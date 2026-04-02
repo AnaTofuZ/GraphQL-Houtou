@@ -5,6 +5,7 @@ use Test::Deep;
 use Test::Exception;
 
 use GraphQL::Houtou qw(parse parse_with_options);
+use GraphQL::Houtou::Backend::GraphQLJS::XS ();
 use GraphQL::Houtou::Backend::Pegex ();
 use GraphQL::Houtou::Backend::XS ();
 use GraphQL::Houtou::GraphQLPerl::Parser ();
@@ -16,6 +17,20 @@ BEGIN {
         GraphQL::Houtou::XS::Parser->import('parse_xs');
         1;
     };
+}
+
+sub strip_location {
+    my ($value) = @_;
+    if (ref $value eq 'HASH') {
+        return +{
+            map { ($_ => strip_location($value->{$_})) }
+            grep $_ ne 'location', sort keys %$value
+        };
+    }
+    if (ref $value eq 'ARRAY') {
+        return [ map strip_location($_), @$value ];
+    }
+    return $value;
 }
 
 subtest 'default parse stays graphql-perl dialect but uses xs by default', sub {
@@ -61,9 +76,11 @@ subtest 'graphql-js namespace is routable', sub {
     my $source = '{ field }';
     my $namespaced = GraphQL::Houtou::GraphQLJS::Parser::parse($source);
     my $through_facade = parse_with_options($source, { dialect => 'graphql-js' });
+    my $through_backend = GraphQL::Houtou::Backend::GraphQLJS::XS::parse($source);
 
     is $namespaced->{kind}, 'Document', 'graphql-js namespace returns a document node';
     cmp_deeply $through_facade, $namespaced, 'dialect selection routes to graphql-js namespace';
+    cmp_deeply $through_backend, $namespaced, 'graphql-js xs backend exposes the canonical xs path';
 };
 
 subtest 'graphql-js parser keeps PP fallback unloaded on XS path', sub {
@@ -100,6 +117,19 @@ subtest 'graphql-perl xs backend can be selected explicitly', sub {
     my $direct = parse_xs($source);
 
     cmp_deeply $explicit, $direct, 'explicit xs backend matches parse_xs';
+};
+
+subtest 'graphql-perl can be derived from graphql-js xs through an adapter path', sub {
+    my $source = 'query Q($id: ID = 1) @root { user(id: $id) { name } }';
+    my $legacy_xs = GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, {
+        backend => 'xs',
+    });
+    my $legacy_from_graphqljs = GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, {
+        backend => 'graphqljs-xs',
+    });
+
+    cmp_deeply strip_location($legacy_from_graphqljs), strip_location($legacy_xs),
+        'graphqljs-xs backend can reproduce legacy AST shape for a representative executable document';
 };
 
 done_testing;

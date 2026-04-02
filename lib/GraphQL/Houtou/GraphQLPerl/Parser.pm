@@ -5,6 +5,7 @@ use strict;
 use warnings;
 use Exporter 'import';
 use GraphQL::Error;
+use GraphQL::Houtou::Adapter::GraphQLJSToGraphQLPerl qw(convert_document);
 
 our @EXPORT_OK = qw(
   parse
@@ -50,6 +51,17 @@ sub _parse_via_xs {
   return $document;
 }
 
+sub _parse_via_graphqljs_xs {
+  my ($source, $no_location, $options) = @_;
+  require GraphQL::Houtou::Backend::GraphQLJS::XS;
+  my $document = GraphQL::Houtou::Backend::GraphQLJS::XS::parse($source, {
+    no_location => $no_location,
+  });
+  my $legacy = convert_document($document);
+  _enforce_legacy_empty_object_rule($source) if !$options->{skip_legacy_compat};
+  return $legacy;
+}
+
 sub parse {
   my ($source, $no_location) = @_;
   return _has_xs_backend()
@@ -69,6 +81,9 @@ sub parse_with_options {
   }
   if ($backend eq 'xs') {
     return _parse_via_xs($source, $no_location, $options);
+  }
+  if ($backend eq 'graphqljs-xs') {
+    return _parse_via_graphqljs_xs($source, $no_location, $options);
   }
 
   die "Unknown parser backend '$backend'.\n";

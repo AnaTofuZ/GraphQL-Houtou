@@ -282,6 +282,33 @@ EOF
     };
 };
 
+subtest 'graphql-js dialect converts directive extensions', sub {
+    my $source = q(extend directive @tag on FIELD | FRAGMENT_SPREAD);
+    my $got = parse($source);
+    my $got_pegex = parse($source, { backend => 'pegex' });
+
+    cmp_deeply strip_loc($got), {
+        kind => 'Document',
+        definitions => [
+            {
+                kind => 'DirectiveExtension',
+                name => { kind => 'Name', value => 'tag' },
+                arguments => [],
+                repeatable => 0,
+                locations => [
+                    { kind => 'Name', value => 'FIELD' },
+                    { kind => 'Name', value => 'FRAGMENT_SPREAD' },
+                ],
+            },
+        ],
+    };
+
+    cmp_deeply strip_loc($got_pegex), strip_loc($got),
+        'directive extension is backend-independent';
+    is_deeply [ map $got->{definitions}[0]{loc}{$_}, qw(line column) ], [1, 1],
+        'directive extension loc points at extend keyword';
+};
+
 subtest 'graphql-js no_location strips loc recursively', sub {
     my $source = 'query Q($id: ID @fromContext) { user(id: $id) { id } }';
     my $with_loc = parse($source);
@@ -305,6 +332,79 @@ subtest 'graphql-js loc is rebuilt from source tokens on XS path', sub {
     is_deeply [ map $got->{definitions}[0]{selectionSet}{loc}{$_}, qw(line column) ], [1, 28], 'selection set loc points at opening brace';
     is_deeply [ map $got->{definitions}[0]{selectionSet}{selections}[0]{loc}{$_}, qw(line column) ], [1, 30], 'field loc points at field name';
     is_deeply [ map $got->{definitions}[0]{selectionSet}{selections}[0]{arguments}[0]{loc}{$_}, qw(line column) ], [1, 35], 'argument loc points at argument name';
+};
+
+subtest 'graphql-js SDL loc covers descriptions and directive extensions', sub {
+    my $described = parse(<<'EOF');
+"Type doc"
+type User {
+  "Field doc"
+  name: String
+}
+EOF
+    my $directive_ext = parse('extend directive @tag on FIELD | FRAGMENT_SPREAD');
+
+    is_deeply [ map $described->{definitions}[0]{loc}{$_}, qw(line column) ], [1, 1],
+        'described type loc starts at description';
+    is_deeply [ map $described->{definitions}[0]{description}{loc}{$_}, qw(line column) ], [1, 1],
+        'type description loc is precise';
+    is_deeply [ map $described->{definitions}[0]{fields}[0]{loc}{$_}, qw(line column) ], [3, 3],
+        'described field loc starts at field description';
+    is_deeply [ map $described->{definitions}[0]{fields}[0]{description}{loc}{$_}, qw(line column) ], [3, 3],
+        'field description loc is precise';
+    is_deeply [ map $described->{definitions}[0]{fields}[0]{name}{loc}{$_}, qw(line column) ], [4, 3],
+        'field name loc points at field token';
+
+    is_deeply [ map $directive_ext->{definitions}[0]{loc}{$_}, qw(line column) ], [1, 1],
+        'directive extension loc starts at extend keyword';
+    is_deeply [ map $directive_ext->{definitions}[0]{name}{loc}{$_}, qw(line column) ], [1, 19],
+        'directive extension name loc points at directive name';
+    is_deeply [ map $directive_ext->{definitions}[0]{locations}[0]{loc}{$_}, qw(line column) ], [1, 26],
+        'directive extension first location loc is precise';
+    is_deeply [ map $directive_ext->{definitions}[0]{locations}[1]{loc}{$_}, qw(line column) ], [1, 34],
+        'directive extension second location loc is precise';
+};
+
+subtest 'graphql-js SDL loc handles directive locations with leading pipe', sub {
+    my $doc = parse(<<'EOF');
+directive @include2(if: Boolean!) on
+  | FIELD
+  | FRAGMENT_SPREAD
+  | INLINE_FRAGMENT
+EOF
+
+    cmp_deeply strip_loc($doc), {
+        kind => 'Document',
+        definitions => [
+            {
+                kind => 'DirectiveDefinition',
+                name => { kind => 'Name', value => 'include2' },
+                arguments => [
+                    {
+                        kind => 'InputValueDefinition',
+                        name => { kind => 'Name', value => 'if' },
+                        type => {
+                            kind => 'NonNullType',
+                            type => {
+                                kind => 'NamedType',
+                                name => { kind => 'Name', value => 'Boolean' },
+                            },
+                        },
+                        directives => [],
+                    },
+                ],
+                repeatable => 0,
+                locations => [
+                    { kind => 'Name', value => 'FIELD' },
+                    { kind => 'Name', value => 'FRAGMENT_SPREAD' },
+                    { kind => 'Name', value => 'INLINE_FRAGMENT' },
+                ],
+            },
+        ],
+    };
+
+    is_deeply [ map $doc->{definitions}[0]{locations}[0]{loc}{$_}, qw(line column) ], [2, 5],
+        'leading-pipe directive location starts at the name token';
 };
 
 subtest 'graphql-js dialect can be selected through facade', sub {
@@ -332,7 +432,7 @@ subtest 'XS and PP directive patch paths stay aligned', sub {
 };
 
 subtest 'graphql-js parser still rejects unsupported extension forms explicitly', sub {
-    dies_ok { parse('extend directive @tag on FIELD') } 'directive extension currently dies';
+    dies_ok { parse('extend directive @tag') } 'directive extension without locations still dies';
     like $@, qr/(?:Expected|Parse document failed)/, 'unsupported extension still fails explicitly';
 };
 

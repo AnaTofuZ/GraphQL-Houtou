@@ -132,7 +132,8 @@ sub _locate_value {
   }
 
   if ($node->{kind} eq 'IntValue' || $node->{kind} eq 'FloatValue') {
-    my $token = _consume_kind($state, $node->{kind} eq 'IntValue' ? 'INT' : 'FLOAT');
+    die "Expected numeric token\n" if !_peek_kind($state, 'INT') && !_peek_kind($state, 'FLOAT');
+    my $token = _consume($state);
     _set_loc($node, _loc($token));
     return _loc($token);
   }
@@ -393,10 +394,15 @@ sub _locate_operation_types {
 sub _locate_interfaces {
   my ($state, $nodes) = @_;
   return if !@$nodes;
+  my $lookup = _name_lookup($nodes, sub { $_[0]{name}{value} });
   _consume_kind($state, 'NAME');
   _consume_text($state, '&') if _peek_text($state, '&');
-  for my $node (@$nodes) {
-    _locate_type($state, $node);
+  while (_peek_kind($state, 'NAME')) {
+    my $name = _consume_kind($state, 'NAME');
+    my $node = _take_named_node($lookup, $name->{text});
+    die "Missing interface node for $name->{text}\n" if !$node;
+    _set_loc($node, _loc($name));
+    _set_loc($node->{name}, _loc($name));
     _consume_text($state, '&') if _peek_text($state, '&');
   }
 }
@@ -416,6 +422,7 @@ sub _locate_directive_locations {
   my ($state, $nodes) = @_;
   return if !@$nodes;
   _consume_kind($state, 'NAME');
+  _consume_text($state, '|') if _peek_text($state, '|');
   for my $node (@$nodes) {
     _locate_name_node($state, $node);
     _consume_text($state, '|') if _peek_text($state, '|');
@@ -534,7 +541,7 @@ sub _locate_definition {
     return;
   }
 
-  if ($node->{kind} eq 'DirectiveDefinition') {
+  if ($node->{kind} eq 'DirectiveDefinition' || $node->{kind} eq 'DirectiveExtension') {
     my $token = _consume_kind($state, 'NAME');
     $definition_loc ||= _loc($token);
     _consume_text($state, '@');

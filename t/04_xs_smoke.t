@@ -101,6 +101,7 @@ EOF
         {
             kind => 'type',
             name => 'User',
+            occurrence => 1,
         },
     ];
 

@@ -257,6 +257,7 @@ sub _strip_variable_definition_directives {
 sub _scan_extensions {
   my ($source) = @_;
   my @extensions;
+  my %definition_counts;
   my $pos = 0;
   my $length = length $source;
   my $depth = 0;
@@ -288,14 +289,32 @@ sub _scan_extensions {
         if ($word eq 'extend') {
           _skip_ignored($source, \$pos);
           my $kind = _read_name($source, \$pos);
-          if (defined $kind && $kind =~ /\A(?:schema|scalar|type|interface|union|enum|input)\z/) {
+          if (defined $kind && $kind =~ /\A(?:schema|scalar|type|interface|union|enum|input|directive)\z/) {
             my %extension = (kind => $kind);
             if ($kind ne 'schema') {
               _skip_ignored($source, \$pos);
+              $pos++ if $kind eq 'directive' && substr($source, $pos, 1) eq '@';
               $extension{name} = _read_name($source, \$pos);
             }
+            $extension{occurrence} = ++$definition_counts{ join "\x1e", $kind, ($extension{name} // '') };
             push @extensions, \%extension;
           }
+          next;
+        }
+        if ($word =~ /\A(?:schema|scalar|type|interface|union|enum|input)\z/) {
+          my $name = '';
+          if ($word ne 'schema') {
+            _skip_ignored($source, \$pos);
+            $name = _read_name($source, \$pos) // '';
+          }
+          $definition_counts{ join "\x1e", $word, $name }++;
+          next;
+        }
+        if ($word eq 'directive') {
+          _skip_ignored($source, \$pos);
+          $pos++ if substr($source, $pos, 1) eq '@';
+          my $name = _read_name($source, \$pos) // '';
+          $definition_counts{ join "\x1e", 'directive', $name }++;
           next;
         }
       }
@@ -331,6 +350,7 @@ sub preprocess_source_fallback {
     $meta{repeatable_directives}{$1} = 1;
   }
   $rewritten =~ s/\brepeatable\b//g;
+  $rewritten =~ s/^(\s*)extend(\s+directive\s+\@)/$1$2/mg;
 
   return ($rewritten, \%meta);
 }
@@ -345,6 +365,7 @@ sub _definition_source_kind {
   return 'union'     if $definition->{kind} eq 'UnionTypeDefinition';
   return 'enum'      if $definition->{kind} eq 'EnumTypeDefinition';
   return 'input'     if $definition->{kind} eq 'InputObjectTypeDefinition';
+  return 'directive' if $definition->{kind} eq 'DirectiveDefinition';
 
   return;
 }
@@ -413,7 +434,9 @@ sub patch_document_fallback {
     union => 'UnionTypeExtension',
     enum => 'EnumTypeExtension',
     input => 'InputObjectTypeExtension',
+    directive => 'DirectiveExtension',
   );
+  my %seen_occurrence;
 
   for my $definition (@{ $doc->{definitions} || [] }) {
     if ($definition->{kind} eq 'ObjectTypeDefinition'
@@ -425,8 +448,10 @@ sub patch_document_fallback {
     if ($source_kind && @{ $meta->{extensions} || [] }) {
       my $next_extension = $meta->{extensions}[0];
       my $name = $definition->{name} ? $definition->{name}{value} : undef;
+      my $occurrence = ++$seen_occurrence{ join "\x1e", $source_kind, ($name // '') };
       if ($next_extension->{kind} eq $source_kind
-          && (($next_extension->{name} // '') eq ($name // ''))) {
+          && (($next_extension->{name} // '') eq ($name // ''))
+          && ($next_extension->{occurrence} || 0) == $occurrence) {
         shift @{ $meta->{extensions} };
         $definition->{kind} = $extension_kind{$source_kind}
           or die "Unknown extension kind '$source_kind'.\n";

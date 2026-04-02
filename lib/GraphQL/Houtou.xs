@@ -104,7 +104,8 @@ static int gqljs_read_name_bounds(const char *src, STRLEN len, STRLEN *pos, STRL
 static SV *gqljs_make_string_sv(pTHX_ const char *src, STRLEN start, STRLEN end, int is_utf8);
 static int gqljs_match_word(const char *src, STRLEN start, STRLEN end, const char *word);
 static void gqljs_push_rewrite(pTHX_ AV *rewrites, UV start, UV end, const char *replacement);
-static void gqljs_push_extension(pTHX_ AV *extensions, const char *kind, SV *name_sv);
+static UV gqljs_bump_occurrence(pTHX_ HV *counts, const char *kind, SV *name_sv);
+static void gqljs_push_extension(pTHX_ AV *extensions, const char *kind, SV *name_sv, UV occurrence);
 static void gqljs_store_hash_key_sv(HV *hv, SV *key_sv, SV *value);
 static SV *gqljs_apply_rewrites_sv(pTHX_ SV *source_sv, AV *rewrites);
 static SV *gqljs_skip_directive_raw(pTHX_ const char *src, STRLEN len, STRLEN *pos, int is_utf8);
@@ -442,13 +443,38 @@ gqljs_push_rewrite(pTHX_ AV *rewrites, UV start, UV end, const char *replacement
 }
 
 static void
-gqljs_push_extension(pTHX_ AV *extensions, const char *kind, SV *name_sv) {
+gqljs_push_extension(pTHX_ AV *extensions, const char *kind, SV *name_sv, UV occurrence) {
   HV *hv = newHV();
   gql_store_sv(hv, "kind", newSVpv(kind, 0));
   if (name_sv) {
     gql_store_sv(hv, "name", newSVsv(name_sv));
   }
+  gql_store_sv(hv, "occurrence", newSVuv(occurrence));
   av_push(extensions, newRV_noinc((SV *)hv));
+}
+
+static UV
+gqljs_bump_occurrence(pTHX_ HV *counts, const char *kind, SV *name_sv) {
+  SV *key_sv = newSVpv(kind, 0);
+  SV **current_svp;
+  UV next = 1;
+  STRLEN key_len;
+  const char *key;
+
+  sv_catpvn(key_sv, "\x1e", 1);
+  if (name_sv) {
+    sv_catsv(key_sv, name_sv);
+  }
+
+  key = SvPV(key_sv, key_len);
+  current_svp = hv_fetch(counts, key, (I32)key_len, 0);
+  if (current_svp) {
+    next = SvUV(*current_svp) + 1;
+  }
+  hv_store(counts, key, (I32)key_len, newSVuv(next), 0);
+
+  SvREFCNT_dec(key_sv);
+  return next;
 }
 
 static void
@@ -625,6 +651,7 @@ gql_graphqljs_preprocess(pTHX_ SV *source_sv) {
   AV *rewrites = newAV();
   AV *extensions = newAV();
   AV *operation_variable_directives = newAV();
+  HV *definition_counts = newHV();
   HV *interface_implements = newHV();
   HV *repeatable_directives = newHV();
 
@@ -673,27 +700,43 @@ gql_graphqljs_preprocess(pTHX_ SV *source_sv) {
             gqljs_match_word(src, kind_start, kind_end, "interface") ||
             gqljs_match_word(src, kind_start, kind_end, "union") ||
             gqljs_match_word(src, kind_start, kind_end, "enum") ||
-            gqljs_match_word(src, kind_start, kind_end, "input")) {
+            gqljs_match_word(src, kind_start, kind_end, "input") ||
+            gqljs_match_word(src, kind_start, kind_end, "directive")) {
           SV *name_sv = NULL;
+          const char *extension_kind;
+          UV occurrence;
           if (!gqljs_match_word(src, kind_start, kind_end, "schema")) {
             STRLEN name_start;
             STRLEN name_end;
             gqljs_skip_ignored_raw(src, len, &pos);
+            if (gqljs_match_word(src, kind_start, kind_end, "directive")) {
+              if (pos < len && src[pos] == '@') {
+                pos++;
+              }
+            }
             if (gqljs_read_name_bounds(src, len, &pos, &name_start, &name_end)) {
               name_sv = gqljs_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
             }
           }
-          gqljs_push_extension(
-            aTHX_ extensions,
+          extension_kind =
             gqljs_match_word(src, kind_start, kind_end, "schema") ? "schema" :
             gqljs_match_word(src, kind_start, kind_end, "scalar") ? "scalar" :
             gqljs_match_word(src, kind_start, kind_end, "type") ? "type" :
             gqljs_match_word(src, kind_start, kind_end, "interface") ? "interface" :
             gqljs_match_word(src, kind_start, kind_end, "union") ? "union" :
             gqljs_match_word(src, kind_start, kind_end, "enum") ? "enum" :
-            "input",
-            name_sv
+            gqljs_match_word(src, kind_start, kind_end, "input") ? "input" :
+            "directive";
+          occurrence = gqljs_bump_occurrence(aTHX_ definition_counts, extension_kind, name_sv);
+          gqljs_push_extension(
+            aTHX_ extensions,
+            extension_kind,
+            name_sv,
+            occurrence
           );
+          if (gqljs_match_word(src, kind_start, kind_end, "directive")) {
+            gqljs_push_rewrite(aTHX_ rewrites, word_start, kind_start, "");
+          }
           if (gqljs_match_word(src, kind_start, kind_end, "interface") && name_sv) {
             temp_pos = pos;
             gqljs_skip_ignored_raw(src, len, &temp_pos);
@@ -721,6 +764,7 @@ gql_graphqljs_preprocess(pTHX_ SV *source_sv) {
         gqljs_skip_ignored_raw(src, len, &temp_pos);
         if (gqljs_read_name_bounds(src, len, &temp_pos, &name_start, &name_end)) {
           SV *name_sv = gqljs_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
+          (void)gqljs_bump_occurrence(aTHX_ definition_counts, "interface", name_sv);
           gqljs_skip_ignored_raw(src, len, &temp_pos);
           if (temp_pos < len && gqljs_is_name_start(src[temp_pos])) {
             STRLEN kw_start;
@@ -748,6 +792,7 @@ gql_graphqljs_preprocess(pTHX_ SV *source_sv) {
             continue;
           }
           name_sv = gqljs_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
+          (void)gqljs_bump_occurrence(aTHX_ definition_counts, "directive", name_sv);
           gqljs_skip_ignored_raw(src, len, &temp_pos);
           if (temp_pos < len && src[temp_pos] == '(') {
             gqljs_skip_delimited_raw(src, len, &temp_pos, '(', ')');
@@ -763,6 +808,36 @@ gql_graphqljs_preprocess(pTHX_ SV *source_sv) {
             }
           }
           SvREFCNT_dec(name_sv);
+        }
+        continue;
+      }
+
+      if (gqljs_match_word(src, word_start, word_end, "schema") ||
+          gqljs_match_word(src, word_start, word_end, "scalar") ||
+          gqljs_match_word(src, word_start, word_end, "type") ||
+          gqljs_match_word(src, word_start, word_end, "union") ||
+          gqljs_match_word(src, word_start, word_end, "enum") ||
+          gqljs_match_word(src, word_start, word_end, "input")) {
+        const char *definition_kind =
+          gqljs_match_word(src, word_start, word_end, "schema") ? "schema" :
+          gqljs_match_word(src, word_start, word_end, "scalar") ? "scalar" :
+          gqljs_match_word(src, word_start, word_end, "type") ? "type" :
+          gqljs_match_word(src, word_start, word_end, "union") ? "union" :
+          gqljs_match_word(src, word_start, word_end, "enum") ? "enum" :
+          "input";
+        if (gqljs_match_word(src, word_start, word_end, "schema")) {
+          (void)gqljs_bump_occurrence(aTHX_ definition_counts, definition_kind, NULL);
+        } else {
+          STRLEN name_start;
+          STRLEN name_end;
+          SV *name_sv = NULL;
+          temp_pos = pos;
+          gqljs_skip_ignored_raw(src, len, &temp_pos);
+          if (gqljs_read_name_bounds(src, len, &temp_pos, &name_start, &name_end)) {
+            name_sv = gqljs_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
+            (void)gqljs_bump_occurrence(aTHX_ definition_counts, definition_kind, name_sv);
+            SvREFCNT_dec(name_sv);
+          }
         }
         continue;
       }
@@ -893,6 +968,7 @@ gqljs_definition_source_kind(SV *kind_sv) {
   if (len == 19 && memcmp(kind, "UnionTypeDefinition", 19) == 0) return "union";
   if (len == 18 && memcmp(kind, "EnumTypeDefinition", 18) == 0) return "enum";
   if (len == 25 && memcmp(kind, "InputObjectTypeDefinition", 25) == 0) return "input";
+  if (len == 19 && memcmp(kind, "DirectiveDefinition", 19) == 0) return "directive";
 
   return NULL;
 }
@@ -906,6 +982,7 @@ gqljs_extension_kind_name(const char *source_kind) {
   if (strcmp(source_kind, "union") == 0) return "UnionTypeExtension";
   if (strcmp(source_kind, "enum") == 0) return "EnumTypeExtension";
   if (strcmp(source_kind, "input") == 0) return "InputObjectTypeExtension";
+  if (strcmp(source_kind, "directive") == 0) return "DirectiveExtension";
   return NULL;
 }
 
@@ -918,6 +995,7 @@ gql_graphqljs_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
   AV *operation_variable_directives = NULL;
   HV *interface_implements = NULL;
   HV *repeatable_directives = NULL;
+  HV *seen_occurrences = newHV();
   I32 i;
 
   if (!SvROK(doc_sv) || SvTYPE(SvRV(doc_sv)) != SVt_PVHV ||
@@ -994,22 +1072,37 @@ gql_graphqljs_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
     if (extensions && av_len(extensions) >= 0 && kind_svp) {
       const char *source_kind = gqljs_definition_source_kind(*kind_svp);
       if (source_kind) {
+        SV **name_svp = hv_fetch(def_hv, "name", 4, 0);
+        SV *name_value = NULL;
+        UV occurrence;
+        if (strcmp(source_kind, "schema") == 0) {
+          occurrence = gqljs_bump_occurrence(aTHX_ seen_occurrences, source_kind, NULL);
+        } else if (name_svp && SvROK(*name_svp) && SvTYPE(SvRV(*name_svp)) == SVt_PVHV) {
+          HV *name_hv = (HV *)SvRV(*name_svp);
+          SV **value_svp = hv_fetch(name_hv, "value", 5, 0);
+          if (value_svp) {
+            name_value = *value_svp;
+          }
+          occurrence = gqljs_bump_occurrence(aTHX_ seen_occurrences, source_kind, name_value);
+        } else {
+          occurrence = gqljs_bump_occurrence(aTHX_ seen_occurrences, source_kind, NULL);
+        }
         SV **ext_svp = av_fetch(extensions, 0, 0);
         if (ext_svp && SvROK(*ext_svp) && SvTYPE(SvRV(*ext_svp)) == SVt_PVHV) {
           HV *ext_hv = (HV *)SvRV(*ext_svp);
           SV **ext_kind_svp = hv_fetch(ext_hv, "kind", 4, 0);
-          SV **name_svp = hv_fetch(def_hv, "name", 4, 0);
+          SV **ext_occurrence_svp = hv_fetch(ext_hv, "occurrence", 10, 0);
           const char *expected_kind = gqljs_extension_kind_name(source_kind);
           int matches = 0;
 
-          if (ext_kind_svp && gqljs_sv_eq_pv(*ext_kind_svp, source_kind)) {
+          if (ext_kind_svp && ext_occurrence_svp &&
+              gqljs_sv_eq_pv(*ext_kind_svp, source_kind) &&
+              SvUV(*ext_occurrence_svp) == occurrence) {
             if (strcmp(source_kind, "schema") == 0) {
               matches = 1;
-            } else if (name_svp && SvROK(*name_svp) && SvTYPE(SvRV(*name_svp)) == SVt_PVHV) {
-              HV *name_hv = (HV *)SvRV(*name_svp);
-              SV **value_svp = hv_fetch(name_hv, "value", 5, 0);
+            } else if (name_value) {
               SV **ext_name_svp = hv_fetch(ext_hv, "name", 4, 0);
-              if (value_svp && ext_name_svp && sv_eq(*value_svp, *ext_name_svp)) {
+              if (ext_name_svp && sv_eq(name_value, *ext_name_svp)) {
                 matches = 1;
               }
             }
@@ -1088,6 +1181,7 @@ gql_graphqljs_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
     }
   }
 
+  SvREFCNT_dec((SV *)seen_occurrences);
   return newSVsv(doc_sv);
 }
 

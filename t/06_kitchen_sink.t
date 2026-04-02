@@ -53,9 +53,7 @@ subtest 'graphql-perl xs parses kitchen-sink inputs', sub {
 
 subtest 'graphql-js parses kitchen-sink inputs', sub {
     my $exec = GraphQL::Houtou::GraphQLJS::Parser::parse($kitchen);
-    my $schema = GraphQL::Houtou::GraphQLJS::Parser::parse($schema_kitchen, {
-        no_location => 1,
-    });
+    my $schema = GraphQL::Houtou::GraphQLJS::Parser::parse($schema_kitchen);
 
     is $exec->{kind}, 'Document', 'graphql-js executable kitchen-sink returns document';
     is scalar(@{ $exec->{definitions} }), 6, 'graphql-js executable kitchen-sink yields expected definition count';
@@ -64,6 +62,18 @@ subtest 'graphql-js parses kitchen-sink inputs', sub {
     is $schema->{kind}, 'Document', 'graphql-js schema kitchen-sink returns document';
     is scalar(@{ $schema->{definitions} }), 35, 'graphql-js schema kitchen-sink yields expected top-level definitions';
     is $schema->{definitions}[0]{kind}, 'SchemaDefinition', 'graphql-js first schema definition is schema';
+
+    my @foo_defs = grep {
+        ($_->{kind} eq 'ObjectTypeDefinition' || $_->{kind} eq 'ObjectTypeExtension')
+            && $_->{name}
+            && $_->{name}{value} eq 'Foo'
+    } @{ $schema->{definitions} };
+    is_deeply [ map $_->{kind}, @foo_defs ], [
+        'ObjectTypeDefinition',
+        'ObjectTypeExtension',
+        'ObjectTypeExtension',
+    ], 'graphql-js keeps base type and both Foo extensions distinct on loc path';
+    ok exists $foo_defs[1]{loc}, 'first Foo extension carries loc';
 };
 
 subtest 'facade routes graphql-js kitchen-sink parsing', sub {

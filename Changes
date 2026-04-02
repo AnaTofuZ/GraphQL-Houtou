@@ -1,0 +1,8 @@
+Revision history for Perl extension GraphQL-Houtou
+
+{{$NEXT}}
+
+    - recreated the project with `minil new -P XS`
+    - added initial parser facade modules under `GraphQL::Houtou::*`
+    - copied the current XS parser backend and graphql-js adapter stack
+    - added basic smoke tests for graphql-perl and graphql-js parser paths

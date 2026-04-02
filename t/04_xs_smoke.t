@@ -123,6 +123,13 @@ EOF
     ok scalar @{ $meta->{rewrites} } >= 3, 'rewrite spans are returned';
 };
 
+subtest 'graphqljs_preprocess_xs skips empty variable directive metadata', sub {
+    my $meta = graphqljs_preprocess_xs('query Q($id: ID, $limit: Int) { user(id: $id) { id } }');
+
+    cmp_deeply $meta->{operation_variable_directives}, [],
+        'operations without variable directives do not get empty metadata entries';
+};
+
 subtest 'parse_directives_xs parses directive snippets directly', sub {
     my $got = parse_directives_xs(q(@fromContext @clamp(max: 100)));
 
@@ -137,6 +144,15 @@ subtest 'parse_directives_xs parses directive snippets directly', sub {
             },
         },
     ];
+};
+
+subtest 'parse_xs accepts empty object values at the core parser layer', sub {
+    my $got = parse_xs('query Q($input: Filter = {}) { user(filter: {}) { id } }');
+
+    cmp_deeply $got->[0]{variables}{input}{default_value}, {},
+        'empty object default value is accepted';
+    cmp_deeply $got->[0]{selections}[0]{arguments}{filter}, {},
+        'empty object argument value is accepted';
 };
 
 subtest 'tokenize_xs exposes token locations directly', sub {

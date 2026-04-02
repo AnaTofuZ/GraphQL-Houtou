@@ -9,7 +9,7 @@ use GraphQL::Houtou::Adapter::GraphQLPerlToGraphQLJS qw(
   convert_legacy_directives
 );
 use GraphQL::Houtou::GraphQLJS::Locator qw(apply_loc_from_source);
-use GraphQL::Houtou::GraphQLPerl::Parser ();
+use GraphQL::Houtou::GraphQLJS::Util qw(rebase_loc);
 
 my $HAS_XS_PREPROCESS = eval {
   require GraphQL::Houtou::XS::Parser;
@@ -50,24 +50,6 @@ sub _patch_document_pp {
   return $pkg->can('patch_document_fallback')->($doc, $meta);
 }
 
-sub _rebase_loc {
-  my ($node, $loc) = @_;
-  if (ref $node eq 'HASH') {
-    if ($loc) {
-      $node->{loc} = { %$loc };
-    }
-    else {
-      delete $node->{loc};
-    }
-    _rebase_loc($node->{$_}, $loc) for grep $_ ne 'loc', keys %$node;
-    return $node;
-  }
-  if (ref $node eq 'ARRAY') {
-    _rebase_loc($_, $loc) for @$node;
-  }
-  return $node;
-}
-
 sub _convert_directive_texts {
   my ($raw_directives, $loc) = @_;
   return [] if !$raw_directives || !@$raw_directives;
@@ -82,11 +64,26 @@ sub _convert_directive_texts {
 
   my @copy = map {
     my %directive = %$_;
-    _rebase_loc(\%directive, $loc);
+    rebase_loc(\%directive, $loc);
     \%directive;
   } @$converted;
 
   return \@copy;
+}
+
+sub _parse_legacy_document {
+  my ($source, $backend, $no_location) = @_;
+
+  if ($backend eq 'xs') {
+    require GraphQL::Houtou::Backend::XS;
+    return GraphQL::Houtou::Backend::XS::parse($source, $no_location);
+  }
+  if ($backend eq 'pegex') {
+    require GraphQL::Houtou::Backend::Pegex;
+    return GraphQL::Houtou::Backend::Pegex::parse($source, $no_location);
+  }
+
+  die "Unknown parser backend '$backend'.\n";
 }
 
 sub _materialize_operation_variable_directives_xs {
@@ -123,10 +120,8 @@ sub parse {
   $options ||= {};
 
   my ($rewritten, $meta) = _preprocess_source($source);
-  my $legacy = GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($rewritten, {
-    %$options,
-    backend => $options->{backend} || ($HAS_XS_PREPROCESS ? 'xs' : 'pegex'),
-  });
+  my $backend = $options->{backend} || ($HAS_XS_PREPROCESS ? 'xs' : 'pegex');
+  my $legacy = _parse_legacy_document($rewritten, $backend, $options->{no_location} // $options->{noLocation});
   my $doc = convert_document($legacy, $options);
   if ($HAS_XS_PREPROCESS) {
     _materialize_operation_variable_directives_xs($meta);

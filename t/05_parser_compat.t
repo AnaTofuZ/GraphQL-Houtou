@@ -233,6 +233,7 @@ subtest 'strict grammar edge cases stay compatible', sub {
 
     dies_ok { parse('query Q { f(arg: {}) }') } 'empty object literal stays rejected';
     like $@->message, qr/Expected name/, 'empty object literal message';
+    is_deeply [ map $@->locations->[0]{$_}, qw(line column) ], [1, 19], 'empty object literal location';
 };
 
 subtest 'noLocation flag stays ignored for compatibility', sub {

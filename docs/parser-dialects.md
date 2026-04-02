@@ -28,6 +28,8 @@
 - 既存 grammar の制約
 
 ただし backend の既定は `xs` であり、必要なときだけ `pegex` を明示選択する。
+また、core parser が spec 寄りに受理する差分のうち legacy 互換が必要なものは、
+この dialect 層で再制約する。現時点では empty object value (`{}`) がこれに当たる。
 
 ### 2. Dialect selection uses `parse_with_options()`
 
@@ -71,6 +73,8 @@ my $ast = GraphQL::Houtou::parse_with_options($source, {
 - XS 前処理は metadata だけでなく rewritten source も返す
 - `GraphQL::Houtou::GraphQLJS::PP` は fallback 専用に隔離し、通常経路で eager load しない
 - `GraphQL::Houtou::XS::Parser::tokenize_xs()` を使って graphql-js `loc` を source token ベースで再構築する
+- XS core parser は empty object value を受理し、graphql-perl dialect 側でだけ legacy reject をかける
+- XS patch と PP patch の variable directive 出力は parity テストで固定している
 
 ## Verified
 

@@ -7,6 +7,7 @@ use Exporter 'import';
 use GraphQL::Houtou::Adapter::GraphQLPerlToGraphQLJS qw(
   convert_document
 );
+use GraphQL::Houtou::GraphQLJS::Util qw(rebase_loc);
 use GraphQL::Houtou::GraphQLPerl::Parser ();
 
 our @EXPORT_OK = qw(
@@ -348,24 +349,6 @@ sub _definition_source_kind {
   return;
 }
 
-sub _rebase_loc {
-  my ($node, $loc) = @_;
-  if (ref $node eq 'HASH') {
-    if ($loc) {
-      $node->{loc} = { %$loc };
-    }
-    else {
-      delete $node->{loc};
-    }
-    _rebase_loc($node->{$_}, $loc) for grep $_ ne 'loc', keys %$node;
-    return $node;
-  }
-  if (ref $node eq 'ARRAY') {
-    _rebase_loc($_, $loc) for @$node;
-  }
-  return $node;
-}
-
 sub _convert_directive_texts_fallback {
   my ($raw_directives, $loc) = @_;
   return [] if !$raw_directives || !@$raw_directives;
@@ -384,9 +367,22 @@ sub _convert_directive_texts_fallback {
 
   my @copy = map {
     my %directive = %$_;
-    _rebase_loc(\%directive, $loc);
+    rebase_loc(\%directive, $loc);
     \%directive;
   } @$converted;
+
+  return \@copy;
+}
+
+sub _clone_directives_with_loc {
+  my ($directives, $loc) = @_;
+  return [] if !$directives || !@$directives;
+
+  my @copy = map {
+    my %directive = %$_;
+    rebase_loc(\%directive, $loc);
+    \%directive;
+  } @$directives;
 
   return \@copy;
 }
@@ -448,7 +444,7 @@ sub patch_document_fallback {
       for my $variable_definition (@{ $definition->{variableDefinitions} || [] }) {
         my $name = $variable_definition->{variable}{name}{value};
         next if !$operation_meta->{$name};
-        $variable_definition->{directives} = _convert_directive_texts_fallback(
+        $variable_definition->{directives} = _clone_directives_with_loc(
           $operation_meta->{$name},
           $variable_definition->{loc},
         );

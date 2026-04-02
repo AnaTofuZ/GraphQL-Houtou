@@ -5,6 +5,14 @@ use Test::Deep;
 use Test::Exception;
 
 use GraphQL::Houtou qw(parse_with_options);
+use GraphQL::Houtou::Adapter::GraphQLPerlToGraphQLJS qw(convert_document);
+use GraphQL::Houtou::Backend::XS ();
+use GraphQL::Houtou::GraphQLJS::Locator qw(apply_loc_from_source);
+use GraphQL::Houtou::GraphQLJS::PP qw(
+    materialize_operation_variable_directives
+    patch_document_fallback
+    preprocess_source_fallback
+);
 use GraphQL::Houtou::GraphQLJS::Parser qw(parse);
 
 sub strip_loc {
@@ -178,6 +186,40 @@ subtest 'graphql-js dialect supports repeatable and variable directives', sub {
     ];
 };
 
+subtest 'graphql-js dialect accepts empty object values', sub {
+    my $got = parse(q(query Q($input: Filter = {}) { user(filter: {}) { id } }));
+
+    cmp_deeply strip_loc($got->{definitions}[0]{variableDefinitions}), [
+        {
+            kind => 'VariableDefinition',
+            variable => {
+                kind => 'Variable',
+                name => { kind => 'Name', value => 'input' },
+            },
+            type => {
+                kind => 'NamedType',
+                name => { kind => 'Name', value => 'Filter' },
+            },
+            defaultValue => {
+                kind => 'ObjectValue',
+                fields => [],
+            },
+            directives => [],
+        },
+    ];
+
+    cmp_deeply strip_loc($got->{definitions}[0]{selectionSet}{selections}[0]{arguments}), [
+        {
+            kind => 'Argument',
+            name => { kind => 'Name', value => 'filter' },
+            value => {
+                kind => 'ObjectValue',
+                fields => [],
+            },
+        },
+    ];
+};
+
 subtest 'graphql-js dialect converts extension nodes', sub {
     my $got = parse(<<'EOF');
 extend schema @wired {
@@ -273,6 +315,20 @@ subtest 'graphql-js dialect can be selected through facade', sub {
     });
 
     cmp_deeply $through_facade, $direct, 'facade routes to graphql-js parser';
+};
+
+subtest 'XS and PP directive patch paths stay aligned', sub {
+    my $source = q(query Q($id: ID @fromContext, $limit: Int = 10 @clamp(max: 100)) { user(id: $id) { id } });
+    my $xs_doc = parse($source, { backend => 'xs' });
+
+    my ($rewritten, $meta) = preprocess_source_fallback($source);
+    my $legacy = GraphQL::Houtou::Backend::XS::parse($rewritten);
+    my $pp_doc = convert_document($legacy, {});
+    materialize_operation_variable_directives($meta);
+    $pp_doc = patch_document_fallback($pp_doc, $meta);
+    $pp_doc = apply_loc_from_source($pp_doc, $source);
+
+    cmp_deeply $pp_doc, $xs_doc, 'PP fallback patch matches XS patch output';
 };
 
 subtest 'graphql-js parser still rejects unsupported extension forms explicitly', sub {

@@ -390,14 +390,6 @@ sub _locate_operation_types {
   _consume_text($state, '}');
 }
 
-sub _locate_implements_clause {
-  my ($state, $nodes) = @_;
-  return if !@$nodes;
-  _consume_kind($state, 'NAME');
-  _consume_text($state, '&') if _peek_text($state, '&');
-  _locate_type($state, $_) for @$nodes[0];
-}
-
 sub _locate_interfaces {
   my ($state, $nodes) = @_;
   return if !@$nodes;

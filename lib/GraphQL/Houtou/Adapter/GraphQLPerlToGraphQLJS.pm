@@ -23,6 +23,17 @@ sub _name_node {
   return _node('Name', { value => $value }, $loc);
 }
 
+sub _description_node {
+  my ($description, $loc) = @_;
+  return if !defined $description;
+  # graphql-perl AST には block string だったかどうかが残らないので、
+  # 現状は改行の有無を近似値として graphql-js の block flag に写す。
+  return _node('StringValue', {
+    value => $description,
+    block => index($description, "\n") >= 0 ? 1 : 0,
+  }, $loc);
+}
+
 sub _strip_loc {
   my ($value) = @_;
   if (ref $value eq 'HASH') {
@@ -228,10 +239,7 @@ sub _convert_input_value_definitions {
       my $arg = $args->{$_};
       _node('InputValueDefinition', {
         ($arg->{description}
-          ? (description => _node('StringValue', {
-            value => $arg->{description},
-            block => index($arg->{description}, "\n") >= 0 ? 1 : 0,
-          }, $loc))
+          ? (description => _description_node($arg->{description}, $loc))
           : ()),
         name => _name_node($_, $loc),
         type => _convert_type($arg->{type}, $loc),
@@ -252,10 +260,7 @@ sub _convert_field_definitions {
       my $field = $fields->{$_};
       _node('FieldDefinition', {
         ($field->{description}
-          ? (description => _node('StringValue', {
-            value => $field->{description},
-            block => index($field->{description}, "\n") >= 0 ? 1 : 0,
-          }, $loc))
+          ? (description => _description_node($field->{description}, $loc))
           : ()),
         name => _name_node($_, $loc),
         arguments => _convert_input_value_definitions($field->{args}, $loc),
@@ -310,10 +315,7 @@ sub _convert_definition {
   if ($definition->{kind} eq 'scalar') {
     return _node('ScalarTypeDefinition', {
       ($definition->{description}
-        ? (description => _node('StringValue', {
-          value => $definition->{description},
-          block => index($definition->{description}, "\n") >= 0 ? 1 : 0,
-        }, $loc))
+        ? (description => _description_node($definition->{description}, $loc))
         : ()),
       name => _name_node($definition->{name}, $loc),
       directives => _convert_directives($definition->{directives}, $loc),
@@ -323,10 +325,7 @@ sub _convert_definition {
   if ($definition->{kind} eq 'type') {
     return _node('ObjectTypeDefinition', {
       ($definition->{description}
-        ? (description => _node('StringValue', {
-          value => $definition->{description},
-          block => index($definition->{description}, "\n") >= 0 ? 1 : 0,
-        }, $loc))
+        ? (description => _description_node($definition->{description}, $loc))
         : ()),
       name => _name_node($definition->{name}, $loc),
       interfaces => [
@@ -341,10 +340,7 @@ sub _convert_definition {
   if ($definition->{kind} eq 'interface') {
     return _node('InterfaceTypeDefinition', {
       ($definition->{description}
-        ? (description => _node('StringValue', {
-          value => $definition->{description},
-          block => index($definition->{description}, "\n") >= 0 ? 1 : 0,
-        }, $loc))
+        ? (description => _description_node($definition->{description}, $loc))
         : ()),
       name => _name_node($definition->{name}, $loc),
       interfaces => [],
@@ -356,10 +352,7 @@ sub _convert_definition {
   if ($definition->{kind} eq 'union') {
     return _node('UnionTypeDefinition', {
       ($definition->{description}
-        ? (description => _node('StringValue', {
-          value => $definition->{description},
-          block => index($definition->{description}, "\n") >= 0 ? 1 : 0,
-        }, $loc))
+        ? (description => _description_node($definition->{description}, $loc))
         : ()),
       name => _name_node($definition->{name}, $loc),
       directives => _convert_directives($definition->{directives}, $loc),
@@ -373,10 +366,7 @@ sub _convert_definition {
   if ($definition->{kind} eq 'enum') {
     return _node('EnumTypeDefinition', {
       ($definition->{description}
-        ? (description => _node('StringValue', {
-          value => $definition->{description},
-          block => index($definition->{description}, "\n") >= 0 ? 1 : 0,
-        }, $loc))
+        ? (description => _description_node($definition->{description}, $loc))
         : ()),
       name => _name_node($definition->{name}, $loc),
       directives => _convert_directives($definition->{directives}, $loc),
@@ -385,10 +375,7 @@ sub _convert_definition {
           my $value = $definition->{values}{$_};
           _node('EnumValueDefinition', {
             ($value->{description}
-              ? (description => _node('StringValue', {
-                value => $value->{description},
-                block => index($value->{description}, "\n") >= 0 ? 1 : 0,
-              }, $loc))
+              ? (description => _description_node($value->{description}, $loc))
               : ()),
             name => _name_node($_, $loc),
             directives => _convert_directives($value->{directives}, $loc),
@@ -401,10 +388,7 @@ sub _convert_definition {
   if ($definition->{kind} eq 'input') {
     return _node('InputObjectTypeDefinition', {
       ($definition->{description}
-        ? (description => _node('StringValue', {
-          value => $definition->{description},
-          block => index($definition->{description}, "\n") >= 0 ? 1 : 0,
-        }, $loc))
+        ? (description => _description_node($definition->{description}, $loc))
         : ()),
       name => _name_node($definition->{name}, $loc),
       directives => _convert_directives($definition->{directives}, $loc),
@@ -415,10 +399,7 @@ sub _convert_definition {
   if ($definition->{kind} eq 'directive') {
     return _node('DirectiveDefinition', {
       ($definition->{description}
-        ? (description => _node('StringValue', {
-          value => $definition->{description},
-          block => index($definition->{description}, "\n") >= 0 ? 1 : 0,
-        }, $loc))
+        ? (description => _description_node($definition->{description}, $loc))
         : ()),
       name => _name_node($definition->{name}, $loc),
       arguments => _convert_input_value_definitions($definition->{args}, $loc),

@@ -605,7 +605,7 @@ gqljs_scan_variable_definition_directives(pTHX_ const char *src, STRLEN len, STR
       (*pos)++;
     }
 
-    if (directive_texts && av_count(directive_texts) >= 0) {
+    if (directive_texts && av_count(directive_texts) > 0) {
       gqljs_store_hash_key_sv(operation_meta, name_sv, newRV_noinc((SV *)directive_texts));
     } else if (directive_texts) {
       SvREFCNT_dec((SV *)directive_texts);
@@ -782,7 +782,12 @@ gql_graphqljs_preprocess(pTHX_ SV *source_sv) {
         if (temp_pos < len && src[temp_pos] == '(') {
           gqljs_scan_variable_definition_directives(aTHX_ src, len, &temp_pos, is_utf8, operation_meta, rewrites);
         }
-        av_push(operation_variable_directives, newRV_noinc((SV *)operation_meta));
+        if (HvUSEDKEYS(operation_meta) > 0) {
+          av_push(operation_variable_directives, newRV_noinc((SV *)operation_meta));
+        }
+        else {
+          SvREFCNT_dec((SV *)operation_meta);
+        }
         continue;
       }
     }
@@ -1586,9 +1591,6 @@ static SV *
 gql_parse_object_value(pTHX_ gql_parser_t *p, int is_const) {
   HV *hv = newHV();
   gql_expect(aTHX_ p, TOK_LBRACE, "Expected name");
-  if (p->kind == TOK_RBRACE) {
-    gql_throw(aTHX_ p, p->tok_start, "Expected name");
-  }
   while (p->kind != TOK_RBRACE) {
     SV *name = gql_parse_name(aTHX_ p, "Expected name");
     gql_expect(aTHX_ p, TOK_COLON, NULL);

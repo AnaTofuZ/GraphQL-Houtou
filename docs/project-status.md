@@ -67,13 +67,34 @@
 - token-based `loc`
 - XS helper の smoke
 - graphql-perl 互換 AST の代表回帰
+- graphql-js/spec 寄りの空 object value 受理
+- graphql-perl dialect での空 object value legacy reject
+- XS/PP directive patch parity
 - kitchen-sink / schema-kitchen-sink の parse smoke
 
 2026-04-03 時点のローカル検証:
 
 - `./Build build`
 - `./Build test`
-- `7 files / 36 tests / PASS`
+- `7 files / 47 tests / PASS`
+
+## Recent Decisions
+
+### Core parser is spec-first for empty object values
+
+XS コア parser は `{}`
+を object value として受理する。これは graphql-js / 現行 spec 側に寄せた判断である。
+
+一方で `graphql-perl` dialect は既存互換のため、compatibility layer 側で
+empty object value を `Expected name` として reject する。
+この差分は parser core ではなく dialect 層の責務として扱う。
+
+### XS and PP patch paths must stay comparable
+
+variable definition directive の patch は、XS 経路と PP fallback 経路で
+同じ graphql-js AST を返すことをテストで固定した。
+PP 側は materialize 済み directive node を再 parse せず、
+`loc` の rebasing だけ行う構成に整理した。
 
 ## Remaining Work
 

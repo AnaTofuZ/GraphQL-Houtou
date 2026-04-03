@@ -8,6 +8,7 @@ BEGIN {
     eval {
         require GraphQL::Houtou::XS::Parser;
         GraphQL::Houtou::XS::Parser->import(qw(
+            graphqljs_apply_executable_loc_xs
             parse_xs
             graphqljs_preprocess_xs
             graphqljs_patch_document_xs
@@ -17,6 +18,8 @@ BEGIN {
         1;
     } or plan skip_all => 'XS parser is not built';
 }
+
+use GraphQL::Houtou::GraphQLJS::Canonical qw(parse_canonical_document);
 
 sub var_ref {
     my ($name) = @_;
@@ -231,6 +234,23 @@ subtest 'tokenize_xs exposes token locations directly', sub {
             loc => { line => 1, column => 20 },
         },
     ];
+};
+
+subtest 'graphqljs_apply_executable_loc_xs locates executable documents directly', sub {
+    my $source = 'query Q($id: ID = 1) @root { user(id: $id) { name } }';
+    my $doc = parse_canonical_document($source, {
+        backend => 'xs',
+        no_location => 1,
+    });
+    my $located = graphqljs_apply_executable_loc_xs($doc, $source);
+
+    isa_ok $located, 'HASH', 'xs helper returns a document hash';
+    is_deeply [ map $located->{definitions}[0]{loc}{$_}, qw(line column) ], [1, 1],
+        'operation loc is applied directly';
+    is_deeply [ map $located->{definitions}[0]{variableDefinitions}[0]{loc}{$_}, qw(line column) ], [1, 9],
+        'variable definition loc is applied directly';
+    is_deeply [ map $located->{definitions}[0]{selectionSet}{selections}[0]{arguments}[0]{loc}{$_}, qw(line column) ], [1, 35],
+        'argument loc is applied directly';
 };
 
 done_testing;

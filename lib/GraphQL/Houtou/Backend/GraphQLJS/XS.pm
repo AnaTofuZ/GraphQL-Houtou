@@ -4,7 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 use Exporter 'import';
-use GraphQL::Houtou::GraphQLJS::Parser ();
+use GraphQL::Houtou::GraphQLJS::Canonical qw(parse_canonical_document);
 
 our @EXPORT_OK = qw(
   parse
@@ -13,7 +13,7 @@ our @EXPORT_OK = qw(
 sub parse {
   my ($source, $options) = @_;
   $options ||= {};
-  return GraphQL::Houtou::GraphQLJS::Parser::parse($source, {
+  return parse_canonical_document($source, {
     %$options,
     backend => 'xs',
   });

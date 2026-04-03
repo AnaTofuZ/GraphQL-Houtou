@@ -4,8 +4,10 @@ use 5.014;
 use strict;
 use warnings;
 use Exporter 'import';
-use GraphQL::Error;
-use GraphQL::Houtou::Adapter::GraphQLJSToGraphQLPerl qw(convert_document);
+use GraphQL::Houtou::GraphQLPerl::FromGraphQLJS qw(
+  convert_canonical_document
+  enforce_legacy_compat
+);
 
 our @EXPORT_OK = qw(
   parse
@@ -26,40 +28,21 @@ sub _parse_via_pegex {
   return GraphQL::Houtou::Backend::Pegex::parse(@_);
 }
 
-sub _enforce_legacy_empty_object_rule {
-  my ($source) = @_;
-  return if !$HAS_XS_BACKEND;
-
-  require GraphQL::Houtou::XS::Parser;
-  my $tokens = GraphQL::Houtou::XS::Parser::tokenize_xs($source);
-  for my $index (0 .. @$tokens - 3) {
-    next if $tokens->[$index]{kind} ne 'COLON' && $tokens->[$index]{kind} ne 'EQUALS';
-    next if $tokens->[$index + 1]{kind} ne 'LBRACE';
-    next if $tokens->[$index + 2]{kind} ne 'RBRACE';
-    die GraphQL::Error->new(
-      message => 'Expected name',
-      locations => [{ %{ $tokens->[$index + 2]{loc} } }],
-    );
-  }
-}
-
 sub _parse_via_xs {
   my ($source, $no_location, $options) = @_;
   require GraphQL::Houtou::Backend::XS;
   my $document = GraphQL::Houtou::Backend::XS::parse($source, $no_location);
-  _enforce_legacy_empty_object_rule($source) if !$options->{skip_legacy_compat};
+  enforce_legacy_compat($source, $options);
   return $document;
 }
 
-sub _parse_via_graphqljs_xs {
+sub _parse_via_canonical_xs {
   my ($source, $no_location, $options) = @_;
   require GraphQL::Houtou::Backend::GraphQLJS::XS;
   my $document = GraphQL::Houtou::Backend::GraphQLJS::XS::parse($source, {
     no_location => $no_location,
   });
-  my $legacy = convert_document($document);
-  _enforce_legacy_empty_object_rule($source) if !$options->{skip_legacy_compat};
-  return $legacy;
+  return convert_canonical_document($document, $source, $options);
 }
 
 sub parse {
@@ -82,8 +65,8 @@ sub parse_with_options {
   if ($backend eq 'xs') {
     return _parse_via_xs($source, $no_location, $options);
   }
-  if ($backend eq 'graphqljs-xs') {
-    return _parse_via_graphqljs_xs($source, $no_location, $options);
+  if ($backend eq 'canonical-xs' || $backend eq 'graphqljs-xs') {
+    return _parse_via_canonical_xs($source, $no_location, $options);
   }
 
   die "Unknown parser backend '$backend'.\n";

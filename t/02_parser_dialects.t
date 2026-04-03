@@ -119,17 +119,22 @@ subtest 'graphql-perl xs backend can be selected explicitly', sub {
     cmp_deeply $explicit, $direct, 'explicit xs backend matches parse_xs';
 };
 
-subtest 'graphql-perl can be derived from graphql-js xs through an adapter path', sub {
+subtest 'graphql-perl can be derived from canonical graphql-js xs through an adapter path', sub {
     my $source = 'query Q($id: ID = 1) @root { user(id: $id) { name } }';
     my $legacy_xs = GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, {
         backend => 'xs',
     });
-    my $legacy_from_graphqljs = GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, {
+    my $legacy_from_canonical = GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, {
+        backend => 'canonical-xs',
+    });
+    my $legacy_from_alias = GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, {
         backend => 'graphqljs-xs',
     });
 
-    cmp_deeply strip_location($legacy_from_graphqljs), strip_location($legacy_xs),
-        'graphqljs-xs backend can reproduce legacy AST shape for a representative executable document';
+    cmp_deeply strip_location($legacy_from_canonical), strip_location($legacy_xs),
+        'canonical-xs backend can reproduce legacy AST shape for a representative executable document';
+    cmp_deeply strip_location($legacy_from_alias), strip_location($legacy_from_canonical),
+        'graphqljs-xs remains as a compatibility alias';
 };
 
 done_testing;

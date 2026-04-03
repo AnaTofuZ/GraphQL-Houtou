@@ -8,6 +8,8 @@ use_ok $_ for qw(
     GraphQL::Houtou::Backend::XS
     GraphQL::Houtou::Adapter::GraphQLJSToGraphQLPerl
     GraphQL::Houtou::Adapter::GraphQLPerlToGraphQLJS
+    GraphQL::Houtou::GraphQLPerl::FromGraphQLJS
+    GraphQL::Houtou::GraphQLJS::Canonical
     GraphQL::Houtou::GraphQLJS::Locator
     GraphQL::Houtou::GraphQLPerl::Parser
     GraphQL::Houtou::GraphQLJS::Parser

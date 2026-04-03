@@ -5718,6 +5718,7 @@ gql_parser_init(pTHX_ gql_parser_t *p, SV *source_sv, int no_location) {
   STRLEN len;
   const char *src = SvPV(source_sv, len);
   STRLEN i;
+  I32 line_cap = 16;
   I32 line_count = 1;
 
   p->src = src;
@@ -5739,35 +5740,24 @@ gql_parser_init(pTHX_ gql_parser_t *p, SV *source_sv, int no_location) {
     return;
   }
 
+  Newx(p->line_starts, line_cap, UV);
+  p->line_starts[0] = 0;
+
   for (i = 0; i < len; i++) {
-    if (src[i] == '\n') {
-      line_count++;
-    } else if (src[i] == '\r') {
-      line_count++;
-      if (i + 1 < len && src[i + 1] == '\n') {
+    if (src[i] == '\n' || src[i] == '\r') {
+      if (line_count == line_cap) {
+        line_cap *= 2;
+        Renew(p->line_starts, line_cap, UV);
+      }
+      if (src[i] == '\r' && i + 1 < len && src[i + 1] == '\n') {
         i++;
       }
+      p->line_starts[line_count++] = (UV)(i + 1);
     }
   }
 
-  Newx(p->line_starts, line_count, UV);
-  SAVEFREEPV(p->line_starts);
-  p->line_starts[0] = 0;
   p->num_lines = line_count;
-
-  {
-    I32 line_index = 1;
-    for (i = 0; i < len; i++) {
-      if (src[i] == '\n') {
-        p->line_starts[line_index++] = (UV)(i + 1);
-      } else if (src[i] == '\r') {
-        if (i + 1 < len && src[i + 1] == '\n') {
-          i++;
-        }
-        p->line_starts[line_index++] = (UV)(i + 1);
-      }
-    }
-  }
+  SAVEFREEPV(p->line_starts);
 }
 
 static void

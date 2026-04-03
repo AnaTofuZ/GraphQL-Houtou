@@ -5,6 +5,9 @@
 `graphql-perl` 本体へ取り込まれる前提を捨てて、parser 関連の成果物を
 別 distribution `GraphQL-Houtou` として独立公開する。
 
+Operational handoff notes, exact commands, and latest local benchmark snapshot are
+kept in `docs/current-context.md`.
+
 この distribution の基本方針は次のとおり。
 
 - upstream `GraphQL` を依存に置く

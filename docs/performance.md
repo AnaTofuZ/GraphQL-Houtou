@@ -1,5 +1,8 @@
 # Parser Performance
 
+For the latest reproducible local commands, current benchmark snapshot, and NYTProf
+HTML generation steps, see `docs/current-context.md`.
+
 ## Benchmark
 
 2026-04-03 時点で、`blib` を優先したローカル build を使って

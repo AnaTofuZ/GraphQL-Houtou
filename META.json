@@ -1,5 +1,5 @@
 {
-   "abstract" : "It's new $module",
+   "abstract" : "XS recursive-descent GraphQL parser toolkit for Perl",
    "author" : [
       "anatofuz <anatofuz@gmail.com>"
    ],
@@ -42,16 +42,30 @@
       },
       "runtime" : {
          "requires" : {
-            "perl" : "5.008001"
+            "GraphQL" : "0.54",
+            "perl" : "5.014"
          }
       },
       "test" : {
          "requires" : {
+            "Test::Deep" : "1.205",
+            "Test::Exception" : "0.43",
             "Test::More" : "0.98"
          }
       }
    },
    "release_status" : "unstable",
+   "resources" : {
+      "bugtracker" : {
+         "web" : "https://github.com/AnaTofuZ/GraphQL-Houtou/issues"
+      },
+      "homepage" : "https://github.com/AnaTofuZ/GraphQL-Houtou",
+      "repository" : {
+         "type" : "git",
+         "url" : "https://github.com/AnaTofuZ/GraphQL-Houtou.git",
+         "web" : "https://github.com/AnaTofuZ/GraphQL-Houtou"
+      }
+   },
    "version" : "0.01",
    "x_serialization_backend" : "JSON::PP version 4.16",
    "x_static_install" : 0

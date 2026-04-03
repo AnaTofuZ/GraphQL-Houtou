@@ -47,6 +47,14 @@ sub run_graphql_js_xs {
   });
 }
 
+sub run_graphql_js_xs_lazy {
+  return parse_with_options($source, {
+    dialect => 'graphql-js',
+    backend => 'xs',
+    lazy_location => 1,
+  });
+}
+
 sub run_graphql_js_xs_noloc {
   return parse_with_options($source, {
     dialect => 'graphql-js',
@@ -59,6 +67,7 @@ run_graphql_perl_pegex();
 run_graphql_perl_xs();
 run_graphql_perl_canonical_xs();
 run_graphql_js_xs();
+run_graphql_js_xs_lazy();
 run_graphql_js_xs_noloc();
 
 print "Benchmark target: $file\n";
@@ -69,5 +78,6 @@ cmpthese($count, {
   graphql_perl_xs    => \&run_graphql_perl_xs,
   graphql_perl_canonical_xs => \&run_graphql_perl_canonical_xs,
   graphql_js_xs      => \&run_graphql_js_xs,
+  graphql_js_xs_lazy => \&run_graphql_js_xs_lazy,
   graphql_js_xs_noloc    => \&run_graphql_js_xs_noloc,
 });

@@ -295,7 +295,7 @@ static SV *gql_make_location(pTHX_ gql_parser_t *p);
 static SV *gql_make_current_location(pTHX_ gql_parser_t *p);
 static SV *gql_make_endline_location(pTHX_ gql_parser_t *p);
 static SV *gql_make_current_or_endline_location(pTHX_ gql_parser_t *p);
-static void gql_parser_init(gql_parser_t *p, SV *source_sv);
+static void gql_parser_init(pTHX_ gql_parser_t *p, SV *source_sv);
 static void gql_parser_destroy(gql_parser_t *p);
 static void gql_store_location(pTHX_ gql_parser_t *p, HV *hv);
 static void gql_store_current_location(pTHX_ gql_parser_t *p, HV *hv);
@@ -1299,13 +1299,17 @@ gql_parse_directives_only(pTHX_ SV *source_sv) {
   gql_parser_t p;
   SV *directives;
 
-  gql_parser_init(&p, source_sv);
+  ENTER;
+  SAVETMPS;
+  gql_parser_init(aTHX_ &p, source_sv);
   gql_advance(aTHX_ &p);
   directives = gql_parse_directives(aTHX_ &p);
   if (p.kind != TOK_EOF) {
     gql_throw(aTHX_ &p, p.tok_start, "Expected directive");
   }
   gql_parser_destroy(&p);
+  FREETMPS;
+  LEAVE;
   return directives;
 }
 
@@ -2322,7 +2326,9 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
     croak("graphqljs_apply_executable_loc_xs expected document definitions");
   }
 
-  gql_parser_init(&p, source_sv);
+  ENTER;
+  SAVETMPS;
+  gql_parser_init(aTHX_ &p, source_sv);
   gql_advance(aTHX_ &p);
 
   loc_hv = newHV();
@@ -2337,6 +2343,8 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
     }
     if (!gqljs_locate_executable_definition(aTHX_ &p, *svp)) {
       gql_parser_destroy(&p);
+      FREETMPS;
+      LEAVE;
       return &PL_sv_undef;
     }
   }
@@ -2346,6 +2354,8 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
   }
 
   gql_parser_destroy(&p);
+  FREETMPS;
+  LEAVE;
   return newSVsv(doc_sv);
 }
 
@@ -3919,9 +3929,11 @@ gql_ir_parse_executable_document(pTHX_ SV *source_sv) {
   gql_parser_t p;
   gql_ir_document_t *document;
 
+  ENTER;
+  SAVETMPS;
   Newxz(document, 1, gql_ir_document_t);
   gql_ir_arena_init(&document->arena);
-  gql_parser_init(&p, source_sv);
+  gql_parser_init(aTHX_ &p, source_sv);
   p.ir_arena = &document->arena;
 
   gql_advance(aTHX_ &p);
@@ -3929,6 +3941,8 @@ gql_ir_parse_executable_document(pTHX_ SV *source_sv) {
     gql_ir_ptr_array_push(&document->definitions, gql_ir_parse_executable_definition(aTHX_ &p));
   }
   gql_parser_destroy(&p);
+  FREETMPS;
+  LEAVE;
   return document;
 }
 
@@ -5696,7 +5710,7 @@ gql_parse_fragment_name(pTHX_ gql_parser_t *p) {
 }
 
 static void
-gql_parser_init(gql_parser_t *p, SV *source_sv) {
+gql_parser_init(pTHX_ gql_parser_t *p, SV *source_sv) {
   STRLEN len;
   const char *src = SvPV(source_sv, len);
   STRLEN i;
@@ -5729,6 +5743,7 @@ gql_parser_init(gql_parser_t *p, SV *source_sv) {
   }
 
   Newx(p->line_starts, line_count, UV);
+  SAVEFREEPV(p->line_starts);
   p->line_starts[0] = 0;
   p->num_lines = line_count;
 
@@ -5749,10 +5764,7 @@ gql_parser_init(gql_parser_t *p, SV *source_sv) {
 
 static void
 gql_parser_destroy(gql_parser_t *p) {
-  if (p->line_starts) {
-    Safefree(p->line_starts);
-    p->line_starts = NULL;
-  }
+  p->line_starts = NULL;
   p->num_lines = 0;
 }
 
@@ -5901,7 +5913,9 @@ gql_tokenize_source(pTHX_ SV *source_sv) {
   gql_parser_t p;
   AV *tokens = newAV();
 
-  gql_parser_init(&p, source_sv);
+  ENTER;
+  SAVETMPS;
+  gql_parser_init(aTHX_ &p, source_sv);
   gql_advance(aTHX_ &p);
   while (p.kind != TOK_EOF) {
     HV *hv = newHV();
@@ -5924,13 +5938,17 @@ gql_tokenize_source(pTHX_ SV *source_sv) {
   }
 
   gql_parser_destroy(&p);
+  FREETMPS;
+  LEAVE;
   return newRV_noinc((SV *)tokens);
 }
 
 static SV *
 gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv) {
   gql_parser_t p;
-  gql_parser_init(&p, source_sv);
+  ENTER;
+  SAVETMPS;
+  gql_parser_init(aTHX_ &p, source_sv);
   gql_advance(aTHX_ &p);
   while (p.kind != TOK_EOF) {
     if (p.kind == TOK_COLON || p.kind == TOK_EQUALS) {
@@ -5945,6 +5963,8 @@ gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv) {
           gql_store_sv(loc_hv, "line", newSViv(line));
           gql_store_sv(loc_hv, "column", newSViv(column));
           gql_parser_destroy(&p);
+          FREETMPS;
+          LEAVE;
           return newRV_noinc((SV *)loc_hv);
         }
       }
@@ -5954,6 +5974,8 @@ gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv) {
   }
 
   gql_parser_destroy(&p);
+  FREETMPS;
+  LEAVE;
   return &PL_sv_undef;
 }
 
@@ -6699,11 +6721,15 @@ gql_parse_document(pTHX_ SV *source_sv, SV *no_location_sv) {
   gql_parser_t p;
   SV *ret;
 
-  gql_parser_init(&p, source_sv);
+  ENTER;
+  SAVETMPS;
+  gql_parser_init(aTHX_ &p, source_sv);
   p.no_location = SvTRUE(no_location_sv) ? 1 : 0;
   gql_advance(aTHX_ &p);
   ret = newRV_noinc((SV *)gql_parse_definitions(aTHX_ &p));
   gql_parser_destroy(&p);
+  FREETMPS;
+  LEAVE;
   return ret;
 }
 

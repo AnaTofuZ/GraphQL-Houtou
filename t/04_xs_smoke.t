@@ -9,6 +9,7 @@ BEGIN {
         require GraphQL::Houtou::XS::Parser;
         GraphQL::Houtou::XS::Parser->import(qw(
             graphqljs_apply_executable_loc_xs
+            graphqljs_build_document_xs
             graphqljs_build_executable_document_xs
             graphqlperl_build_document_xs
             graphqlperl_find_legacy_empty_object_location_xs
@@ -22,7 +23,6 @@ BEGIN {
     } or plan skip_all => 'XS parser is not built';
 }
 
-use GraphQL::Houtou::Adapter::GraphQLPerlToGraphQLJS qw(convert_document);
 use GraphQL::Houtou::Adapter::GraphQLJSToGraphQLPerl ();
 use GraphQL::Houtou::GraphQLJS::Canonical qw(parse_canonical_document);
 
@@ -241,28 +241,56 @@ subtest 'tokenize_xs exposes token locations directly', sub {
     ];
 };
 
-subtest 'graphqljs_build_executable_document_xs matches Perl adapter for executable documents', sub {
+subtest 'graphqljs_build_executable_document_xs matches canonical parser for executable documents', sub {
     my $source = 'query Q($id: ID = 1) @root { user(id: $id) { ...UserFields } } fragment UserFields on User { name }';
     my $legacy = parse_xs($source);
     my $built = graphqljs_build_executable_document_xs($legacy);
-    my $expected = convert_document($legacy, {
+    my $expected = parse_canonical_document($source, {
+        backend => 'xs',
         no_location => 1,
-        skip_location_projection => 1,
     });
 
-    cmp_deeply $built, $expected, 'xs executable builder matches the Perl adapter output';
+    cmp_deeply $built, $expected, 'xs executable builder matches canonical parser output';
 };
 
-subtest 'graphqljs_build_executable_document_xs matches Perl adapter for empty object values', sub {
+subtest 'graphqljs_build_executable_document_xs matches canonical parser for empty object values', sub {
     my $source = 'query Q($input: Filter = {}) { user(filter: {}) { id } }';
     my $legacy = parse_xs($source);
     my $built = graphqljs_build_executable_document_xs($legacy);
-    my $expected = convert_document($legacy, {
+    my $expected = parse_canonical_document($source, {
+        backend => 'xs',
         no_location => 1,
-        skip_location_projection => 1,
     });
 
     cmp_deeply $built, $expected, 'xs executable builder handles empty object values';
+};
+
+subtest 'graphqljs_build_document_xs matches canonical parser for type system documents', sub {
+    my $source = <<'EOF';
+"Type doc"
+type User implements Node @entity {
+  "Role doc"
+  role(status: Status = ACTIVE): String @deprecated
+}
+
+enum Status { ACTIVE INACTIVE }
+
+input UserFilter {
+  status: Status = ACTIVE
+}
+
+directive @entity on OBJECT | INTERFACE
+
+schema { query: Query mutation: Mutation }
+EOF
+    my $legacy = parse_xs($source);
+    my $built = graphqljs_build_document_xs($legacy);
+    my $expected = parse_canonical_document($source, {
+        backend => 'xs',
+        no_location => 1,
+    });
+
+    cmp_deeply $built, $expected, 'xs full-document builder matches canonical parser output';
 };
 
 subtest 'graphqlperl_build_document_xs matches Perl adapter for type system documents', sub {

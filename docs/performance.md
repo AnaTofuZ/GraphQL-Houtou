@@ -134,7 +134,7 @@ graphql_js_xs_noloc       7164/s            1486%                  1436%        
 
 であり、`no_location` 経路に限れば location projection コストはほぼ解消できたと見てよい。
 
-さらに後続作業で、executable document は `GraphQLPerlToGraphQLJS` を経由せず
+さらに後続作業で、executable document は Perl fallback converter を経由せず
 `graphqljs_build_executable_document_xs()` で直接 graphql-js AST を組み立てるようにした。
 当初は object value を含む executable を安全のため Perl adapter に fallback していたが、
 empty object / non-empty object の双方を XS builder 側で扱えるようにしたことで、
@@ -209,7 +209,7 @@ executable 変換そのものよりも、legacy 互換チェックと SDL / 非 
   NYTProf はまだ `graphql-perl` backend 比較を優先している。
 
 
-2026-04-03 の後続作業として、executable document については `GraphQLPerlToGraphQLJS`
+2026-04-03 の後続作業として、executable document については Perl fallback converter
 を経由しない XS builder `graphqljs_build_executable_document_xs()` を導入した。
 ただし現段階では object value を含む executable は Canonical 側で安全に Perl adapter へ
 fallback するため、`kitchen-sink` のような入力では builder が部分適用に留まる。

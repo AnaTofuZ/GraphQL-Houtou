@@ -4,9 +4,6 @@ use 5.014;
 use strict;
 use warnings;
 use Exporter 'import';
-use GraphQL::Houtou::Adapter::GraphQLPerlToGraphQLJS qw(
-  convert_document
-);
 use GraphQL::Houtou::GraphQLJS::Locator qw(apply_loc_from_source);
 use GraphQL::Houtou::GraphQLJS::Util qw(rebase_loc);
 
@@ -18,6 +15,7 @@ my $HAS_XS_PREPROCESS = eval {
   require GraphQL::Houtou::XS::Parser;
   GraphQL::Houtou::XS::Parser->import(qw(
     graphqljs_apply_executable_loc_xs
+    graphqljs_build_document_xs
     graphqljs_build_directives_xs
     graphqljs_build_executable_document_xs
     graphqljs_preprocess_xs
@@ -28,29 +26,6 @@ my $HAS_XS_PREPROCESS = eval {
 };
 
 my %DIRECTIVE_CACHE;
-
-sub _pp_package {
-  require GraphQL::Houtou::GraphQLJS::PP;
-  return 'GraphQL::Houtou::GraphQLJS::PP';
-}
-
-sub _preprocess_source_pp {
-  my ($source) = @_;
-  my $pkg = _pp_package();
-  return $pkg->can('preprocess_source_fallback')->($source);
-}
-
-sub _materialize_operation_variable_directives_pp {
-  my ($meta) = @_;
-  my $pkg = _pp_package();
-  return $pkg->can('materialize_operation_variable_directives')->($meta);
-}
-
-sub _patch_document_pp {
-  my ($doc, $meta) = @_;
-  my $pkg = _pp_package();
-  return $pkg->can('patch_document_fallback')->($doc, $meta);
-}
 
 sub _convert_directive_texts {
   my ($raw_directives, $loc) = @_;
@@ -75,38 +50,30 @@ sub _convert_directive_texts {
 sub _parse_legacy_document {
   my ($source, $backend, $no_location) = @_;
 
-  if ($backend eq 'xs') {
-    require GraphQL::Houtou::Backend::XS;
-    return GraphQL::Houtou::Backend::XS::parse($source, $no_location);
-  }
-  if ($backend eq 'pegex') {
-    require GraphQL::Houtou::Backend::Pegex;
-    return GraphQL::Houtou::Backend::Pegex::parse($source, $no_location);
-  }
+  die "graphql-js parser requires XS backend support.\n"
+    if !$HAS_XS_PREPROCESS;
+  die "graphql-js parser only supports backend 'xs'.\n"
+    if ($backend || '') ne 'xs';
 
-  die "Unknown parser backend '$backend'.\n";
+  require GraphQL::Houtou::Backend::XS;
+  return GraphQL::Houtou::Backend::XS::parse($source, $no_location);
 }
 
 sub _build_graphqljs_document_from_legacy {
-  my ($legacy, $options) = @_;
+  my ($legacy) = @_;
   my $is_executable = _is_executable_legacy_document($legacy);
-  my $use_xs_builder = $HAS_XS_PREPROCESS
-    && ($options->{backend} || '') eq 'xs'
-    && $is_executable;
 
-  if ($use_xs_builder) {
-    my $doc = graphqljs_build_executable_document_xs($legacy);
+  my $doc = graphqljs_build_document_xs($legacy);
+  return ($doc, $is_executable)
+    if defined $doc && ref $doc eq 'HASH';
+
+  if ($is_executable) {
+    $doc = graphqljs_build_executable_document_xs($legacy);
     return ($doc, $is_executable)
       if defined $doc && ref $doc eq 'HASH';
   }
 
-  return (
-    convert_document($legacy, {
-      %$options,
-      ($use_xs_builder ? (skip_location_projection => 1) : ()),
-    }),
-    $is_executable,
-  );
+  die "graphql-js XS builder could not materialize a canonical document.\n";
 }
 
 sub _materialize_operation_variable_directives_xs {
@@ -128,14 +95,13 @@ sub _materialize_operation_variable_directives_xs {
 sub _preprocess_source {
   my ($source) = @_;
 
-  if ($HAS_XS_PREPROCESS) {
-    my $meta = graphqljs_preprocess_xs($source);
-    my $rewritten = delete $meta->{rewritten_source};
-    delete $meta->{rewrites};
-    return ($rewritten, $meta);
-  }
+  die "graphql-js parser requires XS backend support.\n"
+    if !$HAS_XS_PREPROCESS;
 
-  return _preprocess_source_pp($source);
+  my $meta = graphqljs_preprocess_xs($source);
+  my $rewritten = delete $meta->{rewritten_source};
+  delete $meta->{rewrites};
+  return ($rewritten, $meta);
 }
 
 sub _is_executable_legacy_document {
@@ -156,30 +122,18 @@ sub parse_canonical_document {
   $options ||= {};
 
   my ($rewritten, $meta) = _preprocess_source($source);
-  my $backend = $options->{backend} || ($HAS_XS_PREPROCESS ? 'xs' : 'pegex');
+  my $backend = $options->{backend} || 'xs';
   my $legacy = _parse_legacy_document($rewritten, $backend, $options->{no_location} // $options->{noLocation});
-  my ($doc, $is_executable) = _build_graphqljs_document_from_legacy($legacy, {
-    %$options,
-    backend => $backend,
-  });
-  if ($HAS_XS_PREPROCESS) {
-    _materialize_operation_variable_directives_xs($meta);
-  }
-  else {
-    _materialize_operation_variable_directives_pp($meta);
-  }
+  my ($doc) = _build_graphqljs_document_from_legacy($legacy);
+  _materialize_operation_variable_directives_xs($meta);
 
-  if ($HAS_XS_PREPROCESS) {
-    $doc = graphqljs_patch_document_xs($doc, $meta);
-    unless ($options->{no_location} || $options->{noLocation}) {
-      my $located = graphqljs_apply_executable_loc_xs($doc, $source);
-      return $located if defined $located && ref $located eq 'HASH';
-      return apply_loc_from_source($doc, $source);
-    }
-    return $doc;
+  $doc = graphqljs_patch_document_xs($doc, $meta);
+  unless ($options->{no_location} || $options->{noLocation}) {
+    my $located = graphqljs_apply_executable_loc_xs($doc, $source);
+    return $located if defined $located && ref $located eq 'HASH';
+    return apply_loc_from_source($doc, $source);
   }
-
-  return _patch_document_pp($doc, $meta);
+  return $doc;
 }
 
 1;

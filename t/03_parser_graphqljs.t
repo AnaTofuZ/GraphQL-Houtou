@@ -5,14 +5,6 @@ use Test::Deep;
 use Test::Exception;
 
 use GraphQL::Houtou qw(parse_with_options);
-use GraphQL::Houtou::Adapter::GraphQLPerlToGraphQLJS qw(convert_document);
-use GraphQL::Houtou::Backend::XS ();
-use GraphQL::Houtou::GraphQLJS::Locator qw(apply_loc_from_source);
-use GraphQL::Houtou::GraphQLJS::PP qw(
-    materialize_operation_variable_directives
-    patch_document_fallback
-    preprocess_source_fallback
-);
 use GraphQL::Houtou::GraphQLJS::Parser qw(parse);
 
 sub strip_loc {
@@ -285,7 +277,6 @@ EOF
 subtest 'graphql-js dialect converts directive extensions', sub {
     my $source = q(extend directive @tag on FIELD | FRAGMENT_SPREAD);
     my $got = parse($source);
-    my $got_pegex = parse($source, { backend => 'pegex' });
 
     cmp_deeply strip_loc($got), {
         kind => 'Document',
@@ -303,8 +294,6 @@ subtest 'graphql-js dialect converts directive extensions', sub {
         ],
     };
 
-    cmp_deeply strip_loc($got_pegex), strip_loc($got),
-        'directive extension is backend-independent';
     is_deeply [ map $got->{definitions}[0]{loc}{$_}, qw(line column) ], [1, 1],
         'directive extension loc points at extend keyword';
 };
@@ -417,18 +406,15 @@ subtest 'graphql-js dialect can be selected through facade', sub {
     cmp_deeply $through_facade, $direct, 'facade routes to graphql-js parser';
 };
 
-subtest 'XS and PP directive patch paths stay aligned', sub {
+subtest 'graphql-js parser uses canonical XS path', sub {
     my $source = q(query Q($id: ID @fromContext, $limit: Int = 10 @clamp(max: 100)) { user(id: $id) { id } });
-    my $xs_doc = parse($source, { backend => 'xs' });
+    my $through_parser = parse($source, { backend => 'xs' });
+    my $through_facade = parse_with_options($source, {
+        dialect => 'graphql-js',
+        backend => 'xs',
+    });
 
-    my ($rewritten, $meta) = preprocess_source_fallback($source);
-    my $legacy = GraphQL::Houtou::Backend::XS::parse($rewritten);
-    my $pp_doc = convert_document($legacy, {});
-    materialize_operation_variable_directives($meta);
-    $pp_doc = patch_document_fallback($pp_doc, $meta);
-    $pp_doc = apply_loc_from_source($pp_doc, $source);
-
-    cmp_deeply $pp_doc, $xs_doc, 'PP fallback patch matches XS patch output';
+    cmp_deeply $through_facade, $through_parser, 'facade and parser stay on the same canonical XS path';
 };
 
 subtest 'graphql-js parser still rejects unsupported extension forms explicitly', sub {

@@ -71,7 +71,7 @@ my $ast = GraphQL::Houtou::parse_with_options($source, {
 - variable definition directives も metadata patch で対応済み
 - graphql-js dialect の前処理 metadata 抽出は `GraphQL::Houtou::XS::Parser::graphqljs_preprocess_xs()` を優先利用する
 - XS 前処理は metadata だけでなく rewritten source も返す
-- `GraphQL::Houtou::GraphQLJS::PP` は fallback 専用に隔離し、通常経路で eager load しない
+- `GraphQL::Houtou::GraphQLJS::Parser` は XS 専用経路であり、`backend => 'xs'` のみを受け付ける
 - `GraphQL::Houtou::XS::Parser::tokenize_xs()` を使って graphql-js `loc` を source token ベースで再構築する
 - XS core parser は empty object value を受理し、graphql-perl dialect 側でだけ legacy reject をかける
 - XS patch と PP patch の variable directive 出力は parity テストで固定している

@@ -83,13 +83,14 @@ subtest 'graphql-js namespace is routable', sub {
     cmp_deeply $through_backend, $namespaced, 'graphql-js xs backend exposes the canonical xs path';
 };
 
-subtest 'graphql-js parser keeps PP fallback unloaded on XS path', sub {
-    unless (defined &parse_xs) {
-        plan skip_all => 'XS parser is not built';
-    }
-
-    ok !exists $INC{'GraphQL/Houtou/GraphQLJS/PP.pm'},
-        'graphql-js parser module does not eagerly load PP fallback';
+subtest 'graphql-js parser is XS-only', sub {
+    dies_ok {
+        GraphQL::Houtou::GraphQLJS::Parser::parse('{ field }', {
+            backend => 'pegex',
+        });
+    } 'graphql-js parser rejects pegex backend';
+    like $@, qr/graphql-js parser only supports backend 'xs'/,
+        'graphql-js backend restriction is explicit';
 };
 
 subtest 'invalid dialect and backend are rejected explicitly', sub {

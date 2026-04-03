@@ -13,6 +13,7 @@ use XSLoader ();
 our $VERSION = '0.01';
 our @EXPORT_OK = qw(
   graphqljs_apply_executable_loc_xs
+  graphqljs_build_document_xs
   graphqljs_build_executable_document_xs
   graphqljs_build_directives_xs
   graphqlperl_build_document_xs

@@ -40,6 +40,24 @@ sub strip_location {
     return $value;
 }
 
+sub has_location {
+    my ($value) = @_;
+    if (ref $value eq 'HASH') {
+        return 1 if exists $value->{location};
+        for my $key (keys %$value) {
+            return 1 if has_location($value->{$key});
+        }
+        return 0;
+    }
+    if (ref $value eq 'ARRAY') {
+        for my $item (@$value) {
+            return 1 if has_location($item);
+        }
+        return 0;
+    }
+    return 0;
+}
+
 subtest 'executable document AST stays compatible', sub {
     my $got = parse(<<'EOF');
 query Q($id: ID = 1, $flag: Boolean = false) @root {
@@ -250,7 +268,7 @@ subtest 'strict grammar edge cases stay compatible', sub {
     is_deeply [ map $@->locations->[0]{$_}, qw(line column) ], [1, 19], 'empty object literal location';
 };
 
-subtest 'noLocation flag stays ignored for compatibility', sub {
+subtest 'noLocation compatibility stays explicit by backend', sub {
     my $source = <<'EOF';
 query Q {
   user {
@@ -275,8 +293,10 @@ EOF
 
         my $xs_with_locations = parse_xs($source, 0);
         my $xs_without_locations = parse_xs($source, 1);
-        cmp_deeply $xs_without_locations, $xs_with_locations,
-            'parse_xs also ignores noLocation';
+        ok has_location($xs_with_locations), 'parse_xs keeps locations by default';
+        ok !has_location($xs_without_locations), 'parse_xs drops locations when noLocation is enabled';
+        cmp_deeply strip_location($xs_without_locations), strip_location($xs_with_locations),
+            'parse_xs preserves document shape when dropping locations';
     }
 };
 

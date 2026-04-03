@@ -48,6 +48,7 @@ typedef struct {
   STRLEN val_end;
   gql_token_kind_t kind;
   bool is_utf8;
+  bool no_location;
   gql_ir_arena_t *ir_arena;
 } gql_parser_t;
 
@@ -249,7 +250,7 @@ struct gql_ir_document {
   gql_ir_arena_t arena;
 };
 
-static SV *gql_parse_document(pTHX_ SV *source_sv);
+static SV *gql_parse_document(pTHX_ SV *source_sv, SV *no_location_sv);
 static void gql_advance(pTHX_ gql_parser_t *p);
 static void gql_skip_ignored(gql_parser_t *p);
 static void gql_lex_token(pTHX_ gql_parser_t *p);
@@ -1219,6 +1220,8 @@ gql_parse_directives_only(pTHX_ SV *source_sv) {
   p.val_end = 0;
   p.kind = TOK_EOF;
   p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
+  p.no_location = 0;
+  p.ir_arena = NULL;
 
   gql_advance(aTHX_ &p);
   directives = gql_parse_directives(aTHX_ &p);
@@ -2255,6 +2258,8 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
   p.val_end = 0;
   p.kind = TOK_EOF;
   p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
+  p.no_location = 0;
+  p.ir_arena = NULL;
   gql_advance(aTHX_ &p);
 
   loc_hv = newHV();
@@ -3351,7 +3356,7 @@ gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_l
     return &PL_sv_undef;
   }
 
-  legacy_sv = gql_parse_document(aTHX_ *rewritten_svp);
+  legacy_sv = gql_parse_document(aTHX_ *rewritten_svp, no_location_sv);
   if (!legacy_sv || !SvROK(legacy_sv) || SvTYPE(SvRV(legacy_sv)) != SVt_PVAV) {
     return &PL_sv_undef;
   }
@@ -3863,6 +3868,7 @@ gql_ir_parse_executable_document(pTHX_ SV *source_sv) {
   p.val_end = 0;
   p.kind = TOK_EOF;
   p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
+  p.no_location = 0;
   p.ir_arena = &document->arena;
 
   gql_advance(aTHX_ &p);
@@ -5682,6 +5688,9 @@ gql_make_location(pTHX_ gql_parser_t *p) {
 
 static void
 gql_store_location(pTHX_ gql_parser_t *p, HV *hv) {
+  if (p->no_location) {
+    return;
+  }
   gql_store_sv(hv, "location", gql_make_location(aTHX_ p));
 }
 
@@ -5707,6 +5716,9 @@ gql_make_current_location(pTHX_ gql_parser_t *p) {
 
 static void
 gql_store_current_location(pTHX_ gql_parser_t *p, HV *hv) {
+  if (p->no_location) {
+    return;
+  }
   gql_store_sv(hv, "location", gql_make_current_location(aTHX_ p));
 }
 
@@ -5723,6 +5735,9 @@ gql_make_endline_location(pTHX_ gql_parser_t *p) {
 
 static void
 gql_store_endline_location(pTHX_ gql_parser_t *p, HV *hv) {
+  if (p->no_location) {
+    return;
+  }
   gql_store_sv(hv, "location", gql_make_endline_location(aTHX_ p));
 }
 
@@ -5745,6 +5760,9 @@ gql_make_current_or_endline_location(pTHX_ gql_parser_t *p) {
 
 static void
 gql_store_current_or_endline_location(pTHX_ gql_parser_t *p, HV *hv) {
+  if (p->no_location) {
+    return;
+  }
   gql_store_sv(hv, "location", gql_make_current_or_endline_location(aTHX_ p));
 }
 
@@ -5775,6 +5793,8 @@ gql_tokenize_source(pTHX_ SV *source_sv) {
   p.val_end = 0;
   p.kind = TOK_EOF;
   p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
+  p.no_location = 0;
+  p.ir_arena = NULL;
 
   gql_advance(aTHX_ &p);
   while (p.kind != TOK_EOF) {
@@ -5816,6 +5836,8 @@ gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv) {
   p.val_end = 0;
   p.kind = TOK_EOF;
   p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
+  p.no_location = 0;
+  p.ir_arena = NULL;
 
   gql_advance(aTHX_ &p);
   while (p.kind != TOK_EOF) {
@@ -6579,7 +6601,7 @@ gql_parse_definitions(pTHX_ gql_parser_t *p) {
 }
 
 static SV *
-gql_parse_document(pTHX_ SV *source_sv) {
+gql_parse_document(pTHX_ SV *source_sv, SV *no_location_sv) {
   gql_parser_t p;
   STRLEN len;
   const char *src = SvPV(source_sv, len);
@@ -6593,6 +6615,8 @@ gql_parse_document(pTHX_ SV *source_sv) {
   p.val_end = 0;
   p.kind = TOK_EOF;
   p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
+  p.no_location = SvTRUE(no_location_sv) ? 1 : 0;
+  p.ir_arena = NULL;
   gql_advance(aTHX_ &p);
   return newRV_noinc((SV *)gql_parse_definitions(aTHX_ &p));
 }
@@ -6604,7 +6628,7 @@ parse_xs(source, no_location = &PL_sv_undef)
     SV *source
     SV *no_location
   CODE:
-    RETVAL = gql_parse_document(aTHX_ source);
+    RETVAL = gql_parse_document(aTHX_ source, no_location);
   OUTPUT:
     RETVAL
 

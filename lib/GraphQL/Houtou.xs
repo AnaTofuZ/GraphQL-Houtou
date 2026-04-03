@@ -524,11 +524,13 @@ gql_unescape_string_sv(pTHX_ SV *raw) {
   STRLEN len;
   const char *src = SvPV(raw, len);
   SV *out = newSVpvn("", 0);
+  char *dst;
   STRLEN i;
+  STRLEN out_len = 0;
+  int needs_utf8 = SvUTF8(raw) ? 1 : 0;
 
-  if (len > 0) {
-    SvGROW(out, len + 1);
-  }
+  SvGROW(out, len + 1);
+  dst = SvPVX(out);
 
   for (i = 0; i < len; i++) {
     if (src[i] == '\\' && i + 1 < len) {
@@ -544,7 +546,6 @@ gql_unescape_string_sv(pTHX_ SV *raw) {
         case 't': decoded = '\t'; break;
         case 'u': {
           UV codepoint = 0;
-          U8 utf8_buf[UTF8_MAXBYTES + 1];
           U8 *utf8_end;
 
           if (i + 5 < len) {
@@ -561,8 +562,9 @@ gql_unescape_string_sv(pTHX_ SV *raw) {
               }
             }
 
-            utf8_end = uvchr_to_utf8(utf8_buf, codepoint);
-            sv_catpvn_flags(out, (char *)utf8_buf, (STRLEN)(utf8_end - utf8_buf), SV_CATUTF8);
+            utf8_end = uvchr_to_utf8((U8 *)(dst + out_len), codepoint);
+            out_len += (STRLEN)(utf8_end - (U8 *)(dst + out_len));
+            needs_utf8 = 1;
             i += 5;
             continue;
           }
@@ -571,15 +573,18 @@ gql_unescape_string_sv(pTHX_ SV *raw) {
         default: break;
       }
       if (decoded != '\0') {
-        sv_catpvn(out, &decoded, 1);
+        dst[out_len++] = decoded;
         i++;
         continue;
       }
     }
-    sv_catpvn(out, src + i, 1);
+    dst[out_len++] = src[i];
   }
 
-  if (SvUTF8(raw)) {
+  dst[out_len] = '\0';
+  SvCUR_set(out, out_len);
+
+  if (needs_utf8) {
     SvUTF8_on(out);
   }
   return out;

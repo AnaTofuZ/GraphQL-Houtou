@@ -11,7 +11,7 @@ BEGIN {
             graphqljs_apply_executable_loc_xs
             graphqljs_build_executable_document_xs
             graphqlperl_build_document_xs
-            graphqlperl_build_executable_document_xs
+            graphqlperl_find_legacy_empty_object_location_xs
             parse_xs
             graphqljs_preprocess_xs
             graphqljs_patch_document_xs
@@ -265,17 +265,6 @@ subtest 'graphqljs_build_executable_document_xs matches Perl adapter for empty o
     cmp_deeply $built, $expected, 'xs executable builder handles empty object values';
 };
 
-subtest 'graphqlperl_build_executable_document_xs matches Perl adapter for executable documents', sub {
-    my $source = 'query Q($id: ID = 1, $flag: Boolean = false) @root { user(id: $id) { ...UserFields } } fragment UserFields on User { name }';
-    my $document = parse_canonical_document($source, {
-        backend => 'xs',
-    });
-    my $built = graphqlperl_build_executable_document_xs($document);
-    my $expected = GraphQL::Houtou::Adapter::GraphQLJSToGraphQLPerl::convert_document($document);
-
-    cmp_deeply $built, $expected, 'xs graphql-perl builder matches the Perl adapter output';
-};
-
 subtest 'graphqlperl_build_document_xs matches Perl adapter for type system documents', sub {
     my $source = <<'EOF';
 "Type doc"
@@ -301,6 +290,17 @@ EOF
     cmp_deeply $built, $expected, 'xs graphql-perl full-document builder matches the Perl adapter output';
 };
 
+subtest 'graphqlperl_build_document_xs matches Perl adapter for executable documents', sub {
+    my $source = 'query Q($id: ID = 1, $flag: Boolean = false) @root { user(id: $id) { ...UserFields } } fragment UserFields on User { name }';
+    my $document = parse_canonical_document($source, {
+        backend => 'xs',
+    });
+    my $built = graphqlperl_build_document_xs($document);
+    my $expected = GraphQL::Houtou::Adapter::GraphQLJSToGraphQLPerl::convert_document($document);
+
+    cmp_deeply $built, $expected, 'xs graphql-perl full-document builder also matches executable output';
+};
+
 subtest 'graphqljs_apply_executable_loc_xs locates executable documents directly', sub {
     my $source = 'query Q($id: ID = 1) @root { user(id: $id) { name } }';
     my $doc = parse_canonical_document($source, {
@@ -316,6 +316,20 @@ subtest 'graphqljs_apply_executable_loc_xs locates executable documents directly
         'variable definition loc is applied directly';
     is_deeply [ map $located->{definitions}[0]{selectionSet}{selections}[0]{arguments}[0]{loc}{$_}, qw(line column) ], [1, 35],
         'argument loc is applied directly';
+};
+
+subtest 'graphqlperl_find_legacy_empty_object_location_xs detects legacy empty object errors directly', sub {
+    my $loc = graphqlperl_find_legacy_empty_object_location_xs(
+        'query Q($input: Filter = {}) { user(filter: {}) { id } }'
+    );
+    isa_ok $loc, 'HASH', 'legacy compat helper returns a location hash';
+    is_deeply [ map $loc->{$_}, qw(line column) ], [1, 27],
+        'helper points at the empty object closing brace';
+
+    my $none = graphqlperl_find_legacy_empty_object_location_xs(
+        'query Q($input: Filter = {a: 1}) { user(filter: {a: 1}) { id } }'
+    );
+    ok !defined($none), 'non-empty object value is not reported';
 };
 
 done_testing;

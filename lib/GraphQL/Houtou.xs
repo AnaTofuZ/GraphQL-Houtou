@@ -113,6 +113,7 @@ static void gqljs_scan_variable_definition_directives(pTHX_ const char *src, STR
 static SV *gql_graphqljs_preprocess(pTHX_ SV *source_sv);
 static SV *gql_parse_directives_only(pTHX_ SV *source_sv);
 static SV *gql_tokenize_source(pTHX_ SV *source_sv);
+static SV *gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv);
 static SV *gqljs_clone_with_loc(pTHX_ SV *value, SV *loc_sv);
 static int gqljs_sv_eq_pv(SV *sv, const char *literal);
 static const char *gqljs_definition_source_kind(SV *kind_sv);
@@ -138,7 +139,6 @@ static void gqljs_locate_selection_node(pTHX_ gql_parser_t *p, SV *node_sv);
 static int gqljs_locate_executable_definition(pTHX_ gql_parser_t *p, SV *node_sv);
 static SV *gql_graphqljs_build_executable_document(pTHX_ SV *legacy_sv);
 static SV *gql_graphqlperl_build_document(pTHX_ SV *doc_sv);
-static SV *gql_graphqlperl_build_executable_document(pTHX_ SV *doc_sv);
 static HV *gqljs_new_node_hv(const char *kind);
 static SV *gqljs_new_node_ref(const char *kind);
 static SV *gqljs_new_name_node_sv(pTHX_ SV *value_sv);
@@ -2976,43 +2976,6 @@ gqlperl_convert_definition_from_gqljs(pTHX_ SV *node_sv) {
 }
 
 static SV *
-gql_graphqlperl_build_executable_document(pTHX_ SV *doc_sv) {
-  HV *doc_hv;
-  AV *definitions_av;
-  AV *out_av;
-  I32 i;
-
-  if (!doc_sv || !SvROK(doc_sv) || SvTYPE(SvRV(doc_sv)) != SVt_PVHV) {
-    croak("graphqlperl_build_executable_document_xs expects a document hash reference");
-  }
-  doc_hv = (HV *)SvRV(doc_sv);
-  if (!strEQ(gqljs_fetch_kind(doc_hv), "Document")) {
-    croak("graphqlperl_build_executable_document_xs expects a graphql-js Document node");
-  }
-  definitions_av = gqljs_fetch_array(doc_hv, "definitions");
-  if (!definitions_av) {
-    croak("graphqlperl_build_executable_document_xs expected document definitions");
-  }
-
-  out_av = newAV();
-  for (i = 0; i <= av_len(definitions_av); i++) {
-    SV **svp = av_fetch(definitions_av, i, 0);
-    SV *converted_sv;
-    if (!svp) {
-      continue;
-    }
-    converted_sv = gqlperl_convert_executable_definition_from_gqljs(aTHX_ *svp);
-    if (!converted_sv || converted_sv == &PL_sv_undef) {
-      SvREFCNT_dec((SV *)out_av);
-      return &PL_sv_undef;
-    }
-    av_push(out_av, converted_sv);
-  }
-
-  return newRV_noinc((SV *)out_av);
-}
-
-static SV *
 gql_graphqlperl_build_document(pTHX_ SV *doc_sv) {
   HV *doc_hv;
   AV *definitions_av;
@@ -3532,6 +3495,47 @@ gql_tokenize_source(pTHX_ SV *source_sv) {
   }
 
   return newRV_noinc((SV *)tokens);
+}
+
+static SV *
+gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv) {
+  gql_parser_t p;
+  STRLEN len;
+  const char *src = SvPV(source_sv, len);
+
+  p.src = src;
+  p.len = len;
+  p.pos = 0;
+  p.last_pos = (STRLEN)-1;
+  p.tok_start = 0;
+  p.tok_end = 0;
+  p.val_start = 0;
+  p.val_end = 0;
+  p.kind = TOK_EOF;
+  p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
+
+  gql_advance(aTHX_ &p);
+  while (p.kind != TOK_EOF) {
+    if (p.kind == TOK_COLON || p.kind == TOK_EQUALS) {
+      gql_advance(aTHX_ &p);
+      if (p.kind == TOK_LBRACE) {
+        gql_advance(aTHX_ &p);
+        if (p.kind == TOK_RBRACE) {
+          IV line;
+          IV column;
+          HV *loc_hv = newHV();
+          gql_line_column_from_pos(&p, p.tok_start, &line, &column, 1);
+          gql_store_sv(loc_hv, "line", newSViv(line));
+          gql_store_sv(loc_hv, "column", newSViv(column));
+          return newRV_noinc((SV *)loc_hv);
+        }
+      }
+      continue;
+    }
+    gql_advance(aTHX_ &p);
+  }
+
+  return &PL_sv_undef;
 }
 
 static SV *
@@ -4326,6 +4330,14 @@ tokenize_xs(source)
     RETVAL
 
 SV *
+graphqlperl_find_legacy_empty_object_location_xs(source)
+    SV *source
+  CODE:
+    RETVAL = gql_graphqlperl_find_legacy_empty_object_location(aTHX_ source);
+  OUTPUT:
+    RETVAL
+
+SV *
 graphqljs_patch_document_xs(doc, meta)
     SV *doc
     SV *meta
@@ -4347,14 +4359,6 @@ graphqlperl_build_document_xs(doc)
     SV *doc
   CODE:
     RETVAL = gql_graphqlperl_build_document(aTHX_ doc);
-  OUTPUT:
-    RETVAL
-
-SV *
-graphqlperl_build_executable_document_xs(doc)
-    SV *doc
-  CODE:
-    RETVAL = gql_graphqlperl_build_executable_document(aTHX_ doc);
   OUTPUT:
     RETVAL
 

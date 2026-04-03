@@ -11,6 +11,7 @@ BEGIN {
             graphqljs_apply_executable_loc_xs
             graphqljs_build_document_xs
             graphqljs_build_executable_document_xs
+            graphqljs_parse_document_xs
             graphqljs_parse_executable_document_xs
             graphqlperl_build_document_xs
             graphqlperl_find_legacy_empty_object_location_xs
@@ -309,6 +310,27 @@ subtest 'graphqljs_parse_executable_document_xs keeps shorthand query shape stab
             ],
         },
     }, 'xs executable fast path preserves empty arrays on shorthand queries';
+};
+
+subtest 'graphqljs_parse_document_xs matches canonical parser on executable fast path', sub {
+    my $source = 'query Q($id: ID = 1) @root { user(id: $id) { ...UserFields } } fragment UserFields on User { name }';
+    my $built = graphqljs_parse_document_xs($source);
+    my $expected = parse_canonical_document($source, {
+        backend => 'xs',
+    });
+
+    cmp_deeply $built, $expected, 'xs canonical entrypoint matches canonical parser for executable documents';
+};
+
+subtest 'graphqljs_parse_document_xs materializes type system documents without locations', sub {
+    my $source = 'type User { id: ID! }';
+    my $built = graphqljs_parse_document_xs($source, 1);
+    my $expected = parse_canonical_document($source, {
+        backend => 'xs',
+        no_location => 1,
+    });
+
+    cmp_deeply $built, $expected, 'xs canonical entrypoint handles non-executable documents in no_location mode';
 };
 
 subtest 'graphqljs_build_document_xs matches canonical parser for type system documents', sub {

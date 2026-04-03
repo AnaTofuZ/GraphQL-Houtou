@@ -18,7 +18,7 @@ my $HAS_XS_PREPROCESS = eval {
     graphqljs_build_document_xs
     graphqljs_build_directives_xs
     graphqljs_build_executable_document_xs
-    graphqljs_parse_executable_document_xs
+    graphqljs_parse_document_xs
     graphqljs_preprocess_xs
     graphqljs_patch_document_xs
     parse_directives_xs
@@ -27,11 +27,6 @@ my $HAS_XS_PREPROCESS = eval {
 };
 
 my %DIRECTIVE_CACHE;
-
-sub _looks_like_executable_source {
-  my ($source) = @_;
-  return $source =~ /\A(?:\x{FEFF}|[\x20\x09\x0a\x0d,]|#[^\r\n]*(?:\r\n?|\n))*(?:\{|\b(?:query|mutation|subscription|fragment)\b)/s;
-}
 
 sub _convert_directive_texts {
   my ($raw_directives, $loc) = @_;
@@ -130,9 +125,8 @@ sub parse_canonical_document {
   $options ||= {};
 
   if ($HAS_XS_PREPROCESS
-      && ($options->{backend} || 'xs') eq 'xs'
-      && _looks_like_executable_source($source)) {
-    my $doc = graphqljs_parse_executable_document_xs(
+      && ($options->{backend} || 'xs') eq 'xs') {
+    my $doc = graphqljs_parse_document_xs(
       $source,
       ($options->{no_location} || $options->{noLocation}) ? 1 : 0,
     );

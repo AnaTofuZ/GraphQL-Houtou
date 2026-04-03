@@ -16,6 +16,7 @@ our @EXPORT_OK = qw(
   graphqljs_build_document_xs
   graphqljs_build_executable_document_xs
   graphqljs_build_directives_xs
+  graphqljs_parse_document_xs
   graphqljs_parse_executable_document_xs
   graphqlperl_build_document_xs
   graphqlperl_find_legacy_empty_object_location_xs

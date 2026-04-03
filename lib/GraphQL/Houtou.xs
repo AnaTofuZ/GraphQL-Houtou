@@ -59,7 +59,16 @@ typedef struct {
   I32 num_lines;
   SV **loc_cache;
   UV loc_cache_len;
+  struct gqljs_rewrite_index *rewrite_index;
+  I32 rewrite_index_count;
 } gqljs_loc_context_t;
+
+typedef struct gqljs_rewrite_index {
+  UV original_start;
+  IV rewritten_start;
+  IV rewritten_end;
+  IV delta_after;
+} gqljs_rewrite_index_t;
 
 typedef struct {
   I32 count;
@@ -315,9 +324,11 @@ static SV *gql_parse_directives_only(pTHX_ SV *source_sv);
 static SV *gql_tokenize_source(pTHX_ SV *source_sv);
 static SV *gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv);
 static SV *gql_graphqljs_build_directives_from_source(pTHX_ SV *source_sv);
+static int gql_graphqljs_looks_like_executable_source(pTHX_ SV *source_sv);
 static int gqljs_legacy_document_is_executable(SV *legacy_sv);
 static void gqljs_materialize_operation_variable_directives(pTHX_ HV *meta_hv);
 static SV *gql_graphqljs_build_document(pTHX_ SV *legacy_sv);
+static SV *gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv);
 static SV *gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv);
 static void gql_ir_arena_init(gql_ir_arena_t *arena);
 static void *gql_ir_arena_alloc_zero(gql_ir_arena_t *arena, Size_t size);
@@ -1643,44 +1654,30 @@ gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos) {
     return &PL_sv_undef;
   }
 
-  if (ctx->rewrites) {
-    I32 i;
-    for (i = 0; i <= av_len(ctx->rewrites); i++) {
-      SV **rewrite_svp = av_fetch(ctx->rewrites, i, 0);
-      HV *rewrite_hv;
-      SV **start_svp;
-      SV **end_svp;
-      SV **replacement_svp;
-      UV start;
-      UV end;
-      STRLEN replacement_len;
-      UV rewritten_start;
-      UV rewritten_end;
+  if (ctx->rewrite_index_count > 0) {
+    IV rewritten_iv = (IV)rewritten_pos;
+    I32 low = 0;
+    I32 high = ctx->rewrite_index_count - 1;
+    I32 match = -1;
 
-      if (!rewrite_svp || !SvROK(*rewrite_svp) || SvTYPE(SvRV(*rewrite_svp)) != SVt_PVHV) {
-        continue;
+    while (low <= high) {
+      I32 mid = low + ((high - low) / 2);
+      gqljs_rewrite_index_t *entry = &ctx->rewrite_index[mid];
+      if (entry->rewritten_start <= rewritten_iv) {
+        match = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
       }
-      rewrite_hv = (HV *)SvRV(*rewrite_svp);
-      start_svp = hv_fetch(rewrite_hv, "start", 5, 0);
-      end_svp = hv_fetch(rewrite_hv, "end", 3, 0);
-      replacement_svp = hv_fetch(rewrite_hv, "replacement", 11, 0);
-      if (!start_svp || !end_svp || !replacement_svp) {
-        continue;
-      }
+    }
 
-      start = SvUV(*start_svp);
-      end = SvUV(*end_svp);
-      (void)SvPV(*replacement_svp, replacement_len);
-      rewritten_start = start;
-      if (original_pos < rewritten_start) {
-        continue;
+    if (match >= 0) {
+      gqljs_rewrite_index_t *entry = &ctx->rewrite_index[match];
+      if (rewritten_iv < entry->rewritten_end) {
+        original_pos = entry->original_start;
+      } else {
+        original_pos = (UV)(rewritten_iv + entry->delta_after);
       }
-      rewritten_end = rewritten_start + replacement_len;
-      if (original_pos < rewritten_end) {
-        original_pos = start;
-        break;
-      }
-      original_pos += (end - start) - replacement_len;
     }
   }
 
@@ -1724,6 +1721,7 @@ gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrit
   STRLEN len;
   const char *src = SvPV(source_sv, len);
   I32 line_count = 1;
+  I32 rewrite_count = 0;
   STRLEN i;
 
   ctx->src = src;
@@ -1733,6 +1731,8 @@ gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrit
   ctx->num_lines = 0;
   ctx->loc_cache = NULL;
   ctx->loc_cache_len = 0;
+  ctx->rewrite_index = NULL;
+  ctx->rewrite_index_count = 0;
 
   for (i = 0; i < len; i++) {
     if (src[i] == '\n') {
@@ -1764,6 +1764,50 @@ gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrit
       }
     }
   }
+
+  if (rewrites) {
+    rewrite_count = av_len(rewrites) + 1;
+  }
+  if (rewrite_count > 0) {
+    IV cumulative_delta = 0;
+    I32 rewrite_index = 0;
+
+    Newx(ctx->rewrite_index, rewrite_count, gqljs_rewrite_index_t);
+    for (i = 0; i < (STRLEN)rewrite_count; i++) {
+      SV **rewrite_svp = av_fetch(rewrites, (I32)i, 0);
+      HV *rewrite_hv;
+      SV **start_svp;
+      SV **end_svp;
+      SV **replacement_svp;
+      UV start;
+      UV end;
+      STRLEN replacement_len;
+      gqljs_rewrite_index_t *entry;
+
+      if (!rewrite_svp || !SvROK(*rewrite_svp) || SvTYPE(SvRV(*rewrite_svp)) != SVt_PVHV) {
+        continue;
+      }
+      rewrite_hv = (HV *)SvRV(*rewrite_svp);
+      start_svp = hv_fetch(rewrite_hv, "start", 5, 0);
+      end_svp = hv_fetch(rewrite_hv, "end", 3, 0);
+      replacement_svp = hv_fetch(rewrite_hv, "replacement", 11, 0);
+      if (!start_svp || !end_svp || !replacement_svp) {
+        continue;
+      }
+
+      start = SvUV(*start_svp);
+      end = SvUV(*end_svp);
+      (void)SvPV(*replacement_svp, replacement_len);
+
+      entry = &ctx->rewrite_index[rewrite_index++];
+      entry->original_start = start;
+      entry->rewritten_start = (IV)start - cumulative_delta;
+      entry->rewritten_end = entry->rewritten_start + (IV)replacement_len;
+      cumulative_delta += (IV)((end - start) - replacement_len);
+      entry->delta_after = cumulative_delta;
+    }
+    ctx->rewrite_index_count = rewrite_index;
+  }
 }
 
 static void
@@ -1781,10 +1825,15 @@ gqljs_loc_context_destroy(gqljs_loc_context_t *ctx) {
     }
     Safefree(ctx->loc_cache);
   }
+  if (ctx->rewrite_index) {
+    Safefree(ctx->rewrite_index);
+  }
   ctx->line_starts = NULL;
   ctx->num_lines = 0;
   ctx->loc_cache = NULL;
   ctx->loc_cache_len = 0;
+  ctx->rewrite_index = NULL;
+  ctx->rewrite_index_count = 0;
 }
 
 static SV *
@@ -3201,6 +3250,76 @@ gqljs_materialize_operation_variable_directives(pTHX_ HV *meta_hv) {
     }
     gqljs_free_sorted_hash_keys(keys, key_count);
   }
+}
+
+static int
+gql_graphqljs_looks_like_executable_source(pTHX_ SV *source_sv) {
+  STRLEN len;
+  const char *src = SvPV(source_sv, len);
+  STRLEN pos = 0;
+  STRLEN start = 0;
+  STRLEN end = 0;
+
+  gqljs_skip_ignored_raw(src, len, &pos);
+  if (pos >= len) {
+    return 0;
+  }
+  if (src[pos] == '{') {
+    return 1;
+  }
+  if (!gqljs_read_name_bounds(src, len, &pos, &start, &end)) {
+    return 0;
+  }
+
+  return gqljs_match_word(src, start, end, "query")
+    || gqljs_match_word(src, start, end, "mutation")
+    || gqljs_match_word(src, start, end, "subscription")
+    || gqljs_match_word(src, start, end, "fragment");
+}
+
+static SV *
+gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv) {
+  SV *meta_sv;
+  HV *meta_hv;
+  SV **rewritten_svp;
+  SV *legacy_sv;
+  SV *doc_sv;
+
+  if (gql_graphqljs_looks_like_executable_source(aTHX_ source_sv)) {
+    return gql_graphqljs_parse_executable_document(aTHX_ source_sv, no_location_sv);
+  }
+
+  meta_sv = gql_graphqljs_preprocess(aTHX_ source_sv);
+  if (!meta_sv || !SvROK(meta_sv) || SvTYPE(SvRV(meta_sv)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+  meta_hv = (HV *)SvRV(meta_sv);
+  rewritten_svp = hv_fetch(meta_hv, "rewritten_source", 16, 0);
+  if (!rewritten_svp) {
+    return &PL_sv_undef;
+  }
+
+  legacy_sv = gql_parse_document(aTHX_ *rewritten_svp);
+  if (!legacy_sv || !SvROK(legacy_sv) || SvTYPE(SvRV(legacy_sv)) != SVt_PVAV) {
+    return &PL_sv_undef;
+  }
+
+  if (gqljs_legacy_document_is_executable(legacy_sv)) {
+    doc_sv = gql_graphqljs_build_executable_document(aTHX_ legacy_sv);
+  } else {
+    doc_sv = gql_graphqljs_build_document(aTHX_ legacy_sv);
+  }
+  if (!doc_sv || !SvOK(doc_sv) || doc_sv == &PL_sv_undef) {
+    return &PL_sv_undef;
+  }
+
+  gqljs_materialize_operation_variable_directives(aTHX_ meta_hv);
+  doc_sv = gql_graphqljs_patch_document(aTHX_ doc_sv, meta_sv);
+  if (SvTRUE(no_location_sv)) {
+    return doc_sv;
+  }
+
+  return &PL_sv_undef;
 }
 
 static SV *
@@ -6421,6 +6540,15 @@ graphqljs_preprocess_xs(source)
     SV *source
   CODE:
     RETVAL = gql_graphqljs_preprocess(aTHX_ source);
+  OUTPUT:
+    RETVAL
+
+SV *
+graphqljs_parse_document_xs(source, no_location = &PL_sv_undef)
+    SV *source
+    SV *no_location
+  CODE:
+    RETVAL = gql_graphqljs_parse_document(aTHX_ source, no_location);
   OUTPUT:
     RETVAL
 

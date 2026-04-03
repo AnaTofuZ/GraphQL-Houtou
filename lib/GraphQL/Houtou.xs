@@ -39,6 +39,18 @@ typedef struct {
 } gql_parser_t;
 
 typedef struct {
+  const char *src;
+  STRLEN len;
+  AV *rewrites;
+  I32 rewrite_index;
+  UV original_cursor;
+  UV rewritten_cursor;
+  UV scanned_pos;
+  IV line;
+  UV line_start;
+} gqljs_loc_context_t;
+
+typedef struct {
   I32 count;
   I32 cap;
   void **items;
@@ -97,22 +109,27 @@ typedef struct gql_ir_document gql_ir_document_t;
 
 struct gql_ir_type {
   gql_ir_type_kind_t kind;
+  UV start_pos;
   SV *name;
   gql_ir_type_t *inner;
 };
 
 struct gql_ir_argument {
+  UV start_pos;
   SV *name;
   gql_ir_value_t *value;
 };
 
 struct gql_ir_object_field {
+  UV start_pos;
   SV *name;
   gql_ir_value_t *value;
 };
 
 struct gql_ir_value {
   gql_ir_value_kind_t kind;
+  UV start_pos;
+  UV name_pos;
   union {
     int boolean;
     SV *sv;
@@ -122,11 +139,15 @@ struct gql_ir_value {
 };
 
 struct gql_ir_directive {
+  UV start_pos;
+  UV name_pos;
   SV *name;
   gql_ir_ptr_array_t arguments;
 };
 
 struct gql_ir_variable_definition {
+  UV start_pos;
+  UV name_pos;
   SV *name;
   gql_ir_type_t *type;
   gql_ir_value_t *default_value;
@@ -134,6 +155,9 @@ struct gql_ir_variable_definition {
 };
 
 struct gql_ir_field {
+  UV start_pos;
+  UV alias_pos;
+  UV name_pos;
   SV *alias;
   SV *name;
   gql_ir_ptr_array_t arguments;
@@ -142,11 +166,15 @@ struct gql_ir_field {
 };
 
 struct gql_ir_fragment_spread {
+  UV start_pos;
+  UV name_pos;
   SV *name;
   gql_ir_ptr_array_t directives;
 };
 
 struct gql_ir_inline_fragment {
+  UV start_pos;
+  UV type_condition_pos;
   SV *type_condition;
   gql_ir_ptr_array_t directives;
   gql_ir_selection_set_t *selection_set;
@@ -162,11 +190,14 @@ struct gql_ir_selection {
 };
 
 struct gql_ir_selection_set {
+  UV start_pos;
   gql_ir_ptr_array_t selections;
 };
 
 struct gql_ir_operation_definition {
   gql_ir_operation_kind_t operation;
+  UV start_pos;
+  UV name_pos;
   SV *name;
   gql_ir_ptr_array_t variable_definitions;
   gql_ir_ptr_array_t directives;
@@ -174,6 +205,9 @@ struct gql_ir_operation_definition {
 };
 
 struct gql_ir_fragment_definition {
+  UV start_pos;
+  UV name_pos;
+  UV type_condition_pos;
   SV *name;
   SV *type_condition;
   gql_ir_ptr_array_t directives;
@@ -298,6 +332,17 @@ static void gql_ir_free_operation_definition(gql_ir_operation_definition_t *defi
 static void gql_ir_free_fragment_definition(gql_ir_fragment_definition_t *definition);
 static void gql_ir_free_definition(gql_ir_definition_t *definition);
 static void gql_ir_free_document(gql_ir_document_t *document);
+static void gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrites);
+static SV *gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos);
+static void gqljs_apply_loc_to_type_from_ir(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, gql_ir_type_t *type);
+static void gqljs_apply_loc_to_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, gql_ir_value_t *value);
+static void gqljs_apply_loc_to_arguments_from_ir(pTHX_ gqljs_loc_context_t *ctx, AV *nodes, gql_ir_ptr_array_t *arguments);
+static void gqljs_apply_loc_to_directives_from_ir(pTHX_ gqljs_loc_context_t *ctx, AV *nodes, gql_ir_ptr_array_t *directives);
+static void gqljs_apply_loc_to_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, gql_ir_selection_t *selection);
+static void gqljs_apply_loc_to_selection_set_from_ir(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, gql_ir_selection_set_t *selection_set);
+static void gqljs_apply_loc_to_variable_definitions_from_ir(pTHX_ gqljs_loc_context_t *ctx, AV *nodes, gql_ir_ptr_array_t *definitions);
+static void gqljs_apply_loc_to_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, gql_ir_definition_t *definition);
+static void gqljs_apply_loc_to_document_from_ir(pTHX_ SV *doc_sv, gql_ir_document_t *document, SV *source_sv, AV *rewrites);
 static SV *gqljs_build_type_from_ir(pTHX_ gql_ir_type_t *type);
 static SV *gqljs_build_value_from_ir(pTHX_ gql_ir_value_t *value);
 static AV *gqljs_build_arguments_from_ir(pTHX_ gql_ir_ptr_array_t *arguments);
@@ -1553,6 +1598,358 @@ gqljs_find_variable_definition(AV *av, const char *name) {
     }
   }
   return NULL;
+}
+
+static SV *
+gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos) {
+  HV *loc_hv;
+  UV original_pos;
+
+  if (!ctx) {
+    return &PL_sv_undef;
+  }
+
+  while (ctx->rewrites && ctx->rewrite_index <= av_len(ctx->rewrites)) {
+    SV **rewrite_svp = av_fetch(ctx->rewrites, ctx->rewrite_index, 0);
+    HV *rewrite_hv;
+    SV **start_svp;
+    SV **end_svp;
+    SV **replacement_svp;
+    UV start;
+    UV end;
+    STRLEN replacement_len;
+    UV unchanged_len;
+
+    if (!rewrite_svp || !SvROK(*rewrite_svp) || SvTYPE(SvRV(*rewrite_svp)) != SVt_PVHV) {
+      ctx->rewrite_index++;
+      continue;
+    }
+    rewrite_hv = (HV *)SvRV(*rewrite_svp);
+    start_svp = hv_fetch(rewrite_hv, "start", 5, 0);
+    end_svp = hv_fetch(rewrite_hv, "end", 3, 0);
+    replacement_svp = hv_fetch(rewrite_hv, "replacement", 11, 0);
+    if (!start_svp || !end_svp || !replacement_svp) {
+      ctx->rewrite_index++;
+      continue;
+    }
+
+    start = SvUV(*start_svp);
+    end = SvUV(*end_svp);
+    (void)SvPV(*replacement_svp, replacement_len);
+    unchanged_len = start - ctx->original_cursor;
+    if (rewritten_pos < ctx->rewritten_cursor + unchanged_len) {
+      original_pos = ctx->original_cursor + (rewritten_pos - ctx->rewritten_cursor);
+      goto located;
+    }
+
+    ctx->rewritten_cursor += unchanged_len;
+    ctx->original_cursor = end;
+    if (rewritten_pos < ctx->rewritten_cursor + replacement_len) {
+      original_pos = start;
+      goto located;
+    }
+
+    ctx->rewritten_cursor += replacement_len;
+    ctx->rewrite_index++;
+  }
+
+  original_pos = ctx->original_cursor + (rewritten_pos - ctx->rewritten_cursor);
+
+located:
+  while (ctx->scanned_pos < original_pos && ctx->scanned_pos < (UV)ctx->len) {
+    char c = ctx->src[ctx->scanned_pos];
+    if (c == '\r') {
+      ctx->line++;
+      ctx->line_start = ctx->scanned_pos + 1;
+      if (ctx->scanned_pos + 1 < (UV)ctx->len && ctx->src[ctx->scanned_pos + 1] == '\n') {
+        ctx->scanned_pos++;
+        ctx->line_start = ctx->scanned_pos + 1;
+      }
+    } else if (c == '\n') {
+      ctx->line++;
+      ctx->line_start = ctx->scanned_pos + 1;
+    }
+    ctx->scanned_pos++;
+  }
+
+  loc_hv = newHV();
+  gql_store_sv(loc_hv, "line", newSViv(ctx->line));
+  gql_store_sv(loc_hv, "column", newSViv((IV)(original_pos - ctx->line_start + 1)));
+  return newRV_noinc((SV *)loc_hv);
+}
+
+static void
+gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrites) {
+  STRLEN len;
+  const char *src = SvPV(source_sv, len);
+
+  ctx->src = src;
+  ctx->len = len;
+  ctx->rewrites = rewrites;
+  ctx->rewrite_index = 0;
+  ctx->original_cursor = 0;
+  ctx->rewritten_cursor = 0;
+  ctx->scanned_pos = 0;
+  ctx->line = 1;
+  ctx->line_start = 0;
+}
+
+static void
+gqljs_apply_loc_to_type_from_ir(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, gql_ir_type_t *type) {
+  HV *node_hv;
+
+  if (!type || !(node_hv = gqljs_node_hv(node_sv))) {
+    return;
+  }
+  gqljs_set_loc_node(aTHX_ node_sv, gqljs_loc_from_rewritten_pos(aTHX_ ctx, type->start_pos));
+  if (type->kind == GQL_IR_TYPE_NAMED) {
+    gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(node_hv, "name"),
+      gqljs_loc_from_rewritten_pos(aTHX_ ctx, type->start_pos));
+    return;
+  }
+  gqljs_apply_loc_to_type_from_ir(aTHX_ ctx, gqljs_fetch_sv(node_hv, "type"), type->inner);
+}
+
+static void
+gqljs_apply_loc_to_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, gql_ir_value_t *value) {
+  HV *node_hv;
+  I32 i;
+
+  if (!value || !(node_hv = gqljs_node_hv(node_sv))) {
+    return;
+  }
+  gqljs_set_loc_node(aTHX_ node_sv, gqljs_loc_from_rewritten_pos(aTHX_ ctx, value->start_pos));
+
+  switch (value->kind) {
+    case GQL_IR_VALUE_VARIABLE:
+      gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(node_hv, "name"),
+        gqljs_loc_from_rewritten_pos(aTHX_ ctx, value->name_pos));
+      break;
+    case GQL_IR_VALUE_LIST: {
+      AV *values = gqljs_fetch_array(node_hv, "values");
+      for (i = 0; values && i < value->as.list_items.count; i++) {
+        SV **svp = av_fetch(values, i, 0);
+        if (svp) {
+          gqljs_apply_loc_to_value_from_ir(aTHX_ ctx, *svp, (gql_ir_value_t *)value->as.list_items.items[i]);
+        }
+      }
+      break;
+    }
+    case GQL_IR_VALUE_OBJECT: {
+      AV *fields = gqljs_fetch_array(node_hv, "fields");
+      for (i = 0; fields && i < value->as.object_fields.count; i++) {
+        SV **svp = av_fetch(fields, i, 0);
+        gql_ir_object_field_t *field = (gql_ir_object_field_t *)value->as.object_fields.items[i];
+        HV *field_hv;
+        if (!svp || !(field_hv = gqljs_node_hv(*svp))) {
+          continue;
+        }
+        gqljs_set_loc_node(aTHX_ *svp, gqljs_loc_from_rewritten_pos(aTHX_ ctx, field->start_pos));
+        gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(field_hv, "name"),
+          gqljs_loc_from_rewritten_pos(aTHX_ ctx, field->start_pos));
+        gqljs_apply_loc_to_value_from_ir(aTHX_ ctx, gqljs_fetch_sv(field_hv, "value"), field->value);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+static void
+gqljs_apply_loc_to_arguments_from_ir(pTHX_ gqljs_loc_context_t *ctx, AV *nodes, gql_ir_ptr_array_t *arguments) {
+  I32 i;
+
+  for (i = 0; nodes && arguments && i < arguments->count; i++) {
+    SV **svp = av_fetch(nodes, i, 0);
+    gql_ir_argument_t *argument = (gql_ir_argument_t *)arguments->items[i];
+    HV *arg_hv;
+    if (!svp || !(arg_hv = gqljs_node_hv(*svp))) {
+      continue;
+    }
+    gqljs_set_loc_node(aTHX_ *svp, gqljs_loc_from_rewritten_pos(aTHX_ ctx, argument->start_pos));
+    gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(arg_hv, "name"),
+      gqljs_loc_from_rewritten_pos(aTHX_ ctx, argument->start_pos));
+    gqljs_apply_loc_to_value_from_ir(aTHX_ ctx, gqljs_fetch_sv(arg_hv, "value"), argument->value);
+  }
+}
+
+static void
+gqljs_apply_loc_to_directives_from_ir(pTHX_ gqljs_loc_context_t *ctx, AV *nodes, gql_ir_ptr_array_t *directives) {
+  I32 i;
+
+  for (i = 0; nodes && directives && i < directives->count; i++) {
+    SV **svp = av_fetch(nodes, i, 0);
+    gql_ir_directive_t *directive = (gql_ir_directive_t *)directives->items[i];
+    HV *dir_hv;
+    if (!svp || !(dir_hv = gqljs_node_hv(*svp))) {
+      continue;
+    }
+    gqljs_set_loc_node(aTHX_ *svp, gqljs_loc_from_rewritten_pos(aTHX_ ctx, directive->start_pos));
+    gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(dir_hv, "name"),
+      gqljs_loc_from_rewritten_pos(aTHX_ ctx, directive->name_pos));
+    gqljs_apply_loc_to_arguments_from_ir(aTHX_ ctx, gqljs_fetch_array(dir_hv, "arguments"), &directive->arguments);
+  }
+}
+
+static void
+gqljs_apply_loc_to_selection_set_from_ir(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, gql_ir_selection_set_t *selection_set) {
+  HV *node_hv;
+  AV *selections;
+  I32 i;
+
+  if (!selection_set || !(node_hv = gqljs_node_hv(node_sv))) {
+    return;
+  }
+  gqljs_set_loc_node(aTHX_ node_sv, gqljs_loc_from_rewritten_pos(aTHX_ ctx, selection_set->start_pos));
+  selections = gqljs_fetch_array(node_hv, "selections");
+  for (i = 0; selections && i < selection_set->selections.count; i++) {
+    SV **svp = av_fetch(selections, i, 0);
+    if (svp) {
+      gqljs_apply_loc_to_selection_from_ir(aTHX_ ctx, *svp, (gql_ir_selection_t *)selection_set->selections.items[i]);
+    }
+  }
+}
+
+static void
+gqljs_apply_loc_to_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, gql_ir_selection_t *selection) {
+  HV *node_hv;
+
+  if (!selection || !(node_hv = gqljs_node_hv(node_sv))) {
+    return;
+  }
+
+  switch (selection->kind) {
+    case GQL_IR_SELECTION_FIELD: {
+      gql_ir_field_t *field = selection->as.field;
+      gqljs_set_loc_node(aTHX_ node_sv, gqljs_loc_from_rewritten_pos(aTHX_ ctx, field->start_pos));
+      if (field->alias) {
+        gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(node_hv, "alias"),
+          gqljs_loc_from_rewritten_pos(aTHX_ ctx, field->alias_pos));
+      }
+      gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(node_hv, "name"),
+        gqljs_loc_from_rewritten_pos(aTHX_ ctx, field->name_pos));
+      gqljs_apply_loc_to_arguments_from_ir(aTHX_ ctx, gqljs_fetch_array(node_hv, "arguments"), &field->arguments);
+      gqljs_apply_loc_to_directives_from_ir(aTHX_ ctx, gqljs_fetch_array(node_hv, "directives"), &field->directives);
+      gqljs_apply_loc_to_selection_set_from_ir(aTHX_ ctx, gqljs_fetch_sv(node_hv, "selectionSet"), field->selection_set);
+      break;
+    }
+    case GQL_IR_SELECTION_FRAGMENT_SPREAD: {
+      gql_ir_fragment_spread_t *spread = selection->as.fragment_spread;
+      gqljs_set_loc_node(aTHX_ node_sv, gqljs_loc_from_rewritten_pos(aTHX_ ctx, spread->start_pos));
+      gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(node_hv, "name"),
+        gqljs_loc_from_rewritten_pos(aTHX_ ctx, spread->name_pos));
+      gqljs_apply_loc_to_directives_from_ir(aTHX_ ctx, gqljs_fetch_array(node_hv, "directives"), &spread->directives);
+      break;
+    }
+    case GQL_IR_SELECTION_INLINE_FRAGMENT: {
+      gql_ir_inline_fragment_t *fragment = selection->as.inline_fragment;
+      gqljs_set_loc_node(aTHX_ node_sv, gqljs_loc_from_rewritten_pos(aTHX_ ctx, fragment->start_pos));
+      if (fragment->type_condition) {
+        SV *type_sv = gqljs_fetch_sv(node_hv, "typeCondition");
+        HV *type_hv = gqljs_node_hv(type_sv);
+        gqljs_set_loc_node(aTHX_ type_sv, gqljs_loc_from_rewritten_pos(aTHX_ ctx, fragment->type_condition_pos));
+        if (type_hv) {
+          gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(type_hv, "name"),
+            gqljs_loc_from_rewritten_pos(aTHX_ ctx, fragment->type_condition_pos));
+        }
+      }
+      gqljs_apply_loc_to_directives_from_ir(aTHX_ ctx, gqljs_fetch_array(node_hv, "directives"), &fragment->directives);
+      gqljs_apply_loc_to_selection_set_from_ir(aTHX_ ctx, gqljs_fetch_sv(node_hv, "selectionSet"), fragment->selection_set);
+      break;
+    }
+  }
+}
+
+static void
+gqljs_apply_loc_to_variable_definitions_from_ir(pTHX_ gqljs_loc_context_t *ctx, AV *nodes, gql_ir_ptr_array_t *definitions) {
+  I32 i;
+
+  for (i = 0; nodes && definitions && i < definitions->count; i++) {
+    SV **svp = av_fetch(nodes, i, 0);
+    gql_ir_variable_definition_t *definition = (gql_ir_variable_definition_t *)definitions->items[i];
+    HV *def_hv;
+    SV *variable_sv;
+    HV *variable_hv;
+    if (!svp || !(def_hv = gqljs_node_hv(*svp))) {
+      continue;
+    }
+    gqljs_set_loc_node(aTHX_ *svp, gqljs_loc_from_rewritten_pos(aTHX_ ctx, definition->start_pos));
+    variable_sv = gqljs_fetch_sv(def_hv, "variable");
+    variable_hv = gqljs_node_hv(variable_sv);
+    gqljs_set_loc_node(aTHX_ variable_sv, gqljs_loc_from_rewritten_pos(aTHX_ ctx, definition->start_pos));
+    if (variable_hv) {
+      gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(variable_hv, "name"),
+        gqljs_loc_from_rewritten_pos(aTHX_ ctx, definition->name_pos));
+    }
+    gqljs_apply_loc_to_type_from_ir(aTHX_ ctx, gqljs_fetch_sv(def_hv, "type"), definition->type);
+    gqljs_apply_loc_to_value_from_ir(aTHX_ ctx, gqljs_fetch_sv(def_hv, "defaultValue"), definition->default_value);
+    gqljs_apply_loc_to_directives_from_ir(aTHX_ ctx, gqljs_fetch_array(def_hv, "directives"), &definition->directives);
+  }
+}
+
+static void
+gqljs_apply_loc_to_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, gql_ir_definition_t *definition) {
+  HV *node_hv;
+
+  if (!definition || !(node_hv = gqljs_node_hv(node_sv))) {
+    return;
+  }
+
+  if (definition->kind == GQL_IR_DEFINITION_OPERATION) {
+    gql_ir_operation_definition_t *operation = definition->as.operation;
+    gqljs_set_loc_node(aTHX_ node_sv, gqljs_loc_from_rewritten_pos(aTHX_ ctx, operation->start_pos));
+    if (operation->name) {
+      gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(node_hv, "name"),
+        gqljs_loc_from_rewritten_pos(aTHX_ ctx, operation->name_pos));
+    }
+    gqljs_apply_loc_to_variable_definitions_from_ir(aTHX_ ctx, gqljs_fetch_array(node_hv, "variableDefinitions"), &operation->variable_definitions);
+    gqljs_apply_loc_to_directives_from_ir(aTHX_ ctx, gqljs_fetch_array(node_hv, "directives"), &operation->directives);
+    gqljs_apply_loc_to_selection_set_from_ir(aTHX_ ctx, gqljs_fetch_sv(node_hv, "selectionSet"), operation->selection_set);
+    return;
+  }
+
+  {
+    gql_ir_fragment_definition_t *fragment = definition->as.fragment;
+    SV *type_sv = gqljs_fetch_sv(node_hv, "typeCondition");
+    HV *type_hv = gqljs_node_hv(type_sv);
+    gqljs_set_loc_node(aTHX_ node_sv, gqljs_loc_from_rewritten_pos(aTHX_ ctx, fragment->start_pos));
+    gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(node_hv, "name"),
+      gqljs_loc_from_rewritten_pos(aTHX_ ctx, fragment->name_pos));
+    gqljs_set_loc_node(aTHX_ type_sv, gqljs_loc_from_rewritten_pos(aTHX_ ctx, fragment->type_condition_pos));
+    if (type_hv) {
+      gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(type_hv, "name"),
+        gqljs_loc_from_rewritten_pos(aTHX_ ctx, fragment->type_condition_pos));
+    }
+    gqljs_apply_loc_to_directives_from_ir(aTHX_ ctx, gqljs_fetch_array(node_hv, "directives"), &fragment->directives);
+    gqljs_apply_loc_to_selection_set_from_ir(aTHX_ ctx, gqljs_fetch_sv(node_hv, "selectionSet"), fragment->selection_set);
+  }
+}
+
+static void
+gqljs_apply_loc_to_document_from_ir(pTHX_ SV *doc_sv, gql_ir_document_t *document, SV *source_sv, AV *rewrites) {
+  gqljs_loc_context_t ctx;
+  HV *doc_hv = gqljs_node_hv(doc_sv);
+  AV *definitions;
+  I32 i;
+  HV *doc_loc;
+
+  if (!doc_hv || !document) {
+    return;
+  }
+
+  gqljs_loc_context_init(aTHX_ &ctx, source_sv, rewrites);
+  doc_loc = newHV();
+  gql_store_sv(doc_loc, "line", newSViv(1));
+  gql_store_sv(doc_loc, "column", newSViv(1));
+  hv_store(doc_hv, "loc", 3, newRV_noinc((SV *)doc_loc), 0);
+  definitions = gqljs_fetch_array(doc_hv, "definitions");
+  for (i = 0; definitions && i < document->definitions.count; i++) {
+    SV **svp = av_fetch(definitions, i, 0);
+    if (svp) {
+      gqljs_apply_loc_to_definition_from_ir(aTHX_ &ctx, *svp, (gql_ir_definition_t *)document->definitions.items[i]);
+    }
+  }
 }
 
 static SV *
@@ -2954,6 +3351,7 @@ gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv)
   SV *meta_sv = gql_graphqljs_preprocess(aTHX_ source_sv);
   HV *meta_hv;
   SV *rewritten_sv;
+  AV *rewrites_av = NULL;
   gql_ir_document_t *ir_document;
   SV *doc_sv;
   SV *patched_sv;
@@ -2964,13 +3362,24 @@ gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv)
 
   meta_hv = (HV *)SvRV(meta_sv);
   rewritten_sv = gqljs_fetch_sv(meta_hv, "rewritten_source");
+  {
+    SV *rewrites_sv = gqljs_fetch_sv(meta_hv, "rewrites");
+    if (rewrites_sv && SvROK(rewrites_sv) && SvTYPE(SvRV(rewrites_sv)) == SVt_PVAV) {
+      rewrites_av = (AV *)SvRV(rewrites_sv);
+    }
+  }
   ir_document = gql_ir_parse_executable_document(aTHX_ rewritten_sv ? rewritten_sv : source_sv);
   doc_sv = gqljs_build_executable_document_from_ir(aTHX_ ir_document);
-  gql_ir_free_document(ir_document);
   if (!doc_sv || !SvOK(doc_sv) || doc_sv == &PL_sv_undef) {
+    gql_ir_free_document(ir_document);
     SvREFCNT_dec(meta_sv);
     return &PL_sv_undef;
   }
+
+  if (!SvTRUE(no_location_sv)) {
+    gqljs_apply_loc_to_document_from_ir(aTHX_ doc_sv, ir_document, source_sv, rewrites_av);
+  }
+  gql_ir_free_document(ir_document);
 
   gqljs_materialize_operation_variable_directives(aTHX_ meta_hv);
   patched_sv = gql_graphqljs_patch_document(aTHX_ doc_sv, meta_sv);
@@ -2981,12 +3390,6 @@ gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv)
 
   if (SvTRUE(no_location_sv)) {
     return doc_sv;
-  }
-
-  patched_sv = gql_graphqljs_apply_executable_loc(aTHX_ doc_sv, source_sv);
-  if (patched_sv && SvOK(patched_sv) && patched_sv != &PL_sv_undef) {
-    SvREFCNT_dec(doc_sv);
-    return patched_sv;
   }
 
   return doc_sv;
@@ -3015,8 +3418,10 @@ gql_ir_ptr_array_free(gql_ir_ptr_array_t *array) {
 static gql_ir_type_t *
 gql_ir_parse_type_reference(pTHX_ gql_parser_t *p) {
   gql_ir_type_t *type;
+  UV start_pos = (UV)p->tok_start;
 
   Newxz(type, 1, gql_ir_type_t);
+  type->start_pos = start_pos;
   if (p->kind == TOK_LBRACKET) {
     type->kind = GQL_IR_TYPE_LIST;
     gql_advance(aTHX_ p);
@@ -3032,6 +3437,7 @@ gql_ir_parse_type_reference(pTHX_ gql_parser_t *p) {
     gql_advance(aTHX_ p);
     Newxz(wrapped, 1, gql_ir_type_t);
     wrapped->kind = GQL_IR_TYPE_NON_NULL;
+    wrapped->start_pos = type->start_pos;
     wrapped->inner = type;
     type = wrapped;
   }
@@ -3042,8 +3448,10 @@ gql_ir_parse_type_reference(pTHX_ gql_parser_t *p) {
 static gql_ir_value_t *
 gql_ir_parse_value(pTHX_ gql_parser_t *p, int is_const) {
   gql_ir_value_t *value;
+  UV start_pos = (UV)p->tok_start;
 
   Newxz(value, 1, gql_ir_value_t);
+  value->start_pos = start_pos;
   switch (p->kind) {
     case TOK_DOLLAR:
       if (is_const) {
@@ -3051,6 +3459,7 @@ gql_ir_parse_value(pTHX_ gql_parser_t *p, int is_const) {
       }
       value->kind = GQL_IR_VALUE_VARIABLE;
       gql_advance(aTHX_ p);
+      value->name_pos = (UV)p->tok_start;
       value->as.sv = gql_parse_name(aTHX_ p, "Expected name");
       return value;
     case TOK_INT:
@@ -3105,6 +3514,7 @@ gql_ir_parse_value(pTHX_ gql_parser_t *p, int is_const) {
       while (p->kind != TOK_RBRACE) {
         gql_ir_object_field_t *field;
         Newxz(field, 1, gql_ir_object_field_t);
+        field->start_pos = (UV)p->tok_start;
         field->name = gql_parse_name(aTHX_ p, "Expected name");
         gql_expect(aTHX_ p, TOK_COLON, NULL);
         field->value = gql_ir_parse_value(aTHX_ p, is_const);
@@ -3131,6 +3541,7 @@ gql_ir_parse_arguments(pTHX_ gql_parser_t *p, int is_const) {
   while (p->kind != TOK_RPAREN) {
     gql_ir_argument_t *argument;
     Newxz(argument, 1, gql_ir_argument_t);
+    argument->start_pos = (UV)p->tok_start;
     argument->name = gql_parse_name(aTHX_ p, "Expected name");
     gql_expect(aTHX_ p, TOK_COLON, NULL);
     argument->value = gql_ir_parse_value(aTHX_ p, is_const);
@@ -3147,7 +3558,9 @@ gql_ir_parse_directives(pTHX_ gql_parser_t *p) {
   while (p->kind == TOK_AT) {
     gql_ir_directive_t *directive;
     Newxz(directive, 1, gql_ir_directive_t);
+    directive->start_pos = (UV)p->tok_start;
     gql_expect(aTHX_ p, TOK_AT, NULL);
+    directive->name_pos = (UV)p->tok_start;
     directive->name = gql_parse_name(aTHX_ p, "Expected name");
     if (p->kind == TOK_LPAREN) {
       directive->arguments = gql_ir_parse_arguments(aTHX_ p, 0);
@@ -3163,6 +3576,7 @@ gql_ir_parse_selection_set(pTHX_ gql_parser_t *p) {
   gql_ir_selection_set_t *selection_set;
 
   Newxz(selection_set, 1, gql_ir_selection_set_t);
+  selection_set->start_pos = (UV)p->tok_start;
   gql_expect(aTHX_ p, TOK_LBRACE, "Expected name");
   if (p->kind == TOK_RBRACE) {
     gql_throw(aTHX_ p, p->tok_start, "Expected name");
@@ -3180,6 +3594,7 @@ gql_ir_parse_selection(pTHX_ gql_parser_t *p) {
 
   Newxz(selection, 1, gql_ir_selection_t);
   if (p->kind == TOK_SPREAD) {
+    UV spread_start = (UV)p->tok_start;
     gql_advance(aTHX_ p);
     if (gql_peek_name(p, "on")) {
       gql_parser_t lookahead = *p;
@@ -3190,7 +3605,9 @@ gql_ir_parse_selection(pTHX_ gql_parser_t *p) {
       }
       selection->kind = GQL_IR_SELECTION_INLINE_FRAGMENT;
       Newxz(fragment, 1, gql_ir_inline_fragment_t);
+      fragment->start_pos = spread_start;
       gql_advance(aTHX_ p);
+      fragment->type_condition_pos = (UV)p->tok_start;
       fragment->type_condition = gql_parse_name(aTHX_ p, "Expected name");
       if (p->kind == TOK_AT) {
         fragment->directives = gql_ir_parse_directives(aTHX_ p);
@@ -3203,6 +3620,7 @@ gql_ir_parse_selection(pTHX_ gql_parser_t *p) {
       gql_ir_inline_fragment_t *fragment;
       selection->kind = GQL_IR_SELECTION_INLINE_FRAGMENT;
       Newxz(fragment, 1, gql_ir_inline_fragment_t);
+      fragment->start_pos = spread_start;
       if (p->kind == TOK_AT) {
         fragment->directives = gql_ir_parse_directives(aTHX_ p);
       }
@@ -3214,6 +3632,8 @@ gql_ir_parse_selection(pTHX_ gql_parser_t *p) {
       gql_ir_fragment_spread_t *spread;
       selection->kind = GQL_IR_SELECTION_FRAGMENT_SPREAD;
       Newxz(spread, 1, gql_ir_fragment_spread_t);
+      spread->start_pos = spread_start;
+      spread->name_pos = (UV)p->tok_start;
       spread->name = gql_parse_fragment_name(aTHX_ p);
       if (p->kind == TOK_AT) {
         spread->directives = gql_ir_parse_directives(aTHX_ p);
@@ -3228,10 +3648,14 @@ gql_ir_parse_selection(pTHX_ gql_parser_t *p) {
     SV *first_name;
     selection->kind = GQL_IR_SELECTION_FIELD;
     Newxz(field, 1, gql_ir_field_t);
+    field->start_pos = (UV)p->tok_start;
+    field->name_pos = (UV)p->tok_start;
     first_name = gql_parse_name(aTHX_ p, "Expected name");
     if (p->kind == TOK_COLON) {
+      field->alias_pos = field->name_pos;
       field->alias = first_name;
       gql_advance(aTHX_ p);
+      field->name_pos = (UV)p->tok_start;
       field->name = gql_parse_name(aTHX_ p, "Expected name");
     } else {
       field->name = first_name;
@@ -3261,7 +3685,9 @@ gql_ir_parse_variable_definitions(pTHX_ gql_parser_t *p) {
   while (p->kind != TOK_RPAREN) {
     gql_ir_variable_definition_t *definition;
     Newxz(definition, 1, gql_ir_variable_definition_t);
+    definition->start_pos = (UV)p->tok_start;
     gql_expect(aTHX_ p, TOK_DOLLAR, NULL);
+    definition->name_pos = (UV)p->tok_start;
     definition->name = gql_parse_name(aTHX_ p, "Expected name");
     gql_expect(aTHX_ p, TOK_COLON, NULL);
     definition->type = gql_ir_parse_type_reference(aTHX_ p);
@@ -3281,6 +3707,7 @@ gql_ir_parse_operation_definition(pTHX_ gql_parser_t *p) {
 
   Newxz(definition, 1, gql_ir_operation_definition_t);
   definition->operation = GQL_IR_OPERATION_QUERY;
+  definition->start_pos = (UV)p->tok_start;
   if (p->kind == TOK_LBRACE) {
     definition->selection_set = gql_ir_parse_selection_set(aTHX_ p);
     return definition;
@@ -3296,6 +3723,7 @@ gql_ir_parse_operation_definition(pTHX_ gql_parser_t *p) {
   }
   gql_advance(aTHX_ p);
   if (p->kind == TOK_NAME) {
+    definition->name_pos = (UV)p->tok_start;
     definition->name = gql_parse_name(aTHX_ p, "Expected name");
   }
   if (p->kind == TOK_LPAREN) {
@@ -3313,12 +3741,15 @@ gql_ir_parse_fragment_definition(pTHX_ gql_parser_t *p) {
   gql_ir_fragment_definition_t *definition;
 
   Newxz(definition, 1, gql_ir_fragment_definition_t);
+  definition->start_pos = (UV)p->tok_start;
   gql_advance(aTHX_ p);
+  definition->name_pos = (UV)p->tok_start;
   definition->name = gql_parse_fragment_name(aTHX_ p);
   if (!gql_peek_name(p, "on")) {
     gql_throw(aTHX_ p, p->tok_start, "Expected \"on\"");
   }
   gql_advance(aTHX_ p);
+  definition->type_condition_pos = (UV)p->tok_start;
   definition->type_condition = gql_parse_name(aTHX_ p, "Expected name");
   if (p->kind == TOK_AT) {
     definition->directives = gql_ir_parse_directives(aTHX_ p);

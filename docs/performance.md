@@ -292,3 +292,32 @@ graphql_perl_xs           38802/s              8069%                      469%  
   `index.html` と `all_stacks_by_time.svg` は生成できている。
 - 旧 `GraphQLPerlToGraphQLJS` / `GraphQLJS::PP` は削除済みのため、
   現在の `graphql-js + xs` profile は XS canonical path と location/patch 周辺の実コストをより直接に表す。
+
+## 2026-04-03 Latest Snapshot
+
+同日の後続最適化で、`graphql-js + xs` executable path はさらに次の形へ整理された。
+
+- executable document は `source -> IR -> graphql-js AST`
+- `loc` は build 時に直接付与し、後段の別パスを廃止
+- IR scalar は `newSVsv` ではなく refcount 増加で再利用
+- IR ノード本体は chunk arena から確保
+
+この時点の `t/kitchen-sink.graphql` は次の通り。
+
+```text
+                             Rate graphql_perl_pegex graphql_perl_canonical_xs graphql_js_xs graphql_js_xs_noloc graphql_perl_xs
+graphql_perl_pegex          471/s                 --                      -96%          -98%                -99%            -99%
+graphql_perl_canonical_xs 13446/s              2752%                        --          -39%                -61%            -66%
+graphql_js_xs             22160/s              4601%                       65%            --                -35%            -44%
+graphql_js_xs_noloc       34134/s              7141%                      154%           54%                  --            -13%
+graphql_perl_xs           39421/s              8262%                      193%           78%                 15%              --
+```
+
+観察:
+
+- `graphql-js + xs` は初期の XS-only snapshot (`8314/s`) から大きく改善している。
+- `graphql-js + xs + no_location` は `34134/s` まで上がり、残差の中心が `loc` ではなく
+  graphql-js AST 自体の node 構築へ移っていることが分かる。
+- `graphql-perl + xs` は依然として最速で、legacy AST を直接返す経路はまだ優位である。
+- `graphql_perl_canonical_xs` は shape 互換の移行 backend としては十分速いが、
+  legacy `location` parity はなお未完である。

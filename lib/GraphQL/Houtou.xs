@@ -55,12 +55,8 @@ typedef struct {
   const char *src;
   STRLEN len;
   AV *rewrites;
-  I32 rewrite_index;
-  UV original_cursor;
-  UV rewritten_cursor;
-  UV scanned_pos;
-  IV line;
-  UV line_start;
+  UV *line_starts;
+  I32 num_lines;
 } gqljs_loc_context_t;
 
 typedef struct {
@@ -350,6 +346,7 @@ static void gql_ir_free_fragment_definition(gql_ir_fragment_definition_t *defini
 static void gql_ir_free_definition(gql_ir_definition_t *definition);
 static void gql_ir_free_document(gql_ir_document_t *document);
 static void gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrites);
+static void gqljs_loc_context_destroy(gqljs_loc_context_t *ctx);
 static SV *gqljs_new_loc_sv(pTHX_ IV line, IV column);
 static SV *gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos);
 static SV *gqljs_build_type_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_type_t *type);
@@ -1636,92 +1633,131 @@ gqljs_new_loc_sv(pTHX_ IV line, IV column) {
 
 static SV *
 gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos) {
-  UV original_pos;
+  UV original_pos = rewritten_pos;
+  I32 line_index;
 
   if (!ctx) {
     return &PL_sv_undef;
   }
 
-  while (ctx->rewrites && ctx->rewrite_index <= av_len(ctx->rewrites)) {
-    SV **rewrite_svp = av_fetch(ctx->rewrites, ctx->rewrite_index, 0);
-    HV *rewrite_hv;
-    SV **start_svp;
-    SV **end_svp;
-    SV **replacement_svp;
-    UV start;
-    UV end;
-    STRLEN replacement_len;
-    UV unchanged_len;
+  if (ctx->rewrites) {
+    I32 i;
+    for (i = 0; i <= av_len(ctx->rewrites); i++) {
+      SV **rewrite_svp = av_fetch(ctx->rewrites, i, 0);
+      HV *rewrite_hv;
+      SV **start_svp;
+      SV **end_svp;
+      SV **replacement_svp;
+      UV start;
+      UV end;
+      STRLEN replacement_len;
+      UV rewritten_start;
+      UV rewritten_end;
 
-    if (!rewrite_svp || !SvROK(*rewrite_svp) || SvTYPE(SvRV(*rewrite_svp)) != SVt_PVHV) {
-      ctx->rewrite_index++;
-      continue;
-    }
-    rewrite_hv = (HV *)SvRV(*rewrite_svp);
-    start_svp = hv_fetch(rewrite_hv, "start", 5, 0);
-    end_svp = hv_fetch(rewrite_hv, "end", 3, 0);
-    replacement_svp = hv_fetch(rewrite_hv, "replacement", 11, 0);
-    if (!start_svp || !end_svp || !replacement_svp) {
-      ctx->rewrite_index++;
-      continue;
-    }
-
-    start = SvUV(*start_svp);
-    end = SvUV(*end_svp);
-    (void)SvPV(*replacement_svp, replacement_len);
-    unchanged_len = start - ctx->original_cursor;
-    if (rewritten_pos < ctx->rewritten_cursor + unchanged_len) {
-      original_pos = ctx->original_cursor + (rewritten_pos - ctx->rewritten_cursor);
-      goto located;
-    }
-
-    ctx->rewritten_cursor += unchanged_len;
-    ctx->original_cursor = end;
-    if (rewritten_pos < ctx->rewritten_cursor + replacement_len) {
-      original_pos = start;
-      goto located;
-    }
-
-    ctx->rewritten_cursor += replacement_len;
-    ctx->rewrite_index++;
-  }
-
-  original_pos = ctx->original_cursor + (rewritten_pos - ctx->rewritten_cursor);
-
-located:
-  while (ctx->scanned_pos < original_pos && ctx->scanned_pos < (UV)ctx->len) {
-    char c = ctx->src[ctx->scanned_pos];
-    if (c == '\r') {
-      ctx->line++;
-      ctx->line_start = ctx->scanned_pos + 1;
-      if (ctx->scanned_pos + 1 < (UV)ctx->len && ctx->src[ctx->scanned_pos + 1] == '\n') {
-        ctx->scanned_pos++;
-        ctx->line_start = ctx->scanned_pos + 1;
+      if (!rewrite_svp || !SvROK(*rewrite_svp) || SvTYPE(SvRV(*rewrite_svp)) != SVt_PVHV) {
+        continue;
       }
-    } else if (c == '\n') {
-      ctx->line++;
-      ctx->line_start = ctx->scanned_pos + 1;
+      rewrite_hv = (HV *)SvRV(*rewrite_svp);
+      start_svp = hv_fetch(rewrite_hv, "start", 5, 0);
+      end_svp = hv_fetch(rewrite_hv, "end", 3, 0);
+      replacement_svp = hv_fetch(rewrite_hv, "replacement", 11, 0);
+      if (!start_svp || !end_svp || !replacement_svp) {
+        continue;
+      }
+
+      start = SvUV(*start_svp);
+      end = SvUV(*end_svp);
+      (void)SvPV(*replacement_svp, replacement_len);
+      rewritten_start = start;
+      if (original_pos < rewritten_start) {
+        continue;
+      }
+      rewritten_end = rewritten_start + replacement_len;
+      if (original_pos < rewritten_end) {
+        original_pos = start;
+        break;
+      }
+      original_pos += (end - start) - replacement_len;
     }
-    ctx->scanned_pos++;
   }
 
-  return gqljs_new_loc_sv(aTHX_ ctx->line, (IV)(original_pos - ctx->line_start + 1));
+  if (ctx->num_lines <= 0) {
+    return gqljs_new_loc_sv(aTHX_ 1, (IV)(original_pos + 1));
+  }
+
+  {
+    I32 low = 0;
+    I32 high = ctx->num_lines - 1;
+    line_index = 0;
+
+    while (low <= high) {
+      I32 mid = low + ((high - low) / 2);
+      if (ctx->line_starts[mid] <= original_pos) {
+        line_index = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+  }
+
+  return gqljs_new_loc_sv(
+    aTHX_
+    (IV)(line_index + 1),
+    (IV)(original_pos - ctx->line_starts[line_index] + 1)
+  );
 }
 
 static void
 gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrites) {
   STRLEN len;
   const char *src = SvPV(source_sv, len);
+  I32 line_count = 1;
+  STRLEN i;
 
   ctx->src = src;
   ctx->len = len;
   ctx->rewrites = rewrites;
-  ctx->rewrite_index = 0;
-  ctx->original_cursor = 0;
-  ctx->rewritten_cursor = 0;
-  ctx->scanned_pos = 0;
-  ctx->line = 1;
-  ctx->line_start = 0;
+  ctx->line_starts = NULL;
+  ctx->num_lines = 0;
+
+  for (i = 0; i < len; i++) {
+    if (src[i] == '\n') {
+      line_count++;
+    } else if (src[i] == '\r') {
+      line_count++;
+      if (i + 1 < len && src[i + 1] == '\n') {
+        i++;
+      }
+    }
+  }
+
+  Newx(ctx->line_starts, line_count, UV);
+  ctx->line_starts[0] = 0;
+  ctx->num_lines = line_count;
+
+  {
+    I32 line_index = 1;
+    for (i = 0; i < len; i++) {
+      if (src[i] == '\n') {
+        ctx->line_starts[line_index++] = (UV)(i + 1);
+      } else if (src[i] == '\r') {
+        if (i + 1 < len && src[i + 1] == '\n') {
+          i++;
+        }
+        ctx->line_starts[line_index++] = (UV)(i + 1);
+      }
+    }
+  }
+}
+
+static void
+gqljs_loc_context_destroy(gqljs_loc_context_t *ctx) {
+  if (ctx->line_starts) {
+    Safefree(ctx->line_starts);
+  }
+  ctx->line_starts = NULL;
+  ctx->num_lines = 0;
 }
 
 static SV *
@@ -3153,6 +3189,9 @@ gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv)
     ctx_ptr = &ctx;
   }
   doc_sv = gqljs_build_executable_document_from_ir(aTHX_ ctx_ptr, ir_document);
+  if (ctx_ptr) {
+    gqljs_loc_context_destroy(ctx_ptr);
+  }
   if (!doc_sv || !SvOK(doc_sv) || doc_sv == &PL_sv_undef) {
     gql_ir_free_document(ir_document);
     return &PL_sv_undef;

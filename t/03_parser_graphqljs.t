@@ -323,6 +323,23 @@ subtest 'graphql-js loc is rebuilt from source tokens on XS path', sub {
     is_deeply [ map $got->{definitions}[0]{selectionSet}{selections}[0]{arguments}[0]{loc}{$_}, qw(line column) ], [1, 35], 'argument loc points at argument name';
 };
 
+subtest 'graphql-js loc stays correct on multi-line executable documents', sub {
+    my $got = parse(<<'EOF');
+query Q($id: ID = 1) {
+  user(id: $id) {
+    name
+  }
+}
+EOF
+
+    is_deeply [ map $got->{loc}{$_}, qw(line column) ], [1, 1], 'document loc stays at source start';
+    is_deeply [ map $got->{definitions}[0]{loc}{$_}, qw(line column) ], [1, 1], 'operation loc stays at operation keyword';
+    is_deeply [ map $got->{definitions}[0]{selectionSet}{loc}{$_}, qw(line column) ], [1, 22], 'operation selection set loc points at opening brace';
+    is_deeply [ map $got->{definitions}[0]{selectionSet}{selections}[0]{loc}{$_}, qw(line column) ], [2, 3], 'field loc points at field name on next line';
+    is_deeply [ map $got->{definitions}[0]{selectionSet}{selections}[0]{selectionSet}{loc}{$_}, qw(line column) ], [2, 17], 'nested selection set loc points at nested opening brace';
+    is_deeply [ map $got->{definitions}[0]{selectionSet}{selections}[0]{selectionSet}{selections}[0]{loc}{$_}, qw(line column) ], [3, 5], 'nested field loc points at nested field name';
+};
+
 subtest 'graphql-js SDL loc covers descriptions and directive extensions', sub {
     my $described = parse(<<'EOF');
 "Type doc"

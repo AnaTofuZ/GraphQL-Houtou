@@ -336,4 +336,45 @@ EOF
         'canonical-xs matches xs on type system shape';
 };
 
+subtest 'canonical-xs keeps representative parser errors aligned', sub {
+    for my $case (
+        [
+            'fragment on on on { on }',
+            qr/Unexpected Name "on"/,
+            [1, 12],
+        ],
+        [
+            'query Q { f(arg: {}) }',
+            qr/Expected name/,
+            [1, 19],
+        ],
+    ) {
+        my ($source, $message_re, $location) = @$case;
+
+        my ($legacy_error, $canonical_error);
+        eval {
+            GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, {
+                backend => 'xs',
+            });
+            1;
+        } or $legacy_error = $@;
+
+        eval {
+            GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, {
+                backend => 'canonical-xs',
+            });
+            1;
+        } or $canonical_error = $@;
+
+        ok $legacy_error, 'xs backend still dies';
+        ok $canonical_error, 'canonical-xs backend still dies';
+        like $legacy_error->message, $message_re, 'xs message is preserved';
+        like $canonical_error->message, $message_re, 'canonical-xs message is preserved';
+        is_deeply [ map $legacy_error->locations->[0]{$_}, qw(line column) ], $location,
+            'xs location stays stable';
+        is_deeply [ map $canonical_error->locations->[0]{$_}, qw(line column) ], $location,
+            'canonical-xs location stays stable for representative errors';
+    }
+};
+
 done_testing;

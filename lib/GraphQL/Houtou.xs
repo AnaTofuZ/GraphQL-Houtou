@@ -379,6 +379,7 @@ static SV *gql_graphqljs_patch_document(pTHX_ SV *doc_sv, SV *meta_sv);
 static SV *gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv);
 static void gqljs_set_loc_node(pTHX_ SV *node_sv, SV *loc_sv);
 static void gqljs_set_rewritten_loc_node(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, UV rewritten_pos);
+static void gqljs_set_shared_rewritten_loc_nodes(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos, SV *left_sv, SV *right_sv);
 static HV *gqljs_node_hv(SV *node_sv);
 static SV *gqljs_fetch_sv(HV *hv, const char *key);
 static AV *gqljs_fetch_array(HV *hv, const char *key);
@@ -1520,6 +1521,19 @@ gqljs_set_rewritten_loc_node(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, UV rew
   }
   loc_sv = gqljs_loc_from_rewritten_pos(aTHX_ ctx, rewritten_pos);
   gqljs_set_loc_node(aTHX_ node_sv, loc_sv);
+  SvREFCNT_dec(loc_sv);
+}
+
+static void
+gqljs_set_shared_rewritten_loc_nodes(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos, SV *left_sv, SV *right_sv) {
+  SV *loc_sv;
+
+  if (!ctx || !left_sv || !right_sv) {
+    return;
+  }
+  loc_sv = gqljs_loc_from_rewritten_pos(aTHX_ ctx, rewritten_pos);
+  gqljs_set_loc_node(aTHX_ left_sv, loc_sv);
+  gqljs_set_loc_node(aTHX_ right_sv, loc_sv);
   SvREFCNT_dec(loc_sv);
 }
 
@@ -4069,11 +4083,8 @@ gqljs_build_type_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_type_t *type) {
   if (type->kind == GQL_IR_TYPE_NAMED) {
     node_sv = gqljs_new_named_type_node_sv(aTHX_ type->name);
     if (ctx) {
-      SV *type_loc = gqljs_loc_from_rewritten_pos(aTHX_ ctx, type->start_pos);
-      gqljs_set_loc_node(aTHX_ node_sv, type_loc);
       name_sv = gqljs_fetch_sv(gqljs_node_hv(node_sv), "name");
-      gqljs_set_loc_node(aTHX_ name_sv, type_loc);
-      SvREFCNT_dec(type_loc);
+      gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, type->start_pos, node_sv, name_sv);
     }
     return node_sv;
   }
@@ -4163,10 +4174,7 @@ gqljs_build_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_value_t *value)
         hv_stores(field_hv, "value", gqljs_build_value_from_ir(aTHX_ ctx, field->value));
         field_sv = newRV_noinc((SV *)field_hv);
         if (ctx) {
-          SV *field_loc = gqljs_loc_from_rewritten_pos(aTHX_ ctx, field->start_pos);
-          gqljs_set_loc_node(aTHX_ field_sv, field_loc);
-          gqljs_set_loc_node(aTHX_ field_name_sv, field_loc);
-          SvREFCNT_dec(field_loc);
+          gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, field->start_pos, field_sv, field_name_sv);
         }
         av_push(fields, field_sv);
       }
@@ -4202,10 +4210,7 @@ gqljs_build_arguments_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_ptr_array_t
     hv_stores(arg_hv, "value", gqljs_build_value_from_ir(aTHX_ ctx, argument->value));
     arg_sv = newRV_noinc((SV *)arg_hv);
     if (ctx) {
-      SV *arg_loc = gqljs_loc_from_rewritten_pos(aTHX_ ctx, argument->start_pos);
-      gqljs_set_loc_node(aTHX_ arg_sv, arg_loc);
-      gqljs_set_loc_node(aTHX_ name_sv, arg_loc);
-      SvREFCNT_dec(arg_loc);
+      gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, argument->start_pos, arg_sv, name_sv);
     }
     av_push(av, arg_sv);
   }
@@ -4263,7 +4268,9 @@ gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_selection_t
         SV *name_sv = gqljs_new_name_node_sv(aTHX_ field->name);
         hv_stores(hv, "name", name_sv);
         if (ctx) {
-          gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, field->name_pos);
+          if (field->alias || field->start_pos != field->name_pos) {
+            gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, field->name_pos);
+          }
         }
       }
       hv_stores(hv, "arguments", newRV_noinc((SV *)gqljs_build_arguments_from_ir(aTHX_ ctx, &field->arguments)));
@@ -4273,7 +4280,12 @@ gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_selection_t
       }
       node_sv = newRV_noinc((SV *)hv);
       if (ctx) {
-        gqljs_set_rewritten_loc_node(aTHX_ ctx, node_sv, field->start_pos);
+        if (!field->alias && field->start_pos == field->name_pos) {
+          SV *name_sv = gqljs_fetch_sv(hv, "name");
+          gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, field->start_pos, node_sv, name_sv);
+        } else {
+          gqljs_set_rewritten_loc_node(aTHX_ ctx, node_sv, field->start_pos);
+        }
       }
       return node_sv;
     }
@@ -4302,10 +4314,7 @@ gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_selection_t
         hv_stores(hv, "typeCondition", type_sv);
         if (ctx) {
           SV *type_name_sv = gqljs_fetch_sv(gqljs_node_hv(type_sv), "name");
-          SV *type_loc = gqljs_loc_from_rewritten_pos(aTHX_ ctx, fragment->type_condition_pos);
-          gqljs_set_loc_node(aTHX_ type_sv, type_loc);
-          gqljs_set_loc_node(aTHX_ type_name_sv, type_loc);
-          SvREFCNT_dec(type_loc);
+          gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, fragment->type_condition_pos, type_sv, type_name_sv);
         }
       }
       hv_stores(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, &fragment->directives)));
@@ -4367,10 +4376,7 @@ gqljs_build_variable_definitions_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_
     def_sv = newRV_noinc((SV *)def_hv);
     if (ctx) {
       SV *variable_name_sv = gqljs_fetch_sv(gqljs_node_hv(variable_sv), "name");
-      SV *def_loc = gqljs_loc_from_rewritten_pos(aTHX_ ctx, definition->start_pos);
-      gqljs_set_loc_node(aTHX_ def_sv, def_loc);
-      gqljs_set_loc_node(aTHX_ variable_sv, def_loc);
-      SvREFCNT_dec(def_loc);
+      gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, definition->start_pos, def_sv, variable_sv);
       gqljs_set_rewritten_loc_node(aTHX_ ctx, variable_name_sv, definition->name_pos);
     }
     av_push(av, def_sv);
@@ -4423,11 +4429,8 @@ gqljs_build_executable_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir
       hv_stores(hv, "typeCondition", type_sv);
       if (ctx) {
         SV *type_name_sv = gqljs_fetch_sv(gqljs_node_hv(type_sv), "name");
-        SV *type_loc = gqljs_loc_from_rewritten_pos(aTHX_ ctx, fragment->type_condition_pos);
         gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, fragment->name_pos);
-        gqljs_set_loc_node(aTHX_ type_sv, type_loc);
-        gqljs_set_loc_node(aTHX_ type_name_sv, type_loc);
-        SvREFCNT_dec(type_loc);
+        gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, fragment->type_condition_pos, type_sv, type_name_sv);
       }
     }
     hv_stores(hv, "directives",

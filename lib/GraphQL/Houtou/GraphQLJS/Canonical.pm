@@ -116,6 +116,19 @@ sub _preprocess_source {
   return _preprocess_source_pp($source);
 }
 
+sub _is_executable_legacy_document {
+  my ($legacy) = @_;
+  return 0 if !$legacy || ref($legacy) ne 'ARRAY';
+
+  for my $definition (@$legacy) {
+    return 0 if ref($definition) ne 'HASH';
+    my $kind = $definition->{kind} || '';
+    return 0 if $kind ne 'operation' && $kind ne 'fragment';
+  }
+
+  return 1;
+}
+
 sub parse_canonical_document {
   my ($source, $options) = @_;
   $options ||= {};
@@ -123,7 +136,13 @@ sub parse_canonical_document {
   my ($rewritten, $meta) = _preprocess_source($source);
   my $backend = $options->{backend} || ($HAS_XS_PREPROCESS ? 'xs' : 'pegex');
   my $legacy = _parse_legacy_document($rewritten, $backend, $options->{no_location} // $options->{noLocation});
-  my $doc = convert_document($legacy, $options);
+  my $is_executable = _is_executable_legacy_document($legacy);
+  my $doc = convert_document($legacy, {
+    %$options,
+    (($HAS_XS_PREPROCESS && $backend eq 'xs' && $is_executable)
+      ? (skip_location_projection => 1)
+      : ()),
+  });
   if ($HAS_XS_PREPROCESS) {
     _materialize_operation_variable_directives_xs($meta);
   }

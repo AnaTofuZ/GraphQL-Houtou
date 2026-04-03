@@ -272,8 +272,9 @@ sub _convert_definition {
     my %definition = (
       kind => 'type',
       name => _convert_name_node($node->{name}),
-      interfaces => [ map _convert_name_node($_->{name}), @{ $node->{interfaces} || [] } ],
     );
+    my @interfaces = map _convert_name_node($_->{name}), @{ $node->{interfaces} || [] };
+    $definition{interfaces} = \@interfaces if @interfaces;
     my $directives = _convert_directives($node->{directives});
     $definition{directives} = $directives if $directives && @$directives;
     $definition{description} = $node->{description}{value} if $node->{description};
@@ -287,8 +288,9 @@ sub _convert_definition {
     my %definition = (
       kind => 'interface',
       name => _convert_name_node($node->{name}),
-      interfaces => [ map _convert_name_node($_->{name}), @{ $node->{interfaces} || [] } ],
     );
+    my @interfaces = map _convert_name_node($_->{name}), @{ $node->{interfaces} || [] };
+    $definition{interfaces} = \@interfaces if @interfaces;
     my $directives = _convert_directives($node->{directives});
     $definition{directives} = $directives if $directives && @$directives;
     $definition{description} = $node->{description}{value} if $node->{description};

@@ -11,10 +11,12 @@ our @EXPORT_OK = qw(
   convert_document
 );
 
+our $SKIP_LOCATION_PROJECTION = 0;
+
 sub _node {
   my ($kind, $fields, $loc) = @_;
   my %node = (kind => $kind, %{$fields || {}});
-  $node{loc} = { %$loc } if $loc;
+  $node{loc} = { %$loc } if !$SKIP_LOCATION_PROJECTION && $loc;
   return \%node;
 }
 
@@ -34,20 +36,9 @@ sub _description_node {
   }, $loc);
 }
 
-sub _strip_loc {
-  my ($value) = @_;
-  if (ref $value eq 'HASH') {
-    my %copy = map { ($_ => _strip_loc($value->{$_})) } grep $_ ne 'loc', keys %$value;
-    return \%copy;
-  }
-  if (ref $value eq 'ARRAY') {
-    return [ map _strip_loc($_), @$value ];
-  }
-  return $value;
-}
-
 sub _value_loc {
   my ($legacy, $fallback) = @_;
+  return undef if $SKIP_LOCATION_PROJECTION;
   return $legacy->{location} if ref($legacy) eq 'HASH' && $legacy->{location};
   return $fallback;
 }
@@ -416,12 +407,13 @@ sub _convert_definition {
 sub convert_document {
   my ($legacy, $options) = @_;
   $options ||= {};
-  my $doc = _node('Document', {
+  local $SKIP_LOCATION_PROJECTION = $options->{no_location}
+    || $options->{noLocation}
+    || $options->{skip_location_projection};
+
+  return _node('Document', {
     definitions => [ map _convert_definition($_), @$legacy ],
   }, { line => 1, column => 1 });
-
-  return _strip_loc($doc) if $options->{no_location} || $options->{noLocation};
-  return $doc;
 }
 
 1;

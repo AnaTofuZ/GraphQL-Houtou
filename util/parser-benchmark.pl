@@ -33,6 +33,13 @@ sub run_graphql_perl_xs {
   });
 }
 
+sub run_graphql_perl_canonical_xs {
+  return parse_with_options($source, {
+    dialect => 'graphql-perl',
+    backend => 'canonical-xs',
+  });
+}
+
 sub run_graphql_js_xs {
   return parse_with_options($source, {
     dialect => 'graphql-js',
@@ -65,6 +72,7 @@ sub run_graphql_js_pegex_noloc {
 
 run_graphql_perl_pegex();
 run_graphql_perl_xs();
+run_graphql_perl_canonical_xs();
 run_graphql_js_xs();
 run_graphql_js_pegex();
 run_graphql_js_xs_noloc();
@@ -76,6 +84,7 @@ print "Benchmark count: $count\n";
 cmpthese($count, {
   graphql_perl_pegex => \&run_graphql_perl_pegex,
   graphql_perl_xs    => \&run_graphql_perl_xs,
+  graphql_perl_canonical_xs => \&run_graphql_perl_canonical_xs,
   graphql_js_pegex   => \&run_graphql_js_pegex,
   graphql_js_xs      => \&run_graphql_js_xs,
   graphql_js_pegex_noloc => \&run_graphql_js_pegex_noloc,

@@ -26,6 +26,20 @@ sub enum_ref {
     return \$value;
 }
 
+sub strip_location {
+    my ($value) = @_;
+    if (ref $value eq 'HASH') {
+        return +{
+            map { ($_ => strip_location($value->{$_})) }
+            grep $_ ne 'location', sort keys %$value
+        };
+    }
+    if (ref $value eq 'ARRAY') {
+        return [ map strip_location($_), @$value ];
+    }
+    return $value;
+}
+
 subtest 'executable document AST stays compatible', sub {
     my $got = parse(<<'EOF');
 query Q($id: ID = 1, $flag: Boolean = false) @root {
@@ -264,6 +278,62 @@ EOF
         cmp_deeply $xs_without_locations, $xs_with_locations,
             'parse_xs also ignores noLocation';
     }
+};
+
+subtest 'canonical-xs can reproduce graphql-perl compatibility shape', sub {
+    my $source = <<'EOF';
+query Q($id: ID = 1, $flag: Boolean = false) @root {
+  user: node(id: $id) @include(if: $flag) {
+    ...F
+    ... on User @skip(if: false) {
+      name
+      role
+    }
+  }
+}
+
+fragment F on User {
+  role(status: ACTIVE)
+}
+EOF
+
+    my $legacy_xs = GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, {
+        backend => 'xs',
+    });
+    my $canonical_xs = GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, {
+        backend => 'canonical-xs',
+    });
+
+    cmp_deeply strip_location($canonical_xs), strip_location($legacy_xs),
+        'canonical-xs matches xs on executable document shape';
+};
+
+subtest 'canonical-xs can reproduce graphql-perl type system shape', sub {
+    my $source = <<'EOF';
+"Type doc"
+type User implements Node & Actor @entity {
+  "Role doc"
+  role(status: Status = ACTIVE): String @deprecated
+}
+
+enum Status { ACTIVE INACTIVE }
+
+extend type User { name: String }
+
+directive @entity on OBJECT | INTERFACE
+
+schema { query: Query mutation: Mutation }
+EOF
+
+    my $legacy_xs = GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, {
+        backend => 'xs',
+    });
+    my $canonical_xs = GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, {
+        backend => 'canonical-xs',
+    });
+
+    cmp_deeply strip_location($canonical_xs), strip_location($legacy_xs),
+        'canonical-xs matches xs on type system shape';
 };
 
 done_testing;

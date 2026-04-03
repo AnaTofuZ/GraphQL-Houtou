@@ -87,6 +87,53 @@ graphql_perl_xs        7609/s                  1634%            1559%           
 この時点では、少なくとも executable path については `loc` 自体よりも、
 `no_location` 用の recursive strip や AST 変換コストのほうが重くなり始めている。
 
+同じタイミングで `graphql-perl` を graphql-js 正準経路から組み立てる
+`canonical-xs` も比較した。
+
+```text
+                            Rate graphql_js_pegex_noloc graphql_js_pegex graphql_perl_pegex graphql_perl_canonical_xs graphql_js_xs_noloc graphql_js_xs graphql_perl_xs
+graphql_js_pegex_noloc     440/s                     --              -6%               -13%                      -83%                -86%          -90%            -94%
+graphql_js_pegex           468/s                     6%               --                -8%                      -81%                -85%          -90%            -94%
+graphql_perl_pegex         509/s                    16%               9%                 --                      -80%                -84%          -89%            -93%
+graphql_perl_canonical_xs 2519/s                   472%             438%               395%                        --                -20%          -44%            -67%
+graphql_js_xs_noloc       3159/s                   618%             575%               521%                       25%                  --          -30%            -58%
+graphql_js_xs             4485/s                   919%             858%               782%                       78%                 42%            --            -41%
+graphql_perl_xs           7548/s                  1615%            1513%              1384%                      200%                139%           68%              --
+```
+
+`graphql_perl_canonical_xs` は `graphql_perl_pegex` より大幅に速いが、
+まだ `graphql_perl_xs` には届かない。これは graphql-js AST から graphql-perl AST へ戻す
+adapter コストがまだ大きいことを示している。
+
+さらに後続の最適化として、`graphql-js + xs` の executable path では
+Perl 側で一度 `loc` を大量生成してから XS helper で付け直す無駄を削った。
+具体的には、XS executable loc helper を使う経路では初期の location projection を
+Perl adapter で省略するようにした。
+
+この変更後の `t/kitchen-sink.graphql` は次の通り。
+
+```text
+                            Rate graphql_js_pegex graphql_js_pegex_noloc graphql_perl_pegex graphql_perl_canonical_xs graphql_js_xs graphql_perl_xs graphql_js_xs_noloc
+graphql_js_pegex           452/s               --                    -3%                -9%                      -83%          -91%            -93%                -94%
+graphql_js_pegex_noloc     466/s               3%                     --                -6%                      -82%          -91%            -93%                -93%
+graphql_perl_pegex         494/s               9%                     6%                 --                      -81%          -90%            -93%                -93%
+graphql_perl_canonical_xs 2627/s             482%                   463%               432%                        --          -47%            -62%                -63%
+graphql_js_xs             4964/s             999%                   964%               905%                       89%            --            -28%                -31%
+graphql_perl_xs           6905/s            1429%                  1381%              1299%                      163%           39%              --                 -4%
+graphql_js_xs_noloc       7164/s            1486%                  1436%              1351%                      173%           44%              4%                  --
+```
+
+`graphql_js_xs` は `4485/s` から `4964/s` へ改善した。
+`graphql_js_xs_noloc` は `3159/s` から `7164/s` へ改善しており、
+`no_location` 時はほぼ `graphql_perl_xs` に並ぶ。
+
+この結果から、現時点で `graphql-js + xs` の残る主要コストは
+
+- legacy AST から graphql-js AST への変換
+- variable directive / extension patch
+
+であり、`no_location` 経路に限れば location projection コストはほぼ解消できたと見てよい。
+
 ## Profile
 
 `util/profile-parser.pl` を `Devel::NYTProf` 付きで実行し、

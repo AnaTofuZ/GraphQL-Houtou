@@ -131,6 +131,9 @@ typedef struct gql_ir_operation_definition gql_ir_operation_definition_t;
 typedef struct gql_ir_fragment_definition gql_ir_fragment_definition_t;
 typedef struct gql_ir_definition gql_ir_definition_t;
 typedef struct gql_ir_document gql_ir_document_t;
+typedef struct {
+  gql_ir_document_t *document;
+} gql_ir_document_cleanup_t;
 
 struct gql_ir_type {
   gql_ir_type_kind_t kind;
@@ -355,6 +358,7 @@ static gql_ir_operation_definition_t *gql_ir_parse_operation_definition(pTHX_ gq
 static gql_ir_fragment_definition_t *gql_ir_parse_fragment_definition(pTHX_ gql_parser_t *p);
 static gql_ir_definition_t *gql_ir_parse_executable_definition(pTHX_ gql_parser_t *p);
 static gql_ir_document_t *gql_ir_parse_executable_document(pTHX_ SV *source_sv);
+static void gql_ir_cleanup_document(pTHX_ void *ptr);
 static void gql_ir_free_type(gql_ir_type_t *type);
 static void gql_ir_free_value(gql_ir_value_t *value);
 static void gql_ir_free_directive(gql_ir_directive_t *directive);
@@ -3945,11 +3949,14 @@ static gql_ir_document_t *
 gql_ir_parse_executable_document(pTHX_ SV *source_sv) {
   gql_parser_t p;
   gql_ir_document_t *document;
+  gql_ir_document_cleanup_t cleanup;
 
   ENTER;
   SAVETMPS;
   Newxz(document, 1, gql_ir_document_t);
   gql_ir_arena_init(&document->arena);
+  cleanup.document = document;
+  SAVEDESTRUCTOR_X(gql_ir_cleanup_document, &cleanup);
   gql_parser_init(aTHX_ &p, source_sv, 0);
   p.ir_arena = &document->arena;
 
@@ -3958,6 +3965,7 @@ gql_ir_parse_executable_document(pTHX_ SV *source_sv) {
     gql_ir_ptr_array_push(&document->definitions, gql_ir_parse_executable_definition(aTHX_ &p));
   }
   gql_parser_invalidate(&p);
+  cleanup.document = NULL;
   FREETMPS;
   LEAVE;
   return document;
@@ -4184,6 +4192,16 @@ gql_ir_free_definition(gql_ir_definition_t *definition) {
     gql_ir_free_operation_definition(definition->as.operation);
   } else {
     gql_ir_free_fragment_definition(definition->as.fragment);
+  }
+}
+
+static void
+gql_ir_cleanup_document(pTHX_ void *ptr) {
+  gql_ir_document_cleanup_t *cleanup = (gql_ir_document_cleanup_t *)ptr;
+
+  if (cleanup && cleanup->document) {
+    gql_ir_free_document(cleanup->document);
+    cleanup->document = NULL;
   }
 }
 

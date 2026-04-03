@@ -49,6 +49,8 @@ typedef struct {
   gql_token_kind_t kind;
   bool is_utf8;
   bool no_location;
+  UV *line_starts;
+  I32 num_lines;
   gql_ir_arena_t *ir_arena;
 } gql_parser_t;
 
@@ -291,6 +293,8 @@ static SV *gql_make_location(pTHX_ gql_parser_t *p);
 static SV *gql_make_current_location(pTHX_ gql_parser_t *p);
 static SV *gql_make_endline_location(pTHX_ gql_parser_t *p);
 static SV *gql_make_current_or_endline_location(pTHX_ gql_parser_t *p);
+static void gql_parser_init(gql_parser_t *p, SV *source_sv);
+static void gql_parser_destroy(gql_parser_t *p);
 static void gql_store_location(pTHX_ gql_parser_t *p, HV *hv);
 static void gql_store_current_location(pTHX_ gql_parser_t *p, HV *hv);
 static void gql_store_endline_location(pTHX_ gql_parser_t *p, HV *hv);
@@ -1206,28 +1210,15 @@ gql_graphqljs_preprocess(pTHX_ SV *source_sv) {
 static SV *
 gql_parse_directives_only(pTHX_ SV *source_sv) {
   gql_parser_t p;
-  STRLEN len;
-  const char *src = SvPV(source_sv, len);
   SV *directives;
 
-  p.src = src;
-  p.len = len;
-  p.pos = 0;
-  p.last_pos = (STRLEN)-1;
-  p.tok_start = 0;
-  p.tok_end = 0;
-  p.val_start = 0;
-  p.val_end = 0;
-  p.kind = TOK_EOF;
-  p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
-  p.no_location = 0;
-  p.ir_arena = NULL;
-
+  gql_parser_init(&p, source_sv);
   gql_advance(aTHX_ &p);
   directives = gql_parse_directives(aTHX_ &p);
   if (p.kind != TOK_EOF) {
     gql_throw(aTHX_ &p, p.tok_start, "Expected directive");
   }
+  gql_parser_destroy(&p);
   return directives;
 }
 
@@ -1801,8 +1792,6 @@ gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrit
   Newx(ctx->line_starts, line_count, UV);
   ctx->line_starts[0] = 0;
   ctx->num_lines = line_count;
-  ctx->loc_cache_len = (UV)len + 1;
-  Newxz(ctx->loc_cache, ctx->loc_cache_len, SV *);
 
   {
     I32 line_index = 1;
@@ -2234,8 +2223,6 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
   HV *doc_hv;
   AV *definitions;
   gql_parser_t p;
-  STRLEN len;
-  const char *src = SvPV(source_sv, len);
   I32 i;
   HV *loc_hv;
 
@@ -2248,18 +2235,7 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
     croak("graphqljs_apply_executable_loc_xs expected document definitions");
   }
 
-  p.src = src;
-  p.len = len;
-  p.pos = 0;
-  p.last_pos = (STRLEN)-1;
-  p.tok_start = 0;
-  p.tok_end = 0;
-  p.val_start = 0;
-  p.val_end = 0;
-  p.kind = TOK_EOF;
-  p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
-  p.no_location = 0;
-  p.ir_arena = NULL;
+  gql_parser_init(&p, source_sv);
   gql_advance(aTHX_ &p);
 
   loc_hv = newHV();
@@ -2273,6 +2249,7 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
       continue;
     }
     if (!gqljs_locate_executable_definition(aTHX_ &p, *svp)) {
+      gql_parser_destroy(&p);
       return &PL_sv_undef;
     }
   }
@@ -2281,6 +2258,7 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
     gql_throw_expected_token(aTHX_ &p, TOK_EOF);
   }
 
+  gql_parser_destroy(&p);
   return newSVsv(doc_sv);
 }
 
@@ -3852,29 +3830,18 @@ gql_ir_parse_executable_definition(pTHX_ gql_parser_t *p) {
 static gql_ir_document_t *
 gql_ir_parse_executable_document(pTHX_ SV *source_sv) {
   gql_parser_t p;
-  STRLEN len;
-  const char *src = SvPV(source_sv, len);
   gql_ir_document_t *document;
 
   Newxz(document, 1, gql_ir_document_t);
   gql_ir_arena_init(&document->arena);
-  p.src = src;
-  p.len = len;
-  p.pos = 0;
-  p.last_pos = (STRLEN)-1;
-  p.tok_start = 0;
-  p.tok_end = 0;
-  p.val_start = 0;
-  p.val_end = 0;
-  p.kind = TOK_EOF;
-  p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
-  p.no_location = 0;
+  gql_parser_init(&p, source_sv);
   p.ir_arena = &document->arena;
 
   gql_advance(aTHX_ &p);
   while (p.kind != TOK_EOF) {
     gql_ir_ptr_array_push(&document->definitions, gql_ir_parse_executable_definition(aTHX_ &p));
   }
+  gql_parser_destroy(&p);
   return document;
 }
 
@@ -5642,31 +5609,97 @@ gql_parse_fragment_name(pTHX_ gql_parser_t *p) {
 }
 
 static void
+gql_parser_init(gql_parser_t *p, SV *source_sv) {
+  STRLEN len;
+  const char *src = SvPV(source_sv, len);
+  STRLEN i;
+  I32 line_count = 1;
+
+  p->src = src;
+  p->len = len;
+  p->pos = 0;
+  p->last_pos = (STRLEN)-1;
+  p->tok_start = 0;
+  p->tok_end = 0;
+  p->val_start = 0;
+  p->val_end = 0;
+  p->kind = TOK_EOF;
+  p->is_utf8 = SvUTF8(source_sv) ? 1 : 0;
+  p->no_location = 0;
+  p->line_starts = NULL;
+  p->num_lines = 0;
+  p->ir_arena = NULL;
+
+  for (i = 0; i < len; i++) {
+    if (src[i] == '\n') {
+      line_count++;
+    } else if (src[i] == '\r') {
+      line_count++;
+      if (i + 1 < len && src[i + 1] == '\n') {
+        i++;
+      }
+    }
+  }
+
+  Newx(p->line_starts, line_count, UV);
+  p->line_starts[0] = 0;
+  p->num_lines = line_count;
+
+  {
+    I32 line_index = 1;
+    for (i = 0; i < len; i++) {
+      if (src[i] == '\n') {
+        p->line_starts[line_index++] = (UV)(i + 1);
+      } else if (src[i] == '\r') {
+        if (i + 1 < len && src[i + 1] == '\n') {
+          i++;
+        }
+        p->line_starts[line_index++] = (UV)(i + 1);
+      }
+    }
+  }
+}
+
+static void
+gql_parser_destroy(gql_parser_t *p) {
+  if (p->line_starts) {
+    Safefree(p->line_starts);
+    p->line_starts = NULL;
+  }
+  p->num_lines = 0;
+}
+
+static void
 gql_line_column_from_pos(gql_parser_t *p, STRLEN pos, IV *line, IV *column, int one_based) {
-  STRLEN i = 0;
-  IV current_line = 1;
-  STRLEN line_start = 0;
+  I32 low;
+  I32 high;
+  I32 found;
+  UV line_start;
   if (pos == (STRLEN)-1) {
     *line = 1;
     *column = 0;
     return;
   }
-  while (i < pos && i < p->len) {
-    char c = p->src[i];
-    if (c == '\r') {
-      current_line++;
-      line_start = i + 1;
-      if (i + 1 < pos && i + 1 < p->len && p->src[i + 1] == '\n') {
-        i++;
-        line_start = i + 1;
-      }
-    } else if (c == '\n') {
-      current_line++;
-      line_start = i + 1;
-    }
-    i++;
+  if (!p->line_starts || p->num_lines <= 0) {
+    *line = 1;
+    *column = (IV)(pos + (one_based ? 1 : 0));
+    return;
   }
-  *line = current_line;
+  low = 0;
+  high = p->num_lines - 1;
+  found = 0;
+  while (low <= high) {
+    I32 mid = low + ((high - low) / 2);
+    UV start = p->line_starts[mid];
+    if (start <= (UV)pos) {
+      found = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  line_start = p->line_starts[found];
+  *line = found + 1;
   *column = (IV)(pos - line_start + (one_based ? 1 : 0));
 }
 
@@ -5779,23 +5812,9 @@ gql_make_type_wrapper(pTHX_ SV *type_sv, const char *kind) {
 static SV *
 gql_tokenize_source(pTHX_ SV *source_sv) {
   gql_parser_t p;
-  STRLEN len;
-  const char *src = SvPV(source_sv, len);
   AV *tokens = newAV();
 
-  p.src = src;
-  p.len = len;
-  p.pos = 0;
-  p.last_pos = (STRLEN)-1;
-  p.tok_start = 0;
-  p.tok_end = 0;
-  p.val_start = 0;
-  p.val_end = 0;
-  p.kind = TOK_EOF;
-  p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
-  p.no_location = 0;
-  p.ir_arena = NULL;
-
+  gql_parser_init(&p, source_sv);
   gql_advance(aTHX_ &p);
   while (p.kind != TOK_EOF) {
     HV *hv = newHV();
@@ -5817,28 +5836,14 @@ gql_tokenize_source(pTHX_ SV *source_sv) {
     gql_advance(aTHX_ &p);
   }
 
+  gql_parser_destroy(&p);
   return newRV_noinc((SV *)tokens);
 }
 
 static SV *
 gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv) {
   gql_parser_t p;
-  STRLEN len;
-  const char *src = SvPV(source_sv, len);
-
-  p.src = src;
-  p.len = len;
-  p.pos = 0;
-  p.last_pos = (STRLEN)-1;
-  p.tok_start = 0;
-  p.tok_end = 0;
-  p.val_start = 0;
-  p.val_end = 0;
-  p.kind = TOK_EOF;
-  p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
-  p.no_location = 0;
-  p.ir_arena = NULL;
-
+  gql_parser_init(&p, source_sv);
   gql_advance(aTHX_ &p);
   while (p.kind != TOK_EOF) {
     if (p.kind == TOK_COLON || p.kind == TOK_EQUALS) {
@@ -5852,6 +5857,7 @@ gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv) {
           gql_line_column_from_pos(&p, p.tok_start, &line, &column, 1);
           gql_store_sv(loc_hv, "line", newSViv(line));
           gql_store_sv(loc_hv, "column", newSViv(column));
+          gql_parser_destroy(&p);
           return newRV_noinc((SV *)loc_hv);
         }
       }
@@ -5860,6 +5866,7 @@ gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv) {
     gql_advance(aTHX_ &p);
   }
 
+  gql_parser_destroy(&p);
   return &PL_sv_undef;
 }
 
@@ -6603,22 +6610,14 @@ gql_parse_definitions(pTHX_ gql_parser_t *p) {
 static SV *
 gql_parse_document(pTHX_ SV *source_sv, SV *no_location_sv) {
   gql_parser_t p;
-  STRLEN len;
-  const char *src = SvPV(source_sv, len);
-  p.src = src;
-  p.len = len;
-  p.pos = 0;
-  p.last_pos = (STRLEN)-1;
-  p.tok_start = 0;
-  p.tok_end = 0;
-  p.val_start = 0;
-  p.val_end = 0;
-  p.kind = TOK_EOF;
-  p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
+  SV *ret;
+
+  gql_parser_init(&p, source_sv);
   p.no_location = SvTRUE(no_location_sv) ? 1 : 0;
-  p.ir_arena = NULL;
   gql_advance(aTHX_ &p);
-  return newRV_noinc((SV *)gql_parse_definitions(aTHX_ &p));
+  ret = newRV_noinc((SV *)gql_parse_definitions(aTHX_ &p));
+  gql_parser_destroy(&p);
+  return ret;
 }
 
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Parser

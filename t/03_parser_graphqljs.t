@@ -320,6 +320,21 @@ subtest 'graphql-js directive materialization returns independent AST nodes', su
         'directive AST is not shared across parse results';
 };
 
+subtest 'graphql-js fallback directive materialization returns independent AST nodes', sub {
+    my $source = 'query Q($id: ID @fromContext) { user(id: $id) { id } }';
+
+    no warnings 'redefine';
+    local *GraphQL::Houtou::GraphQLJS::Canonical::graphqljs_parse_document_xs = sub { undef };
+
+    my $first = parse($source);
+    my $second = parse($source);
+
+    $first->{definitions}[0]{variableDefinitions}[0]{directives}[0]{name}{value} = 'mutated';
+
+    is $second->{definitions}[0]{variableDefinitions}[0]{directives}[0]{name}{value}, 'fromContext',
+        'fallback directive materialization does not share AST nodes across parse results';
+};
+
 subtest 'graphql-js lazy/compact loc options fail explicitly when XS fast path is unavailable', sub {
     throws_ok {
         parse('type User { id: ID }', { lazy_location => 1 });

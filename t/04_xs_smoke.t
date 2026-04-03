@@ -333,6 +333,51 @@ subtest 'graphqljs_parse_document_xs materializes type system documents without 
     cmp_deeply $built, $expected, 'xs canonical entrypoint handles non-executable documents in no_location mode';
 };
 
+subtest 'graphqljs_parse_document_xs can return lazy locations for executable documents', sub {
+    my $source = "query Q {\n  user { id }\n}";
+    my $doc = graphqljs_parse_document_xs($source, 0, 1);
+
+    isa_ok $doc->{loc}, 'GraphQL::Houtou::XS::LazyLoc';
+    is $doc->{loc}->start, 0, 'document loc stores start offset lazily';
+    is_deeply $doc->{loc}->as_hash($source), { line => 1, column => 1 }, 'lazy loc materializes on demand';
+    is $doc->{definitions}[0]{loc}->start, 0, 'definition loc also stores start offset';
+    is $doc->{definitions}[0]{name}{loc}->start, 6, 'child loc stores original source offset';
+};
+
+subtest 'parse_canonical_document supports lazy_location option', sub {
+    my $source = "query Q {\n  user { id }\n}";
+    my $doc = parse_canonical_document($source, {
+        backend => 'xs',
+        lazy_location => 1,
+    });
+
+    isa_ok $doc->{definitions}[0]{selectionSet}{loc}, 'GraphQL::Houtou::XS::LazyLoc';
+    is $doc->{definitions}[0]{selectionSet}{loc}->start, 8, 'canonical parser returns lazy loc payloads';
+};
+
+subtest 'graphqljs_parse_document_xs supports compact_loc for executable documents', sub {
+    my $source = "query Q {\n  user(id: 1) { id }\n}";
+    my $doc = graphqljs_parse_document_xs($source, 0, 0, 1);
+    my $field = $doc->{definitions}[0]{selectionSet}{selections}[0];
+    my $arg = $field->{arguments}[0];
+
+    ok exists $field->{loc}, 'field keeps loc in compact mode';
+    ok !exists $field->{name}{loc}, 'field name drops loc in compact mode';
+    ok exists $arg->{loc}, 'argument keeps loc in compact mode';
+    ok !exists $arg->{name}{loc}, 'argument name drops loc in compact mode';
+};
+
+subtest 'parse_canonical_document supports compact_loc option', sub {
+    my $source = "query Q {\n  user(id: 1) { id }\n}";
+    my $doc = parse_canonical_document($source, {
+        backend => 'xs',
+        compact_loc => 1,
+    });
+
+    ok exists $doc->{definitions}[0]{loc}, 'definition keeps loc';
+    ok !exists $doc->{definitions}[0]{name}{loc}, 'definition name drops loc';
+};
+
 subtest 'graphqljs_build_document_xs matches canonical parser for type system documents', sub {
     my $source = <<'EOF';
 "Type doc"

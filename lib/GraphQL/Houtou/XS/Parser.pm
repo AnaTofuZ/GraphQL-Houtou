@@ -92,4 +92,35 @@ sub _line_column {
   return ($line, $column);
 }
 
+package GraphQL::Houtou::XS::LazyLoc;
+
+use 5.014;
+use strict;
+use warnings;
+
+sub start {
+  return $_[0][0];
+}
+
+sub as_hash {
+  my ($self, $source) = @_;
+  my ($line, $column) = GraphQL::Houtou::XS::Parser::_line_column($source, $self->[0]);
+  return {
+    line => $line,
+    column => $column,
+  };
+}
+
+sub line {
+  my ($self, $source) = @_;
+  my ($line) = GraphQL::Houtou::XS::Parser::_line_column($source, $self->[0]);
+  return $line;
+}
+
+sub column {
+  my ($self, $source) = @_;
+  my (undef, $column) = GraphQL::Houtou::XS::Parser::_line_column($source, $self->[0]);
+  return $column;
+}
+
 1;

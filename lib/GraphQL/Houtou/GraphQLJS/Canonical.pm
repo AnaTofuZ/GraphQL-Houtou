@@ -129,6 +129,8 @@ sub parse_canonical_document {
     my $doc = graphqljs_parse_document_xs(
       $source,
       ($options->{no_location} || $options->{noLocation}) ? 1 : 0,
+      $options->{lazy_location} ? 1 : 0,
+      $options->{compact_loc} ? 1 : 0,
     );
     return $doc if defined $doc && ref $doc eq 'HASH';
   }
@@ -140,7 +142,7 @@ sub parse_canonical_document {
   _materialize_operation_variable_directives_xs($meta);
 
   $doc = graphqljs_patch_document_xs($doc, $meta);
-  unless ($options->{no_location} || $options->{noLocation}) {
+  unless ($options->{no_location} || $options->{noLocation} || $options->{lazy_location}) {
     my $located = graphqljs_apply_executable_loc_xs($doc, $source);
     return $located if defined $located && ref $located eq 'HASH';
     return apply_loc_from_source($doc, $source);

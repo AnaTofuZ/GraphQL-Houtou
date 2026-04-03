@@ -61,6 +61,8 @@ typedef struct {
   UV loc_cache_len;
   struct gqljs_rewrite_index *rewrite_index;
   I32 rewrite_index_count;
+  bool lazy_location;
+  bool compact_location;
 } gqljs_loc_context_t;
 
 typedef struct gqljs_rewrite_index {
@@ -328,8 +330,8 @@ static int gql_graphqljs_looks_like_executable_source(pTHX_ SV *source_sv);
 static int gqljs_legacy_document_is_executable(SV *legacy_sv);
 static void gqljs_materialize_operation_variable_directives(pTHX_ HV *meta_hv);
 static SV *gql_graphqljs_build_document(pTHX_ SV *legacy_sv);
-static SV *gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv);
-static SV *gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv);
+static SV *gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_location_sv, SV *compact_location_sv);
+static SV *gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_location_sv, SV *compact_location_sv);
 static void gql_ir_arena_init(gql_ir_arena_t *arena);
 static void *gql_ir_arena_alloc_zero(gql_ir_arena_t *arena, Size_t size);
 static void gql_ir_arena_free(gql_ir_arena_t *arena);
@@ -360,7 +362,9 @@ static void gql_ir_free_definition(gql_ir_definition_t *definition);
 static void gql_ir_free_document(gql_ir_document_t *document);
 static void gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrites);
 static void gqljs_loc_context_destroy(gqljs_loc_context_t *ctx);
+static UV gqljs_original_pos_from_rewritten_pos(gqljs_loc_context_t *ctx, UV rewritten_pos);
 static SV *gqljs_new_loc_sv(pTHX_ IV line, IV column);
+static SV *gqljs_new_lazy_loc_sv(pTHX_ UV start);
 static SV *gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos);
 static SV *gqljs_build_type_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_type_t *type);
 static SV *gqljs_build_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_value_t *value);
@@ -1659,13 +1663,22 @@ gqljs_new_loc_sv(pTHX_ IV line, IV column) {
 }
 
 static SV *
-gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos) {
-  UV original_pos = rewritten_pos;
-  I32 line_index;
+gqljs_new_lazy_loc_sv(pTHX_ UV start) {
+  AV *loc_av = newAV();
+  HV *stash = gv_stashpv("GraphQL::Houtou::XS::LazyLoc", GV_ADD);
   SV *loc_sv;
 
+  av_push(loc_av, newSVuv(start));
+  loc_sv = newRV_noinc((SV *)loc_av);
+  return sv_bless(loc_sv, stash);
+}
+
+static UV
+gqljs_original_pos_from_rewritten_pos(gqljs_loc_context_t *ctx, UV rewritten_pos) {
+  UV original_pos = rewritten_pos;
+
   if (!ctx) {
-    return &PL_sv_undef;
+    return rewritten_pos;
   }
 
   if (ctx->rewrite_index_count > 0) {
@@ -1695,8 +1708,25 @@ gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos) {
     }
   }
 
+  return original_pos;
+}
+
+static SV *
+gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos) {
+  UV original_pos;
+  I32 line_index;
+  SV *loc_sv;
+
+  if (!ctx) {
+    return &PL_sv_undef;
+  }
+
+  original_pos = gqljs_original_pos_from_rewritten_pos(ctx, rewritten_pos);
+
   if (ctx->num_lines <= 0) {
-    return gqljs_new_loc_sv(aTHX_ 1, (IV)(original_pos + 1));
+    return ctx->lazy_location
+      ? gqljs_new_lazy_loc_sv(aTHX_ original_pos)
+      : gqljs_new_loc_sv(aTHX_ 1, (IV)(original_pos + 1));
   }
 
   {
@@ -1719,11 +1749,15 @@ gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos) {
     return SvREFCNT_inc_simple_NN(ctx->loc_cache[original_pos]);
   }
 
-  loc_sv = gqljs_new_loc_sv(
-    aTHX_
-    (IV)(line_index + 1),
-    (IV)(original_pos - ctx->line_starts[line_index] + 1)
-  );
+  if (ctx->lazy_location) {
+    loc_sv = gqljs_new_lazy_loc_sv(aTHX_ original_pos);
+  } else {
+    loc_sv = gqljs_new_loc_sv(
+      aTHX_
+      (IV)(line_index + 1),
+      (IV)(original_pos - ctx->line_starts[line_index] + 1)
+    );
+  }
   if (ctx->loc_cache && original_pos < ctx->loc_cache_len) {
     ctx->loc_cache[original_pos] = SvREFCNT_inc_simple_NN(loc_sv);
   }
@@ -1747,6 +1781,8 @@ gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrit
   ctx->loc_cache_len = 0;
   ctx->rewrite_index = NULL;
   ctx->rewrite_index_count = 0;
+  ctx->lazy_location = 0;
+  ctx->compact_location = 0;
 
   for (i = 0; i < len; i++) {
     if (src[i] == '\n') {
@@ -1848,6 +1884,8 @@ gqljs_loc_context_destroy(gqljs_loc_context_t *ctx) {
   ctx->loc_cache_len = 0;
   ctx->rewrite_index = NULL;
   ctx->rewrite_index_count = 0;
+  ctx->lazy_location = 0;
+  ctx->compact_location = 0;
 }
 
 static SV *
@@ -3292,7 +3330,7 @@ gql_graphqljs_looks_like_executable_source(pTHX_ SV *source_sv) {
 }
 
 static SV *
-gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv) {
+gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_location_sv, SV *compact_location_sv) {
   SV *meta_sv;
   HV *meta_hv;
   SV **rewritten_svp;
@@ -3300,7 +3338,7 @@ gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv) {
   SV *doc_sv;
 
   if (gql_graphqljs_looks_like_executable_source(aTHX_ source_sv)) {
-    return gql_graphqljs_parse_executable_document(aTHX_ source_sv, no_location_sv);
+    return gql_graphqljs_parse_executable_document(aTHX_ source_sv, no_location_sv, lazy_location_sv, compact_location_sv);
   }
 
   meta_sv = gql_graphqljs_preprocess(aTHX_ source_sv);
@@ -3329,7 +3367,7 @@ gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv) {
 
   gqljs_materialize_operation_variable_directives(aTHX_ meta_hv);
   doc_sv = gql_graphqljs_patch_document(aTHX_ doc_sv, meta_sv);
-  if (SvTRUE(no_location_sv)) {
+  if (SvTRUE(no_location_sv) || SvTRUE(lazy_location_sv)) {
     return doc_sv;
   }
 
@@ -3337,7 +3375,7 @@ gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv) {
 }
 
 static SV *
-gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv) {
+gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_location_sv, SV *compact_location_sv) {
   gql_ir_document_t *ir_document;
   SV *doc_sv;
   gqljs_loc_context_t ctx;
@@ -3346,6 +3384,8 @@ gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv)
   ir_document = gql_ir_parse_executable_document(aTHX_ source_sv);
   if (!SvTRUE(no_location_sv)) {
     gqljs_loc_context_init(aTHX_ &ctx, source_sv, NULL);
+    ctx.lazy_location = SvTRUE(lazy_location_sv) ? 1 : 0;
+    ctx.compact_location = SvTRUE(compact_location_sv) ? 1 : 0;
     ctx_ptr = &ctx;
   }
   doc_sv = gqljs_build_executable_document_from_ir(aTHX_ ctx_ptr, ir_document);
@@ -4083,8 +4123,12 @@ gqljs_build_type_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_type_t *type) {
   if (type->kind == GQL_IR_TYPE_NAMED) {
     node_sv = gqljs_new_named_type_node_sv(aTHX_ type->name);
     if (ctx) {
-      name_sv = gqljs_fetch_sv(gqljs_node_hv(node_sv), "name");
-      gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, type->start_pos, node_sv, name_sv);
+      if (ctx->compact_location) {
+        gqljs_set_rewritten_loc_node(aTHX_ ctx, node_sv, type->start_pos);
+      } else {
+        name_sv = gqljs_fetch_sv(gqljs_node_hv(node_sv), "name");
+        gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, type->start_pos, node_sv, name_sv);
+      }
     }
     return node_sv;
   }
@@ -4142,8 +4186,10 @@ gqljs_build_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_value_t *value)
       node_sv = gqljs_new_variable_node_sv(aTHX_ value->as.sv);
       if (ctx) {
         gqljs_set_rewritten_loc_node(aTHX_ ctx, node_sv, value->start_pos);
-        name_sv = gqljs_fetch_sv(gqljs_node_hv(node_sv), "name");
-        gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, value->name_pos);
+        if (!ctx->compact_location) {
+          name_sv = gqljs_fetch_sv(gqljs_node_hv(node_sv), "name");
+          gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, value->name_pos);
+        }
       }
       return node_sv;
     case GQL_IR_VALUE_LIST: {
@@ -4174,7 +4220,11 @@ gqljs_build_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_value_t *value)
         hv_stores(field_hv, "value", gqljs_build_value_from_ir(aTHX_ ctx, field->value));
         field_sv = newRV_noinc((SV *)field_hv);
         if (ctx) {
-          gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, field->start_pos, field_sv, field_name_sv);
+          if (ctx->compact_location) {
+            gqljs_set_rewritten_loc_node(aTHX_ ctx, field_sv, field->start_pos);
+          } else {
+            gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, field->start_pos, field_sv, field_name_sv);
+          }
         }
         av_push(fields, field_sv);
       }
@@ -4210,7 +4260,11 @@ gqljs_build_arguments_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_ptr_array_t
     hv_stores(arg_hv, "value", gqljs_build_value_from_ir(aTHX_ ctx, argument->value));
     arg_sv = newRV_noinc((SV *)arg_hv);
     if (ctx) {
-      gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, argument->start_pos, arg_sv, name_sv);
+      if (ctx->compact_location) {
+        gqljs_set_rewritten_loc_node(aTHX_ ctx, arg_sv, argument->start_pos);
+      } else {
+        gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, argument->start_pos, arg_sv, name_sv);
+      }
     }
     av_push(av, arg_sv);
   }
@@ -4238,7 +4292,9 @@ gqljs_build_directives_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_ptr_array_
     dir_sv = newRV_noinc((SV *)dir_hv);
     if (ctx) {
       gqljs_set_rewritten_loc_node(aTHX_ ctx, dir_sv, directive->start_pos);
-      gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, directive->name_pos);
+      if (!ctx->compact_location) {
+        gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, directive->name_pos);
+      }
     }
     av_push(av, dir_sv);
   }
@@ -4260,14 +4316,14 @@ gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_selection_t
       if (field->alias) {
         SV *alias_sv = gqljs_new_name_node_sv(aTHX_ field->alias);
         hv_stores(hv, "alias", alias_sv);
-        if (ctx) {
+        if (ctx && !ctx->compact_location) {
           gqljs_set_rewritten_loc_node(aTHX_ ctx, alias_sv, field->alias_pos);
         }
       }
       {
         SV *name_sv = gqljs_new_name_node_sv(aTHX_ field->name);
         hv_stores(hv, "name", name_sv);
-        if (ctx) {
+        if (ctx && !ctx->compact_location) {
           if (field->alias || field->start_pos != field->name_pos) {
             gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, field->name_pos);
           }
@@ -4280,7 +4336,7 @@ gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_selection_t
       }
       node_sv = newRV_noinc((SV *)hv);
       if (ctx) {
-        if (!field->alias && field->start_pos == field->name_pos) {
+        if (!ctx->compact_location && !field->alias && field->start_pos == field->name_pos) {
           SV *name_sv = gqljs_fetch_sv(hv, "name");
           gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, field->start_pos, node_sv, name_sv);
         } else {
@@ -4295,7 +4351,7 @@ gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_selection_t
       {
         SV *name_sv = gqljs_new_name_node_sv(aTHX_ spread->name);
         hv_stores(hv, "name", name_sv);
-        if (ctx) {
+        if (ctx && !ctx->compact_location) {
           gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, spread->name_pos);
         }
       }
@@ -4313,8 +4369,12 @@ gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_selection_t
         SV *type_sv = gqljs_new_named_type_node_sv(aTHX_ fragment->type_condition);
         hv_stores(hv, "typeCondition", type_sv);
         if (ctx) {
-          SV *type_name_sv = gqljs_fetch_sv(gqljs_node_hv(type_sv), "name");
-          gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, fragment->type_condition_pos, type_sv, type_name_sv);
+          if (ctx->compact_location) {
+            gqljs_set_rewritten_loc_node(aTHX_ ctx, type_sv, fragment->type_condition_pos);
+          } else {
+            SV *type_name_sv = gqljs_fetch_sv(gqljs_node_hv(type_sv), "name");
+            gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, fragment->type_condition_pos, type_sv, type_name_sv);
+          }
         }
       }
       hv_stores(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, &fragment->directives)));
@@ -4377,7 +4437,9 @@ gqljs_build_variable_definitions_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_
     if (ctx) {
       SV *variable_name_sv = gqljs_fetch_sv(gqljs_node_hv(variable_sv), "name");
       gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, definition->start_pos, def_sv, variable_sv);
-      gqljs_set_rewritten_loc_node(aTHX_ ctx, variable_name_sv, definition->name_pos);
+      if (!ctx->compact_location) {
+        gqljs_set_rewritten_loc_node(aTHX_ ctx, variable_name_sv, definition->name_pos);
+      }
     }
     av_push(av, def_sv);
   }
@@ -4403,7 +4465,7 @@ gqljs_build_executable_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir
     if (operation->name) {
       SV *name_sv = gqljs_new_name_node_sv(aTHX_ operation->name);
       hv_stores(hv, "name", name_sv);
-      if (ctx) {
+      if (ctx && !ctx->compact_location) {
         gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, operation->name_pos);
       }
     }
@@ -4428,9 +4490,15 @@ gqljs_build_executable_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir
       hv_stores(hv, "name", name_sv);
       hv_stores(hv, "typeCondition", type_sv);
       if (ctx) {
-        SV *type_name_sv = gqljs_fetch_sv(gqljs_node_hv(type_sv), "name");
-        gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, fragment->name_pos);
-        gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, fragment->type_condition_pos, type_sv, type_name_sv);
+        if (!ctx->compact_location) {
+          gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, fragment->name_pos);
+        }
+        if (ctx->compact_location) {
+          gqljs_set_rewritten_loc_node(aTHX_ ctx, type_sv, fragment->type_condition_pos);
+        } else {
+          SV *type_name_sv = gqljs_fetch_sv(gqljs_node_hv(type_sv), "name");
+          gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, fragment->type_condition_pos, type_sv, type_name_sv);
+        }
       }
     }
     hv_stores(hv, "directives",
@@ -4460,7 +4528,9 @@ gqljs_build_executable_document_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_d
   hv_stores(hv, "definitions", newRV_noinc((SV *)definitions));
   node_sv = newRV_noinc((SV *)hv);
   if (ctx) {
-    SV *doc_loc = gqljs_new_loc_sv(aTHX_ 1, 1);
+    SV *doc_loc = ctx->lazy_location
+      ? gqljs_new_lazy_loc_sv(aTHX_ 0)
+      : gqljs_new_loc_sv(aTHX_ 1, 1);
     gqljs_set_loc_node(aTHX_ node_sv, doc_loc);
     SvREFCNT_dec(doc_loc);
   }
@@ -6547,20 +6617,24 @@ graphqljs_preprocess_xs(source)
     RETVAL
 
 SV *
-graphqljs_parse_document_xs(source, no_location = &PL_sv_undef)
+graphqljs_parse_document_xs(source, no_location = &PL_sv_undef, lazy_location = &PL_sv_undef, compact_location = &PL_sv_undef)
     SV *source
     SV *no_location
+    SV *lazy_location
+    SV *compact_location
   CODE:
-    RETVAL = gql_graphqljs_parse_document(aTHX_ source, no_location);
+    RETVAL = gql_graphqljs_parse_document(aTHX_ source, no_location, lazy_location, compact_location);
   OUTPUT:
     RETVAL
 
 SV *
-graphqljs_parse_executable_document_xs(source, no_location = &PL_sv_undef)
+graphqljs_parse_executable_document_xs(source, no_location = &PL_sv_undef, lazy_location = &PL_sv_undef, compact_location = &PL_sv_undef)
     SV *source
     SV *no_location
+    SV *lazy_location
+    SV *compact_location
   CODE:
-    RETVAL = gql_graphqljs_parse_executable_document(aTHX_ source, no_location);
+    RETVAL = gql_graphqljs_parse_executable_document(aTHX_ source, no_location, lazy_location, compact_location);
   OUTPUT:
     RETVAL
 

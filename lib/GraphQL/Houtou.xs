@@ -377,9 +377,12 @@ static void gqljs_locate_selection_node(pTHX_ gql_parser_t *p, SV *node_sv);
 static int gqljs_locate_executable_definition(pTHX_ gql_parser_t *p, SV *node_sv);
 static SV *gql_graphqljs_build_executable_document(pTHX_ SV *legacy_sv);
 static SV *gql_graphqlperl_build_document(pTHX_ SV *doc_sv);
+static HV *gqljs_new_node_hv_sized(const char *kind, I32 keys);
 static HV *gqljs_new_node_hv(const char *kind);
 static SV *gqljs_new_node_ref(const char *kind);
 static SV *gqljs_new_name_node_sv(pTHX_ SV *value_sv);
+static SV *gqljs_new_named_type_node_sv(pTHX_ SV *value_sv);
+static SV *gqljs_new_variable_node_sv(pTHX_ SV *value_sv);
 static SV *gqljs_new_description_node_sv(pTHX_ SV *value_sv);
 static SV *gqljs_convert_legacy_type_sv(pTHX_ SV *type_sv);
 static SV *gqljs_convert_legacy_value_sv(pTHX_ SV *value_sv);
@@ -2344,10 +2347,32 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
 }
 
 static HV *
-gqljs_new_node_hv(const char *kind) {
+gqljs_new_node_hv_sized(const char *kind, I32 keys) {
   HV *hv = newHV();
+  if (keys > 1) {
+    hv_ksplit(hv, keys);
+  }
   gql_store_sv(hv, "kind", newSVpv(kind, 0));
   return hv;
+}
+
+static SV *
+gqljs_new_named_type_node_sv(pTHX_ SV *value_sv) {
+  HV *hv = gqljs_new_node_hv_sized("NamedType", 2);
+  hv_stores(hv, "name", gqljs_new_name_node_sv(aTHX_ value_sv));
+  return newRV_noinc((SV *)hv);
+}
+
+static SV *
+gqljs_new_variable_node_sv(pTHX_ SV *value_sv) {
+  HV *hv = gqljs_new_node_hv_sized("Variable", 2);
+  hv_stores(hv, "name", gqljs_new_name_node_sv(aTHX_ value_sv));
+  return newRV_noinc((SV *)hv);
+}
+
+static HV *
+gqljs_new_node_hv(const char *kind) {
+  return gqljs_new_node_hv_sized(kind, 1);
 }
 
 static SV *
@@ -2357,18 +2382,18 @@ gqljs_new_node_ref(const char *kind) {
 
 static SV *
 gqljs_new_name_node_sv(pTHX_ SV *value_sv) {
-  HV *hv = gqljs_new_node_hv("Name");
-  gql_store_sv(hv, "value", newSVsv(value_sv));
+  HV *hv = gqljs_new_node_hv_sized("Name", 2);
+  gql_store_sv(hv, "value", SvREFCNT_inc_simple_NN(value_sv));
   return newRV_noinc((SV *)hv);
 }
 
 static SV *
 gqljs_new_description_node_sv(pTHX_ SV *value_sv) {
-  HV *hv = gqljs_new_node_hv("StringValue");
+  HV *hv = gqljs_new_node_hv_sized("StringValue", 3);
   STRLEN len;
   const char *value;
   value = SvPV(value_sv, len);
-  gql_store_sv(hv, "value", newSVsv(value_sv));
+  gql_store_sv(hv, "value", SvREFCNT_inc_simple_NN(value_sv));
   gql_store_sv(hv, "block", newSViv(memchr(value, '\n', len) ? 1 : 0));
   return newRV_noinc((SV *)hv);
 }
@@ -4042,12 +4067,10 @@ gqljs_build_type_from_ir(pTHX_ gql_ir_type_t *type) {
     return &PL_sv_undef;
   }
   if (type->kind == GQL_IR_TYPE_NAMED) {
-    hv = gqljs_new_node_hv("NamedType");
-    hv_stores(hv, "name", gqljs_new_name_node_sv(aTHX_ type->name));
-    return newRV_noinc((SV *)hv);
+    return gqljs_new_named_type_node_sv(aTHX_ type->name);
   }
 
-  hv = gqljs_new_node_hv(type->kind == GQL_IR_TYPE_LIST ? "ListType" : "NonNullType");
+  hv = gqljs_new_node_hv_sized(type->kind == GQL_IR_TYPE_LIST ? "ListType" : "NonNullType", 2);
   node_sv = gqljs_build_type_from_ir(aTHX_ type->inner);
   hv_stores(hv, "type", node_sv);
   return newRV_noinc((SV *)hv);
@@ -4065,32 +4088,30 @@ gqljs_build_value_from_ir(pTHX_ gql_ir_value_t *value) {
     case GQL_IR_VALUE_NULL:
       return gqljs_new_node_ref("NullValue");
     case GQL_IR_VALUE_BOOL:
-      hv = gqljs_new_node_hv("BooleanValue");
+      hv = gqljs_new_node_hv_sized("BooleanValue", 2);
       hv_stores(hv, "value", newSViv(value->as.boolean ? 1 : 0));
       return newRV_noinc((SV *)hv);
     case GQL_IR_VALUE_INT:
-      hv = gqljs_new_node_hv("IntValue");
-      hv_stores(hv, "value", newSVsv(value->as.sv));
+      hv = gqljs_new_node_hv_sized("IntValue", 2);
+      hv_stores(hv, "value", SvREFCNT_inc_simple_NN(value->as.sv));
       return newRV_noinc((SV *)hv);
     case GQL_IR_VALUE_FLOAT:
-      hv = gqljs_new_node_hv("FloatValue");
-      hv_stores(hv, "value", newSVsv(value->as.sv));
+      hv = gqljs_new_node_hv_sized("FloatValue", 2);
+      hv_stores(hv, "value", SvREFCNT_inc_simple_NN(value->as.sv));
       return newRV_noinc((SV *)hv);
     case GQL_IR_VALUE_STRING:
-      hv = gqljs_new_node_hv("StringValue");
-      hv_stores(hv, "value", newSVsv(value->as.sv));
+      hv = gqljs_new_node_hv_sized("StringValue", 2);
+      hv_stores(hv, "value", SvREFCNT_inc_simple_NN(value->as.sv));
       return newRV_noinc((SV *)hv);
     case GQL_IR_VALUE_ENUM:
-      hv = gqljs_new_node_hv("EnumValue");
-      hv_stores(hv, "value", newSVsv(value->as.sv));
+      hv = gqljs_new_node_hv_sized("EnumValue", 2);
+      hv_stores(hv, "value", SvREFCNT_inc_simple_NN(value->as.sv));
       return newRV_noinc((SV *)hv);
     case GQL_IR_VALUE_VARIABLE:
-      hv = gqljs_new_node_hv("Variable");
-      hv_stores(hv, "name", gqljs_new_name_node_sv(aTHX_ value->as.sv));
-      return newRV_noinc((SV *)hv);
+      return gqljs_new_variable_node_sv(aTHX_ value->as.sv);
     case GQL_IR_VALUE_LIST: {
       AV *items = newAV();
-      hv = gqljs_new_node_hv("ListValue");
+      hv = gqljs_new_node_hv_sized("ListValue", 2);
       if (value->as.list_items.count > 0) {
         av_extend(items, value->as.list_items.count - 1);
       }
@@ -4102,13 +4123,13 @@ gqljs_build_value_from_ir(pTHX_ gql_ir_value_t *value) {
     }
     case GQL_IR_VALUE_OBJECT: {
       AV *fields = newAV();
-      hv = gqljs_new_node_hv("ObjectValue");
+      hv = gqljs_new_node_hv_sized("ObjectValue", 2);
       if (value->as.object_fields.count > 0) {
         av_extend(fields, value->as.object_fields.count - 1);
       }
       for (i = 0; i < value->as.object_fields.count; i++) {
         gql_ir_object_field_t *field = (gql_ir_object_field_t *)value->as.object_fields.items[i];
-        HV *field_hv = gqljs_new_node_hv("ObjectField");
+        HV *field_hv = gqljs_new_node_hv_sized("ObjectField", 3);
         hv_stores(field_hv, "name", gqljs_new_name_node_sv(aTHX_ field->name));
         hv_stores(field_hv, "value", gqljs_build_value_from_ir(aTHX_ field->value));
         av_push(fields, newRV_noinc((SV *)field_hv));
@@ -4134,7 +4155,7 @@ gqljs_build_arguments_from_ir(pTHX_ gql_ir_ptr_array_t *arguments) {
   }
   for (i = 0; i < arguments->count; i++) {
     gql_ir_argument_t *argument = (gql_ir_argument_t *)arguments->items[i];
-    HV *arg_hv = gqljs_new_node_hv("Argument");
+    HV *arg_hv = gqljs_new_node_hv_sized("Argument", 3);
     hv_stores(arg_hv, "name", gqljs_new_name_node_sv(aTHX_ argument->name));
     hv_stores(arg_hv, "value", gqljs_build_value_from_ir(aTHX_ argument->value));
     av_push(av, newRV_noinc((SV *)arg_hv));
@@ -4155,7 +4176,7 @@ gqljs_build_directives_from_ir(pTHX_ gql_ir_ptr_array_t *directives) {
   }
   for (i = 0; i < directives->count; i++) {
     gql_ir_directive_t *directive = (gql_ir_directive_t *)directives->items[i];
-    HV *dir_hv = gqljs_new_node_hv("Directive");
+    HV *dir_hv = gqljs_new_node_hv_sized("Directive", 3);
     hv_stores(dir_hv, "name", gqljs_new_name_node_sv(aTHX_ directive->name));
     hv_stores(dir_hv, "arguments", newRV_noinc((SV *)gqljs_build_arguments_from_ir(aTHX_ &directive->arguments)));
     av_push(av, newRV_noinc((SV *)dir_hv));
@@ -4173,7 +4194,7 @@ gqljs_build_selection_from_ir(pTHX_ gql_ir_selection_t *selection) {
   switch (selection->kind) {
     case GQL_IR_SELECTION_FIELD: {
       gql_ir_field_t *field = selection->as.field;
-      hv = gqljs_new_node_hv("Field");
+      hv = gqljs_new_node_hv_sized("Field", 6);
       if (field->alias) {
         hv_stores(hv, "alias", gqljs_new_name_node_sv(aTHX_ field->alias));
       }
@@ -4187,18 +4208,16 @@ gqljs_build_selection_from_ir(pTHX_ gql_ir_selection_t *selection) {
     }
     case GQL_IR_SELECTION_FRAGMENT_SPREAD: {
       gql_ir_fragment_spread_t *spread = selection->as.fragment_spread;
-      hv = gqljs_new_node_hv("FragmentSpread");
+      hv = gqljs_new_node_hv_sized("FragmentSpread", 3);
       hv_stores(hv, "name", gqljs_new_name_node_sv(aTHX_ spread->name));
       hv_stores(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ &spread->directives)));
       return newRV_noinc((SV *)hv);
     }
     case GQL_IR_SELECTION_INLINE_FRAGMENT: {
       gql_ir_inline_fragment_t *fragment = selection->as.inline_fragment;
-      hv = gqljs_new_node_hv("InlineFragment");
+      hv = gqljs_new_node_hv_sized("InlineFragment", 4);
       if (fragment->type_condition) {
-        HV *type_hv = gqljs_new_node_hv("NamedType");
-        hv_stores(type_hv, "name", gqljs_new_name_node_sv(aTHX_ fragment->type_condition));
-        hv_stores(hv, "typeCondition", newRV_noinc((SV *)type_hv));
+        hv_stores(hv, "typeCondition", gqljs_new_named_type_node_sv(aTHX_ fragment->type_condition));
       }
       hv_stores(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ &fragment->directives)));
       hv_stores(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ fragment->selection_set));
@@ -4211,7 +4230,7 @@ gqljs_build_selection_from_ir(pTHX_ gql_ir_selection_t *selection) {
 
 static SV *
 gqljs_build_selection_set_from_ir(pTHX_ gql_ir_selection_set_t *selection_set) {
-  HV *hv = gqljs_new_node_hv("SelectionSet");
+  HV *hv = gqljs_new_node_hv_sized("SelectionSet", 2);
   AV *selections = newAV();
   I32 i;
 
@@ -4238,10 +4257,8 @@ gqljs_build_variable_definitions_from_ir(pTHX_ gql_ir_ptr_array_t *definitions) 
   }
   for (i = 0; i < definitions->count; i++) {
     gql_ir_variable_definition_t *definition = (gql_ir_variable_definition_t *)definitions->items[i];
-    HV *def_hv = gqljs_new_node_hv("VariableDefinition");
-    HV *var_hv = gqljs_new_node_hv("Variable");
-    hv_stores(var_hv, "name", gqljs_new_name_node_sv(aTHX_ definition->name));
-    hv_stores(def_hv, "variable", newRV_noinc((SV *)var_hv));
+    HV *def_hv = gqljs_new_node_hv_sized("VariableDefinition", 5);
+    hv_stores(def_hv, "variable", gqljs_new_variable_node_sv(aTHX_ definition->name));
     hv_stores(def_hv, "type", gqljs_build_type_from_ir(aTHX_ definition->type));
     if (definition->default_value) {
       hv_stores(def_hv, "defaultValue", gqljs_build_value_from_ir(aTHX_ definition->default_value));
@@ -4265,7 +4282,7 @@ gqljs_build_executable_definition_from_ir(pTHX_ gql_ir_definition_t *definition)
       operation->operation == GQL_IR_OPERATION_MUTATION ? "mutation" :
       operation->operation == GQL_IR_OPERATION_SUBSCRIPTION ? "subscription" :
       "query";
-    hv = gqljs_new_node_hv("OperationDefinition");
+    hv = gqljs_new_node_hv_sized("OperationDefinition", 6);
     hv_stores(hv, "operation", newSVpv(operation_name, 0));
     if (operation->name) {
       hv_stores(hv, "name", gqljs_new_name_node_sv(aTHX_ operation->name));
@@ -4280,12 +4297,9 @@ gqljs_build_executable_definition_from_ir(pTHX_ gql_ir_definition_t *definition)
 
   {
     gql_ir_fragment_definition_t *fragment = definition->as.fragment;
-    HV *type_hv;
-    hv = gqljs_new_node_hv("FragmentDefinition");
+    hv = gqljs_new_node_hv_sized("FragmentDefinition", 5);
     hv_stores(hv, "name", gqljs_new_name_node_sv(aTHX_ fragment->name));
-    type_hv = gqljs_new_node_hv("NamedType");
-    hv_stores(type_hv, "name", gqljs_new_name_node_sv(aTHX_ fragment->type_condition));
-    hv_stores(hv, "typeCondition", newRV_noinc((SV *)type_hv));
+    hv_stores(hv, "typeCondition", gqljs_new_named_type_node_sv(aTHX_ fragment->type_condition));
     hv_stores(hv, "directives",
       newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ &fragment->directives)));
     hv_stores(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ fragment->selection_set));
@@ -4295,7 +4309,7 @@ gqljs_build_executable_definition_from_ir(pTHX_ gql_ir_definition_t *definition)
 
 static SV *
 gqljs_build_executable_document_from_ir(pTHX_ gql_ir_document_t *document) {
-  HV *hv = gqljs_new_node_hv("Document");
+  HV *hv = gqljs_new_node_hv_sized("Document", 2);
   AV *definitions = newAV();
   I32 i;
 

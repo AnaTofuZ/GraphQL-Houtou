@@ -28,7 +28,7 @@ my $HAS_XS_PREPROCESS = eval {
 my %DIRECTIVE_CACHE;
 
 sub _convert_directive_texts {
-  my ($raw_directives, $loc) = @_;
+  my ($raw_directives) = @_;
   return [] if !$raw_directives || !@$raw_directives;
 
   my $cache_key = join "\x1e", @$raw_directives;
@@ -84,7 +84,7 @@ sub _materialize_operation_variable_directives_xs {
   for my $operation (@{ $meta->{operation_variable_directives} || [] }) {
     my %converted;
     for my $name (keys %$operation) {
-      $converted{$name} = _convert_directive_texts($operation->{$name}, undef);
+      $converted{$name} = _convert_directive_texts($operation->{$name});
     }
     push @materialized, \%converted;
   }

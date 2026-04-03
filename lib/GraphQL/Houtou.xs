@@ -289,6 +289,7 @@ static SV *gql_parse_description(pTHX_ gql_parser_t *p);
 static SV *gql_copy_token_sv(pTHX_ gql_parser_t *p);
 static SV *gql_copy_value_sv(pTHX_ gql_parser_t *p);
 static SV *gql_unescape_string_sv(pTHX_ SV *raw);
+static UV gql_hex4_to_uv(const char *src);
 static SV *gql_make_string_sv(pTHX_ gql_parser_t *p, STRLEN start, STRLEN end);
 static SV *gql_make_location(pTHX_ gql_parser_t *p);
 static SV *gql_make_current_location(pTHX_ gql_parser_t *p);
@@ -541,6 +542,32 @@ gql_unescape_string_sv(pTHX_ SV *raw) {
         case 'n': decoded = '\n'; break;
         case 'r': decoded = '\r'; break;
         case 't': decoded = '\t'; break;
+        case 'u': {
+          UV codepoint = 0;
+          U8 utf8_buf[UTF8_MAXBYTES + 1];
+          U8 *utf8_end;
+
+          if (i + 5 < len) {
+            codepoint = gql_hex4_to_uv(src + i + 2);
+
+            if (codepoint >= 0xD800 && codepoint <= 0xDBFF &&
+                i + 11 < len &&
+                src[i + 6] == '\\' &&
+                src[i + 7] == 'u') {
+              UV low = gql_hex4_to_uv(src + i + 8);
+              if (low >= 0xDC00 && low <= 0xDFFF) {
+                codepoint = 0x10000 + (((codepoint - 0xD800) << 10) | (low - 0xDC00));
+                i += 6;
+              }
+            }
+
+            utf8_end = uvchr_to_utf8(utf8_buf, codepoint);
+            sv_catpvn_flags(out, (char *)utf8_buf, (STRLEN)(utf8_end - utf8_buf), SV_CATUTF8);
+            i += 5;
+            continue;
+          }
+          break;
+        }
         default: break;
       }
       if (decoded != '\0') {
@@ -556,6 +583,25 @@ gql_unescape_string_sv(pTHX_ SV *raw) {
     SvUTF8_on(out);
   }
   return out;
+}
+
+static UV
+gql_hex4_to_uv(const char *src) {
+  UV value = 0;
+  I32 i;
+
+  for (i = 0; i < 4; i++) {
+    value <<= 4;
+    if (src[i] >= '0' && src[i] <= '9') {
+      value |= (UV)(src[i] - '0');
+    } else if (src[i] >= 'A' && src[i] <= 'F') {
+      value |= (UV)(src[i] - 'A' + 10);
+    } else if (src[i] >= 'a' && src[i] <= 'f') {
+      value |= (UV)(src[i] - 'a' + 10);
+    }
+  }
+
+  return value;
 }
 
 static SV *

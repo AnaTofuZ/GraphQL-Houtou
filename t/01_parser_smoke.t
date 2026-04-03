@@ -133,6 +133,23 @@ subtest 'graphql-js dialect is selectable through facade', sub {
     };
 };
 
+subtest 'string unicode escapes are decoded on XS paths', sub {
+    my $legacy = GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options(
+        '{ user(arg: "\\u0041\\u03A9", emoji: "\\uD83D\\uDE00") }',
+        { backend => 'xs' },
+    );
+    my $canonical = GraphQL::Houtou::GraphQLJS::Parser::parse(
+        'query Q { user(arg: "\\u0041\\u03A9", emoji: "\\uD83D\\uDE00") }',
+    );
+
+    is $legacy->[0]{selections}[0]{arguments}{arg}, "A\x{03A9}", 'legacy XS decodes BMP unicode escapes';
+    is $legacy->[0]{selections}[0]{arguments}{emoji}, "\x{1F600}", 'legacy XS decodes surrogate pair escapes';
+    is $canonical->{definitions}[0]{selectionSet}{selections}[0]{arguments}[0]{value}{value}, "A\x{03A9}",
+        'graphql-js XS decodes BMP unicode escapes';
+    is $canonical->{definitions}[0]{selectionSet}{selections}[0]{arguments}[1]{value}{value}, "\x{1F600}",
+        'graphql-js XS decodes surrogate pair escapes';
+};
+
 subtest 'invalid backend is rejected explicitly', sub {
     dies_ok {
         GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options('{ field }', {

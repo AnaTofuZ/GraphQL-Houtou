@@ -16,7 +16,7 @@ sub _loc {
 sub _set_loc {
   my ($node, $loc) = @_;
   return if ref($node) ne 'HASH' || !$loc;
-  $node->{loc} = { %$loc };
+  $node->{loc} = $loc;
 }
 
 sub _peek {
@@ -561,9 +561,8 @@ sub _locate_definition {
 sub apply_loc_from_source {
   my ($doc, $source) = @_;
   require GraphQL::Houtou::XS::Parser;
-  GraphQL::Houtou::XS::Parser->import('tokenize_xs');
 
-  my $tokens = tokenize_xs($source);
+  my $tokens = GraphQL::Houtou::XS::Parser::tokenize_xs($source);
   my $state = {
     tokens => $tokens,
     index => 0,

@@ -6,7 +6,6 @@ use warnings;
 use Exporter 'import';
 use GraphQL::Houtou::Adapter::GraphQLPerlToGraphQLJS qw(
   convert_document
-  convert_legacy_directives
 );
 use GraphQL::Houtou::GraphQLJS::Locator qw(apply_loc_from_source);
 use GraphQL::Houtou::GraphQLJS::Util qw(rebase_loc);
@@ -19,6 +18,7 @@ my $HAS_XS_PREPROCESS = eval {
   require GraphQL::Houtou::XS::Parser;
   GraphQL::Houtou::XS::Parser->import(qw(
     graphqljs_apply_executable_loc_xs
+    graphqljs_build_directives_xs
     graphqljs_build_executable_document_xs
     graphqljs_preprocess_xs
     graphqljs_patch_document_xs
@@ -59,8 +59,7 @@ sub _convert_directive_texts {
   my $cache_key = join "\x1e", @$raw_directives;
   my $converted = $DIRECTIVE_CACHE{$cache_key};
   if (!$converted) {
-    my $legacy = parse_directives_xs(join ' ', @$raw_directives);
-    $converted = convert_legacy_directives($legacy, undef);
+    $converted = graphqljs_build_directives_xs(join ' ', @$raw_directives);
     $DIRECTIVE_CACHE{$cache_key} = $converted;
   }
 

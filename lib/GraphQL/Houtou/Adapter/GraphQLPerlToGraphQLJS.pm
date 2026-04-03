@@ -7,7 +7,6 @@ use Exporter 'import';
 use Scalar::Util qw(blessed looks_like_number);
 
 our @EXPORT_OK = qw(
-  convert_legacy_directives
   convert_document
 );
 
@@ -148,11 +147,6 @@ sub _convert_directives {
       }, $loc)
     } @$directives
   ];
-}
-
-sub convert_legacy_directives {
-  my ($directives, $fallback_loc) = @_;
-  return _convert_directives($directives, $fallback_loc);
 }
 
 sub _convert_selection_set {

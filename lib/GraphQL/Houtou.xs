@@ -114,6 +114,7 @@ static SV *gql_graphqljs_preprocess(pTHX_ SV *source_sv);
 static SV *gql_parse_directives_only(pTHX_ SV *source_sv);
 static SV *gql_tokenize_source(pTHX_ SV *source_sv);
 static SV *gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv);
+static SV *gql_graphqljs_build_directives_from_source(pTHX_ SV *source_sv);
 static SV *gqljs_clone_with_loc(pTHX_ SV *value, SV *loc_sv);
 static int gqljs_sv_eq_pv(SV *sv, const char *literal);
 static const char *gqljs_definition_source_kind(SV *kind_sv);
@@ -2235,6 +2236,21 @@ gql_graphqljs_build_executable_document(pTHX_ SV *legacy_sv) {
 }
 
 static SV *
+gql_graphqljs_build_directives_from_source(pTHX_ SV *source_sv) {
+  SV *legacy_sv = gql_parse_directives_only(aTHX_ source_sv);
+  AV *legacy_av;
+  AV *directives_av;
+
+  if (!legacy_sv || !SvROK(legacy_sv) || SvTYPE(SvRV(legacy_sv)) != SVt_PVAV) {
+    return newRV_noinc((SV *)newAV());
+  }
+
+  legacy_av = (AV *)SvRV(legacy_sv);
+  directives_av = gqljs_convert_legacy_directives_av(aTHX_ legacy_av);
+  return newRV_noinc((SV *)directives_av);
+}
+
+static SV *
 gqlperl_location_from_gqljs_node(pTHX_ SV *node_sv) {
   HV *src_hv;
   HV *loc_hv;
@@ -4318,6 +4334,14 @@ parse_directives_xs(source)
     SV *source
   CODE:
     RETVAL = gql_parse_directives_only(aTHX_ source);
+  OUTPUT:
+    RETVAL
+
+SV *
+graphqljs_build_directives_xs(source)
+    SV *source
+  CODE:
+    RETVAL = gql_graphqljs_build_directives_from_source(aTHX_ source);
   OUTPUT:
     RETVAL
 

@@ -635,7 +635,7 @@ gql_throw_sv(pTHX_ gql_parser_t *p, STRLEN pos, SV *msg) {
   ENTER;
   SAVETMPS;
   PUSHMARK(SP);
-  XPUSHs(source);
+  XPUSHs(sv_2mortal(source));
   XPUSHs(sv_2mortal(newSVuv((UV)pos)));
   XPUSHs(sv_2mortal(msg));
   PUTBACK;
@@ -3456,7 +3456,7 @@ gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_l
 
   gqljs_materialize_operation_variable_directives(aTHX_ meta_hv);
   doc_sv = gql_graphqljs_patch_document(aTHX_ doc_sv, meta_sv);
-  if (SvTRUE(no_location_sv) || SvTRUE(lazy_location_sv)) {
+  if (SvTRUE(no_location_sv)) {
     return doc_sv;
   }
 

@@ -25,24 +25,11 @@ my $HAS_XS_PREPROCESS = eval {
   1;
 };
 
-my %DIRECTIVE_CACHE;
-
 sub _convert_directive_texts {
   my ($raw_directives) = @_;
   return [] if !$raw_directives || !@$raw_directives;
 
-  my $cache_key = join "\x1e", @$raw_directives;
-  my $converted = $DIRECTIVE_CACHE{$cache_key};
-  if (!$converted) {
-    $converted = graphqljs_build_directives_xs(join ' ', @$raw_directives);
-    $DIRECTIVE_CACHE{$cache_key} = $converted;
-  }
-
-  my @copy = map {
-    +{ %$_ };
-  } @$converted;
-
-  return \@copy;
+  return graphqljs_build_directives_xs(join ' ', @$raw_directives);
 }
 
 sub _parse_legacy_document {
@@ -130,6 +117,9 @@ sub parse_canonical_document {
       $options->{compact_loc} ? 1 : 0,
     );
     return $doc if defined $doc && ref $doc eq 'HASH';
+    if ($options->{lazy_location} || $options->{compact_loc}) {
+      die "graphql-js parser options lazy_location/compact_loc require the XS fast path for this document.\n";
+    }
   }
 
   my ($rewritten, $meta) = _preprocess_source($source);

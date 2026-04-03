@@ -309,6 +309,27 @@ subtest 'graphql-js no_location strips loc recursively', sub {
     ok !exists $without_loc->{definitions}[0]{variableDefinitions}[0]{directives}[0]{loc}, 'patched directive loc is stripped too';
 };
 
+subtest 'graphql-js directive materialization returns independent AST nodes', sub {
+    my $source = 'query Q($id: ID @fromContext) { user(id: $id) { id } }';
+    my $first = parse($source);
+    my $second = parse($source);
+
+    $first->{definitions}[0]{variableDefinitions}[0]{directives}[0]{name}{value} = 'mutated';
+
+    is $second->{definitions}[0]{variableDefinitions}[0]{directives}[0]{name}{value}, 'fromContext',
+        'directive AST is not shared across parse results';
+};
+
+subtest 'graphql-js lazy/compact loc options fail explicitly when XS fast path is unavailable', sub {
+    throws_ok {
+        parse('type User { id: ID }', { lazy_location => 1 });
+    } qr/require the XS fast path/, 'lazy_location dies explicitly on non-executable fallback path';
+
+    throws_ok {
+        parse('type User { id: ID }', { compact_loc => 1 });
+    } qr/require the XS fast path/, 'compact_loc dies explicitly on non-executable fallback path';
+};
+
 subtest 'graphql-js loc is rebuilt from source tokens on XS path', sub {
     my $got = parse('query Q($id: ID = 1) @root { user(id: $id) { name } }');
 

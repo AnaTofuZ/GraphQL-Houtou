@@ -25,6 +25,18 @@ typedef enum {
   TOK_BLOCK_STRING
 } gql_token_kind_t;
 
+typedef struct gql_ir_arena_chunk {
+  char *buf;
+  Size_t used;
+  Size_t cap;
+  struct gql_ir_arena_chunk *next;
+} gql_ir_arena_chunk_t;
+
+typedef struct {
+  gql_ir_arena_chunk_t *head;
+  gql_ir_arena_chunk_t *tail;
+} gql_ir_arena_t;
+
 typedef struct {
   const char *src;
   STRLEN len;
@@ -36,6 +48,7 @@ typedef struct {
   STRLEN val_end;
   gql_token_kind_t kind;
   bool is_utf8;
+  gql_ir_arena_t *ir_arena;
 } gql_parser_t;
 
 typedef struct {
@@ -224,6 +237,7 @@ struct gql_ir_definition {
 
 struct gql_ir_document {
   gql_ir_ptr_array_t definitions;
+  gql_ir_arena_t arena;
 };
 
 static SV *gql_parse_document(pTHX_ SV *source_sv);
@@ -307,6 +321,9 @@ static int gqljs_legacy_document_is_executable(SV *legacy_sv);
 static void gqljs_materialize_operation_variable_directives(pTHX_ HV *meta_hv);
 static SV *gql_graphqljs_build_document(pTHX_ SV *legacy_sv);
 static SV *gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv);
+static void gql_ir_arena_init(gql_ir_arena_t *arena);
+static void *gql_ir_arena_alloc_zero(gql_ir_arena_t *arena, Size_t size);
+static void gql_ir_arena_free(gql_ir_arena_t *arena);
 static void gql_ir_ptr_array_push(gql_ir_ptr_array_t *array, void *item);
 static void gql_ir_ptr_array_free(gql_ir_ptr_array_t *array);
 static gql_ir_type_t *gql_ir_parse_type_reference(pTHX_ gql_parser_t *p);
@@ -3400,6 +3417,62 @@ gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv)
 }
 
 static void
+gql_ir_arena_init(gql_ir_arena_t *arena) {
+  arena->head = NULL;
+  arena->tail = NULL;
+}
+
+static void *
+gql_ir_arena_alloc_zero(gql_ir_arena_t *arena, Size_t size) {
+  gql_ir_arena_chunk_t *chunk;
+  Size_t aligned_used;
+  Size_t next_used;
+  Size_t chunk_cap;
+  char *ptr;
+
+  chunk = arena->tail;
+  aligned_used = chunk ? ((chunk->used + sizeof(void *) - 1) & ~(sizeof(void *) - 1)) : 0;
+  next_used = aligned_used + size;
+  if (!chunk || next_used > chunk->cap) {
+    chunk_cap = 1024;
+    while (chunk_cap < size) {
+      chunk_cap *= 2;
+    }
+    Newxz(chunk, 1, gql_ir_arena_chunk_t);
+    Newx(chunk->buf, chunk_cap, char);
+    chunk->cap = chunk_cap;
+    if (arena->tail) {
+      arena->tail->next = chunk;
+    } else {
+      arena->head = chunk;
+    }
+    arena->tail = chunk;
+    aligned_used = 0;
+    next_used = size;
+  }
+  ptr = chunk->buf + aligned_used;
+  Zero(ptr, size, char);
+  chunk->used = next_used;
+  return ptr;
+}
+
+static void
+gql_ir_arena_free(gql_ir_arena_t *arena) {
+  gql_ir_arena_chunk_t *chunk = arena->head;
+
+  while (chunk) {
+    gql_ir_arena_chunk_t *next = chunk->next;
+    if (chunk->buf) {
+      Safefree(chunk->buf);
+    }
+    Safefree(chunk);
+    chunk = next;
+  }
+  arena->head = NULL;
+  arena->tail = NULL;
+}
+
+static void
 gql_ir_ptr_array_push(gql_ir_ptr_array_t *array, void *item) {
   if (array->count == array->cap) {
     I32 next_cap = array->cap ? array->cap * 2 : 4;
@@ -3424,7 +3497,7 @@ gql_ir_parse_type_reference(pTHX_ gql_parser_t *p) {
   gql_ir_type_t *type;
   UV start_pos = (UV)p->tok_start;
 
-  Newxz(type, 1, gql_ir_type_t);
+  type = (gql_ir_type_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_type_t));
   type->start_pos = start_pos;
   if (p->kind == TOK_LBRACKET) {
     type->kind = GQL_IR_TYPE_LIST;
@@ -3439,7 +3512,7 @@ gql_ir_parse_type_reference(pTHX_ gql_parser_t *p) {
   if (p->kind == TOK_BANG) {
     gql_ir_type_t *wrapped;
     gql_advance(aTHX_ p);
-    Newxz(wrapped, 1, gql_ir_type_t);
+    wrapped = (gql_ir_type_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_type_t));
     wrapped->kind = GQL_IR_TYPE_NON_NULL;
     wrapped->start_pos = type->start_pos;
     wrapped->inner = type;
@@ -3454,7 +3527,7 @@ gql_ir_parse_value(pTHX_ gql_parser_t *p, int is_const) {
   gql_ir_value_t *value;
   UV start_pos = (UV)p->tok_start;
 
-  Newxz(value, 1, gql_ir_value_t);
+  value = (gql_ir_value_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_value_t));
   value->start_pos = start_pos;
   switch (p->kind) {
     case TOK_DOLLAR:
@@ -3517,7 +3590,7 @@ gql_ir_parse_value(pTHX_ gql_parser_t *p, int is_const) {
       gql_expect(aTHX_ p, TOK_LBRACE, "Expected name");
       while (p->kind != TOK_RBRACE) {
         gql_ir_object_field_t *field;
-        Newxz(field, 1, gql_ir_object_field_t);
+        field = (gql_ir_object_field_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_object_field_t));
         field->start_pos = (UV)p->tok_start;
         field->name = gql_parse_name(aTHX_ p, "Expected name");
         gql_expect(aTHX_ p, TOK_COLON, NULL);
@@ -3529,8 +3602,6 @@ gql_ir_parse_value(pTHX_ gql_parser_t *p, int is_const) {
     default:
       gql_throw(aTHX_ p, p->tok_start, is_const ? "Expected name or constant" : "Expected value");
   }
-
-  Safefree(value);
   return NULL;
 }
 
@@ -3544,7 +3615,7 @@ gql_ir_parse_arguments(pTHX_ gql_parser_t *p, int is_const) {
   }
   while (p->kind != TOK_RPAREN) {
     gql_ir_argument_t *argument;
-    Newxz(argument, 1, gql_ir_argument_t);
+    argument = (gql_ir_argument_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_argument_t));
     argument->start_pos = (UV)p->tok_start;
     argument->name = gql_parse_name(aTHX_ p, "Expected name");
     gql_expect(aTHX_ p, TOK_COLON, NULL);
@@ -3561,7 +3632,7 @@ gql_ir_parse_directives(pTHX_ gql_parser_t *p) {
 
   while (p->kind == TOK_AT) {
     gql_ir_directive_t *directive;
-    Newxz(directive, 1, gql_ir_directive_t);
+    directive = (gql_ir_directive_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_directive_t));
     directive->start_pos = (UV)p->tok_start;
     gql_expect(aTHX_ p, TOK_AT, NULL);
     directive->name_pos = (UV)p->tok_start;
@@ -3579,7 +3650,7 @@ static gql_ir_selection_set_t *
 gql_ir_parse_selection_set(pTHX_ gql_parser_t *p) {
   gql_ir_selection_set_t *selection_set;
 
-  Newxz(selection_set, 1, gql_ir_selection_set_t);
+  selection_set = (gql_ir_selection_set_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_selection_set_t));
   selection_set->start_pos = (UV)p->tok_start;
   gql_expect(aTHX_ p, TOK_LBRACE, "Expected name");
   if (p->kind == TOK_RBRACE) {
@@ -3596,7 +3667,7 @@ static gql_ir_selection_t *
 gql_ir_parse_selection(pTHX_ gql_parser_t *p) {
   gql_ir_selection_t *selection;
 
-  Newxz(selection, 1, gql_ir_selection_t);
+  selection = (gql_ir_selection_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_selection_t));
   if (p->kind == TOK_SPREAD) {
     UV spread_start = (UV)p->tok_start;
     gql_advance(aTHX_ p);
@@ -3608,7 +3679,7 @@ gql_ir_parse_selection(pTHX_ gql_parser_t *p) {
         gql_throw(aTHX_ p, p->tok_start, "Unexpected Name \"on\"");
       }
       selection->kind = GQL_IR_SELECTION_INLINE_FRAGMENT;
-      Newxz(fragment, 1, gql_ir_inline_fragment_t);
+      fragment = (gql_ir_inline_fragment_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_inline_fragment_t));
       fragment->start_pos = spread_start;
       gql_advance(aTHX_ p);
       fragment->type_condition_pos = (UV)p->tok_start;
@@ -3623,7 +3694,7 @@ gql_ir_parse_selection(pTHX_ gql_parser_t *p) {
     if (p->kind == TOK_LBRACE || p->kind == TOK_AT) {
       gql_ir_inline_fragment_t *fragment;
       selection->kind = GQL_IR_SELECTION_INLINE_FRAGMENT;
-      Newxz(fragment, 1, gql_ir_inline_fragment_t);
+      fragment = (gql_ir_inline_fragment_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_inline_fragment_t));
       fragment->start_pos = spread_start;
       if (p->kind == TOK_AT) {
         fragment->directives = gql_ir_parse_directives(aTHX_ p);
@@ -3635,7 +3706,7 @@ gql_ir_parse_selection(pTHX_ gql_parser_t *p) {
     {
       gql_ir_fragment_spread_t *spread;
       selection->kind = GQL_IR_SELECTION_FRAGMENT_SPREAD;
-      Newxz(spread, 1, gql_ir_fragment_spread_t);
+      spread = (gql_ir_fragment_spread_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_fragment_spread_t));
       spread->start_pos = spread_start;
       spread->name_pos = (UV)p->tok_start;
       spread->name = gql_parse_fragment_name(aTHX_ p);
@@ -3651,7 +3722,7 @@ gql_ir_parse_selection(pTHX_ gql_parser_t *p) {
     gql_ir_field_t *field;
     SV *first_name;
     selection->kind = GQL_IR_SELECTION_FIELD;
-    Newxz(field, 1, gql_ir_field_t);
+    field = (gql_ir_field_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_field_t));
     field->start_pos = (UV)p->tok_start;
     field->name_pos = (UV)p->tok_start;
     first_name = gql_parse_name(aTHX_ p, "Expected name");
@@ -3688,7 +3759,7 @@ gql_ir_parse_variable_definitions(pTHX_ gql_parser_t *p) {
   }
   while (p->kind != TOK_RPAREN) {
     gql_ir_variable_definition_t *definition;
-    Newxz(definition, 1, gql_ir_variable_definition_t);
+    definition = (gql_ir_variable_definition_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_variable_definition_t));
     definition->start_pos = (UV)p->tok_start;
     gql_expect(aTHX_ p, TOK_DOLLAR, NULL);
     definition->name_pos = (UV)p->tok_start;
@@ -3712,7 +3783,7 @@ static gql_ir_operation_definition_t *
 gql_ir_parse_operation_definition(pTHX_ gql_parser_t *p) {
   gql_ir_operation_definition_t *definition;
 
-  Newxz(definition, 1, gql_ir_operation_definition_t);
+  definition = (gql_ir_operation_definition_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_operation_definition_t));
   definition->operation = GQL_IR_OPERATION_QUERY;
   definition->start_pos = (UV)p->tok_start;
   if (p->kind == TOK_LBRACE) {
@@ -3747,7 +3818,7 @@ static gql_ir_fragment_definition_t *
 gql_ir_parse_fragment_definition(pTHX_ gql_parser_t *p) {
   gql_ir_fragment_definition_t *definition;
 
-  Newxz(definition, 1, gql_ir_fragment_definition_t);
+  definition = (gql_ir_fragment_definition_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_fragment_definition_t));
   definition->start_pos = (UV)p->tok_start;
   gql_advance(aTHX_ p);
   definition->name_pos = (UV)p->tok_start;
@@ -3769,7 +3840,7 @@ static gql_ir_definition_t *
 gql_ir_parse_executable_definition(pTHX_ gql_parser_t *p) {
   gql_ir_definition_t *definition;
 
-  Newxz(definition, 1, gql_ir_definition_t);
+  definition = (gql_ir_definition_t *)gql_ir_arena_alloc_zero(p->ir_arena, sizeof(gql_ir_definition_t));
   if (p->kind == TOK_LBRACE
       || gql_peek_name(p, "query")
       || gql_peek_name(p, "mutation")
@@ -3796,6 +3867,7 @@ gql_ir_parse_executable_document(pTHX_ SV *source_sv) {
   gql_ir_document_t *document;
 
   Newxz(document, 1, gql_ir_document_t);
+  gql_ir_arena_init(&document->arena);
   p.src = src;
   p.len = len;
   p.pos = 0;
@@ -3806,6 +3878,7 @@ gql_ir_parse_executable_document(pTHX_ SV *source_sv) {
   p.val_end = 0;
   p.kind = TOK_EOF;
   p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
+  p.ir_arena = &document->arena;
 
   gql_advance(aTHX_ &p);
   while (p.kind != TOK_EOF) {
@@ -3823,7 +3896,6 @@ gql_ir_free_type(gql_ir_type_t *type) {
     SvREFCNT_dec(type->name);
   }
   gql_ir_free_type(type->inner);
-  Safefree(type);
 }
 
 static void
@@ -3835,7 +3907,6 @@ gql_ir_free_argument(gql_ir_argument_t *argument) {
     SvREFCNT_dec(argument->name);
   }
   gql_ir_free_value(argument->value);
-  Safefree(argument);
 }
 
 static void
@@ -3847,7 +3918,6 @@ gql_ir_free_object_field(gql_ir_object_field_t *field) {
     SvREFCNT_dec(field->name);
   }
   gql_ir_free_value(field->value);
-  Safefree(field);
 }
 
 static void
@@ -3882,7 +3952,6 @@ gql_ir_free_value(gql_ir_value_t *value) {
     default:
       break;
   }
-  Safefree(value);
 }
 
 static void
@@ -3899,7 +3968,6 @@ gql_ir_free_directive(gql_ir_directive_t *directive) {
     gql_ir_free_argument((gql_ir_argument_t *)directive->arguments.items[i]);
   }
   gql_ir_ptr_array_free(&directive->arguments);
-  Safefree(directive);
 }
 
 static void
@@ -3918,7 +3986,6 @@ gql_ir_free_variable_definition(gql_ir_variable_definition_t *definition) {
     gql_ir_free_directive((gql_ir_directive_t *)definition->directives.items[i]);
   }
   gql_ir_ptr_array_free(&definition->directives);
-  Safefree(definition);
 }
 
 static void
@@ -3932,7 +3999,6 @@ gql_ir_free_selection_set(gql_ir_selection_set_t *selection_set) {
     gql_ir_free_selection((gql_ir_selection_t *)selection_set->selections.items[i]);
   }
   gql_ir_ptr_array_free(&selection_set->selections);
-  Safefree(selection_set);
 }
 
 static void
@@ -3960,7 +4026,6 @@ gql_ir_free_selection(gql_ir_selection_t *selection) {
         }
         gql_ir_ptr_array_free(&field->directives);
         gql_ir_free_selection_set(field->selection_set);
-        Safefree(field);
       }
       break;
     case GQL_IR_SELECTION_FRAGMENT_SPREAD:
@@ -3974,7 +4039,6 @@ gql_ir_free_selection(gql_ir_selection_t *selection) {
           gql_ir_free_directive((gql_ir_directive_t *)spread->directives.items[i]);
         }
         gql_ir_ptr_array_free(&spread->directives);
-        Safefree(spread);
       }
       break;
     case GQL_IR_SELECTION_INLINE_FRAGMENT:
@@ -3989,11 +4053,9 @@ gql_ir_free_selection(gql_ir_selection_t *selection) {
         }
         gql_ir_ptr_array_free(&fragment->directives);
         gql_ir_free_selection_set(fragment->selection_set);
-        Safefree(fragment);
       }
       break;
   }
-  Safefree(selection);
 }
 
 static void
@@ -4015,7 +4077,6 @@ gql_ir_free_operation_definition(gql_ir_operation_definition_t *definition) {
   }
   gql_ir_ptr_array_free(&definition->directives);
   gql_ir_free_selection_set(definition->selection_set);
-  Safefree(definition);
 }
 
 static void
@@ -4036,7 +4097,6 @@ gql_ir_free_fragment_definition(gql_ir_fragment_definition_t *definition) {
   }
   gql_ir_ptr_array_free(&definition->directives);
   gql_ir_free_selection_set(definition->selection_set);
-  Safefree(definition);
 }
 
 static void
@@ -4049,7 +4109,6 @@ gql_ir_free_definition(gql_ir_definition_t *definition) {
   } else {
     gql_ir_free_fragment_definition(definition->as.fragment);
   }
-  Safefree(definition);
 }
 
 static void
@@ -4063,6 +4122,7 @@ gql_ir_free_document(gql_ir_document_t *document) {
     gql_ir_free_definition((gql_ir_definition_t *)document->definitions.items[i]);
   }
   gql_ir_ptr_array_free(&document->definitions);
+  gql_ir_arena_free(&document->arena);
   Safefree(document);
 }
 

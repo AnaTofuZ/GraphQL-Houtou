@@ -289,14 +289,14 @@ static SV *gql_parse_description(pTHX_ gql_parser_t *p);
 static SV *gql_copy_token_sv(pTHX_ gql_parser_t *p);
 static SV *gql_copy_value_sv(pTHX_ gql_parser_t *p);
 static SV *gql_unescape_string_sv(pTHX_ SV *raw);
-static UV gql_hex4_to_uv(const char *src);
+static int gql_hex4_to_uv(const char *src, UV *value);
 static SV *gql_make_string_sv(pTHX_ gql_parser_t *p, STRLEN start, STRLEN end);
 static SV *gql_make_location(pTHX_ gql_parser_t *p);
 static SV *gql_make_current_location(pTHX_ gql_parser_t *p);
 static SV *gql_make_endline_location(pTHX_ gql_parser_t *p);
 static SV *gql_make_current_or_endline_location(pTHX_ gql_parser_t *p);
 static void gql_parser_init(pTHX_ gql_parser_t *p, SV *source_sv, int no_location);
-static void gql_parser_destroy(gql_parser_t *p);
+static void gql_parser_invalidate(gql_parser_t *p);
 static void gql_store_location(pTHX_ gql_parser_t *p, HV *hv);
 static void gql_store_current_location(pTHX_ gql_parser_t *p, HV *hv);
 static void gql_store_endline_location(pTHX_ gql_parser_t *p, HV *hv);
@@ -549,13 +549,18 @@ gql_unescape_string_sv(pTHX_ SV *raw) {
           U8 *utf8_end;
 
           if (i + 5 < len) {
-            codepoint = gql_hex4_to_uv(src + i + 2);
+            if (!gql_hex4_to_uv(src + i + 2, &codepoint)) {
+              croak("Invalid Unicode escape sequence");
+            }
 
             if (codepoint >= 0xD800 && codepoint <= 0xDBFF &&
                 i + 11 < len &&
                 src[i + 6] == '\\' &&
                 src[i + 7] == 'u') {
-              UV low = gql_hex4_to_uv(src + i + 8);
+              UV low = 0;
+              if (!gql_hex4_to_uv(src + i + 8, &low)) {
+                croak("Invalid Unicode escape sequence");
+              }
               if (low >= 0xDC00 && low <= 0xDFFF) {
                 codepoint = 0x10000 + (((codepoint - 0xD800) << 10) | (low - 0xDC00));
                 i += 6;
@@ -590,23 +595,26 @@ gql_unescape_string_sv(pTHX_ SV *raw) {
   return out;
 }
 
-static UV
-gql_hex4_to_uv(const char *src) {
-  UV value = 0;
+static int
+gql_hex4_to_uv(const char *src, UV *value) {
+  UV parsed = 0;
   I32 i;
 
   for (i = 0; i < 4; i++) {
-    value <<= 4;
+    parsed <<= 4;
     if (src[i] >= '0' && src[i] <= '9') {
-      value |= (UV)(src[i] - '0');
+      parsed |= (UV)(src[i] - '0');
     } else if (src[i] >= 'A' && src[i] <= 'F') {
-      value |= (UV)(src[i] - 'A' + 10);
+      parsed |= (UV)(src[i] - 'A' + 10);
     } else if (src[i] >= 'a' && src[i] <= 'f') {
-      value |= (UV)(src[i] - 'a' + 10);
+      parsed |= (UV)(src[i] - 'a' + 10);
+    } else {
+      return 0;
     }
   }
 
-  return value;
+  *value = parsed;
+  return 1;
 }
 
 static SV *
@@ -1316,7 +1324,7 @@ gql_parse_directives_only(pTHX_ SV *source_sv) {
   if (p.kind != TOK_EOF) {
     gql_throw(aTHX_ &p, p.tok_start, "Expected directive");
   }
-  gql_parser_destroy(&p);
+  gql_parser_invalidate(&p);
   FREETMPS;
   LEAVE;
   return directives;
@@ -2351,7 +2359,7 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
       continue;
     }
     if (!gqljs_locate_executable_definition(aTHX_ &p, *svp)) {
-      gql_parser_destroy(&p);
+      gql_parser_invalidate(&p);
       FREETMPS;
       LEAVE;
       return &PL_sv_undef;
@@ -2362,7 +2370,7 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
     gql_throw_expected_token(aTHX_ &p, TOK_EOF);
   }
 
-  gql_parser_destroy(&p);
+  gql_parser_invalidate(&p);
   FREETMPS;
   LEAVE;
   return newSVsv(doc_sv);
@@ -3949,7 +3957,7 @@ gql_ir_parse_executable_document(pTHX_ SV *source_sv) {
   while (p.kind != TOK_EOF) {
     gql_ir_ptr_array_push(&document->definitions, gql_ir_parse_executable_definition(aTHX_ &p));
   }
-  gql_parser_destroy(&p);
+  gql_parser_invalidate(&p);
   FREETMPS;
   LEAVE;
   return document;
@@ -5766,7 +5774,10 @@ gql_parser_init(pTHX_ gql_parser_t *p, SV *source_sv, int no_location) {
 }
 
 static void
-gql_parser_destroy(gql_parser_t *p) {
+gql_parser_invalidate(gql_parser_t *p) {
+  /* line_starts is freed by SAVEFREEPV during FREETMPS/LEAVE.
+   * This helper only clears borrowed pointers from the stack-local parser.
+   */
   p->line_starts = NULL;
   p->num_lines = 0;
 }
@@ -5940,7 +5951,7 @@ gql_tokenize_source(pTHX_ SV *source_sv) {
     gql_advance(aTHX_ &p);
   }
 
-  gql_parser_destroy(&p);
+  gql_parser_invalidate(&p);
   FREETMPS;
   LEAVE;
   return newRV_noinc((SV *)tokens);
@@ -5965,7 +5976,7 @@ gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv) {
           gql_line_column_from_pos(&p, p.tok_start, &line, &column, 1);
           gql_store_sv(loc_hv, "line", newSViv(line));
           gql_store_sv(loc_hv, "column", newSViv(column));
-          gql_parser_destroy(&p);
+          gql_parser_invalidate(&p);
           FREETMPS;
           LEAVE;
           return newRV_noinc((SV *)loc_hv);
@@ -5976,7 +5987,7 @@ gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv) {
     gql_advance(aTHX_ &p);
   }
 
-  gql_parser_destroy(&p);
+  gql_parser_invalidate(&p);
   FREETMPS;
   LEAVE;
   return &PL_sv_undef;
@@ -6729,7 +6740,7 @@ gql_parse_document(pTHX_ SV *source_sv, SV *no_location_sv) {
   gql_parser_init(aTHX_ &p, source_sv, SvTRUE(no_location_sv) ? 1 : 0);
   gql_advance(aTHX_ &p);
   ret = newRV_noinc((SV *)gql_parse_definitions(aTHX_ &p));
-  gql_parser_destroy(&p);
+  gql_parser_invalidate(&p);
   FREETMPS;
   LEAVE;
   return ret;

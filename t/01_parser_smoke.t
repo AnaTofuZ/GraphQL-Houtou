@@ -150,6 +150,23 @@ subtest 'string unicode escapes are decoded on XS paths', sub {
         'graphql-js XS decodes surrogate pair escapes';
 };
 
+subtest 'invalid unicode escapes still die explicitly on XS paths', sub {
+    dies_ok {
+        GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options(
+            '{ user(arg: "\\u00GG") }',
+            { backend => 'xs' },
+        );
+    } 'legacy XS rejects invalid unicode escape';
+    like $@->message, qr/Invalid Unicode escape sequence/, 'legacy XS preserves unicode escape error';
+
+    dies_ok {
+        GraphQL::Houtou::GraphQLJS::Parser::parse(
+            'query Q { user(arg: "\\u00GG") }',
+        );
+    } 'graphql-js XS rejects invalid unicode escape';
+    like $@->message, qr/Invalid Unicode escape sequence/, 'graphql-js XS preserves unicode escape error';
+};
+
 subtest 'invalid backend is rejected explicitly', sub {
     dies_ok {
         GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options('{ field }', {

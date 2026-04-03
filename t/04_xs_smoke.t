@@ -9,6 +9,7 @@ BEGIN {
         require GraphQL::Houtou::XS::Parser;
         GraphQL::Houtou::XS::Parser->import(qw(
             graphqljs_apply_executable_loc_xs
+            graphqljs_build_executable_document_xs
             parse_xs
             graphqljs_preprocess_xs
             graphqljs_patch_document_xs
@@ -19,6 +20,7 @@ BEGIN {
     } or plan skip_all => 'XS parser is not built';
 }
 
+use GraphQL::Houtou::Adapter::GraphQLPerlToGraphQLJS qw(convert_document);
 use GraphQL::Houtou::GraphQLJS::Canonical qw(parse_canonical_document);
 
 sub var_ref {
@@ -234,6 +236,30 @@ subtest 'tokenize_xs exposes token locations directly', sub {
             loc => { line => 1, column => 20 },
         },
     ];
+};
+
+subtest 'graphqljs_build_executable_document_xs matches Perl adapter for executable documents', sub {
+    my $source = 'query Q($id: ID = 1) @root { user(id: $id) { ...UserFields } } fragment UserFields on User { name }';
+    my $legacy = parse_xs($source);
+    my $built = graphqljs_build_executable_document_xs($legacy);
+    my $expected = convert_document($legacy, {
+        no_location => 1,
+        skip_location_projection => 1,
+    });
+
+    cmp_deeply $built, $expected, 'xs executable builder matches the Perl adapter output';
+};
+
+subtest 'graphqljs_build_executable_document_xs matches Perl adapter for empty object values', sub {
+    my $source = 'query Q($input: Filter = {}) { user(filter: {}) { id } }';
+    my $legacy = parse_xs($source);
+    my $built = graphqljs_build_executable_document_xs($legacy);
+    my $expected = convert_document($legacy, {
+        no_location => 1,
+        skip_location_projection => 1,
+    });
+
+    cmp_deeply $built, $expected, 'xs executable builder handles empty object values';
 };
 
 subtest 'graphqljs_apply_executable_loc_xs locates executable documents directly', sub {

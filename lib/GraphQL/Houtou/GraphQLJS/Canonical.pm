@@ -19,6 +19,7 @@ my $HAS_XS_PREPROCESS = eval {
   require GraphQL::Houtou::XS::Parser;
   GraphQL::Houtou::XS::Parser->import(qw(
     graphqljs_apply_executable_loc_xs
+    graphqljs_build_executable_document_xs
     graphqljs_preprocess_xs
     graphqljs_patch_document_xs
     parse_directives_xs
@@ -87,6 +88,28 @@ sub _parse_legacy_document {
   die "Unknown parser backend '$backend'.\n";
 }
 
+sub _build_graphqljs_document_from_legacy {
+  my ($legacy, $options) = @_;
+  my $is_executable = _is_executable_legacy_document($legacy);
+  my $use_xs_builder = $HAS_XS_PREPROCESS
+    && ($options->{backend} || '') eq 'xs'
+    && $is_executable;
+
+  if ($use_xs_builder) {
+    my $doc = graphqljs_build_executable_document_xs($legacy);
+    return ($doc, $is_executable)
+      if defined $doc && ref $doc eq 'HASH';
+  }
+
+  return (
+    convert_document($legacy, {
+      %$options,
+      ($use_xs_builder ? (skip_location_projection => 1) : ()),
+    }),
+    $is_executable,
+  );
+}
+
 sub _materialize_operation_variable_directives_xs {
   my ($meta) = @_;
   return if !@{ $meta->{operation_variable_directives} || [] };
@@ -136,12 +159,9 @@ sub parse_canonical_document {
   my ($rewritten, $meta) = _preprocess_source($source);
   my $backend = $options->{backend} || ($HAS_XS_PREPROCESS ? 'xs' : 'pegex');
   my $legacy = _parse_legacy_document($rewritten, $backend, $options->{no_location} // $options->{noLocation});
-  my $is_executable = _is_executable_legacy_document($legacy);
-  my $doc = convert_document($legacy, {
+  my ($doc, $is_executable) = _build_graphqljs_document_from_legacy($legacy, {
     %$options,
-    (($HAS_XS_PREPROCESS && $backend eq 'xs' && $is_executable)
-      ? (skip_location_projection => 1)
-      : ()),
+    backend => $backend,
   });
   if ($HAS_XS_PREPROCESS) {
     _materialize_operation_variable_directives_xs($meta);

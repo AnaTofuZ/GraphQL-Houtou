@@ -134,6 +134,29 @@ graphql_js_xs_noloc       7164/s            1486%                  1436%        
 
 であり、`no_location` 経路に限れば location projection コストはほぼ解消できたと見てよい。
 
+さらに後続作業で、executable document は `GraphQLPerlToGraphQLJS` を経由せず
+`graphqljs_build_executable_document_xs()` で直接 graphql-js AST を組み立てるようにした。
+当初は object value を含む executable を安全のため Perl adapter に fallback していたが、
+empty object / non-empty object の双方を XS builder 側で扱えるようにしたことで、
+現在は executable document 全体で XS builder を使っている。
+
+この変更後の `t/kitchen-sink.graphql` は次の通り。
+
+```text
+                             Rate graphql_js_pegex graphql_js_pegex_noloc graphql_perl_pegex graphql_perl_canonical_xs graphql_perl_xs graphql_js_xs graphql_js_xs_noloc
+graphql_js_pegex            446/s               --                    -4%                -8%                      -87%            -94%          -95%                -97%
+graphql_js_pegex_noloc      462/s               4%                     --                -4%                      -87%            -94%          -95%                -97%
+graphql_perl_pegex          483/s               8%                     4%                 --                      -86%            -94%          -94%                -97%
+graphql_perl_canonical_xs  3516/s             689%                   661%               629%                        --            -55%          -59%                -80%
+graphql_perl_xs            7853/s            1662%                  1599%              1527%                      123%              --           -9%                -55%
+graphql_js_xs              8616/s            1834%                  1764%              1685%                      145%             10%            --                -51%
+graphql_js_xs_noloc       17440/s            3814%                  3673%              3514%                      396%            122%          102%                  --
+```
+
+`graphql_js_xs` は `8616/s` まで伸びて、`graphql_perl_xs` (`7853/s`) を上回った。
+この時点で executable path の主コストは、graphql-js AST 自体の構築ではなく、
+`graphql-perl` dialect に戻す `graphql_perl_canonical_xs` 側の adapter に移っている。
+
 ## Profile
 
 `util/profile-parser.pl` を `Devel::NYTProf` 付きで実行し、
@@ -163,3 +186,25 @@ graphql_js_xs_noloc       7164/s            1486%                  1436%        
   HTML と SVG は生成できている。
 - `graphql-js + xs` / `graphql-js + pegex` の benchmark は取り終えているが、
   NYTProf はまだ `graphql-perl` backend 比較を優先している。
+
+
+2026-04-03 の後続作業として、executable document については `GraphQLPerlToGraphQLJS`
+を経由しない XS builder `graphqljs_build_executable_document_xs()` を導入した。
+ただし現段階では object value を含む executable は Canonical 側で安全に Perl adapter へ
+fallback するため、`kitchen-sink` のような入力では builder が部分適用に留まる。
+
+この状態での `t/kitchen-sink.graphql` は次の通り。
+
+```text
+                            Rate graphql_js_pegex graphql_js_pegex_noloc graphql_perl_pegex graphql_perl_canonical_xs graphql_js_xs graphql_js_xs_noloc graphql_perl_xs
+graphql_js_pegex           418/s               --                    -4%               -10%                      -81%          -89%                -93%            -94%
+graphql_js_pegex_noloc     436/s               4%                     --                -6%                      -80%          -88%                -93%            -94%
+graphql_perl_pegex         465/s              11%                     7%                 --                      -79%          -87%                -92%            -94%
+graphql_perl_canonical_xs 2228/s             433%                   411%               379%                        --          -39%                -63%            -70%
+graphql_js_xs             3670/s             779%                   742%               689%                       65%            --                -39%            -51%
+graphql_js_xs_noloc       5992/s            1335%                  1274%              1189%                      169%           63%                  --            -20%
+graphql_perl_xs           7494/s            1694%                  1619%              1512%                      236%          104%                 25%              --
+```
+
+この時点では `graphql_js_xs` の最適化余地はまだ大きく、特に object value を含む value 変換を
+XS builder 側で完結させて fallback 条件を縮めるのが次の主要課題になる。

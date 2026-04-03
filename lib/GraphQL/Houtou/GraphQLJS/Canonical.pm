@@ -5,7 +5,6 @@ use strict;
 use warnings;
 use Exporter 'import';
 use GraphQL::Houtou::GraphQLJS::Locator qw(apply_loc_from_source);
-use GraphQL::Houtou::GraphQLJS::Util qw(rebase_loc);
 
 our @EXPORT_OK = qw(
   parse_canonical_document
@@ -40,9 +39,7 @@ sub _convert_directive_texts {
   }
 
   my @copy = map {
-    my %directive = %$_;
-    rebase_loc(\%directive, $loc);
-    \%directive;
+    +{ %$_ };
   } @$converted;
 
   return \@copy;

@@ -229,3 +229,66 @@ graphql_perl_xs           7494/s            1694%                  1619%        
 
 この時点では `graphql_js_xs` の最適化余地はまだ大きく、特に object value を含む value 変換を
 XS builder 側で完結させて fallback 条件を縮めるのが次の主要課題になる。
+
+## 2026-04-03 Current XS-only Snapshot
+
+`graphql-js` parser を XS 専用経路に寄せた現時点では、
+`util/parser-benchmark.pl` から `graphql-js + pegex` 系の比較軸を外した。
+
+対象:
+
+- file: `t/kitchen-sink.graphql`
+- command: `perl util/parser-benchmark.pl --count=-5`
+
+結果:
+
+```text
+                             Rate graphql_perl_pegex graphql_perl_canonical_xs graphql_js_xs graphql_js_xs_noloc graphql_perl_xs
+graphql_perl_pegex          475/s                 --                      -93%          -94%                -97%            -99%
+graphql_perl_canonical_xs  6818/s              1335%                        --          -18%                -60%            -82%
+graphql_js_xs              8314/s              1650%                       22%            --                -51%            -79%
+graphql_js_xs_noloc       17026/s              3484%                      150%          105%                  --            -56%
+graphql_perl_xs           38802/s              8069%                      469%          367%                128%              --
+```
+
+観察:
+
+- `graphql-js + xs` は `graphql-perl canonical-xs` を約 22% 上回る。
+- `graphql-js + xs + no_location` は `17026/s` で、location 再構築コストの大きさが引き続き見える。
+- `graphql-perl + xs` は依然として最速で、legacy AST を直接返す経路の強さが明確である。
+
+同時点の `NYTProf` は `graphql-js + xs` を含めて取り直した。
+
+対象:
+
+- dialect/backend:
+  - `graphql-perl + pegex`
+  - `graphql-perl + xs`
+  - `graphql-perl + canonical-xs`
+  - `graphql-js + xs`
+- file: `t/kitchen-sink.graphql`
+- iterations: `300`
+
+出力:
+
+- raw profile
+  - `/tmp/graphql-houtou-nytprof-pegex.out`
+  - `/tmp/graphql-houtou-nytprof-xs.out`
+  - `/tmp/graphql-houtou-nytprof-canonical-xs.out`
+  - `/tmp/graphql-houtou-nytprof-graphql-js-xs.out`
+- HTML / flame graph
+  - `/tmp/graphql-houtou-nytprof-pegex/index.html`
+  - `/tmp/graphql-houtou-nytprof-pegex/all_stacks_by_time.svg`
+  - `/tmp/graphql-houtou-nytprof-xs/index.html`
+  - `/tmp/graphql-houtou-nytprof-xs/all_stacks_by_time.svg`
+  - `/tmp/graphql-houtou-nytprof-canonical-xs/index.html`
+  - `/tmp/graphql-houtou-nytprof-canonical-xs/all_stacks_by_time.svg`
+  - `/tmp/graphql-houtou-nytprof-graphql-js-xs/index.html`
+  - `/tmp/graphql-houtou-nytprof-graphql-js-xs/all_stacks_by_time.svg`
+
+補足:
+
+- `pegex` 側の `nytprofhtml` では今回も `nytprofcalls` 由来の deep recursion warning が大量に出るが、
+  `index.html` と `all_stacks_by_time.svg` は生成できている。
+- 旧 `GraphQLPerlToGraphQLJS` / `GraphQLJS::PP` は削除済みのため、
+  現在の `graphql-js + xs` profile は XS canonical path と location/patch 周辺の実コストをより直接に表す。

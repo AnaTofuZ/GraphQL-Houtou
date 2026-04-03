@@ -17,13 +17,19 @@ GetOptions(
   'backend=s'    => \$backend,
   'file=s'       => \$file,
   'iterations=i' => \$iterations,
-) or die "Usage: $0 [--dialect graphql-perl|graphql-js] [--backend pegex|xs] [--file path] [--iterations N]\n";
+) or die "Usage: $0 [--dialect graphql-perl|graphql-js] [--backend pegex|xs|canonical-xs] [--file path] [--iterations N]\n";
 
 die "--dialect must be graphql-perl or graphql-js\n"
   unless $dialect eq 'graphql-perl' || $dialect eq 'graphql-js';
 
-die "--backend must be pegex or xs\n"
-  unless $backend eq 'pegex' || $backend eq 'xs';
+if ($dialect eq 'graphql-js') {
+  die "--backend must be xs for graphql-js\n"
+    unless $backend eq 'xs';
+}
+else {
+  die "--backend must be pegex, xs, or canonical-xs for graphql-perl\n"
+    unless $backend eq 'pegex' || $backend eq 'xs' || $backend eq 'canonical-xs';
+}
 
 open my $fh, '<', $file or die "Failed to open $file: $!";
 my $source = do { local $/; <$fh> };

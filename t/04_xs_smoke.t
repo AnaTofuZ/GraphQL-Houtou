@@ -11,6 +11,7 @@ BEGIN {
             graphqljs_apply_executable_loc_xs
             graphqljs_build_document_xs
             graphqljs_build_executable_document_xs
+            graphqljs_parse_executable_document_xs
             graphqlperl_build_document_xs
             graphqlperl_find_legacy_empty_object_location_xs
             parse_xs
@@ -263,6 +264,16 @@ subtest 'graphqljs_build_executable_document_xs matches canonical parser for emp
     });
 
     cmp_deeply $built, $expected, 'xs executable builder handles empty object values';
+};
+
+subtest 'graphqljs_parse_executable_document_xs matches canonical parser for executable documents', sub {
+    my $source = 'query Q($id: ID = 1) @root { user(id: $id) { ...UserFields } } fragment UserFields on User { name }';
+    my $built = graphqljs_parse_executable_document_xs($source);
+    my $expected = parse_canonical_document($source, {
+        backend => 'xs',
+    });
+
+    cmp_deeply $built, $expected, 'xs executable fast path matches canonical parser output';
 };
 
 subtest 'graphqljs_build_document_xs matches canonical parser for type system documents', sub {

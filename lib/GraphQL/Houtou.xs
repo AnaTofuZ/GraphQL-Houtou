@@ -38,6 +38,160 @@ typedef struct {
   bool is_utf8;
 } gql_parser_t;
 
+typedef struct {
+  I32 count;
+  I32 cap;
+  void **items;
+} gql_ir_ptr_array_t;
+
+typedef enum {
+  GQL_IR_TYPE_NAMED = 0,
+  GQL_IR_TYPE_LIST,
+  GQL_IR_TYPE_NON_NULL
+} gql_ir_type_kind_t;
+
+typedef enum {
+  GQL_IR_VALUE_NULL = 0,
+  GQL_IR_VALUE_BOOL,
+  GQL_IR_VALUE_INT,
+  GQL_IR_VALUE_FLOAT,
+  GQL_IR_VALUE_STRING,
+  GQL_IR_VALUE_ENUM,
+  GQL_IR_VALUE_VARIABLE,
+  GQL_IR_VALUE_LIST,
+  GQL_IR_VALUE_OBJECT
+} gql_ir_value_kind_t;
+
+typedef enum {
+  GQL_IR_SELECTION_FIELD = 0,
+  GQL_IR_SELECTION_FRAGMENT_SPREAD,
+  GQL_IR_SELECTION_INLINE_FRAGMENT
+} gql_ir_selection_kind_t;
+
+typedef enum {
+  GQL_IR_DEFINITION_OPERATION = 0,
+  GQL_IR_DEFINITION_FRAGMENT
+} gql_ir_definition_kind_t;
+
+typedef enum {
+  GQL_IR_OPERATION_QUERY = 0,
+  GQL_IR_OPERATION_MUTATION,
+  GQL_IR_OPERATION_SUBSCRIPTION
+} gql_ir_operation_kind_t;
+
+typedef struct gql_ir_type gql_ir_type_t;
+typedef struct gql_ir_value gql_ir_value_t;
+typedef struct gql_ir_directive gql_ir_directive_t;
+typedef struct gql_ir_argument gql_ir_argument_t;
+typedef struct gql_ir_object_field gql_ir_object_field_t;
+typedef struct gql_ir_variable_definition gql_ir_variable_definition_t;
+typedef struct gql_ir_selection gql_ir_selection_t;
+typedef struct gql_ir_selection_set gql_ir_selection_set_t;
+typedef struct gql_ir_field gql_ir_field_t;
+typedef struct gql_ir_fragment_spread gql_ir_fragment_spread_t;
+typedef struct gql_ir_inline_fragment gql_ir_inline_fragment_t;
+typedef struct gql_ir_operation_definition gql_ir_operation_definition_t;
+typedef struct gql_ir_fragment_definition gql_ir_fragment_definition_t;
+typedef struct gql_ir_definition gql_ir_definition_t;
+typedef struct gql_ir_document gql_ir_document_t;
+
+struct gql_ir_type {
+  gql_ir_type_kind_t kind;
+  SV *name;
+  gql_ir_type_t *inner;
+};
+
+struct gql_ir_argument {
+  SV *name;
+  gql_ir_value_t *value;
+};
+
+struct gql_ir_object_field {
+  SV *name;
+  gql_ir_value_t *value;
+};
+
+struct gql_ir_value {
+  gql_ir_value_kind_t kind;
+  union {
+    int boolean;
+    SV *sv;
+    gql_ir_ptr_array_t list_items;
+    gql_ir_ptr_array_t object_fields;
+  } as;
+};
+
+struct gql_ir_directive {
+  SV *name;
+  gql_ir_ptr_array_t arguments;
+};
+
+struct gql_ir_variable_definition {
+  SV *name;
+  gql_ir_type_t *type;
+  gql_ir_value_t *default_value;
+  gql_ir_ptr_array_t directives;
+};
+
+struct gql_ir_field {
+  SV *alias;
+  SV *name;
+  gql_ir_ptr_array_t arguments;
+  gql_ir_ptr_array_t directives;
+  gql_ir_selection_set_t *selection_set;
+};
+
+struct gql_ir_fragment_spread {
+  SV *name;
+  gql_ir_ptr_array_t directives;
+};
+
+struct gql_ir_inline_fragment {
+  SV *type_condition;
+  gql_ir_ptr_array_t directives;
+  gql_ir_selection_set_t *selection_set;
+};
+
+struct gql_ir_selection {
+  gql_ir_selection_kind_t kind;
+  union {
+    gql_ir_field_t *field;
+    gql_ir_fragment_spread_t *fragment_spread;
+    gql_ir_inline_fragment_t *inline_fragment;
+  } as;
+};
+
+struct gql_ir_selection_set {
+  gql_ir_ptr_array_t selections;
+};
+
+struct gql_ir_operation_definition {
+  gql_ir_operation_kind_t operation;
+  SV *name;
+  gql_ir_ptr_array_t variable_definitions;
+  gql_ir_ptr_array_t directives;
+  gql_ir_selection_set_t *selection_set;
+};
+
+struct gql_ir_fragment_definition {
+  SV *name;
+  SV *type_condition;
+  gql_ir_ptr_array_t directives;
+  gql_ir_selection_set_t *selection_set;
+};
+
+struct gql_ir_definition {
+  gql_ir_definition_kind_t kind;
+  union {
+    gql_ir_operation_definition_t *operation;
+    gql_ir_fragment_definition_t *fragment;
+  } as;
+};
+
+struct gql_ir_document {
+  gql_ir_ptr_array_t definitions;
+};
+
 static SV *gql_parse_document(pTHX_ SV *source_sv);
 static void gql_advance(pTHX_ gql_parser_t *p);
 static void gql_skip_ignored(gql_parser_t *p);
@@ -115,7 +269,44 @@ static SV *gql_parse_directives_only(pTHX_ SV *source_sv);
 static SV *gql_tokenize_source(pTHX_ SV *source_sv);
 static SV *gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv);
 static SV *gql_graphqljs_build_directives_from_source(pTHX_ SV *source_sv);
+static int gqljs_legacy_document_is_executable(SV *legacy_sv);
+static void gqljs_materialize_operation_variable_directives(pTHX_ HV *meta_hv);
 static SV *gql_graphqljs_build_document(pTHX_ SV *legacy_sv);
+static SV *gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv);
+static void gql_ir_ptr_array_push(gql_ir_ptr_array_t *array, void *item);
+static void gql_ir_ptr_array_free(gql_ir_ptr_array_t *array);
+static gql_ir_type_t *gql_ir_parse_type_reference(pTHX_ gql_parser_t *p);
+static gql_ir_value_t *gql_ir_parse_value(pTHX_ gql_parser_t *p, int is_const);
+static gql_ir_ptr_array_t gql_ir_parse_arguments(pTHX_ gql_parser_t *p, int is_const);
+static gql_ir_ptr_array_t gql_ir_parse_directives(pTHX_ gql_parser_t *p);
+static gql_ir_selection_set_t *gql_ir_parse_selection_set(pTHX_ gql_parser_t *p);
+static gql_ir_selection_t *gql_ir_parse_selection(pTHX_ gql_parser_t *p);
+static gql_ir_ptr_array_t gql_ir_parse_variable_definitions(pTHX_ gql_parser_t *p);
+static gql_ir_operation_definition_t *gql_ir_parse_operation_definition(pTHX_ gql_parser_t *p);
+static gql_ir_fragment_definition_t *gql_ir_parse_fragment_definition(pTHX_ gql_parser_t *p);
+static gql_ir_definition_t *gql_ir_parse_executable_definition(pTHX_ gql_parser_t *p);
+static gql_ir_document_t *gql_ir_parse_executable_document(pTHX_ SV *source_sv);
+static void gql_ir_free_type(gql_ir_type_t *type);
+static void gql_ir_free_value(gql_ir_value_t *value);
+static void gql_ir_free_directive(gql_ir_directive_t *directive);
+static void gql_ir_free_argument(gql_ir_argument_t *argument);
+static void gql_ir_free_object_field(gql_ir_object_field_t *field);
+static void gql_ir_free_variable_definition(gql_ir_variable_definition_t *definition);
+static void gql_ir_free_selection(gql_ir_selection_t *selection);
+static void gql_ir_free_selection_set(gql_ir_selection_set_t *selection_set);
+static void gql_ir_free_operation_definition(gql_ir_operation_definition_t *definition);
+static void gql_ir_free_fragment_definition(gql_ir_fragment_definition_t *definition);
+static void gql_ir_free_definition(gql_ir_definition_t *definition);
+static void gql_ir_free_document(gql_ir_document_t *document);
+static SV *gqljs_build_type_from_ir(pTHX_ gql_ir_type_t *type);
+static SV *gqljs_build_value_from_ir(pTHX_ gql_ir_value_t *value);
+static AV *gqljs_build_arguments_from_ir(pTHX_ gql_ir_ptr_array_t *arguments);
+static AV *gqljs_build_directives_from_ir(pTHX_ gql_ir_ptr_array_t *directives);
+static SV *gqljs_build_selection_from_ir(pTHX_ gql_ir_selection_t *selection);
+static SV *gqljs_build_selection_set_from_ir(pTHX_ gql_ir_selection_set_t *selection_set);
+static AV *gqljs_build_variable_definitions_from_ir(pTHX_ gql_ir_ptr_array_t *definitions);
+static SV *gqljs_build_executable_definition_from_ir(pTHX_ gql_ir_definition_t *definition);
+static SV *gqljs_build_executable_document_from_ir(pTHX_ gql_ir_document_t *document);
 static SV *gqljs_clone_with_loc(pTHX_ SV *value, SV *loc_sv);
 static int gqljs_sv_eq_pv(SV *sv, const char *literal);
 static const char *gqljs_definition_source_kind(SV *kind_sv);
@@ -2664,6 +2855,1032 @@ gql_graphqljs_build_directives_from_source(pTHX_ SV *source_sv) {
   return newRV_noinc((SV *)directives_av);
 }
 
+static int
+gqljs_legacy_document_is_executable(SV *legacy_sv) {
+  AV *legacy_av;
+  I32 i;
+
+  if (!legacy_sv || !SvROK(legacy_sv) || SvTYPE(SvRV(legacy_sv)) != SVt_PVAV) {
+    return 0;
+  }
+
+  legacy_av = (AV *)SvRV(legacy_sv);
+  for (i = 0; i <= av_len(legacy_av); i++) {
+    SV **svp = av_fetch(legacy_av, i, 0);
+    HV *hv;
+    SV *kind_sv;
+    STRLEN len;
+    const char *kind;
+
+    if (!svp || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVHV) {
+      return 0;
+    }
+    hv = (HV *)SvRV(*svp);
+    kind_sv = gqljs_fetch_sv(hv, "kind");
+    if (!kind_sv) {
+      return 0;
+    }
+
+    kind = SvPV(kind_sv, len);
+    if (!(len == 9 && memcmp(kind, "operation", 9) == 0)
+        && !(len == 8 && memcmp(kind, "fragment", 8) == 0)) {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+static void
+gqljs_materialize_operation_variable_directives(pTHX_ HV *meta_hv) {
+  SV *operations_sv = gqljs_fetch_sv(meta_hv, "operation_variable_directives");
+  AV *operations_av;
+  I32 i;
+
+  if (!operations_sv || !SvROK(operations_sv) || SvTYPE(SvRV(operations_sv)) != SVt_PVAV) {
+    return;
+  }
+
+  operations_av = (AV *)SvRV(operations_sv);
+  for (i = 0; i <= av_len(operations_av); i++) {
+    SV **operation_svp = av_fetch(operations_av, i, 0);
+    HV *operation_hv;
+    SV **keys;
+    I32 key_count;
+    I32 j;
+
+    if (!operation_svp || !SvROK(*operation_svp) || SvTYPE(SvRV(*operation_svp)) != SVt_PVHV) {
+      continue;
+    }
+
+    operation_hv = (HV *)SvRV(*operation_svp);
+    keys = gqljs_sorted_hash_keys(aTHX_ operation_hv, &key_count);
+    for (j = 0; j < key_count; j++) {
+      SV *key_sv = keys[j];
+      STRLEN key_len;
+      const char *key = SvPV(key_sv, key_len);
+      SV **raw_svp = hv_fetch(operation_hv, key, (I32)key_len, 0);
+      AV *raw_av;
+      SV *joined;
+      I32 k;
+
+      if (!raw_svp || !SvROK(*raw_svp) || SvTYPE(SvRV(*raw_svp)) != SVt_PVAV) {
+        continue;
+      }
+
+      raw_av = (AV *)SvRV(*raw_svp);
+      joined = newSVpvn("", 0);
+      for (k = 0; k <= av_len(raw_av); k++) {
+        SV **text_svp = av_fetch(raw_av, k, 0);
+        if (!text_svp) {
+          continue;
+        }
+        if (SvCUR(joined) > 0) {
+          sv_catpvn(joined, " ", 1);
+        }
+        sv_catsv(joined, *text_svp);
+      }
+
+      hv_store(operation_hv, key, (I32)key_len,
+        gql_graphqljs_build_directives_from_source(aTHX_ joined), 0);
+      SvREFCNT_dec(joined);
+    }
+    gqljs_free_sorted_hash_keys(keys, key_count);
+  }
+}
+
+static SV *
+gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv) {
+  SV *meta_sv = gql_graphqljs_preprocess(aTHX_ source_sv);
+  HV *meta_hv;
+  SV *rewritten_sv;
+  gql_ir_document_t *ir_document;
+  SV *doc_sv;
+  SV *patched_sv;
+
+  if (!meta_sv || !SvROK(meta_sv) || SvTYPE(SvRV(meta_sv)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+
+  meta_hv = (HV *)SvRV(meta_sv);
+  rewritten_sv = gqljs_fetch_sv(meta_hv, "rewritten_source");
+  ir_document = gql_ir_parse_executable_document(aTHX_ rewritten_sv ? rewritten_sv : source_sv);
+  doc_sv = gqljs_build_executable_document_from_ir(aTHX_ ir_document);
+  gql_ir_free_document(ir_document);
+  if (!doc_sv || !SvOK(doc_sv) || doc_sv == &PL_sv_undef) {
+    SvREFCNT_dec(meta_sv);
+    return &PL_sv_undef;
+  }
+
+  gqljs_materialize_operation_variable_directives(aTHX_ meta_hv);
+  patched_sv = gql_graphqljs_patch_document(aTHX_ doc_sv, meta_sv);
+  SvREFCNT_dec(doc_sv);
+  doc_sv = patched_sv;
+
+  SvREFCNT_dec(meta_sv);
+
+  if (SvTRUE(no_location_sv)) {
+    return doc_sv;
+  }
+
+  patched_sv = gql_graphqljs_apply_executable_loc(aTHX_ doc_sv, source_sv);
+  if (patched_sv && SvOK(patched_sv) && patched_sv != &PL_sv_undef) {
+    SvREFCNT_dec(doc_sv);
+    return patched_sv;
+  }
+
+  return doc_sv;
+}
+
+static void
+gql_ir_ptr_array_push(gql_ir_ptr_array_t *array, void *item) {
+  if (array->count == array->cap) {
+    I32 next_cap = array->cap ? array->cap * 2 : 4;
+    Renew(array->items, next_cap, void *);
+    array->cap = next_cap;
+  }
+  array->items[array->count++] = item;
+}
+
+static void
+gql_ir_ptr_array_free(gql_ir_ptr_array_t *array) {
+  if (array->items) {
+    Safefree(array->items);
+  }
+  array->items = NULL;
+  array->count = 0;
+  array->cap = 0;
+}
+
+static gql_ir_type_t *
+gql_ir_parse_type_reference(pTHX_ gql_parser_t *p) {
+  gql_ir_type_t *type;
+
+  Newxz(type, 1, gql_ir_type_t);
+  if (p->kind == TOK_LBRACKET) {
+    type->kind = GQL_IR_TYPE_LIST;
+    gql_advance(aTHX_ p);
+    type->inner = gql_ir_parse_type_reference(aTHX_ p);
+    gql_expect(aTHX_ p, TOK_RBRACKET, NULL);
+  } else {
+    type->kind = GQL_IR_TYPE_NAMED;
+    type->name = gql_parse_name(aTHX_ p, "Expected name");
+  }
+
+  if (p->kind == TOK_BANG) {
+    gql_ir_type_t *wrapped;
+    gql_advance(aTHX_ p);
+    Newxz(wrapped, 1, gql_ir_type_t);
+    wrapped->kind = GQL_IR_TYPE_NON_NULL;
+    wrapped->inner = type;
+    type = wrapped;
+  }
+
+  return type;
+}
+
+static gql_ir_value_t *
+gql_ir_parse_value(pTHX_ gql_parser_t *p, int is_const) {
+  gql_ir_value_t *value;
+
+  Newxz(value, 1, gql_ir_value_t);
+  switch (p->kind) {
+    case TOK_DOLLAR:
+      if (is_const) {
+        gql_throw(aTHX_ p, p->tok_start, "Expected name or constant");
+      }
+      value->kind = GQL_IR_VALUE_VARIABLE;
+      gql_advance(aTHX_ p);
+      value->as.sv = gql_parse_name(aTHX_ p, "Expected name");
+      return value;
+    case TOK_INT:
+      value->kind = GQL_IR_VALUE_INT;
+      value->as.sv = gql_copy_token_sv(aTHX_ p);
+      gql_advance(aTHX_ p);
+      return value;
+    case TOK_FLOAT:
+      value->kind = GQL_IR_VALUE_FLOAT;
+      value->as.sv = gql_copy_token_sv(aTHX_ p);
+      gql_advance(aTHX_ p);
+      return value;
+    case TOK_STRING:
+    case TOK_BLOCK_STRING:
+      value->kind = GQL_IR_VALUE_STRING;
+      value->as.sv = gql_copy_value_sv(aTHX_ p);
+      gql_advance(aTHX_ p);
+      return value;
+    case TOK_NAME:
+      if (gql_peek_name(p, "true")) {
+        value->kind = GQL_IR_VALUE_BOOL;
+        value->as.boolean = 1;
+        gql_advance(aTHX_ p);
+        return value;
+      }
+      if (gql_peek_name(p, "false")) {
+        value->kind = GQL_IR_VALUE_BOOL;
+        value->as.boolean = 0;
+        gql_advance(aTHX_ p);
+        return value;
+      }
+      if (gql_peek_name(p, "null")) {
+        value->kind = GQL_IR_VALUE_NULL;
+        gql_advance(aTHX_ p);
+        return value;
+      }
+      value->kind = GQL_IR_VALUE_ENUM;
+      value->as.sv = gql_copy_token_sv(aTHX_ p);
+      gql_advance(aTHX_ p);
+      return value;
+    case TOK_LBRACKET:
+      value->kind = GQL_IR_VALUE_LIST;
+      gql_expect(aTHX_ p, TOK_LBRACKET, NULL);
+      while (p->kind != TOK_RBRACKET) {
+        gql_ir_ptr_array_push(&value->as.list_items, gql_ir_parse_value(aTHX_ p, is_const));
+      }
+      gql_expect(aTHX_ p, TOK_RBRACKET, NULL);
+      return value;
+    case TOK_LBRACE:
+      value->kind = GQL_IR_VALUE_OBJECT;
+      gql_expect(aTHX_ p, TOK_LBRACE, "Expected name");
+      while (p->kind != TOK_RBRACE) {
+        gql_ir_object_field_t *field;
+        Newxz(field, 1, gql_ir_object_field_t);
+        field->name = gql_parse_name(aTHX_ p, "Expected name");
+        gql_expect(aTHX_ p, TOK_COLON, NULL);
+        field->value = gql_ir_parse_value(aTHX_ p, is_const);
+        gql_ir_ptr_array_push(&value->as.object_fields, field);
+      }
+      gql_expect(aTHX_ p, TOK_RBRACE, NULL);
+      return value;
+    default:
+      gql_throw(aTHX_ p, p->tok_start, is_const ? "Expected name or constant" : "Expected value");
+  }
+
+  Safefree(value);
+  return NULL;
+}
+
+static gql_ir_ptr_array_t
+gql_ir_parse_arguments(pTHX_ gql_parser_t *p, int is_const) {
+  gql_ir_ptr_array_t arguments = { 0, 0, NULL };
+
+  gql_expect(aTHX_ p, TOK_LPAREN, NULL);
+  if (p->kind == TOK_RPAREN) {
+    gql_throw_expected_message(aTHX_ p, p->tok_start, "Expected name");
+  }
+  while (p->kind != TOK_RPAREN) {
+    gql_ir_argument_t *argument;
+    Newxz(argument, 1, gql_ir_argument_t);
+    argument->name = gql_parse_name(aTHX_ p, "Expected name");
+    gql_expect(aTHX_ p, TOK_COLON, NULL);
+    argument->value = gql_ir_parse_value(aTHX_ p, is_const);
+    gql_ir_ptr_array_push(&arguments, argument);
+  }
+  gql_expect(aTHX_ p, TOK_RPAREN, NULL);
+  return arguments;
+}
+
+static gql_ir_ptr_array_t
+gql_ir_parse_directives(pTHX_ gql_parser_t *p) {
+  gql_ir_ptr_array_t directives = { 0, 0, NULL };
+
+  while (p->kind == TOK_AT) {
+    gql_ir_directive_t *directive;
+    Newxz(directive, 1, gql_ir_directive_t);
+    gql_expect(aTHX_ p, TOK_AT, NULL);
+    directive->name = gql_parse_name(aTHX_ p, "Expected name");
+    if (p->kind == TOK_LPAREN) {
+      directive->arguments = gql_ir_parse_arguments(aTHX_ p, 0);
+    }
+    gql_ir_ptr_array_push(&directives, directive);
+  }
+
+  return directives;
+}
+
+static gql_ir_selection_set_t *
+gql_ir_parse_selection_set(pTHX_ gql_parser_t *p) {
+  gql_ir_selection_set_t *selection_set;
+
+  Newxz(selection_set, 1, gql_ir_selection_set_t);
+  gql_expect(aTHX_ p, TOK_LBRACE, "Expected name");
+  if (p->kind == TOK_RBRACE) {
+    gql_throw(aTHX_ p, p->tok_start, "Expected name");
+  }
+  while (p->kind != TOK_RBRACE) {
+    gql_ir_ptr_array_push(&selection_set->selections, gql_ir_parse_selection(aTHX_ p));
+  }
+  gql_expect(aTHX_ p, TOK_RBRACE, NULL);
+  return selection_set;
+}
+
+static gql_ir_selection_t *
+gql_ir_parse_selection(pTHX_ gql_parser_t *p) {
+  gql_ir_selection_t *selection;
+
+  Newxz(selection, 1, gql_ir_selection_t);
+  if (p->kind == TOK_SPREAD) {
+    gql_advance(aTHX_ p);
+    if (gql_peek_name(p, "on")) {
+      gql_parser_t lookahead = *p;
+      gql_ir_inline_fragment_t *fragment;
+      gql_advance(aTHX_ &lookahead);
+      if (lookahead.kind != TOK_NAME) {
+        gql_throw(aTHX_ p, p->tok_start, "Unexpected Name \"on\"");
+      }
+      selection->kind = GQL_IR_SELECTION_INLINE_FRAGMENT;
+      Newxz(fragment, 1, gql_ir_inline_fragment_t);
+      gql_advance(aTHX_ p);
+      fragment->type_condition = gql_parse_name(aTHX_ p, "Expected name");
+      if (p->kind == TOK_AT) {
+        fragment->directives = gql_ir_parse_directives(aTHX_ p);
+      }
+      fragment->selection_set = gql_ir_parse_selection_set(aTHX_ p);
+      selection->as.inline_fragment = fragment;
+      return selection;
+    }
+    if (p->kind == TOK_LBRACE || p->kind == TOK_AT) {
+      gql_ir_inline_fragment_t *fragment;
+      selection->kind = GQL_IR_SELECTION_INLINE_FRAGMENT;
+      Newxz(fragment, 1, gql_ir_inline_fragment_t);
+      if (p->kind == TOK_AT) {
+        fragment->directives = gql_ir_parse_directives(aTHX_ p);
+      }
+      fragment->selection_set = gql_ir_parse_selection_set(aTHX_ p);
+      selection->as.inline_fragment = fragment;
+      return selection;
+    }
+    {
+      gql_ir_fragment_spread_t *spread;
+      selection->kind = GQL_IR_SELECTION_FRAGMENT_SPREAD;
+      Newxz(spread, 1, gql_ir_fragment_spread_t);
+      spread->name = gql_parse_fragment_name(aTHX_ p);
+      if (p->kind == TOK_AT) {
+        spread->directives = gql_ir_parse_directives(aTHX_ p);
+      }
+      selection->as.fragment_spread = spread;
+      return selection;
+    }
+  }
+
+  {
+    gql_ir_field_t *field;
+    SV *first_name;
+    selection->kind = GQL_IR_SELECTION_FIELD;
+    Newxz(field, 1, gql_ir_field_t);
+    first_name = gql_parse_name(aTHX_ p, "Expected name");
+    if (p->kind == TOK_COLON) {
+      field->alias = first_name;
+      gql_advance(aTHX_ p);
+      field->name = gql_parse_name(aTHX_ p, "Expected name");
+    } else {
+      field->name = first_name;
+    }
+    if (p->kind == TOK_LPAREN) {
+      field->arguments = gql_ir_parse_arguments(aTHX_ p, 0);
+    }
+    if (p->kind == TOK_AT) {
+      field->directives = gql_ir_parse_directives(aTHX_ p);
+    }
+    if (p->kind == TOK_LBRACE) {
+      field->selection_set = gql_ir_parse_selection_set(aTHX_ p);
+    }
+    selection->as.field = field;
+    return selection;
+  }
+}
+
+static gql_ir_ptr_array_t
+gql_ir_parse_variable_definitions(pTHX_ gql_parser_t *p) {
+  gql_ir_ptr_array_t definitions = { 0, 0, NULL };
+
+  gql_expect(aTHX_ p, TOK_LPAREN, NULL);
+  if (p->kind == TOK_RPAREN) {
+    gql_throw(aTHX_ p, p->tok_start, "Expected $argument: Type");
+  }
+  while (p->kind != TOK_RPAREN) {
+    gql_ir_variable_definition_t *definition;
+    Newxz(definition, 1, gql_ir_variable_definition_t);
+    gql_expect(aTHX_ p, TOK_DOLLAR, NULL);
+    definition->name = gql_parse_name(aTHX_ p, "Expected name");
+    gql_expect(aTHX_ p, TOK_COLON, NULL);
+    definition->type = gql_ir_parse_type_reference(aTHX_ p);
+    if (p->kind == TOK_EQUALS) {
+      gql_advance(aTHX_ p);
+      definition->default_value = gql_ir_parse_value(aTHX_ p, 1);
+    }
+    gql_ir_ptr_array_push(&definitions, definition);
+  }
+  gql_expect(aTHX_ p, TOK_RPAREN, NULL);
+  return definitions;
+}
+
+static gql_ir_operation_definition_t *
+gql_ir_parse_operation_definition(pTHX_ gql_parser_t *p) {
+  gql_ir_operation_definition_t *definition;
+
+  Newxz(definition, 1, gql_ir_operation_definition_t);
+  definition->operation = GQL_IR_OPERATION_QUERY;
+  if (p->kind == TOK_LBRACE) {
+    definition->selection_set = gql_ir_parse_selection_set(aTHX_ p);
+    return definition;
+  }
+
+  if (!(gql_peek_name(p, "query") || gql_peek_name(p, "mutation") || gql_peek_name(p, "subscription"))) {
+    gql_throw(aTHX_ p, p->tok_start, "Expected executable definition");
+  }
+  if (gql_peek_name(p, "mutation")) {
+    definition->operation = GQL_IR_OPERATION_MUTATION;
+  } else if (gql_peek_name(p, "subscription")) {
+    definition->operation = GQL_IR_OPERATION_SUBSCRIPTION;
+  }
+  gql_advance(aTHX_ p);
+  if (p->kind == TOK_NAME) {
+    definition->name = gql_parse_name(aTHX_ p, "Expected name");
+  }
+  if (p->kind == TOK_LPAREN) {
+    definition->variable_definitions = gql_ir_parse_variable_definitions(aTHX_ p);
+  }
+  if (p->kind == TOK_AT) {
+    definition->directives = gql_ir_parse_directives(aTHX_ p);
+  }
+  definition->selection_set = gql_ir_parse_selection_set(aTHX_ p);
+  return definition;
+}
+
+static gql_ir_fragment_definition_t *
+gql_ir_parse_fragment_definition(pTHX_ gql_parser_t *p) {
+  gql_ir_fragment_definition_t *definition;
+
+  Newxz(definition, 1, gql_ir_fragment_definition_t);
+  gql_advance(aTHX_ p);
+  definition->name = gql_parse_fragment_name(aTHX_ p);
+  if (!gql_peek_name(p, "on")) {
+    gql_throw(aTHX_ p, p->tok_start, "Expected \"on\"");
+  }
+  gql_advance(aTHX_ p);
+  definition->type_condition = gql_parse_name(aTHX_ p, "Expected name");
+  if (p->kind == TOK_AT) {
+    definition->directives = gql_ir_parse_directives(aTHX_ p);
+  }
+  definition->selection_set = gql_ir_parse_selection_set(aTHX_ p);
+  return definition;
+}
+
+static gql_ir_definition_t *
+gql_ir_parse_executable_definition(pTHX_ gql_parser_t *p) {
+  gql_ir_definition_t *definition;
+
+  Newxz(definition, 1, gql_ir_definition_t);
+  if (p->kind == TOK_LBRACE
+      || gql_peek_name(p, "query")
+      || gql_peek_name(p, "mutation")
+      || gql_peek_name(p, "subscription")) {
+    definition->kind = GQL_IR_DEFINITION_OPERATION;
+    definition->as.operation = gql_ir_parse_operation_definition(aTHX_ p);
+    return definition;
+  }
+  if (gql_peek_name(p, "fragment")) {
+    definition->kind = GQL_IR_DEFINITION_FRAGMENT;
+    definition->as.fragment = gql_ir_parse_fragment_definition(aTHX_ p);
+    return definition;
+  }
+
+  gql_throw(aTHX_ p, p->tok_start, "Expected executable definition");
+  return NULL;
+}
+
+static gql_ir_document_t *
+gql_ir_parse_executable_document(pTHX_ SV *source_sv) {
+  gql_parser_t p;
+  STRLEN len;
+  const char *src = SvPV(source_sv, len);
+  gql_ir_document_t *document;
+
+  Newxz(document, 1, gql_ir_document_t);
+  p.src = src;
+  p.len = len;
+  p.pos = 0;
+  p.last_pos = (STRLEN)-1;
+  p.tok_start = 0;
+  p.tok_end = 0;
+  p.val_start = 0;
+  p.val_end = 0;
+  p.kind = TOK_EOF;
+  p.is_utf8 = SvUTF8(source_sv) ? 1 : 0;
+
+  gql_advance(aTHX_ &p);
+  while (p.kind != TOK_EOF) {
+    gql_ir_ptr_array_push(&document->definitions, gql_ir_parse_executable_definition(aTHX_ &p));
+  }
+  return document;
+}
+
+static void
+gql_ir_free_type(gql_ir_type_t *type) {
+  if (!type) {
+    return;
+  }
+  if (type->name) {
+    SvREFCNT_dec(type->name);
+  }
+  gql_ir_free_type(type->inner);
+  Safefree(type);
+}
+
+static void
+gql_ir_free_argument(gql_ir_argument_t *argument) {
+  if (!argument) {
+    return;
+  }
+  if (argument->name) {
+    SvREFCNT_dec(argument->name);
+  }
+  gql_ir_free_value(argument->value);
+  Safefree(argument);
+}
+
+static void
+gql_ir_free_object_field(gql_ir_object_field_t *field) {
+  if (!field) {
+    return;
+  }
+  if (field->name) {
+    SvREFCNT_dec(field->name);
+  }
+  gql_ir_free_value(field->value);
+  Safefree(field);
+}
+
+static void
+gql_ir_free_value(gql_ir_value_t *value) {
+  I32 i;
+
+  if (!value) {
+    return;
+  }
+  switch (value->kind) {
+    case GQL_IR_VALUE_INT:
+    case GQL_IR_VALUE_FLOAT:
+    case GQL_IR_VALUE_STRING:
+    case GQL_IR_VALUE_ENUM:
+    case GQL_IR_VALUE_VARIABLE:
+      if (value->as.sv) {
+        SvREFCNT_dec(value->as.sv);
+      }
+      break;
+    case GQL_IR_VALUE_LIST:
+      for (i = 0; i < value->as.list_items.count; i++) {
+        gql_ir_free_value((gql_ir_value_t *)value->as.list_items.items[i]);
+      }
+      gql_ir_ptr_array_free(&value->as.list_items);
+      break;
+    case GQL_IR_VALUE_OBJECT:
+      for (i = 0; i < value->as.object_fields.count; i++) {
+        gql_ir_free_object_field((gql_ir_object_field_t *)value->as.object_fields.items[i]);
+      }
+      gql_ir_ptr_array_free(&value->as.object_fields);
+      break;
+    default:
+      break;
+  }
+  Safefree(value);
+}
+
+static void
+gql_ir_free_directive(gql_ir_directive_t *directive) {
+  I32 i;
+
+  if (!directive) {
+    return;
+  }
+  if (directive->name) {
+    SvREFCNT_dec(directive->name);
+  }
+  for (i = 0; i < directive->arguments.count; i++) {
+    gql_ir_free_argument((gql_ir_argument_t *)directive->arguments.items[i]);
+  }
+  gql_ir_ptr_array_free(&directive->arguments);
+  Safefree(directive);
+}
+
+static void
+gql_ir_free_variable_definition(gql_ir_variable_definition_t *definition) {
+  I32 i;
+
+  if (!definition) {
+    return;
+  }
+  if (definition->name) {
+    SvREFCNT_dec(definition->name);
+  }
+  gql_ir_free_type(definition->type);
+  gql_ir_free_value(definition->default_value);
+  for (i = 0; i < definition->directives.count; i++) {
+    gql_ir_free_directive((gql_ir_directive_t *)definition->directives.items[i]);
+  }
+  gql_ir_ptr_array_free(&definition->directives);
+  Safefree(definition);
+}
+
+static void
+gql_ir_free_selection_set(gql_ir_selection_set_t *selection_set) {
+  I32 i;
+
+  if (!selection_set) {
+    return;
+  }
+  for (i = 0; i < selection_set->selections.count; i++) {
+    gql_ir_free_selection((gql_ir_selection_t *)selection_set->selections.items[i]);
+  }
+  gql_ir_ptr_array_free(&selection_set->selections);
+  Safefree(selection_set);
+}
+
+static void
+gql_ir_free_selection(gql_ir_selection_t *selection) {
+  if (!selection) {
+    return;
+  }
+  switch (selection->kind) {
+    case GQL_IR_SELECTION_FIELD:
+      if (selection->as.field) {
+        gql_ir_field_t *field = selection->as.field;
+        I32 i;
+        if (field->alias) {
+          SvREFCNT_dec(field->alias);
+        }
+        if (field->name) {
+          SvREFCNT_dec(field->name);
+        }
+        for (i = 0; i < field->arguments.count; i++) {
+          gql_ir_free_argument((gql_ir_argument_t *)field->arguments.items[i]);
+        }
+        gql_ir_ptr_array_free(&field->arguments);
+        for (i = 0; i < field->directives.count; i++) {
+          gql_ir_free_directive((gql_ir_directive_t *)field->directives.items[i]);
+        }
+        gql_ir_ptr_array_free(&field->directives);
+        gql_ir_free_selection_set(field->selection_set);
+        Safefree(field);
+      }
+      break;
+    case GQL_IR_SELECTION_FRAGMENT_SPREAD:
+      if (selection->as.fragment_spread) {
+        gql_ir_fragment_spread_t *spread = selection->as.fragment_spread;
+        I32 i;
+        if (spread->name) {
+          SvREFCNT_dec(spread->name);
+        }
+        for (i = 0; i < spread->directives.count; i++) {
+          gql_ir_free_directive((gql_ir_directive_t *)spread->directives.items[i]);
+        }
+        gql_ir_ptr_array_free(&spread->directives);
+        Safefree(spread);
+      }
+      break;
+    case GQL_IR_SELECTION_INLINE_FRAGMENT:
+      if (selection->as.inline_fragment) {
+        gql_ir_inline_fragment_t *fragment = selection->as.inline_fragment;
+        I32 i;
+        if (fragment->type_condition) {
+          SvREFCNT_dec(fragment->type_condition);
+        }
+        for (i = 0; i < fragment->directives.count; i++) {
+          gql_ir_free_directive((gql_ir_directive_t *)fragment->directives.items[i]);
+        }
+        gql_ir_ptr_array_free(&fragment->directives);
+        gql_ir_free_selection_set(fragment->selection_set);
+        Safefree(fragment);
+      }
+      break;
+  }
+  Safefree(selection);
+}
+
+static void
+gql_ir_free_operation_definition(gql_ir_operation_definition_t *definition) {
+  I32 i;
+
+  if (!definition) {
+    return;
+  }
+  if (definition->name) {
+    SvREFCNT_dec(definition->name);
+  }
+  for (i = 0; i < definition->variable_definitions.count; i++) {
+    gql_ir_free_variable_definition((gql_ir_variable_definition_t *)definition->variable_definitions.items[i]);
+  }
+  gql_ir_ptr_array_free(&definition->variable_definitions);
+  for (i = 0; i < definition->directives.count; i++) {
+    gql_ir_free_directive((gql_ir_directive_t *)definition->directives.items[i]);
+  }
+  gql_ir_ptr_array_free(&definition->directives);
+  gql_ir_free_selection_set(definition->selection_set);
+  Safefree(definition);
+}
+
+static void
+gql_ir_free_fragment_definition(gql_ir_fragment_definition_t *definition) {
+  I32 i;
+
+  if (!definition) {
+    return;
+  }
+  if (definition->name) {
+    SvREFCNT_dec(definition->name);
+  }
+  if (definition->type_condition) {
+    SvREFCNT_dec(definition->type_condition);
+  }
+  for (i = 0; i < definition->directives.count; i++) {
+    gql_ir_free_directive((gql_ir_directive_t *)definition->directives.items[i]);
+  }
+  gql_ir_ptr_array_free(&definition->directives);
+  gql_ir_free_selection_set(definition->selection_set);
+  Safefree(definition);
+}
+
+static void
+gql_ir_free_definition(gql_ir_definition_t *definition) {
+  if (!definition) {
+    return;
+  }
+  if (definition->kind == GQL_IR_DEFINITION_OPERATION) {
+    gql_ir_free_operation_definition(definition->as.operation);
+  } else {
+    gql_ir_free_fragment_definition(definition->as.fragment);
+  }
+  Safefree(definition);
+}
+
+static void
+gql_ir_free_document(gql_ir_document_t *document) {
+  I32 i;
+
+  if (!document) {
+    return;
+  }
+  for (i = 0; i < document->definitions.count; i++) {
+    gql_ir_free_definition((gql_ir_definition_t *)document->definitions.items[i]);
+  }
+  gql_ir_ptr_array_free(&document->definitions);
+  Safefree(document);
+}
+
+static SV *
+gqljs_build_type_from_ir(pTHX_ gql_ir_type_t *type) {
+  HV *hv;
+
+  if (!type) {
+    return &PL_sv_undef;
+  }
+  if (type->kind == GQL_IR_TYPE_NAMED) {
+    hv = gqljs_new_node_hv("NamedType");
+    gql_store_sv(hv, "name", gqljs_new_name_node_sv(aTHX_ type->name));
+    return newRV_noinc((SV *)hv);
+  }
+
+  hv = gqljs_new_node_hv(type->kind == GQL_IR_TYPE_LIST ? "ListType" : "NonNullType");
+  gql_store_sv(hv, "type", gqljs_build_type_from_ir(aTHX_ type->inner));
+  return newRV_noinc((SV *)hv);
+}
+
+static SV *
+gqljs_build_value_from_ir(pTHX_ gql_ir_value_t *value) {
+  HV *hv;
+  I32 i;
+
+  if (!value) {
+    return &PL_sv_undef;
+  }
+  switch (value->kind) {
+    case GQL_IR_VALUE_NULL:
+      return gqljs_new_node_ref("NullValue");
+    case GQL_IR_VALUE_BOOL:
+      hv = gqljs_new_node_hv("BooleanValue");
+      gql_store_sv(hv, "value", newSViv(value->as.boolean ? 1 : 0));
+      return newRV_noinc((SV *)hv);
+    case GQL_IR_VALUE_INT:
+      hv = gqljs_new_node_hv("IntValue");
+      gql_store_sv(hv, "value", newSVsv(value->as.sv));
+      return newRV_noinc((SV *)hv);
+    case GQL_IR_VALUE_FLOAT:
+      hv = gqljs_new_node_hv("FloatValue");
+      gql_store_sv(hv, "value", newSVsv(value->as.sv));
+      return newRV_noinc((SV *)hv);
+    case GQL_IR_VALUE_STRING:
+      hv = gqljs_new_node_hv("StringValue");
+      gql_store_sv(hv, "value", newSVsv(value->as.sv));
+      return newRV_noinc((SV *)hv);
+    case GQL_IR_VALUE_ENUM:
+      hv = gqljs_new_node_hv("EnumValue");
+      gql_store_sv(hv, "value", newSVsv(value->as.sv));
+      return newRV_noinc((SV *)hv);
+    case GQL_IR_VALUE_VARIABLE:
+      hv = gqljs_new_node_hv("Variable");
+      gql_store_sv(hv, "name", gqljs_new_name_node_sv(aTHX_ value->as.sv));
+      return newRV_noinc((SV *)hv);
+    case GQL_IR_VALUE_LIST: {
+      AV *items = newAV();
+      hv = gqljs_new_node_hv("ListValue");
+      for (i = 0; i < value->as.list_items.count; i++) {
+        av_push(items, gqljs_build_value_from_ir(aTHX_ (gql_ir_value_t *)value->as.list_items.items[i]));
+      }
+      gql_store_sv(hv, "values", newRV_noinc((SV *)items));
+      return newRV_noinc((SV *)hv);
+    }
+    case GQL_IR_VALUE_OBJECT: {
+      AV *fields = newAV();
+      hv = gqljs_new_node_hv("ObjectValue");
+      for (i = 0; i < value->as.object_fields.count; i++) {
+        gql_ir_object_field_t *field = (gql_ir_object_field_t *)value->as.object_fields.items[i];
+        HV *field_hv = gqljs_new_node_hv("ObjectField");
+        gql_store_sv(field_hv, "name", gqljs_new_name_node_sv(aTHX_ field->name));
+        gql_store_sv(field_hv, "value", gqljs_build_value_from_ir(aTHX_ field->value));
+        av_push(fields, newRV_noinc((SV *)field_hv));
+      }
+      gql_store_sv(hv, "fields", newRV_noinc((SV *)fields));
+      return newRV_noinc((SV *)hv);
+    }
+  }
+
+  return &PL_sv_undef;
+}
+
+static AV *
+gqljs_build_arguments_from_ir(pTHX_ gql_ir_ptr_array_t *arguments) {
+  AV *av = newAV();
+  I32 i;
+
+  if (!arguments) {
+    return av;
+  }
+  for (i = 0; i < arguments->count; i++) {
+    gql_ir_argument_t *argument = (gql_ir_argument_t *)arguments->items[i];
+    HV *arg_hv = gqljs_new_node_hv("Argument");
+    gql_store_sv(arg_hv, "name", gqljs_new_name_node_sv(aTHX_ argument->name));
+    gql_store_sv(arg_hv, "value", gqljs_build_value_from_ir(aTHX_ argument->value));
+    av_push(av, newRV_noinc((SV *)arg_hv));
+  }
+  return av;
+}
+
+static AV *
+gqljs_build_directives_from_ir(pTHX_ gql_ir_ptr_array_t *directives) {
+  AV *av = newAV();
+  I32 i;
+
+  if (!directives) {
+    return av;
+  }
+  for (i = 0; i < directives->count; i++) {
+    gql_ir_directive_t *directive = (gql_ir_directive_t *)directives->items[i];
+    HV *dir_hv = gqljs_new_node_hv("Directive");
+    gql_store_sv(dir_hv, "name", gqljs_new_name_node_sv(aTHX_ directive->name));
+    gql_store_sv(dir_hv, "arguments", newRV_noinc((SV *)gqljs_build_arguments_from_ir(aTHX_ &directive->arguments)));
+    av_push(av, newRV_noinc((SV *)dir_hv));
+  }
+  return av;
+}
+
+static SV *
+gqljs_build_selection_from_ir(pTHX_ gql_ir_selection_t *selection) {
+  HV *hv;
+
+  if (!selection) {
+    return &PL_sv_undef;
+  }
+  switch (selection->kind) {
+    case GQL_IR_SELECTION_FIELD: {
+      gql_ir_field_t *field = selection->as.field;
+      hv = gqljs_new_node_hv("Field");
+      if (field->alias) {
+        gql_store_sv(hv, "alias", gqljs_new_name_node_sv(aTHX_ field->alias));
+      }
+      gql_store_sv(hv, "name", gqljs_new_name_node_sv(aTHX_ field->name));
+      gql_store_sv(hv, "arguments", newRV_noinc((SV *)gqljs_build_arguments_from_ir(aTHX_ &field->arguments)));
+      gql_store_sv(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ &field->directives)));
+      if (field->selection_set) {
+        gql_store_sv(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ field->selection_set));
+      }
+      return newRV_noinc((SV *)hv);
+    }
+    case GQL_IR_SELECTION_FRAGMENT_SPREAD: {
+      gql_ir_fragment_spread_t *spread = selection->as.fragment_spread;
+      hv = gqljs_new_node_hv("FragmentSpread");
+      gql_store_sv(hv, "name", gqljs_new_name_node_sv(aTHX_ spread->name));
+      gql_store_sv(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ &spread->directives)));
+      return newRV_noinc((SV *)hv);
+    }
+    case GQL_IR_SELECTION_INLINE_FRAGMENT: {
+      gql_ir_inline_fragment_t *fragment = selection->as.inline_fragment;
+      hv = gqljs_new_node_hv("InlineFragment");
+      if (fragment->type_condition) {
+        HV *type_hv = gqljs_new_node_hv("NamedType");
+        gql_store_sv(type_hv, "name", gqljs_new_name_node_sv(aTHX_ fragment->type_condition));
+        gql_store_sv(hv, "typeCondition", newRV_noinc((SV *)type_hv));
+      }
+      gql_store_sv(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ &fragment->directives)));
+      gql_store_sv(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ fragment->selection_set));
+      return newRV_noinc((SV *)hv);
+    }
+  }
+
+  return &PL_sv_undef;
+}
+
+static SV *
+gqljs_build_selection_set_from_ir(pTHX_ gql_ir_selection_set_t *selection_set) {
+  HV *hv = gqljs_new_node_hv("SelectionSet");
+  AV *selections = newAV();
+  I32 i;
+
+  for (i = 0; selection_set && i < selection_set->selections.count; i++) {
+    av_push(selections, gqljs_build_selection_from_ir(aTHX_ (gql_ir_selection_t *)selection_set->selections.items[i]));
+  }
+  gql_store_sv(hv, "selections", newRV_noinc((SV *)selections));
+  return newRV_noinc((SV *)hv);
+}
+
+static AV *
+gqljs_build_variable_definitions_from_ir(pTHX_ gql_ir_ptr_array_t *definitions) {
+  AV *av = newAV();
+  I32 i;
+
+  if (!definitions) {
+    return av;
+  }
+  for (i = 0; i < definitions->count; i++) {
+    gql_ir_variable_definition_t *definition = (gql_ir_variable_definition_t *)definitions->items[i];
+    HV *def_hv = gqljs_new_node_hv("VariableDefinition");
+    HV *var_hv = gqljs_new_node_hv("Variable");
+    gql_store_sv(var_hv, "name", gqljs_new_name_node_sv(aTHX_ definition->name));
+    gql_store_sv(def_hv, "variable", newRV_noinc((SV *)var_hv));
+    gql_store_sv(def_hv, "type", gqljs_build_type_from_ir(aTHX_ definition->type));
+    if (definition->default_value) {
+      gql_store_sv(def_hv, "defaultValue", gqljs_build_value_from_ir(aTHX_ definition->default_value));
+    }
+    gql_store_sv(def_hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ &definition->directives)));
+    av_push(av, newRV_noinc((SV *)def_hv));
+  }
+  return av;
+}
+
+static SV *
+gqljs_build_executable_definition_from_ir(pTHX_ gql_ir_definition_t *definition) {
+  HV *hv;
+
+  if (!definition) {
+    return &PL_sv_undef;
+  }
+  if (definition->kind == GQL_IR_DEFINITION_OPERATION) {
+    gql_ir_operation_definition_t *operation = definition->as.operation;
+    const char *operation_name =
+      operation->operation == GQL_IR_OPERATION_MUTATION ? "mutation" :
+      operation->operation == GQL_IR_OPERATION_SUBSCRIPTION ? "subscription" :
+      "query";
+    hv = gqljs_new_node_hv("OperationDefinition");
+    gql_store_sv(hv, "operation", newSVpv(operation_name, 0));
+    if (operation->name) {
+      gql_store_sv(hv, "name", gqljs_new_name_node_sv(aTHX_ operation->name));
+    }
+    gql_store_sv(hv, "variableDefinitions",
+      newRV_noinc((SV *)gqljs_build_variable_definitions_from_ir(aTHX_ &operation->variable_definitions)));
+    gql_store_sv(hv, "directives",
+      newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ &operation->directives)));
+    gql_store_sv(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ operation->selection_set));
+    return newRV_noinc((SV *)hv);
+  }
+
+  {
+    gql_ir_fragment_definition_t *fragment = definition->as.fragment;
+    HV *type_hv;
+    hv = gqljs_new_node_hv("FragmentDefinition");
+    gql_store_sv(hv, "name", gqljs_new_name_node_sv(aTHX_ fragment->name));
+    type_hv = gqljs_new_node_hv("NamedType");
+    gql_store_sv(type_hv, "name", gqljs_new_name_node_sv(aTHX_ fragment->type_condition));
+    gql_store_sv(hv, "typeCondition", newRV_noinc((SV *)type_hv));
+    gql_store_sv(hv, "directives",
+      newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ &fragment->directives)));
+    gql_store_sv(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ fragment->selection_set));
+    return newRV_noinc((SV *)hv);
+  }
+}
+
+static SV *
+gqljs_build_executable_document_from_ir(pTHX_ gql_ir_document_t *document) {
+  HV *hv = gqljs_new_node_hv("Document");
+  AV *definitions = newAV();
+  I32 i;
+
+  for (i = 0; document && i < document->definitions.count; i++) {
+    av_push(definitions, gqljs_build_executable_definition_from_ir(aTHX_ (gql_ir_definition_t *)document->definitions.items[i]));
+  }
+  gql_store_sv(hv, "definitions", newRV_noinc((SV *)definitions));
+  return newRV_noinc((SV *)hv);
+}
+
 static SV *
 gqlperl_location_from_gqljs_node(pTHX_ SV *node_sv) {
   HV *src_hv;
@@ -4740,6 +5957,15 @@ graphqljs_preprocess_xs(source)
     SV *source
   CODE:
     RETVAL = gql_graphqljs_preprocess(aTHX_ source);
+  OUTPUT:
+    RETVAL
+
+SV *
+graphqljs_parse_executable_document_xs(source, no_location = &PL_sv_undef)
+    SV *source
+    SV *no_location
+  CODE:
+    RETVAL = gql_graphqljs_parse_executable_document(aTHX_ source, no_location);
   OUTPUT:
     RETVAL
 

@@ -18,6 +18,7 @@ my $HAS_XS_PREPROCESS = eval {
     graphqljs_build_document_xs
     graphqljs_build_directives_xs
     graphqljs_build_executable_document_xs
+    graphqljs_parse_executable_document_xs
     graphqljs_preprocess_xs
     graphqljs_patch_document_xs
     parse_directives_xs
@@ -26,6 +27,11 @@ my $HAS_XS_PREPROCESS = eval {
 };
 
 my %DIRECTIVE_CACHE;
+
+sub _looks_like_executable_source {
+  my ($source) = @_;
+  return $source =~ /\A(?:\x{FEFF}|[\x20\x09\x0a\x0d,]|#[^\r\n]*(?:\r\n?|\n))*(?:\{|\b(?:query|mutation|subscription|fragment)\b)/s;
+}
 
 sub _convert_directive_texts {
   my ($raw_directives, $loc) = @_;
@@ -63,12 +69,14 @@ sub _build_graphqljs_document_from_legacy {
   my ($legacy) = @_;
   my $is_executable = _is_executable_legacy_document($legacy);
 
-  my $doc = graphqljs_build_document_xs($legacy);
-  return ($doc, $is_executable)
-    if defined $doc && ref $doc eq 'HASH';
-
   if ($is_executable) {
-    $doc = graphqljs_build_executable_document_xs($legacy);
+    my $doc = graphqljs_build_executable_document_xs($legacy);
+    return ($doc, $is_executable)
+      if defined $doc && ref $doc eq 'HASH';
+  }
+
+  {
+    my $doc = graphqljs_build_document_xs($legacy);
     return ($doc, $is_executable)
       if defined $doc && ref $doc eq 'HASH';
   }
@@ -120,6 +128,16 @@ sub _is_executable_legacy_document {
 sub parse_canonical_document {
   my ($source, $options) = @_;
   $options ||= {};
+
+  if ($HAS_XS_PREPROCESS
+      && ($options->{backend} || 'xs') eq 'xs'
+      && _looks_like_executable_source($source)) {
+    my $doc = graphqljs_parse_executable_document_xs(
+      $source,
+      ($options->{no_location} || $options->{noLocation}) ? 1 : 0,
+    );
+    return $doc if defined $doc && ref $doc eq 'HASH';
+  }
 
   my ($rewritten, $meta) = _preprocess_source($source);
   my $backend = $options->{backend} || 'xs';

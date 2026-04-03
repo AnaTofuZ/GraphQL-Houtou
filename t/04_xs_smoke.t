@@ -10,6 +10,8 @@ BEGIN {
         GraphQL::Houtou::XS::Parser->import(qw(
             graphqljs_apply_executable_loc_xs
             graphqljs_build_executable_document_xs
+            graphqlperl_build_document_xs
+            graphqlperl_build_executable_document_xs
             parse_xs
             graphqljs_preprocess_xs
             graphqljs_patch_document_xs
@@ -21,6 +23,7 @@ BEGIN {
 }
 
 use GraphQL::Houtou::Adapter::GraphQLPerlToGraphQLJS qw(convert_document);
+use GraphQL::Houtou::Adapter::GraphQLJSToGraphQLPerl ();
 use GraphQL::Houtou::GraphQLJS::Canonical qw(parse_canonical_document);
 
 sub var_ref {
@@ -260,6 +263,42 @@ subtest 'graphqljs_build_executable_document_xs matches Perl adapter for empty o
     });
 
     cmp_deeply $built, $expected, 'xs executable builder handles empty object values';
+};
+
+subtest 'graphqlperl_build_executable_document_xs matches Perl adapter for executable documents', sub {
+    my $source = 'query Q($id: ID = 1, $flag: Boolean = false) @root { user(id: $id) { ...UserFields } } fragment UserFields on User { name }';
+    my $document = parse_canonical_document($source, {
+        backend => 'xs',
+    });
+    my $built = graphqlperl_build_executable_document_xs($document);
+    my $expected = GraphQL::Houtou::Adapter::GraphQLJSToGraphQLPerl::convert_document($document);
+
+    cmp_deeply $built, $expected, 'xs graphql-perl builder matches the Perl adapter output';
+};
+
+subtest 'graphqlperl_build_document_xs matches Perl adapter for type system documents', sub {
+    my $source = <<'EOF';
+"Type doc"
+type User implements Node & Actor @entity {
+  "Role doc"
+  role(status: Status = ACTIVE): String @deprecated
+}
+
+enum Status { ACTIVE INACTIVE }
+
+extend type User { name: String }
+
+directive @entity on OBJECT | INTERFACE
+
+schema { query: Query mutation: Mutation }
+EOF
+    my $document = parse_canonical_document($source, {
+        backend => 'xs',
+    });
+    my $built = graphqlperl_build_document_xs($document);
+    my $expected = GraphQL::Houtou::Adapter::GraphQLJSToGraphQLPerl::convert_document($document);
+
+    cmp_deeply $built, $expected, 'xs graphql-perl full-document builder matches the Perl adapter output';
 };
 
 subtest 'graphqljs_apply_executable_loc_xs locates executable documents directly', sub {

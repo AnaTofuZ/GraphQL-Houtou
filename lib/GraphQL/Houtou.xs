@@ -137,6 +137,8 @@ static SV *gqljs_locate_selection_set_node(pTHX_ gql_parser_t *p, SV *node_sv);
 static void gqljs_locate_selection_node(pTHX_ gql_parser_t *p, SV *node_sv);
 static int gqljs_locate_executable_definition(pTHX_ gql_parser_t *p, SV *node_sv);
 static SV *gql_graphqljs_build_executable_document(pTHX_ SV *legacy_sv);
+static SV *gql_graphqlperl_build_document(pTHX_ SV *doc_sv);
+static SV *gql_graphqlperl_build_executable_document(pTHX_ SV *doc_sv);
 static HV *gqljs_new_node_hv(const char *kind);
 static SV *gqljs_new_node_ref(const char *kind);
 static SV *gqljs_new_name_node_sv(pTHX_ SV *value_sv);
@@ -151,6 +153,21 @@ static SV *gqljs_convert_legacy_executable_definition_sv(pTHX_ SV *definition_sv
 static int gqljs_cmp_sv_ptrs(const void *a, const void *b);
 static SV **gqljs_sorted_hash_keys(pTHX_ HV *hv, I32 *count_out);
 static void gqljs_free_sorted_hash_keys(SV **keys, I32 count);
+static SV *gqlperl_location_from_gqljs_node(pTHX_ SV *node_sv);
+static void gqlperl_store_location_from_gqljs_node(pTHX_ HV *dst_hv, SV *node_sv);
+static SV *gqlperl_convert_type_from_gqljs(pTHX_ SV *node_sv);
+static SV *gqlperl_convert_value_from_gqljs(pTHX_ SV *node_sv);
+static SV *gqlperl_convert_arguments_from_gqljs(pTHX_ AV *av);
+static SV *gqlperl_convert_directives_from_gqljs(pTHX_ AV *av);
+static SV *gqlperl_convert_selection_from_gqljs(pTHX_ SV *node_sv);
+static AV *gqlperl_convert_selections_from_gqljs(pTHX_ AV *av);
+static SV *gqlperl_convert_variable_definitions_from_gqljs(pTHX_ AV *av);
+static SV *gqlperl_convert_named_types_from_gqljs(pTHX_ AV *av);
+static SV *gqlperl_convert_input_value_definitions_from_gqljs(pTHX_ AV *av);
+static SV *gqlperl_convert_field_definitions_from_gqljs(pTHX_ AV *av);
+static SV *gqlperl_convert_enum_values_from_gqljs(pTHX_ AV *av);
+static SV *gqlperl_convert_executable_definition_from_gqljs(pTHX_ SV *node_sv);
+static SV *gqlperl_convert_definition_from_gqljs(pTHX_ SV *node_sv);
 
 static void
 gql_store_sv(HV *hv, const char *key, SV *value) {
@@ -2217,6 +2234,821 @@ gql_graphqljs_build_executable_document(pTHX_ SV *legacy_sv) {
   return newRV_noinc((SV *)doc_hv);
 }
 
+static SV *
+gqlperl_location_from_gqljs_node(pTHX_ SV *node_sv) {
+  HV *src_hv;
+  HV *loc_hv;
+  HV *dst_hv;
+  SV *line_sv;
+  SV *column_sv;
+  SV *loc_sv;
+
+  if (!node_sv || !SvROK(node_sv) || SvTYPE(SvRV(node_sv)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+  src_hv = (HV *)SvRV(node_sv);
+  loc_sv = gqljs_fetch_sv(src_hv, "loc");
+  if (!loc_sv || !SvROK(loc_sv) || SvTYPE(SvRV(loc_sv)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+
+  loc_hv = (HV *)SvRV(loc_sv);
+  line_sv = gqljs_fetch_sv(loc_hv, "line");
+  column_sv = gqljs_fetch_sv(loc_hv, "column");
+  if (!line_sv || !column_sv) {
+    return &PL_sv_undef;
+  }
+
+  dst_hv = newHV();
+  gql_store_sv(dst_hv, "line", newSViv(SvIV(line_sv)));
+  gql_store_sv(dst_hv, "column", newSViv(SvIV(column_sv)));
+  return newRV_noinc((SV *)dst_hv);
+}
+
+static void
+gqlperl_store_location_from_gqljs_node(pTHX_ HV *dst_hv, SV *node_sv) {
+  SV *location_sv = gqlperl_location_from_gqljs_node(aTHX_ node_sv);
+  if (location_sv && location_sv != &PL_sv_undef) {
+    gql_store_sv(dst_hv, "location", location_sv);
+  }
+}
+
+static SV *
+gqlperl_convert_type_from_gqljs(pTHX_ SV *node_sv) {
+  HV *src_hv;
+  const char *kind;
+
+  if (!node_sv || !SvROK(node_sv) || SvTYPE(SvRV(node_sv)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+  src_hv = (HV *)SvRV(node_sv);
+  kind = gqljs_fetch_kind(src_hv);
+
+  if (strEQ(kind, "NamedType")) {
+    return newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0);
+  }
+  if (strEQ(kind, "ListType") || strEQ(kind, "NonNullType")) {
+    AV *av = newAV();
+    HV *inner_hv = newHV();
+    av_push(av, newSVpv(strEQ(kind, "ListType") ? "list" : "non_null", 0));
+    gql_store_sv(inner_hv, "type",
+      gqlperl_convert_type_from_gqljs(aTHX_ gqljs_fetch_sv(src_hv, "type")));
+    av_push(av, newRV_noinc((SV *)inner_hv));
+    return newRV_noinc((SV *)av);
+  }
+
+  croak("Unsupported graphql-js type node '%s'.", kind);
+}
+
+static SV *
+gqlperl_convert_value_from_gqljs(pTHX_ SV *node_sv) {
+  HV *src_hv;
+  const char *kind;
+  SV *value_sv;
+
+  if (!node_sv || !SvROK(node_sv) || SvTYPE(SvRV(node_sv)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+  src_hv = (HV *)SvRV(node_sv);
+  kind = gqljs_fetch_kind(src_hv);
+
+  if (strEQ(kind, "Variable")) {
+    return newRV_noinc(newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0));
+  }
+  if (strEQ(kind, "IntValue")) {
+    value_sv = gqljs_fetch_sv(src_hv, "value");
+    return newSViv(SvIV(value_sv));
+  }
+  if (strEQ(kind, "FloatValue")) {
+    value_sv = gqljs_fetch_sv(src_hv, "value");
+    return newSVnv(SvNV(value_sv));
+  }
+  if (strEQ(kind, "StringValue")) {
+    value_sv = gqljs_fetch_sv(src_hv, "value");
+    return newSVsv(value_sv);
+  }
+  if (strEQ(kind, "BooleanValue")) {
+    value_sv = gqljs_fetch_sv(src_hv, "value");
+    return gql_call_helper1(aTHX_ "GraphQL::Houtou::XS::Parser::_make_bool",
+      newSViv(SvTRUE(value_sv) ? 1 : 0));
+  }
+  if (strEQ(kind, "NullValue")) {
+    return newSV(0);
+  }
+  if (strEQ(kind, "EnumValue")) {
+    SV *enum_sv = newSVsv(gqljs_fetch_sv(src_hv, "value"));
+    SV *inner_ref = newRV_noinc(enum_sv);
+    return newRV_noinc(inner_ref);
+  }
+  if (strEQ(kind, "ListValue")) {
+    AV *src_av = gqljs_fetch_array(src_hv, "values");
+    AV *dst_av = newAV();
+    I32 i;
+    for (i = 0; src_av && i <= av_len(src_av); i++) {
+      SV **svp = av_fetch(src_av, i, 0);
+      if (svp) {
+        av_push(dst_av, gqlperl_convert_value_from_gqljs(aTHX_ *svp));
+      }
+    }
+    return newRV_noinc((SV *)dst_av);
+  }
+  if (strEQ(kind, "ObjectValue")) {
+    AV *fields_av = gqljs_fetch_array(src_hv, "fields");
+    HV *dst_hv = newHV();
+    I32 i;
+    for (i = 0; fields_av && i <= av_len(fields_av); i++) {
+      SV **svp = av_fetch(fields_av, i, 0);
+      HV *field_hv;
+      const char *name;
+      if (!svp || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVHV) {
+        continue;
+      }
+      field_hv = (HV *)SvRV(*svp);
+      name = gqljs_name_value(gqljs_fetch_sv(field_hv, "name"));
+      gql_store_sv(dst_hv, name,
+        gqlperl_convert_value_from_gqljs(aTHX_ gqljs_fetch_sv(field_hv, "value")));
+    }
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  croak("Unsupported graphql-js value node '%s'.", kind);
+}
+
+static SV *
+gqlperl_convert_arguments_from_gqljs(pTHX_ AV *av) {
+  HV *dst_hv = newHV();
+  I32 i;
+
+  if (!av || av_len(av) < 0) {
+    SvREFCNT_dec((SV *)dst_hv);
+    return &PL_sv_undef;
+  }
+
+  for (i = 0; i <= av_len(av); i++) {
+    SV **svp = av_fetch(av, i, 0);
+    HV *arg_hv;
+    const char *name;
+    if (!svp || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVHV) {
+      continue;
+    }
+    arg_hv = (HV *)SvRV(*svp);
+    name = gqljs_name_value(gqljs_fetch_sv(arg_hv, "name"));
+    gql_store_sv(dst_hv, name,
+      gqlperl_convert_value_from_gqljs(aTHX_ gqljs_fetch_sv(arg_hv, "value")));
+  }
+
+  return newRV_noinc((SV *)dst_hv);
+}
+
+static SV *
+gqlperl_convert_directives_from_gqljs(pTHX_ AV *av) {
+  AV *dst_av = newAV();
+  I32 i;
+
+  if (!av || av_len(av) < 0) {
+    return newRV_noinc((SV *)dst_av);
+  }
+
+  for (i = 0; i <= av_len(av); i++) {
+    SV **svp = av_fetch(av, i, 0);
+    HV *src_hv;
+    HV *dst_hv;
+    SV *arguments_sv;
+    if (!svp || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVHV) {
+      continue;
+    }
+    src_hv = (HV *)SvRV(*svp);
+    dst_hv = newHV();
+    gql_store_sv(dst_hv, "name",
+      newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0));
+    arguments_sv = gqlperl_convert_arguments_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "arguments"));
+    if (arguments_sv && arguments_sv != &PL_sv_undef) {
+      gql_store_sv(dst_hv, "arguments", arguments_sv);
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, *svp);
+    av_push(dst_av, newRV_noinc((SV *)dst_hv));
+  }
+
+  return newRV_noinc((SV *)dst_av);
+}
+
+static AV *
+gqlperl_convert_selections_from_gqljs(pTHX_ AV *av) {
+  AV *dst_av = newAV();
+  I32 i;
+
+  for (i = 0; av && i <= av_len(av); i++) {
+    SV **svp = av_fetch(av, i, 0);
+    if (svp) {
+      av_push(dst_av, gqlperl_convert_selection_from_gqljs(aTHX_ *svp));
+    }
+  }
+
+  return dst_av;
+}
+
+static SV *
+gqlperl_convert_selection_from_gqljs(pTHX_ SV *node_sv) {
+  HV *src_hv;
+  HV *dst_hv;
+  const char *kind;
+  SV *arguments_sv;
+  SV *directives_sv;
+  AV *selection_av;
+
+  if (!node_sv || !SvROK(node_sv) || SvTYPE(SvRV(node_sv)) != SVt_PVHV) {
+    croak("Unsupported graphql-js selection node");
+  }
+  src_hv = (HV *)SvRV(node_sv);
+  kind = gqljs_fetch_kind(src_hv);
+  dst_hv = newHV();
+
+  if (strEQ(kind, "Field")) {
+    gql_store_sv(dst_hv, "kind", newSVpv("field", 0));
+    gql_store_sv(dst_hv, "name", newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0));
+    if (gqljs_fetch_sv(src_hv, "alias")) {
+      gql_store_sv(dst_hv, "alias",
+        newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "alias")), 0));
+    }
+    arguments_sv = gqlperl_convert_arguments_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "arguments"));
+    if (arguments_sv && arguments_sv != &PL_sv_undef) {
+      gql_store_sv(dst_hv, "arguments", arguments_sv);
+    }
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    if (gqljs_fetch_sv(src_hv, "selectionSet")) {
+      selection_av = gqlperl_convert_selections_from_gqljs(aTHX_
+        gqljs_fetch_array((HV *)SvRV(gqljs_fetch_sv(src_hv, "selectionSet")), "selections"));
+      if (av_len(selection_av) >= 0) {
+        gql_store_sv(dst_hv, "selections", newRV_noinc((SV *)selection_av));
+      } else {
+        SvREFCNT_dec((SV *)selection_av);
+      }
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, node_sv);
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  if (strEQ(kind, "FragmentSpread")) {
+    gql_store_sv(dst_hv, "kind", newSVpv("fragment_spread", 0));
+    gql_store_sv(dst_hv, "name", newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0));
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, node_sv);
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  if (strEQ(kind, "InlineFragment")) {
+    gql_store_sv(dst_hv, "kind", newSVpv("inline_fragment", 0));
+    if (gqljs_fetch_sv(src_hv, "typeCondition")) {
+      gql_store_sv(dst_hv, "on",
+        newSVpv(gqljs_name_value(gqljs_fetch_sv((HV *)SvRV(gqljs_fetch_sv(src_hv, "typeCondition")), "name")), 0));
+    }
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    selection_av = gqlperl_convert_selections_from_gqljs(aTHX_
+      gqljs_fetch_array((HV *)SvRV(gqljs_fetch_sv(src_hv, "selectionSet")), "selections"));
+    gql_store_sv(dst_hv, "selections", newRV_noinc((SV *)selection_av));
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, node_sv);
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  SvREFCNT_dec((SV *)dst_hv);
+  croak("Unsupported graphql-js selection node '%s'.", kind);
+}
+
+static SV *
+gqlperl_convert_variable_definitions_from_gqljs(pTHX_ AV *av) {
+  HV *dst_hv = newHV();
+  I32 i;
+
+  if (!av || av_len(av) < 0) {
+    SvREFCNT_dec((SV *)dst_hv);
+    return &PL_sv_undef;
+  }
+
+  for (i = 0; i <= av_len(av); i++) {
+    SV **svp = av_fetch(av, i, 0);
+    HV *src_hv;
+    HV *var_hv;
+    HV *dst_var_hv;
+    const char *name;
+    SV *directives_sv;
+    if (!svp || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVHV) {
+      continue;
+    }
+    src_hv = (HV *)SvRV(*svp);
+    var_hv = (HV *)SvRV(gqljs_fetch_sv(src_hv, "variable"));
+    name = gqljs_name_value(gqljs_fetch_sv(var_hv, "name"));
+    dst_var_hv = newHV();
+    gql_store_sv(dst_var_hv, "type",
+      gqlperl_convert_type_from_gqljs(aTHX_ gqljs_fetch_sv(src_hv, "type")));
+    if (gqljs_fetch_sv(src_hv, "defaultValue")) {
+      gql_store_sv(dst_var_hv, "default_value",
+        gqlperl_convert_value_from_gqljs(aTHX_ gqljs_fetch_sv(src_hv, "defaultValue")));
+    }
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_var_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    gql_store_sv(dst_hv, name, newRV_noinc((SV *)dst_var_hv));
+  }
+
+  return newRV_noinc((SV *)dst_hv);
+}
+
+static SV *
+gqlperl_convert_named_types_from_gqljs(pTHX_ AV *av) {
+  AV *out_av = newAV();
+  I32 i;
+
+  if (!av) {
+    return newRV_noinc((SV *)out_av);
+  }
+
+  for (i = 0; i <= av_len(av); i++) {
+    SV **svp = av_fetch(av, i, 0);
+    HV *node_hv;
+    const char *name;
+    if (!svp || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVHV) {
+      continue;
+    }
+    node_hv = (HV *)SvRV(*svp);
+    name = gqljs_name_value(gqljs_fetch_sv(node_hv, "name"));
+    av_push(out_av, newSVpv(name, 0));
+  }
+
+  return newRV_noinc((SV *)out_av);
+}
+
+static SV *
+gqlperl_convert_input_value_definitions_from_gqljs(pTHX_ AV *av) {
+  HV *out_hv = newHV();
+  I32 i;
+
+  if (!av || av_len(av) < 0) {
+    SvREFCNT_dec((SV *)out_hv);
+    return &PL_sv_undef;
+  }
+
+  for (i = 0; i <= av_len(av); i++) {
+    SV **svp = av_fetch(av, i, 0);
+    HV *src_hv;
+    HV *dst_hv;
+    const char *name;
+    SV *directives_sv;
+    if (!svp || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVHV) {
+      continue;
+    }
+    src_hv = (HV *)SvRV(*svp);
+    name = gqljs_name_value(gqljs_fetch_sv(src_hv, "name"));
+    dst_hv = newHV();
+    gql_store_sv(dst_hv, "type",
+      gqlperl_convert_type_from_gqljs(aTHX_ gqljs_fetch_sv(src_hv, "type")));
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    if (gqljs_fetch_sv(src_hv, "description")) {
+      gql_store_sv(dst_hv, "description",
+        newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "description")), 0));
+    }
+    if (gqljs_fetch_sv(src_hv, "defaultValue")) {
+      gql_store_sv(dst_hv, "default_value",
+        gqlperl_convert_value_from_gqljs(aTHX_ gqljs_fetch_sv(src_hv, "defaultValue")));
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, *svp);
+    gql_store_sv(out_hv, name, newRV_noinc((SV *)dst_hv));
+  }
+
+  return newRV_noinc((SV *)out_hv);
+}
+
+static SV *
+gqlperl_convert_field_definitions_from_gqljs(pTHX_ AV *av) {
+  HV *out_hv = newHV();
+  I32 i;
+
+  if (!av || av_len(av) < 0) {
+    SvREFCNT_dec((SV *)out_hv);
+    return &PL_sv_undef;
+  }
+
+  for (i = 0; i <= av_len(av); i++) {
+    SV **svp = av_fetch(av, i, 0);
+    HV *src_hv;
+    HV *dst_hv;
+    const char *name;
+    SV *directives_sv;
+    SV *args_sv;
+    if (!svp || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVHV) {
+      continue;
+    }
+    src_hv = (HV *)SvRV(*svp);
+    name = gqljs_name_value(gqljs_fetch_sv(src_hv, "name"));
+    dst_hv = newHV();
+    gql_store_sv(dst_hv, "type",
+      gqlperl_convert_type_from_gqljs(aTHX_ gqljs_fetch_sv(src_hv, "type")));
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    if (gqljs_fetch_sv(src_hv, "description")) {
+      gql_store_sv(dst_hv, "description",
+        newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "description")), 0));
+    }
+    args_sv = gqlperl_convert_input_value_definitions_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "arguments"));
+    if (args_sv && args_sv != &PL_sv_undef) {
+      gql_store_sv(dst_hv, "args", args_sv);
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, *svp);
+    gql_store_sv(out_hv, name, newRV_noinc((SV *)dst_hv));
+  }
+
+  return newRV_noinc((SV *)out_hv);
+}
+
+static SV *
+gqlperl_convert_enum_values_from_gqljs(pTHX_ AV *av) {
+  HV *out_hv = newHV();
+  I32 i;
+
+  for (i = 0; av && i <= av_len(av); i++) {
+    SV **svp = av_fetch(av, i, 0);
+    HV *src_hv;
+    HV *dst_hv;
+    const char *name;
+    SV *directives_sv;
+    if (!svp || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVHV) {
+      continue;
+    }
+    src_hv = (HV *)SvRV(*svp);
+    name = gqljs_name_value(gqljs_fetch_sv(src_hv, "name"));
+    dst_hv = newHV();
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    if (gqljs_fetch_sv(src_hv, "description")) {
+      gql_store_sv(dst_hv, "description",
+        newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "description")), 0));
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, *svp);
+    gql_store_sv(out_hv, name, newRV_noinc((SV *)dst_hv));
+  }
+
+  return newRV_noinc((SV *)out_hv);
+}
+
+static SV *
+gqlperl_convert_executable_definition_from_gqljs(pTHX_ SV *node_sv) {
+  HV *src_hv;
+  HV *dst_hv;
+  const char *kind;
+  SV *directives_sv;
+  AV *selections_av;
+
+  if (!node_sv || !SvROK(node_sv) || SvTYPE(SvRV(node_sv)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+  src_hv = (HV *)SvRV(node_sv);
+  kind = gqljs_fetch_kind(src_hv);
+  dst_hv = newHV();
+
+  if (strEQ(kind, "OperationDefinition")) {
+    gql_store_sv(dst_hv, "kind", newSVpv("operation", 0));
+    gql_store_sv(dst_hv, "operationType", newSVsv(gqljs_fetch_sv(src_hv, "operation")));
+    if (gqljs_fetch_sv(src_hv, "name")) {
+      gql_store_sv(dst_hv, "name",
+        newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0));
+    }
+    if (gqljs_fetch_array(src_hv, "variableDefinitions")) {
+      SV *variables_sv = gqlperl_convert_variable_definitions_from_gqljs(aTHX_
+        gqljs_fetch_array(src_hv, "variableDefinitions"));
+      if (variables_sv && variables_sv != &PL_sv_undef) {
+        gql_store_sv(dst_hv, "variables", variables_sv);
+      }
+    }
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    selections_av = gqlperl_convert_selections_from_gqljs(aTHX_
+      gqljs_fetch_array((HV *)SvRV(gqljs_fetch_sv(src_hv, "selectionSet")), "selections"));
+    gql_store_sv(dst_hv, "selections", newRV_noinc((SV *)selections_av));
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, node_sv);
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  if (strEQ(kind, "FragmentDefinition")) {
+    gql_store_sv(dst_hv, "kind", newSVpv("fragment", 0));
+    gql_store_sv(dst_hv, "name",
+      newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0));
+    gql_store_sv(dst_hv, "on",
+      newSVpv(gqljs_name_value(gqljs_fetch_sv((HV *)SvRV(gqljs_fetch_sv(src_hv, "typeCondition")), "name")), 0));
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    selections_av = gqlperl_convert_selections_from_gqljs(aTHX_
+      gqljs_fetch_array((HV *)SvRV(gqljs_fetch_sv(src_hv, "selectionSet")), "selections"));
+    gql_store_sv(dst_hv, "selections", newRV_noinc((SV *)selections_av));
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, node_sv);
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  SvREFCNT_dec((SV *)dst_hv);
+  return &PL_sv_undef;
+}
+
+static SV *
+gqlperl_convert_definition_from_gqljs(pTHX_ SV *node_sv) {
+  HV *src_hv;
+  HV *dst_hv;
+  const char *kind;
+  SV *directives_sv;
+  SV *fields_sv;
+  SV *args_sv;
+  SV *interfaces_sv;
+  SV *types_sv;
+  AV *locations_av;
+  I32 i;
+
+  SV *executable = gqlperl_convert_executable_definition_from_gqljs(aTHX_ node_sv);
+  if (executable && executable != &PL_sv_undef) {
+    return executable;
+  }
+
+  if (!node_sv || !SvROK(node_sv) || SvTYPE(SvRV(node_sv)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+  src_hv = (HV *)SvRV(node_sv);
+  kind = gqljs_fetch_kind(src_hv);
+  dst_hv = newHV();
+
+  if (strEQ(kind, "SchemaDefinition") || strEQ(kind, "SchemaExtension")) {
+    AV *ops_av = gqljs_fetch_array(src_hv, "operationTypes");
+    gql_store_sv(dst_hv, "kind", newSVpv("schema", 0));
+    for (i = 0; ops_av && i <= av_len(ops_av); i++) {
+      SV **svp = av_fetch(ops_av, i, 0);
+      HV *op_hv;
+      const char *operation;
+      const char *type_name;
+      SV *operation_sv;
+      if (!svp || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVHV) {
+        continue;
+      }
+      op_hv = (HV *)SvRV(*svp);
+      operation_sv = gqljs_fetch_sv(op_hv, "operation");
+      operation = SvPV_nolen(operation_sv);
+      type_name = gqljs_name_value(gqljs_fetch_sv((HV *)SvRV(gqljs_fetch_sv(op_hv, "type")), "name"));
+      gql_store_sv(dst_hv, operation, newSVpv(type_name, 0));
+    }
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, node_sv);
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  if (strEQ(kind, "ScalarTypeDefinition") || strEQ(kind, "ScalarTypeExtension")) {
+    gql_store_sv(dst_hv, "kind", newSVpv("scalar", 0));
+    gql_store_sv(dst_hv, "name", newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0));
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    if (gqljs_fetch_sv(src_hv, "description")) {
+      gql_store_sv(dst_hv, "description",
+        newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "description")), 0));
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, node_sv);
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  if (strEQ(kind, "ObjectTypeDefinition") || strEQ(kind, "ObjectTypeExtension")
+      || strEQ(kind, "InterfaceTypeDefinition") || strEQ(kind, "InterfaceTypeExtension")) {
+    gql_store_sv(dst_hv, "kind",
+      newSVpv((strstr(kind, "InterfaceType") == kind) ? "interface" : "type", 0));
+    gql_store_sv(dst_hv, "name", newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0));
+    interfaces_sv = gqlperl_convert_named_types_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "interfaces"));
+    if (interfaces_sv && SvROK(interfaces_sv) && av_len((AV *)SvRV(interfaces_sv)) >= 0) {
+      gql_store_sv(dst_hv, "interfaces", interfaces_sv);
+    } else if (interfaces_sv && interfaces_sv != &PL_sv_undef) {
+      SvREFCNT_dec(interfaces_sv);
+    }
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    if (gqljs_fetch_sv(src_hv, "description")) {
+      gql_store_sv(dst_hv, "description",
+        newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "description")), 0));
+    }
+    fields_sv = gqlperl_convert_field_definitions_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "fields"));
+    if (fields_sv && fields_sv != &PL_sv_undef) {
+      gql_store_sv(dst_hv, "fields", fields_sv);
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, node_sv);
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  if (strEQ(kind, "UnionTypeDefinition") || strEQ(kind, "UnionTypeExtension")) {
+    gql_store_sv(dst_hv, "kind", newSVpv("union", 0));
+    gql_store_sv(dst_hv, "name", newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0));
+    types_sv = gqlperl_convert_named_types_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "types"));
+    if (types_sv && types_sv != &PL_sv_undef) {
+      gql_store_sv(dst_hv, "types", types_sv);
+    }
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    if (gqljs_fetch_sv(src_hv, "description")) {
+      gql_store_sv(dst_hv, "description",
+        newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "description")), 0));
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, node_sv);
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  if (strEQ(kind, "EnumTypeDefinition") || strEQ(kind, "EnumTypeExtension")) {
+    gql_store_sv(dst_hv, "kind", newSVpv("enum", 0));
+    gql_store_sv(dst_hv, "name", newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0));
+    gql_store_sv(dst_hv, "values",
+      gqlperl_convert_enum_values_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "values")));
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    if (gqljs_fetch_sv(src_hv, "description")) {
+      gql_store_sv(dst_hv, "description",
+        newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "description")), 0));
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, node_sv);
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  if (strEQ(kind, "InputObjectTypeDefinition") || strEQ(kind, "InputObjectTypeExtension")) {
+    gql_store_sv(dst_hv, "kind", newSVpv("input", 0));
+    gql_store_sv(dst_hv, "name", newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0));
+    directives_sv = gqlperl_convert_directives_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "directives"));
+    if (directives_sv && SvROK(directives_sv) && av_len((AV *)SvRV(directives_sv)) >= 0) {
+      gql_store_sv(dst_hv, "directives", directives_sv);
+    } else if (directives_sv && directives_sv != &PL_sv_undef) {
+      SvREFCNT_dec(directives_sv);
+    }
+    if (gqljs_fetch_sv(src_hv, "description")) {
+      gql_store_sv(dst_hv, "description",
+        newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "description")), 0));
+    }
+    fields_sv = gqlperl_convert_input_value_definitions_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "fields"));
+    if (fields_sv && fields_sv != &PL_sv_undef) {
+      gql_store_sv(dst_hv, "fields", fields_sv);
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, node_sv);
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  if (strEQ(kind, "DirectiveDefinition") || strEQ(kind, "DirectiveExtension")) {
+    gql_store_sv(dst_hv, "kind", newSVpv("directive", 0));
+    gql_store_sv(dst_hv, "name", newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "name")), 0));
+    locations_av = gqljs_fetch_array(src_hv, "locations");
+    if (locations_av) {
+      AV *out_locations = newAV();
+      for (i = 0; i <= av_len(locations_av); i++) {
+        SV **svp = av_fetch(locations_av, i, 0);
+        if (svp) {
+          av_push(out_locations, newSVpv(gqljs_name_value(*svp), 0));
+        }
+      }
+      gql_store_sv(dst_hv, "locations", newRV_noinc((SV *)out_locations));
+    }
+    args_sv = gqlperl_convert_input_value_definitions_from_gqljs(aTHX_ gqljs_fetch_array(src_hv, "arguments"));
+    if (args_sv && args_sv != &PL_sv_undef) {
+      gql_store_sv(dst_hv, "args", args_sv);
+    }
+    if (gqljs_fetch_sv(src_hv, "description")) {
+      gql_store_sv(dst_hv, "description",
+        newSVpv(gqljs_name_value(gqljs_fetch_sv(src_hv, "description")), 0));
+    }
+    gqlperl_store_location_from_gqljs_node(aTHX_ dst_hv, node_sv);
+    return newRV_noinc((SV *)dst_hv);
+  }
+
+  SvREFCNT_dec((SV *)dst_hv);
+  return &PL_sv_undef;
+}
+
+static SV *
+gql_graphqlperl_build_executable_document(pTHX_ SV *doc_sv) {
+  HV *doc_hv;
+  AV *definitions_av;
+  AV *out_av;
+  I32 i;
+
+  if (!doc_sv || !SvROK(doc_sv) || SvTYPE(SvRV(doc_sv)) != SVt_PVHV) {
+    croak("graphqlperl_build_executable_document_xs expects a document hash reference");
+  }
+  doc_hv = (HV *)SvRV(doc_sv);
+  if (!strEQ(gqljs_fetch_kind(doc_hv), "Document")) {
+    croak("graphqlperl_build_executable_document_xs expects a graphql-js Document node");
+  }
+  definitions_av = gqljs_fetch_array(doc_hv, "definitions");
+  if (!definitions_av) {
+    croak("graphqlperl_build_executable_document_xs expected document definitions");
+  }
+
+  out_av = newAV();
+  for (i = 0; i <= av_len(definitions_av); i++) {
+    SV **svp = av_fetch(definitions_av, i, 0);
+    SV *converted_sv;
+    if (!svp) {
+      continue;
+    }
+    converted_sv = gqlperl_convert_executable_definition_from_gqljs(aTHX_ *svp);
+    if (!converted_sv || converted_sv == &PL_sv_undef) {
+      SvREFCNT_dec((SV *)out_av);
+      return &PL_sv_undef;
+    }
+    av_push(out_av, converted_sv);
+  }
+
+  return newRV_noinc((SV *)out_av);
+}
+
+static SV *
+gql_graphqlperl_build_document(pTHX_ SV *doc_sv) {
+  HV *doc_hv;
+  AV *definitions_av;
+  AV *out_av;
+  I32 i;
+
+  if (!doc_sv || !SvROK(doc_sv) || SvTYPE(SvRV(doc_sv)) != SVt_PVHV) {
+    croak("graphqlperl_build_document_xs expects a document hash reference");
+  }
+  doc_hv = (HV *)SvRV(doc_sv);
+  if (!strEQ(gqljs_fetch_kind(doc_hv), "Document")) {
+    croak("graphqlperl_build_document_xs expects a graphql-js Document node");
+  }
+  definitions_av = gqljs_fetch_array(doc_hv, "definitions");
+  if (!definitions_av) {
+    croak("graphqlperl_build_document_xs expected document definitions");
+  }
+
+  out_av = newAV();
+  for (i = 0; i <= av_len(definitions_av); i++) {
+    SV **svp = av_fetch(definitions_av, i, 0);
+    SV *converted_sv;
+    if (!svp) {
+      continue;
+    }
+    converted_sv = gqlperl_convert_definition_from_gqljs(aTHX_ *svp);
+    if (!converted_sv || converted_sv == &PL_sv_undef) {
+      SvREFCNT_dec((SV *)out_av);
+      return &PL_sv_undef;
+    }
+    av_push(out_av, converted_sv);
+  }
+
+  return newRV_noinc((SV *)out_av);
+}
+
 static void
 gql_skip_ignored(gql_parser_t *p) {
   while (p->pos < p->len) {
@@ -3507,6 +4339,22 @@ graphqljs_build_executable_document_xs(legacy)
     SV *legacy
   CODE:
     RETVAL = gql_graphqljs_build_executable_document(aTHX_ legacy);
+  OUTPUT:
+    RETVAL
+
+SV *
+graphqlperl_build_document_xs(doc)
+    SV *doc
+  CODE:
+    RETVAL = gql_graphqlperl_build_document(aTHX_ doc);
+  OUTPUT:
+    RETVAL
+
+SV *
+graphqlperl_build_executable_document_xs(doc)
+    SV *doc
+  CODE:
+    RETVAL = gql_graphqlperl_build_executable_document(aTHX_ doc);
   OUTPUT:
     RETVAL
 

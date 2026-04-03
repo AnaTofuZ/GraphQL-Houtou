@@ -157,6 +157,27 @@ graphql_js_xs_noloc       17440/s            3814%                  3673%       
 この時点で executable path の主コストは、graphql-js AST 自体の構築ではなく、
 `graphql-perl` dialect に戻す `graphql_perl_canonical_xs` 側の adapter に移っている。
 
+さらに後続作業で、`graphql-js` canonical document から `graphql-perl` legacy AST への
+executable 変換も `graphqlperl_build_executable_document_xs()` として XS 化した。
+これにより `graphql_perl_canonical_xs` は `3516/s` から `3742/s` まで改善した。
+
+同時点の `t/kitchen-sink.graphql` は次の通り。
+
+```text
+                             Rate graphql_js_pegex graphql_js_pegex_noloc graphql_perl_pegex graphql_perl_canonical_xs graphql_perl_xs graphql_js_xs graphql_js_xs_noloc
+graphql_js_pegex            436/s               --                    -5%                -8%                      -88%            -94%          -94%                -97%
+graphql_js_pegex_noloc      458/s               5%                     --                -3%                      -88%            -94%          -94%                -97%
+graphql_perl_pegex          474/s               9%                     3%                 --                      -87%            -93%          -94%                -97%
+graphql_perl_canonical_xs  3742/s             758%                   717%               690%                        --            -48%          -50%                -77%
+graphql_perl_xs            7242/s            1561%                  1481%              1429%                       94%              --           -3%                -56%
+graphql_js_xs              7453/s            1609%                  1528%              1474%                       99%              3%            --                -54%
+graphql_js_xs_noloc       16333/s            3646%                  3467%              3349%                      336%            126%          119%                  --
+```
+
+改善幅が比較的小さいのは、`graphql_perl_canonical_xs` の残コストが
+executable 変換そのものよりも、legacy 互換チェックと SDL / 非 executable fallback 側へ
+寄ってきているためである。
+
 ## Profile
 
 `util/profile-parser.pl` を `Devel::NYTProf` 付きで実行し、

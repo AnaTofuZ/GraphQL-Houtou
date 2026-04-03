@@ -607,10 +607,14 @@ gql_hex4_to_uv(const char *src) {
 static SV *
 gql_copy_value_sv(pTHX_ gql_parser_t *p) {
   SV *raw = gql_make_string_sv(aTHX_ p, p->val_start, p->val_end);
+  SV *ret;
   if (p->kind == TOK_BLOCK_STRING) {
-    return gql_call_helper1(aTHX_ "GraphQL::Houtou::XS::Parser::_block_string_value", raw);
+    ret = gql_call_helper1(aTHX_ "GraphQL::Houtou::XS::Parser::_block_string_value", raw);
+  } else {
+    ret = gql_unescape_string_sv(aTHX_ raw);
   }
-  return gql_unescape_string_sv(aTHX_ raw);
+  SvREFCNT_dec(raw);
+  return ret;
 }
 
 static void

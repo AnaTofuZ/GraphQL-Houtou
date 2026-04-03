@@ -57,6 +57,8 @@ typedef struct {
   AV *rewrites;
   UV *line_starts;
   I32 num_lines;
+  SV **loc_cache;
+  UV loc_cache_len;
 } gqljs_loc_context_t;
 
 typedef struct {
@@ -1635,6 +1637,7 @@ static SV *
 gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos) {
   UV original_pos = rewritten_pos;
   I32 line_index;
+  SV *loc_sv;
 
   if (!ctx) {
     return &PL_sv_undef;
@@ -1701,11 +1704,19 @@ gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos) {
     }
   }
 
-  return gqljs_new_loc_sv(
+  if (ctx->loc_cache && original_pos < ctx->loc_cache_len && ctx->loc_cache[original_pos]) {
+    return SvREFCNT_inc_simple_NN(ctx->loc_cache[original_pos]);
+  }
+
+  loc_sv = gqljs_new_loc_sv(
     aTHX_
     (IV)(line_index + 1),
     (IV)(original_pos - ctx->line_starts[line_index] + 1)
   );
+  if (ctx->loc_cache && original_pos < ctx->loc_cache_len) {
+    ctx->loc_cache[original_pos] = SvREFCNT_inc_simple_NN(loc_sv);
+  }
+  return loc_sv;
 }
 
 static void
@@ -1720,6 +1731,8 @@ gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrit
   ctx->rewrites = rewrites;
   ctx->line_starts = NULL;
   ctx->num_lines = 0;
+  ctx->loc_cache = NULL;
+  ctx->loc_cache_len = 0;
 
   for (i = 0; i < len; i++) {
     if (src[i] == '\n') {
@@ -1735,6 +1748,8 @@ gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrit
   Newx(ctx->line_starts, line_count, UV);
   ctx->line_starts[0] = 0;
   ctx->num_lines = line_count;
+  ctx->loc_cache_len = (UV)len + 1;
+  Newxz(ctx->loc_cache, ctx->loc_cache_len, SV *);
 
   {
     I32 line_index = 1;
@@ -1753,11 +1768,23 @@ gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrit
 
 static void
 gqljs_loc_context_destroy(gqljs_loc_context_t *ctx) {
+  UV i;
+
   if (ctx->line_starts) {
     Safefree(ctx->line_starts);
   }
+  if (ctx->loc_cache) {
+    for (i = 0; i < ctx->loc_cache_len; i++) {
+      if (ctx->loc_cache[i]) {
+        SvREFCNT_dec(ctx->loc_cache[i]);
+      }
+    }
+    Safefree(ctx->loc_cache);
+  }
   ctx->line_starts = NULL;
   ctx->num_lines = 0;
+  ctx->loc_cache = NULL;
+  ctx->loc_cache_len = 0;
 }
 
 static SV *

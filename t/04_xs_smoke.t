@@ -276,6 +276,41 @@ subtest 'graphqljs_parse_executable_document_xs matches canonical parser for exe
     cmp_deeply $built, $expected, 'xs executable fast path matches canonical parser output';
 };
 
+subtest 'graphqljs_parse_executable_document_xs keeps variable definition directives inline', sub {
+    my $source = 'query Q($id: ID @fromContext, $limit: Int = 10 @clamp(max: 100)) @root { user(id: $id) { id } }';
+    my $built = graphqljs_parse_executable_document_xs($source);
+    my $expected = parse_canonical_document($source, {
+        backend => 'xs',
+    });
+
+    cmp_deeply $built, $expected, 'xs executable fast path matches canonical output with variable directives';
+};
+
+subtest 'graphqljs_parse_executable_document_xs keeps shorthand query shape stable', sub {
+    my $built = graphqljs_parse_executable_document_xs('{ __typename }', 1);
+
+    cmp_deeply $built->{definitions}[0], {
+        kind => 'OperationDefinition',
+        operation => 'query',
+        variableDefinitions => [],
+        directives => [],
+        selectionSet => {
+            kind => 'SelectionSet',
+            selections => [
+                {
+                    kind => 'Field',
+                    name => {
+                        kind => 'Name',
+                        value => '__typename',
+                    },
+                    arguments => [],
+                    directives => [],
+                },
+            ],
+        },
+    }, 'xs executable fast path preserves empty arrays on shorthand queries';
+};
+
 subtest 'graphqljs_build_document_xs matches canonical parser for type system documents', sub {
     my $source = <<'EOF';
 "Type doc"

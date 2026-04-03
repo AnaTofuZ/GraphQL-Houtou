@@ -288,6 +288,7 @@ static SV *gql_parse_arguments_definition(pTHX_ gql_parser_t *p);
 static SV *gql_parse_description(pTHX_ gql_parser_t *p);
 static SV *gql_copy_token_sv(pTHX_ gql_parser_t *p);
 static SV *gql_copy_value_sv(pTHX_ gql_parser_t *p);
+static SV *gql_unescape_string_sv(pTHX_ SV *raw);
 static SV *gql_make_string_sv(pTHX_ gql_parser_t *p, STRLEN start, STRLEN end);
 static SV *gql_make_location(pTHX_ gql_parser_t *p);
 static SV *gql_make_current_location(pTHX_ gql_parser_t *p);
@@ -518,12 +519,52 @@ gql_call_helper1(pTHX_ const char *subname, SV *arg) {
 }
 
 static SV *
+gql_unescape_string_sv(pTHX_ SV *raw) {
+  STRLEN len;
+  const char *src = SvPV(raw, len);
+  SV *out = newSVpvn("", 0);
+  STRLEN i;
+
+  if (len > 0) {
+    SvGROW(out, len + 1);
+  }
+
+  for (i = 0; i < len; i++) {
+    if (src[i] == '\\' && i + 1 < len) {
+      char decoded = '\0';
+      switch (src[i + 1]) {
+        case '"': decoded = '"'; break;
+        case '\\': decoded = '\\'; break;
+        case '/': decoded = '/'; break;
+        case 'b': decoded = '\b'; break;
+        case 'f': decoded = '\f'; break;
+        case 'n': decoded = '\n'; break;
+        case 'r': decoded = '\r'; break;
+        case 't': decoded = '\t'; break;
+        default: break;
+      }
+      if (decoded != '\0') {
+        sv_catpvn(out, &decoded, 1);
+        i++;
+        continue;
+      }
+    }
+    sv_catpvn(out, src + i, 1);
+  }
+
+  if (SvUTF8(raw)) {
+    SvUTF8_on(out);
+  }
+  return out;
+}
+
+static SV *
 gql_copy_value_sv(pTHX_ gql_parser_t *p) {
   SV *raw = gql_make_string_sv(aTHX_ p, p->val_start, p->val_end);
   if (p->kind == TOK_BLOCK_STRING) {
     return gql_call_helper1(aTHX_ "GraphQL::Houtou::XS::Parser::_block_string_value", raw);
   }
-  return gql_call_helper1(aTHX_ "GraphQL::Houtou::XS::Parser::_string_value", raw);
+  return gql_unescape_string_sv(aTHX_ raw);
 }
 
 static void

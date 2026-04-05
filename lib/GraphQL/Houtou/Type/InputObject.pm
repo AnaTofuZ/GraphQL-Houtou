@@ -5,8 +5,6 @@ use strict;
 use warnings;
 
 use Moo;
-use GraphQL::Houtou::Type::Library -all;
-use Types::Standard -all;
 
 extends 'GraphQL::Houtou::Type';
 with qw(

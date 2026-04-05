@@ -760,10 +760,98 @@ gql_execution_builtin_scalar_is_num(SV *value, NV *out) {
   return 1;
 }
 
+static int
+gql_execution_builtin_scalar_is_boolish(SV *value, int *truthy) {
+  if (!value || !SvOK(value)) {
+    return 0;
+  }
+
+  if (sv_isa(value, "JSON::PP::Boolean")) {
+    if (truthy) {
+      *truthy = SvTRUE(value) ? 1 : 0;
+    }
+    return 1;
+  }
+
+  if (!gql_execution_builtin_scalar_is_nonref_defined(value) || !looks_like_number(value)) {
+    return 0;
+  }
+
+  if (!(SvIV(value) == 0 || SvIV(value) == 1) || SvNV(value) != (NV)SvIV(value)) {
+    return 0;
+  }
+
+  if (truthy) {
+    *truthy = SvTRUE(value) ? 1 : 0;
+  }
+  return 1;
+}
+
+static void
+gql_execution_require_json_pp(pTHX) {
+  static int json_pp_loaded = 0;
+
+  if (json_pp_loaded) {
+    return;
+  }
+
+  eval_pv("require JSON::PP; 1;", TRUE);
+  if (SvTRUE(ERRSV)) {
+    croak_sv(newSVsv(ERRSV));
+  }
+
+  json_pp_loaded = 1;
+}
+
+static SV *
+gql_execution_builtin_scalar_json_boolean_sv(pTHX_ int truthy) {
+  dSP;
+  int count;
+  SV *ret;
+  static CV *true_cv = NULL;
+  static CV *false_cv = NULL;
+  CV *cv;
+
+  gql_execution_require_json_pp(aTHX);
+  if (!true_cv) {
+    true_cv = get_cv("JSON::PP::true", 0);
+  }
+  if (!false_cv) {
+    false_cv = get_cv("JSON::PP::false", 0);
+  }
+
+  cv = truthy ? true_cv : false_cv;
+  if (!cv) {
+    croak("unable to resolve JSON::PP boolean constructor");
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  PUTBACK;
+
+  count = call_sv((SV *)cv, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("JSON::PP boolean constructor did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
 static SV *
 gql_execution_builtin_scalar_graphql_to_perl(pTHX_ gql_execution_builtin_scalar_kind_t kind, SV *value, int *ok) {
   IV iv;
   NV nv;
+  int truthy;
 
   *ok = 0;
 
@@ -797,6 +885,12 @@ gql_execution_builtin_scalar_graphql_to_perl(pTHX_ gql_execution_builtin_scalar_
       }
       *ok = 1;
       return newSVsv(value);
+    case GQL_EXECUTION_BUILTIN_SCALAR_BOOLEAN:
+      if (!gql_execution_builtin_scalar_is_boolish(value, &truthy)) {
+        return &PL_sv_undef;
+      }
+      *ok = 1;
+      return newSViv(truthy ? 1 : 0);
     default:
       return &PL_sv_undef;
   }
@@ -808,6 +902,7 @@ gql_execution_builtin_scalar_perl_to_graphql(pTHX_ gql_execution_builtin_scalar_
   NV nv;
   STRLEN len;
   const char *pv;
+  int truthy;
 
   *ok = 0;
 
@@ -843,6 +938,12 @@ gql_execution_builtin_scalar_perl_to_graphql(pTHX_ gql_execution_builtin_scalar_
       *ok = 1;
       pv = SvPV(value, len);
       return newSVpvn(pv, len);
+    case GQL_EXECUTION_BUILTIN_SCALAR_BOOLEAN:
+      if (!gql_execution_builtin_scalar_is_boolish(value, &truthy)) {
+        return &PL_sv_undef;
+      }
+      *ok = 1;
+      return gql_execution_builtin_scalar_json_boolean_sv(aTHX_ truthy ? 1 : 0);
     default:
       return &PL_sv_undef;
   }
@@ -858,8 +959,7 @@ gql_execution_try_type_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok) {
   *ok = 0;
 
   builtin_kind = gql_execution_builtin_scalar_kind_from_type(type);
-  if (builtin_kind != GQL_EXECUTION_BUILTIN_SCALAR_NONE
-      && builtin_kind != GQL_EXECUTION_BUILTIN_SCALAR_BOOLEAN) {
+  if (builtin_kind != GQL_EXECUTION_BUILTIN_SCALAR_NONE) {
     return gql_execution_builtin_scalar_graphql_to_perl(aTHX_ builtin_kind, value, ok);
   }
 
@@ -1515,8 +1615,7 @@ gql_execution_call_type_perl_to_graphql(pTHX_ SV *type, SV *value, int *ok) {
   *ok = 0;
 
   builtin_kind = gql_execution_builtin_scalar_kind_from_type(type);
-  if (builtin_kind != GQL_EXECUTION_BUILTIN_SCALAR_NONE
-      && builtin_kind != GQL_EXECUTION_BUILTIN_SCALAR_BOOLEAN) {
+  if (builtin_kind != GQL_EXECUTION_BUILTIN_SCALAR_NONE) {
     return gql_execution_builtin_scalar_perl_to_graphql(aTHX_ builtin_kind, value, ok);
   }
 

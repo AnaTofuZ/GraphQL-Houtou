@@ -7,12 +7,37 @@ use warnings;
 use Exporter 'import';
 
 our @EXPORT_OK = qw(
+  set_default_promise_code
+  get_default_promise_code
+  clear_default_promise_code
   normalize_promise_code
   is_promise_value
   then_promise
 );
 
+my $DEFAULT_PROMISE_CODE;
+
+sub set_default_promise_code {
+  my ($promise_code) = @_;
+  $DEFAULT_PROMISE_CODE = _normalize_promise_code($promise_code);
+  return $DEFAULT_PROMISE_CODE;
+}
+
+sub get_default_promise_code {
+  return $DEFAULT_PROMISE_CODE;
+}
+
+sub clear_default_promise_code {
+  undef $DEFAULT_PROMISE_CODE;
+  return;
+}
+
 sub normalize_promise_code {
+  my ($promise_code) = @_;
+  return _normalize_promise_code($promise_code || $DEFAULT_PROMISE_CODE);
+}
+
+sub _normalize_promise_code {
   my ($promise_code) = @_;
   return undef if !$promise_code;
   return $promise_code

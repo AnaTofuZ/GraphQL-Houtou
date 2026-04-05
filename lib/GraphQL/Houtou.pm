@@ -6,11 +6,19 @@ use warnings;
 use Exporter 'import';
 use GraphQL::Houtou::GraphQLJS::Parser ();
 use GraphQL::Houtou::GraphQLPerl::Parser ();
+use GraphQL::Houtou::Promise::Adapter qw(
+  set_default_promise_code
+  get_default_promise_code
+  clear_default_promise_code
+);
 
 our $VERSION = '0.01';
 our @EXPORT_OK = qw(
   parse
   parse_with_options
+  set_default_promise_code
+  get_default_promise_code
+  clear_default_promise_code
 );
 
 sub parse {

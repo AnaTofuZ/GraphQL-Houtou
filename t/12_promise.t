@@ -67,6 +67,11 @@ use Test::More;
 
 use GraphQL::Houtou::Execution qw(execute);
 use GraphQL::Houtou::Promise::Adapter qw(normalize_promise_code);
+use GraphQL::Houtou qw(
+  clear_default_promise_code
+  get_default_promise_code
+  set_default_promise_code
+);
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String $ID);
@@ -170,6 +175,41 @@ subtest 'execute returns a promise when promise_code is supplied' => sub {
       later_list => [ 'alpha', 'beta' ],
     },
   }, 'promise-backed execution resolves to the final response';
+};
+
+subtest 'global default promise code is used when request override is absent' => sub {
+  my $promise_code = set_default_promise_code({
+    resolve => sub { Local::Test::ChainPromise->resolve(@_) },
+    reject => sub { Local::Test::ChainPromise->reject(@_) },
+    all => sub { Local::Test::ChainPromise->all(@_) },
+    then => sub {
+      my ($promise, $on_fulfilled, $on_rejected) = @_;
+      return $promise->chain($on_fulfilled, $on_rejected);
+    },
+    is_promise => sub {
+      my ($value) = @_;
+      return ref($value) eq 'Local::Test::ChainPromise';
+    },
+  });
+
+  ok get_default_promise_code(), 'default promise code is installed';
+
+  my $result = execute(
+    $schema,
+    '{ later later_list }',
+  );
+
+  isa_ok $result, 'Local::Test::ChainPromise';
+  is_deeply $result->get, {
+    data => {
+      later => 'world',
+      later_list => [ 'alpha', 'beta' ],
+    },
+  }, 'global default promise code drives execution';
+
+  is get_default_promise_code(), $promise_code, 'installed adapter is the normalized default';
+  clear_default_promise_code();
+  ok !get_default_promise_code(), 'default promise code can be cleared';
 };
 
 done_testing;

@@ -504,11 +504,13 @@ gql_execution_located_error_xs(pTHX_ SV *error, SV *nodes, SV *path) {
   }
 
   {
+    SV *locations_rv = newRV_noinc((SV *)locations_av);
     SV *located = gql_execution_call_graphql_error_but(
       aTHX_ coerced,
-      newRV_noinc((SV *)locations_av),
+      locations_rv,
       path
     );
+    SvREFCNT_dec(locations_rv);
     SvREFCNT_dec(coerced);
     return located;
   }
@@ -867,10 +869,13 @@ gql_execution_call_resolver(pTHX_ SV *resolve, SV *root_value, SV *args, SV *con
   SPAGAIN;
   if (SvTRUE(ERRSV)) {
     SV *error = newSVsv(ERRSV);
+    SV *coerced;
     PUTBACK;
     FREETMPS;
     LEAVE;
-    return gql_execution_call_graphql_error_coerce(aTHX_ error);
+    coerced = gql_execution_call_graphql_error_coerce(aTHX_ error);
+    SvREFCNT_dec(error);
+    return coerced;
   }
   if (count != 1) {
     PUTBACK;
@@ -1177,11 +1182,10 @@ gql_execution_call_schema_root_type(pTHX_ SV *schema, const char *op_type) {
   count = call_method(op_type, G_SCALAR | G_EVAL);
   SPAGAIN;
   if (SvTRUE(ERRSV)) {
-    SV *error = newSVsv(ERRSV);
     PUTBACK;
     FREETMPS;
     LEAVE;
-    croak_sv(error);
+    croak_sv(sv_2mortal(newSVsv(ERRSV)));
   }
   if (count != 1) {
     PUTBACK;
@@ -1255,7 +1259,9 @@ gql_execution_execute_prepared_context_xs_impl(pTHX_ SV *context) {
 
   type_sv = gql_execution_call_schema_root_type(aTHX_ *schema_svp, op_type);
   if (!SvOK(type_sv) || type_sv == &PL_sv_undef) {
-    SV *error_result = gql_execution_wrap_error_xs(aTHX_ newSVpvf("No %s in schema", op_type));
+    SV *msg = newSVpvf("No %s in schema", op_type);
+    SV *error_result = gql_execution_wrap_error_xs(aTHX_ msg);
+    SvREFCNT_dec(msg);
     if (type_sv != &PL_sv_undef) {
       SvREFCNT_dec(type_sv);
     }
@@ -1269,6 +1275,10 @@ gql_execution_execute_prepared_context_xs_impl(pTHX_ SV *context) {
   }
 
   fields_sv = gql_execution_collect_fields_xs(aTHX_ context, type_sv, *selections_svp);
+  if (!fields_sv || fields_sv == &PL_sv_undef) {
+    SvREFCNT_dec(type_sv);
+    croak("collect_fields failed");
+  }
   path_sv = newRV_noinc((SV *)newAV());
   result_sv = gql_execution_execute_fields(
     aTHX_ context,
@@ -2342,6 +2352,8 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
           SvREFCNT_dec((SV *)data_av);
           SvREFCNT_dec((SV *)errors_av);
           return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
+        } else if (completed) {
+          SvREFCNT_dec(completed);
         }
 
         SvREFCNT_dec(item_path_sv);
@@ -2453,16 +2465,6 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
       }
       SvREFCNT_dec(type_match);
     } else {
-      int ok = 0;
-      SV *subfields = gql_execution_collect_simple_object_fields(aTHX_ context, return_type, nodes, &ok);
-      if (ok) {
-        SV *ret = gql_execution_execute_fields(aTHX_ context, return_type, result, path, subfields);
-        SvREFCNT_dec(subfields);
-        return ret;
-      }
-    }
-
-    {
       int ok = 0;
       SV *subfields = gql_execution_collect_simple_object_fields(aTHX_ context, return_type, nodes, &ok);
       if (ok) {

@@ -178,6 +178,21 @@ Latest local verification:
   - `./Build test`
   - `13 files / 173 tests / PASS`
 
+## XS Memory Rule
+
+When creating a temporary `SV` and passing it to another helper, the caller
+owns that temporary and must release it unless ownership is explicitly
+transferred.
+
+Practical rule:
+
+- if a call site does `newSVsv(...)`, `newSVpvf(...)`, or `newRV_noinc(...)`
+  only to pass the value into another function, the call site is responsible
+  for deciding whether that temporary must be `SvREFCNT_dec(...)`'d after the
+  callee returns
+- do not assume `gql_execution_call_*` helpers consume ownership unless that is
+  documented explicitly
+
 ## Next Work
 
 Execution is now the active compatibility surface and the public path already

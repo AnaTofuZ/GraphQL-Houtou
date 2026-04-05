@@ -116,6 +116,14 @@ subtest 'XS validation entrypoint matches facade behavior' => sub {
 
   is_deeply validate_xs($schema, $source), validate($schema, $source),
     'XS path matches subscription root-field validation too';
+
+  $source = q|
+    query Q { viewer { ...Loop } }
+    fragment Loop on MissingType { ...Loop }
+  |;
+
+  is_deeply validate_xs($schema, $source), validate($schema, $source),
+    'XS path matches fragment-cycle validation too';
 };
 
 subtest 'valid query passes' => sub {

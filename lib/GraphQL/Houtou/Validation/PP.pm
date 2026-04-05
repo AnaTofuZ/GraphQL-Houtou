@@ -44,7 +44,9 @@ sub validate_prepared {
   _validate_lone_anonymous_operation(\@errors, \@operations)
     if !$options->{skip_lone_anonymous_operation};
   _validate_fragments(\@errors, $compiled, \%fragments);
-  _validate_fragment_cycles(\@errors, \%fragments);
+  push @errors, @{ $options->{seed_fragment_cycle_errors} || [] };
+  _validate_fragment_cycles(\@errors, \%fragments)
+    if !$options->{skip_fragment_cycles};
 
   for my $index (0 .. $#operations) {
     my $operation = $operations[$index];

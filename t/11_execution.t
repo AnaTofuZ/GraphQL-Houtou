@@ -317,4 +317,45 @@ subtest 'execute list field through xs path' => sub {
   is_deeply $xs, $public, 'list field result matches public facade';
 };
 
+subtest 'xs completion helper fast-path matches pp for simple object case' => sub {
+  require GraphQL::Houtou::XS::Execution;
+  require GraphQL::Houtou::Execution::PP;
+
+  my $ast = parse_with_options('{ user(id: "9") { id name } }', { backend => 'xs' });
+  my $context = GraphQL::Houtou::Execution::PP::_build_context(
+    $schema,
+    $ast,
+    undef,
+    undef,
+    {},
+    undef,
+    undef,
+    undef,
+  );
+  my $node = $context->{operation}{selections}[0];
+  my $info = {
+    parent_type => $schema->query,
+    field_name => 'user',
+  };
+
+  my $pp = GraphQL::Houtou::Execution::PP::_complete_value_catching_error(
+    $context,
+    $User,
+    [ $node ],
+    $info,
+    ['user'],
+    { id => '9', name => 'user:9' },
+  );
+  my $xs = GraphQL::Houtou::XS::Execution::_complete_value_catching_error_xs(
+    $context,
+    $User,
+    [ $node ],
+    $info,
+    ['user'],
+    { id => '9', name => 'user:9' },
+  );
+
+  is_deeply $xs, $pp, 'simple object completion is handled identically';
+};
+
 done_testing;

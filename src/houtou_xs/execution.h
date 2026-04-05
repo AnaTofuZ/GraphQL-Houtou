@@ -4,6 +4,8 @@
  * from PP to C incrementally.
  */
 
+static SV *gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value, SV *path, SV *fields);
+
 static void
 gql_execution_require_pp(pTHX) {
   eval_pv("require GraphQL::Houtou::Execution::PP; 1;", TRUE);
@@ -403,6 +405,35 @@ gql_execution_call_type_to_string(pTHX_ SV *type) {
 }
 
 static SV *
+gql_execution_call_object_is_type_of(pTHX_ SV *type) {
+  dSP;
+  int count;
+  SV *ret;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(type)));
+  PUTBACK;
+
+  count = call_method("is_type_of", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("type->is_type_of did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
+static SV *
 gql_execution_path_with_index(pTHX_ SV *path, IV index) {
   AV *path_copy_av = newAV();
   SV *ret;
@@ -444,6 +475,103 @@ gql_execution_is_leaf_like_type(pTHX_ SV *type) {
 
   SvREFCNT_dec(current);
   return is_leaf;
+}
+
+static SV *
+gql_execution_collect_simple_object_fields(pTHX_ SV *nodes, int *ok) {
+  AV *field_names_av = NULL;
+  HV *nodes_defs_hv = NULL;
+  AV *ret_av = NULL;
+  I32 node_i;
+  I32 node_len;
+
+  *ok = 0;
+  if (!SvROK(nodes) || SvTYPE(SvRV(nodes)) != SVt_PVAV) {
+    return &PL_sv_undef;
+  }
+
+  field_names_av = newAV();
+  nodes_defs_hv = newHV();
+  node_len = av_len((AV *)SvRV(nodes));
+
+  for (node_i = 0; node_i <= node_len; node_i++) {
+    SV **node_svp = av_fetch((AV *)SvRV(nodes), node_i, 0);
+    HV *node_hv;
+    SV **selections_svp;
+    I32 selection_i;
+    I32 selection_len;
+
+    if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) {
+      continue;
+    }
+
+    node_hv = (HV *)SvRV(*node_svp);
+    selections_svp = hv_fetch(node_hv, "selections", 10, 0);
+    if (!selections_svp || !SvROK(*selections_svp) || SvTYPE(SvRV(*selections_svp)) != SVt_PVAV) {
+      continue;
+    }
+
+    selection_len = av_len((AV *)SvRV(*selections_svp));
+    for (selection_i = 0; selection_i <= selection_len; selection_i++) {
+      SV **selection_svp = av_fetch((AV *)SvRV(*selections_svp), selection_i, 0);
+      HV *selection_hv;
+      SV **kind_svp;
+      SV **directives_svp;
+      SV **alias_svp;
+      SV **name_svp;
+      SV *use_name_sv;
+      HE *bucket_he;
+      SV *bucket_sv;
+      AV *bucket_av;
+
+      if (!selection_svp || !SvROK(*selection_svp) || SvTYPE(SvRV(*selection_svp)) != SVt_PVHV) {
+        goto fallback;
+      }
+
+      selection_hv = (HV *)SvRV(*selection_svp);
+      kind_svp = hv_fetch(selection_hv, "kind", 4, 0);
+      if (!kind_svp || !SvOK(*kind_svp) || !sv_eq(*kind_svp, newSVpvs_flags("field", SVs_TEMP))) {
+        goto fallback;
+      }
+
+      directives_svp = hv_fetch(selection_hv, "directives", 10, 0);
+      if (directives_svp && SvROK(*directives_svp) && SvTYPE(SvRV(*directives_svp)) == SVt_PVAV
+          && av_len((AV *)SvRV(*directives_svp)) >= 0) {
+        goto fallback;
+      }
+
+      alias_svp = hv_fetch(selection_hv, "alias", 5, 0);
+      name_svp = hv_fetch(selection_hv, "name", 4, 0);
+      use_name_sv = (alias_svp && SvOK(*alias_svp)) ? *alias_svp : (name_svp ? *name_svp : NULL);
+      if (!use_name_sv || !SvOK(use_name_sv)) {
+        goto fallback;
+      }
+
+      bucket_he = hv_fetch_ent(nodes_defs_hv, use_name_sv, 0, 0);
+      if (!bucket_he) {
+        bucket_av = newAV();
+        (void)hv_store_ent(nodes_defs_hv, newSVsv(use_name_sv), newRV_noinc((SV *)bucket_av), 0);
+        av_push(field_names_av, newSVsv(use_name_sv));
+      } else if ((bucket_sv = HeVAL(bucket_he)) && SvROK(bucket_sv) && SvTYPE(SvRV(bucket_sv)) == SVt_PVAV) {
+        bucket_av = (AV *)SvRV(bucket_sv);
+      } else {
+        goto fallback;
+      }
+
+      av_push(bucket_av, newSVsv(*selection_svp));
+    }
+  }
+
+  ret_av = newAV();
+  av_push(ret_av, newRV_noinc((SV *)field_names_av));
+  av_push(ret_av, newRV_noinc((SV *)nodes_defs_hv));
+  *ok = 1;
+  return newRV_noinc((SV *)ret_av);
+
+fallback:
+  SvREFCNT_dec((SV *)field_names_av);
+  SvREFCNT_dec((SV *)nodes_defs_hv);
+  return &PL_sv_undef;
 }
 
 static SV *
@@ -757,6 +885,26 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
     }
 
     SvREFCNT_dec(item_type);
+    return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
+  }
+
+  if (sv_derived_from(return_type, "GraphQL::Houtou::Type::Object")
+      || sv_derived_from(return_type, "GraphQL::Type::Object")) {
+    SV *is_type_of_sv = gql_execution_call_object_is_type_of(aTHX_ return_type);
+
+    if (!SvOK(is_type_of_sv)) {
+      int ok = 0;
+      SV *subfields = gql_execution_collect_simple_object_fields(aTHX_ nodes, &ok);
+      SvREFCNT_dec(is_type_of_sv);
+      if (ok) {
+        SV *ret = gql_execution_execute_fields(aTHX_ context, return_type, result, path, subfields);
+        SvREFCNT_dec(subfields);
+        return ret;
+      }
+    } else {
+      SvREFCNT_dec(is_type_of_sv);
+    }
+
     return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
   }
 

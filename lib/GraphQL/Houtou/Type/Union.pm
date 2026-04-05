@@ -5,8 +5,8 @@ use strict;
 use warnings;
 
 use Moo;
-use GraphQL::Houtou::Type::Library -all;
-use Types::Standard -all;
+use GraphQL::Houtou::Type::Library qw(UniqueByProperty ArrayRefNonEmpty);
+use Types::Standard qw(ArrayRef Object CodeRef Bool);
 
 extends 'GraphQL::Houtou::Type';
 with qw(

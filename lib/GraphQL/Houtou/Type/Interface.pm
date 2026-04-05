@@ -6,8 +6,7 @@ use warnings;
 
 use Moo;
 use GraphQL::Error;
-use GraphQL::Houtou::Type::Library -all;
-use Types::Standard -all;
+use Types::Standard qw(CodeRef);
 
 extends 'GraphQL::Houtou::Type';
 with qw(

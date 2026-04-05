@@ -5,8 +5,8 @@ use strict;
 use warnings;
 
 use Moo;
-use GraphQL::Houtou::Type::Library -all;
-use Types::Standard -all;
+use GraphQL::Houtou::Type::Library qw(FieldMapInput);
+use Types::Standard qw(ArrayRef Enum);
 
 use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 

@@ -477,8 +477,124 @@ gql_execution_is_leaf_like_type(pTHX_ SV *type) {
   return is_leaf;
 }
 
+static int
+gql_execution_sv_truthy(pTHX_ SV *value) {
+  if (!value || !SvOK(value)) {
+    return 0;
+  }
+  return SvTRUE(value) ? 1 : 0;
+}
+
+static int
+gql_execution_node_should_include_simple(pTHX_ SV *context, SV *node, int *ok) {
+  HV *context_hv;
+  HV *node_hv;
+  SV **directives_svp;
+  HV *variable_values_hv = NULL;
+  I32 directive_i;
+  I32 directive_len;
+  int include_node = 1;
+
+  *ok = 0;
+  if (!SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
+    return 0;
+  }
+  if (!SvROK(node) || SvTYPE(SvRV(node)) != SVt_PVHV) {
+    return 0;
+  }
+
+  context_hv = (HV *)SvRV(context);
+  node_hv = (HV *)SvRV(node);
+  directives_svp = hv_fetch(node_hv, "directives", 10, 0);
+  if (!directives_svp || !SvROK(*directives_svp) || SvTYPE(SvRV(*directives_svp)) != SVt_PVAV) {
+    *ok = 1;
+    return 1;
+  }
+
+  {
+    SV **variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
+    if (variable_values_svp && SvROK(*variable_values_svp) && SvTYPE(SvRV(*variable_values_svp)) == SVt_PVHV) {
+      variable_values_hv = (HV *)SvRV(*variable_values_svp);
+    }
+  }
+
+  directive_len = av_len((AV *)SvRV(*directives_svp));
+  for (directive_i = 0; directive_i <= directive_len; directive_i++) {
+    SV **directive_svp = av_fetch((AV *)SvRV(*directives_svp), directive_i, 0);
+    HV *directive_hv;
+    SV **name_svp;
+    SV **arguments_svp;
+    SV *if_value = NULL;
+    const char *name_pv;
+    STRLEN name_len;
+
+    if (!directive_svp || !SvROK(*directive_svp) || SvTYPE(SvRV(*directive_svp)) != SVt_PVHV) {
+      return 0;
+    }
+
+    directive_hv = (HV *)SvRV(*directive_svp);
+    name_svp = hv_fetch(directive_hv, "name", 4, 0);
+    arguments_svp = hv_fetch(directive_hv, "arguments", 9, 0);
+    if (!name_svp || !SvOK(*name_svp)) {
+      return 0;
+    }
+    if (!arguments_svp || !SvROK(*arguments_svp) || SvTYPE(SvRV(*arguments_svp)) != SVt_PVHV) {
+      return 0;
+    }
+
+    {
+      SV **if_svp = hv_fetch((HV *)SvRV(*arguments_svp), "if", 2, 0);
+      if (!if_svp) {
+        return 0;
+      }
+      if_value = *if_svp;
+    }
+
+    if (SvROK(if_value)) {
+      SV *inner = SvRV(if_value);
+      if (SvROK(inner) || !variable_values_hv) {
+        return 0;
+      }
+      {
+        STRLEN var_len;
+        const char *var_name = SvPV(inner, var_len);
+        SV **var_svp = hv_fetch(variable_values_hv, var_name, (I32)var_len, 0);
+        if (!var_svp || !SvROK(*var_svp) || SvTYPE(SvRV(*var_svp)) != SVt_PVHV) {
+          return 0;
+        }
+        {
+          SV **value_svp = hv_fetch((HV *)SvRV(*var_svp), "value", 5, 0);
+          if (!value_svp) {
+            return 0;
+          }
+          if_value = *value_svp;
+        }
+      }
+    }
+
+    name_pv = SvPV(*name_svp, name_len);
+    if (name_len == 4 && strEQ(name_pv, "skip")) {
+      if (gql_execution_sv_truthy(aTHX_ if_value)) {
+        include_node = 0;
+      }
+      continue;
+    }
+    if (name_len == 7 && strEQ(name_pv, "include")) {
+      if (!gql_execution_sv_truthy(aTHX_ if_value)) {
+        include_node = 0;
+      }
+      continue;
+    }
+
+    return 0;
+  }
+
+  *ok = 1;
+  return include_node;
+}
+
 static SV *
-gql_execution_collect_simple_object_fields(pTHX_ SV *nodes, int *ok) {
+gql_execution_collect_simple_object_fields(pTHX_ SV *context, SV *nodes, int *ok) {
   AV *field_names_av = NULL;
   HV *nodes_defs_hv = NULL;
   AV *ret_av = NULL;
@@ -516,7 +632,6 @@ gql_execution_collect_simple_object_fields(pTHX_ SV *nodes, int *ok) {
       SV **selection_svp = av_fetch((AV *)SvRV(*selections_svp), selection_i, 0);
       HV *selection_hv;
       SV **kind_svp;
-      SV **directives_svp;
       SV **alias_svp;
       SV **name_svp;
       SV *use_name_sv;
@@ -534,10 +649,15 @@ gql_execution_collect_simple_object_fields(pTHX_ SV *nodes, int *ok) {
         goto fallback;
       }
 
-      directives_svp = hv_fetch(selection_hv, "directives", 10, 0);
-      if (directives_svp && SvROK(*directives_svp) && SvTYPE(SvRV(*directives_svp)) == SVt_PVAV
-          && av_len((AV *)SvRV(*directives_svp)) >= 0) {
-        goto fallback;
+      {
+        int include_ok = 0;
+        int should_include = gql_execution_node_should_include_simple(aTHX_ context, *selection_svp, &include_ok);
+        if (!include_ok) {
+          goto fallback;
+        }
+        if (!should_include) {
+          continue;
+        }
       }
 
       alias_svp = hv_fetch(selection_hv, "alias", 5, 0);
@@ -894,7 +1014,7 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
 
     if (!SvOK(is_type_of_sv)) {
       int ok = 0;
-      SV *subfields = gql_execution_collect_simple_object_fields(aTHX_ nodes, &ok);
+      SV *subfields = gql_execution_collect_simple_object_fields(aTHX_ context, nodes, &ok);
       SvREFCNT_dec(is_type_of_sv);
       if (ok) {
         SV *ret = gql_execution_execute_fields(aTHX_ context, return_type, result, path, subfields);

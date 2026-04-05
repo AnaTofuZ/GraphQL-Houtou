@@ -358,4 +358,14 @@ subtest 'xs completion helper fast-path matches pp for simple object case' => su
   is_deeply $xs, $pp, 'simple object completion is handled identically';
 };
 
+subtest 'execute object field with simple directives through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ user(id: "9") { id name @skip(if: false) } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'object field with simple directives matches public facade';
+};
+
 done_testing;

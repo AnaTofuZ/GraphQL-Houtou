@@ -401,6 +401,7 @@ static void gqljs_lazy_state_destroy(gqljs_lazy_state_t *state);
 static void gqljs_attach_magic_state(pTHX_ SV *sv, SV *state_sv);
 static SV *gqljs_new_lazy_arguments_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *arguments);
 static SV *gqljs_new_lazy_directives_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *directives);
+static SV *gqljs_new_lazy_variable_definitions_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *definitions);
 static SV *gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos);
 static SV *gql_ir_make_sv_from_span(pTHX_ gql_ir_document_t *document, gql_ir_span_t span);
 static SV *gql_ir_make_string_value_sv(pTHX_ gql_ir_document_t *document, gql_ir_value_t *value);
@@ -1955,6 +1956,27 @@ gqljs_new_lazy_directives_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *directives)
   XPUSHs(sv_2mortal(newSVuv(PTR2UV(directives))));
   PUTBACK;
   call_pv("GraphQL::Houtou::XS::LazyArray::Directives::_new", G_SCALAR);
+  SPAGAIN;
+  ret_sv = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret_sv;
+}
+
+static SV *
+gqljs_new_lazy_variable_definitions_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *definitions) {
+  dSP;
+  SV *ret_sv;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(state_sv)));
+  XPUSHs(sv_2mortal(newSVuv(PTR2UV(definitions))));
+  PUTBACK;
+  call_pv("GraphQL::Houtou::XS::LazyArray::VariableDefinitions::_new", G_SCALAR);
   SPAGAIN;
   ret_sv = newSVsv(POPs);
   PUTBACK;
@@ -4805,8 +4827,12 @@ gqljs_build_executable_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir
         gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, operation->name_pos);
       }
     }
-    hv_stores(hv, "variableDefinitions",
-      newRV_noinc((SV *)gqljs_build_variable_definitions_from_ir(aTHX_ ctx, document, &operation->variable_definitions, state_sv)));
+    if (state_sv && operation->variable_definitions.count > 0) {
+      hv_stores(hv, "variableDefinitions", gqljs_new_lazy_variable_definitions_sv(aTHX_ state_sv, &operation->variable_definitions));
+    } else {
+      hv_stores(hv, "variableDefinitions",
+        newRV_noinc((SV *)gqljs_build_variable_definitions_from_ir(aTHX_ ctx, document, &operation->variable_definitions, state_sv)));
+    }
     if (state_sv && operation->directives.count > 0) {
       hv_stores(hv, "directives", gqljs_new_lazy_directives_sv(aTHX_ state_sv, &operation->directives));
     } else {
@@ -7094,6 +7120,24 @@ _graphqljs_materialize_directives_xs(state, ptr)
         aTHX_ lazy_state->has_ctx ? &lazy_state->ctx : NULL,
         lazy_state->document,
         directives,
+        state
+      ));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_graphqljs_materialize_variable_definitions_xs(state, ptr)
+    SV *state
+    UV ptr
+  CODE:
+    {
+      gqljs_lazy_state_t *lazy_state = gqljs_lazy_state_from_sv(state);
+      gql_ir_ptr_array_t *definitions = INT2PTR(gql_ir_ptr_array_t *, ptr);
+      RETVAL = newRV_noinc((SV *)gqljs_build_variable_definitions_from_ir(
+        aTHX_ lazy_state->has_ctx ? &lazy_state->ctx : NULL,
+        lazy_state->document,
+        definitions,
         state
       ));
     }

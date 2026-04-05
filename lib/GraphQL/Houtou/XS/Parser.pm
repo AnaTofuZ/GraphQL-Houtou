@@ -313,4 +313,99 @@ sub SPLICE {
   return splice @{ $self->_materialize }, @_;
 }
 
+package GraphQL::Houtou::XS::LazyArray::VariableDefinitions;
+
+use 5.014;
+use strict;
+use warnings;
+
+sub _new {
+  my ($state, $ptr) = @_;
+  my @items;
+  tie @items, __PACKAGE__, $state, $ptr;
+  return \@items;
+}
+
+sub TIEARRAY {
+  my ($class, $state, $ptr) = @_;
+  return bless {
+    state => $state,
+    ptr => $ptr,
+    data => undef,
+  }, $class;
+}
+
+sub _materialize {
+  my ($self) = @_;
+  return $self->{data} if $self->{data};
+  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_variable_definitions_xs(
+    $self->{state},
+    $self->{ptr},
+  );
+  return $self->{data};
+}
+
+sub FETCHSIZE {
+  my ($self) = @_;
+  return scalar @{ $self->_materialize };
+}
+
+sub STORESIZE {
+  my ($self, $count) = @_;
+  $#{ $self->_materialize } = $count - 1;
+  return;
+}
+
+sub FETCH {
+  my ($self, $index) = @_;
+  return $self->_materialize->[$index];
+}
+
+sub STORE {
+  my ($self, $index, $value) = @_;
+  $self->_materialize->[$index] = $value;
+  return $value;
+}
+
+sub CLEAR {
+  my ($self) = @_;
+  @{ $self->_materialize } = ();
+  return;
+}
+
+sub PUSH {
+  my ($self, @values) = @_;
+  return push @{ $self->_materialize }, @values;
+}
+
+sub POP {
+  my ($self) = @_;
+  return pop @{ $self->_materialize };
+}
+
+sub SHIFT {
+  my ($self) = @_;
+  return shift @{ $self->_materialize };
+}
+
+sub UNSHIFT {
+  my ($self, @values) = @_;
+  return unshift @{ $self->_materialize }, @values;
+}
+
+sub EXISTS {
+  my ($self, $index) = @_;
+  return exists $self->_materialize->[$index];
+}
+
+sub DELETE {
+  my ($self, $index) = @_;
+  return delete $self->_materialize->[$index];
+}
+
+sub SPLICE {
+  my $self = shift;
+  return splice @{ $self->_materialize }, @_;
+}
+
 1;

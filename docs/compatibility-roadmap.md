@@ -15,6 +15,10 @@
 公開 API、型定義 API、schema 構築、execution、subscription、
 introspection、error 形式まで含む。
 
+関連する進捗メモ:
+
+- `docs/validation-status.md`
+
 ## 前提
 
 `GraphQL::Houtou` の現状の中心は parser と AST adapter である。
@@ -108,6 +112,13 @@ validator を実装する必要がある。
 
 validator は public API としても重要だが、
 execution を安全に XS 化するための前提にもなる。
+
+現状メモ:
+
+- public facade と XS entrypoint は追加済み
+- 一部 rule は XS へ移行済み
+- 残り rule の XS 化は当面の優先度を下げている
+- 詳細は `docs/validation-status.md`
 
 ### 3. execution engine
 

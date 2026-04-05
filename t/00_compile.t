@@ -16,6 +16,7 @@ use_ok $_ for qw(
     GraphQL::Houtou::Schema::Compiler::PP
     GraphQL::Houtou::Schema
     GraphQL::Houtou::Directive
+    GraphQL::Houtou::Introspection
     GraphQL::Houtou::Role::Input
     GraphQL::Houtou::Role::Output
     GraphQL::Houtou::Role::Composite

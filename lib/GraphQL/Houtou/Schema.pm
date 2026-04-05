@@ -11,7 +11,7 @@ use Types::Standard qw(HashRef Object ArrayRef);
 use GraphQL::Houtou::Directive ();
 use GraphQL::Houtou::Type::Library qw(StrNameValid);
 use GraphQL::Houtou::Type::Scalar qw($Int $Float $String $Boolean $ID);
-use GraphQL::Introspection qw($SCHEMA_META_TYPE);
+use GraphQL::Houtou::Introspection qw($SCHEMA_META_TYPE);
 
 our @EXPORT_OK = qw(lookup_type);
 

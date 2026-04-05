@@ -146,6 +146,71 @@ gql_execution_call_pp_complete_value_catching_error(pTHX_ SV *context, SV *retur
 }
 
 static SV *
+gql_execution_call_resolver(pTHX_ SV *resolve, SV *root_value, SV *args, SV *context_value, SV *info) {
+  dSP;
+  int count;
+  SV *ret;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(root_value ? root_value : &PL_sv_undef)));
+  XPUSHs(sv_2mortal(newSVsv(args)));
+  XPUSHs(sv_2mortal(newSVsv(context_value ? context_value : &PL_sv_undef)));
+  XPUSHs(sv_2mortal(newSVsv(info)));
+  PUTBACK;
+
+  count = call_sv(resolve, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("resolver did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
+static SV *
+gql_execution_call_pp_get_argument_values(pTHX_ SV *def, SV *node, SV *variable_values) {
+  dSP;
+  int count;
+  SV *ret;
+
+  gql_execution_require_pp(aTHX);
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(def)));
+  XPUSHs(sv_2mortal(newSVsv(node)));
+  XPUSHs(sv_2mortal(variable_values ? newSVsv(variable_values) : newSV(0)));
+  PUTBACK;
+
+  count = call_pv("GraphQL::Houtou::Execution::PP::_get_argument_values", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("GraphQL::Houtou::Execution::PP::_get_argument_values did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
+static SV *
 gql_execution_coerce_ast(pTHX_ SV *document) {
   if (SvROK(document)) {
     return newSVsv(document);
@@ -660,6 +725,9 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     SV *info_sv;
     SV *result_sv;
     SV *completed_sv;
+    SV *args_sv;
+    SV **context_value_svp;
+    SV **variable_values_svp;
     SV **type_svp;
 
     if (!result_name_svp || !SvOK(*result_name_svp)) {
@@ -728,12 +796,18 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     path_copy_sv = newRV_noinc((SV *)path_copy_av);
 
     info_sv = gql_execution_build_resolve_info(aTHX_ context, parent_type, field_def_sv, path_copy_sv, nodes_sv);
-    result_sv = gql_execution_call_pp_resolve_field_value_or_error(
-      aTHX_ context,
-      field_def_sv,
-      nodes_sv,
-      resolve_sv,
+    context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
+    variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
+    args_sv = gql_execution_call_pp_get_argument_values(
+      aTHX_ field_def_sv,
+      *field_node_svp,
+      (variable_values_svp && SvOK(*variable_values_svp)) ? *variable_values_svp : &PL_sv_undef
+    );
+    result_sv = gql_execution_call_resolver(
+      aTHX_ resolve_sv,
       root_value,
+      args_sv,
+      (context_value_svp && SvOK(*context_value_svp)) ? *context_value_svp : &PL_sv_undef,
       info_sv
     );
     type_svp = hv_fetch(field_def_hv, "type", 4, 0);
@@ -759,6 +833,7 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     av_push(values_av, completed_sv);
 
     SvREFCNT_dec(info_sv);
+    SvREFCNT_dec(args_sv);
     SvREFCNT_dec(result_sv);
     SvREFCNT_dec(resolve_sv);
     SvREFCNT_dec(path_copy_sv);

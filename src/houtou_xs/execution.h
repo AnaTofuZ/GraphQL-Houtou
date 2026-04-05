@@ -7,6 +7,7 @@
 static SV *gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value, SV *path, SV *fields);
 static SV *gql_execution_collect_fields_xs(pTHX_ SV *context, SV *object_type, SV *selections);
 static SV *gql_execution_call_graphql_error_but(pTHX_ SV *error, SV *locations, SV *path);
+static SV *gql_execution_call_type_to_string(pTHX_ SV *type);
 
 typedef struct {
   UV variables_apply_defaults_calls;
@@ -2272,7 +2273,11 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
   }
 
   if (sv_does(return_type, "GraphQL::Houtou::Role::Leaf")
-      || sv_does(return_type, "GraphQL::Role::Leaf")) {
+      || sv_does(return_type, "GraphQL::Role::Leaf")
+      || sv_derived_from(return_type, "GraphQL::Houtou::Type::Scalar")
+      || sv_derived_from(return_type, "GraphQL::Type::Scalar")
+      || sv_derived_from(return_type, "GraphQL::Houtou::Type::Enum")
+      || sv_derived_from(return_type, "GraphQL::Type::Enum")) {
     int ok = 0;
     SV *serialized = gql_execution_call_type_perl_to_graphql(aTHX_ return_type, result, &ok);
 

@@ -13,38 +13,56 @@ use GraphQL::Houtou::Schema::Compiler qw(compile_schema);
 
 our @EXPORT_OK = qw(
   validate
+  validate_prepared
 );
 
 sub validate {
   my ($schema, $document, $options) = @_;
   $options ||= {};
 
-  my $ast = ref $document
-    ? $document
-    : parse_with_options($document, {
-        backend => 'xs',
-        no_location => $options->{no_location} ? 1 : 0,
-      });
-
+  my $ast = _coerce_ast($document, $options);
   my $compiled = compile_schema($schema);
+  return validate_prepared($schema, $ast, $compiled, $options);
+}
+
+sub validate_prepared {
+  my ($schema, $ast, $compiled, $options) = @_;
+  $options ||= {};
+
   my @errors;
   my @operations = grep { $_->{kind} && $_->{kind} eq 'operation' } @$ast;
   my %fragments = map { ($_->{name} => $_) } grep { $_->{kind} && $_->{kind} eq 'fragment' } @$ast;
 
-  if (!@operations) {
+  if (!@operations && !$options->{skip_no_operations}) {
     push @errors, _error('No operations supplied.');
   }
 
-  _validate_operation_names(\@errors, \@operations);
-  _validate_lone_anonymous_operation(\@errors, \@operations);
+  push @errors, @{ $options->{seed_errors} || [] };
+
+  _validate_operation_names(\@errors, \@operations)
+    if !$options->{skip_operation_name_uniqueness};
+  _validate_lone_anonymous_operation(\@errors, \@operations)
+    if !$options->{skip_lone_anonymous_operation};
   _validate_fragments(\@errors, $compiled, \%fragments);
   _validate_fragment_cycles(\@errors, \%fragments);
 
-  for my $operation (@operations) {
-    _validate_operation(\@errors, $schema, $compiled, $operation, \%fragments);
+  for my $index (0 .. $#operations) {
+    my $operation = $operations[$index];
+    push @errors, @{ $options->{seed_operation_errors}[$index] || [] };
+    _validate_operation(\@errors, $schema, $compiled, $operation, \%fragments, $options);
   }
 
   return \@errors;
+}
+
+sub _coerce_ast {
+  my ($document, $options) = @_;
+  return $document if ref $document;
+
+  return parse_with_options($document, {
+    backend => 'xs',
+    no_location => $options->{no_location} ? 1 : 0,
+  });
 }
 
 sub _validate_operation_names {
@@ -75,7 +93,7 @@ sub _validate_lone_anonymous_operation {
 }
 
 sub _validate_operation {
-  my ($errors, $schema, $compiled, $operation, $fragments) = @_;
+  my ($errors, $schema, $compiled, $operation, $fragments, $options) = @_;
   my $operation_type = $operation->{operationType} || 'query';
   my $root_type_name = $compiled->{roots}{$operation_type};
   my $variables = $operation->{variables} || {};
@@ -97,7 +115,7 @@ sub _validate_operation {
     $variables,
   );
   _validate_subscription_operation($errors, $operation, $fragments)
-    if $operation_type eq 'subscription';
+    if $operation_type eq 'subscription' && !$options->{skip_subscription_single_root_field};
   _validate_selections(
     $errors,
     $schema,

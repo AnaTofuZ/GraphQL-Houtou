@@ -98,6 +98,24 @@ subtest 'XS validation entrypoint matches facade behavior' => sub {
 
   is_deeply validate_xs($schema, $source), validate($schema, $source),
     'XS path currently matches the public facade';
+
+  $source = q|
+    query Q { viewer { id } }
+    query Q { viewer { name } }
+  |;
+
+  is_deeply validate_xs($schema, $source), validate($schema, $source),
+    'XS path matches duplicate-operation validation too';
+
+  $source = q|
+    subscription S {
+      importantUser { id }
+      otherUser { id }
+    }
+  |;
+
+  is_deeply validate_xs($schema, $source), validate($schema, $source),
+    'XS path matches subscription root-field validation too';
 };
 
 subtest 'valid query passes' => sub {

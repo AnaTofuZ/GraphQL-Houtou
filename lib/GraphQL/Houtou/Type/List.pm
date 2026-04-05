@@ -29,10 +29,12 @@ has of => (
 sub BUILD {
   my ($self) = @_;
   my $of = $self->of;
-  Role::Tiny->apply_roles_to_object($self, grep $of->DOES($_), qw(
-    GraphQL::Role::Input
-    GraphQL::Role::Output
-  ));
+  my @roles;
+  push @roles, 'GraphQL::Houtou::Role::Input'
+    if $of->DOES('GraphQL::Houtou::Role::Input') || $of->DOES('GraphQL::Role::Input');
+  push @roles, 'GraphQL::Houtou::Role::Output'
+    if $of->DOES('GraphQL::Houtou::Role::Output') || $of->DOES('GraphQL::Role::Output');
+  Role::Tiny->apply_roles_to_object($self, @roles) if @roles;
 }
 
 has to_string => (

@@ -32,6 +32,10 @@ use JSON::MaybeXS;
 
 our $VERSION = '0.01';
 my $JSON = JSON::MaybeXS->new->allow_nonref;
+my $InputTypeConsumer = ConsumerOf['GraphQL::Houtou::Role::Input']
+  | ConsumerOf['GraphQL::Role::Input'];
+my $OutputTypeConsumer = ConsumerOf['GraphQL::Houtou::Role::Output']
+  | ConsumerOf['GraphQL::Role::Output'];
 
 declare "StrNameValid", as StrMatch[ qr/^[_a-zA-Z][_a-zA-Z0-9]*$/ ];
 
@@ -39,7 +43,7 @@ declare "ValuesMatchTypes",
   constraint_generator => sub {
     my ($value_key, $type_key) = @_;
     declare as HashRef[Dict[
-      $type_key => ConsumerOf['GraphQL::Role::Input'],
+      $type_key => $InputTypeConsumer,
       slurpy Any,
     ]], where {
       !grep {
@@ -62,7 +66,7 @@ declare "FieldsGot", as Tuple[
 declare "FieldMapInput", as Map[
   StrNameValid,
   Dict[
-    type => ConsumerOf['GraphQL::Role::Input'],
+    type => $InputTypeConsumer,
     default_value => Optional[Any],
     directives => Optional[ArrayRef[HashRef]],
     description => Optional[Str],
@@ -72,7 +76,7 @@ declare "FieldMapInput", as Map[
 declare "FieldMapOutput", as Map[
   StrNameValid,
   Dict[
-    type => ConsumerOf['GraphQL::Role::Output'],
+    type => $OutputTypeConsumer,
     args => Optional[FieldMapInput],
     resolve => Optional[CodeRef],
     subscribe => Optional[CodeRef],

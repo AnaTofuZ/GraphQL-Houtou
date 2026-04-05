@@ -16,6 +16,17 @@ use_ok $_ for qw(
     GraphQL::Houtou::Schema::Compiler::PP
     GraphQL::Houtou::Schema
     GraphQL::Houtou::Directive
+    GraphQL::Houtou::Role::Input
+    GraphQL::Houtou::Role::Output
+    GraphQL::Houtou::Role::Composite
+    GraphQL::Houtou::Role::Abstract
+    GraphQL::Houtou::Role::Leaf
+    GraphQL::Houtou::Role::Named
+    GraphQL::Houtou::Role::FieldsEither
+    GraphQL::Houtou::Role::FieldsInput
+    GraphQL::Houtou::Role::FieldsOutput
+    GraphQL::Houtou::Role::FieldDeprecation
+    GraphQL::Houtou::Role::HashMappable
     GraphQL::Houtou::Type
     GraphQL::Houtou::Type::Object
     GraphQL::Houtou::Type::Interface

@@ -10,10 +10,10 @@ use Types::Standard -all;
 
 extends 'GraphQL::Houtou::Type';
 with qw(
-  GraphQL::Role::Output
-  GraphQL::Role::Composite
-  GraphQL::Role::Abstract
-  GraphQL::Role::Named
+  GraphQL::Houtou::Role::Output
+  GraphQL::Houtou::Role::Composite
+  GraphQL::Houtou::Role::Abstract
+  GraphQL::Houtou::Role::Named
 );
 
 sub list {

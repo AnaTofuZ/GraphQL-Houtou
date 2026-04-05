@@ -12,11 +12,11 @@ use Types::Standard -all;
 
 extends 'GraphQL::Houtou::Type';
 with qw(
-  GraphQL::Role::Input
-  GraphQL::Role::Output
-  GraphQL::Role::Leaf
-  GraphQL::Role::Named
-  GraphQL::Role::FieldsEither
+  GraphQL::Houtou::Role::Input
+  GraphQL::Houtou::Role::Output
+  GraphQL::Houtou::Role::Leaf
+  GraphQL::Houtou::Role::Named
+  GraphQL::Houtou::Role::FieldsEither
 );
 
 our @EXPORT_OK = qw($Int $Float $String $Boolean $ID);

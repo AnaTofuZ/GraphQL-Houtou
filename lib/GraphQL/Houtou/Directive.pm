@@ -5,10 +5,70 @@ use strict;
 use warnings;
 
 use Moo;
+use GraphQL::Houtou::Type::Library -all;
+use Types::Standard -all;
 
 use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 
-extends 'GraphQL::Directive';
+with qw(
+  GraphQL::Houtou::Role::Named
+  GraphQL::Houtou::Role::FieldsEither
+);
+
+use constant DEBUG => $ENV{GRAPHQL_DEBUG};
+
+my @LOCATIONS = qw(
+  QUERY
+  MUTATION
+  SUBSCRIPTION
+  FIELD
+  FRAGMENT_DEFINITION
+  FRAGMENT_SPREAD
+  INLINE_FRAGMENT
+  SCHEMA
+  SCALAR
+  OBJECT
+  FIELD_DEFINITION
+  ARGUMENT_DEFINITION
+  INTERFACE
+  UNION
+  ENUM
+  ENUM_VALUE
+  INPUT_OBJECT
+  INPUT_FIELD_DEFINITION
+);
+
+has locations => (is => 'ro', isa => ArrayRef[Enum[@LOCATIONS]], required => 1);
+has args => (is => 'ro', isa => FieldMapInput, default => sub { {} });
+
+has to_doc => (
+  is => 'lazy',
+  builder => sub {
+    my ($self) = @_;
+    my @start = (
+      $self->_description_doc_lines($self->description),
+      "directive \@@{[$self->name]}(",
+    );
+    my @argtuples = $self->_make_fieldtuples($self->args);
+    my $end = ") on " . join(' | ', @{ $self->locations });
+    return join("\n", @start) . join(', ', map $_->[0], @argtuples) . $end . "\n"
+      if !grep $_->[1], @argtuples;
+    return join '', map "$_\n",
+      @start,
+      (map {
+        my ($main, @description) = @$_;
+        (map length() ? "  $_" : "", @description, $main)
+      } @argtuples),
+      $end;
+  },
+);
+
+sub _get_directive_values {
+  my ($self, $node, $variables) = @_;
+  my ($d) = grep $_->{name} eq $self->name, @{ $node->{directives} || [] };
+  return if !$d;
+  return GraphQL::Execution::_get_argument_values($self, $d, $variables);
+}
 
 our $DEPRECATED = __PACKAGE__->new(
   name => 'deprecated',

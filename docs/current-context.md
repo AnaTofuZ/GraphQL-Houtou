@@ -1,168 +1,146 @@
 # Current Context
 
-Last updated: 2026-04-03
+Last updated: 2026-04-05
 
 This file is a handoff note for continuing work in `GraphQL-Houtou`.
-It records the current parser state, how to run verification, how to run
-benchmarks, how to generate NYTProf output, and what remains to be done next.
+It now covers the current parser status, the Houtou-owned schema/type
+migration, the PP/XS facade layout, and the next migration steps before
+moving deeper into XS-backed validation and execution.
 
 ## Current State
 
-- `graphql-js` parser runtime path is XS-only.
+- `graphql-js` parser runtime is XS-first and keeps `loc` resolution in XS.
 - executable `graphql-js` parsing is `source -> IR -> graphql-js AST`.
-- executable `loc` is assigned during XS build, not by a separate traversal.
-- executable IR nodes are arena-allocated.
-- legacy `graphql-perl` XS parser now honors `no_location`.
-- XS string decoding now handles `\\uXXXX` and surrogate pairs.
-- parser `line_starts` cleanup now survives `croak`/unwind by using save-stack cleanup.
+- executable `graphql-js` AST building now lazily materializes:
+  - `arguments`
+  - `directives`
+  - `variableDefinitions`
+  - object fields
+- lazy array materialization has an XS fast path and an explicit Perl/XS
+  contract guarded by tests.
+- parser/lazy-state safety fixes are in place:
+  - source buffer lifetime is retained by lazy state
+  - temporary parser SV leaks identified in review were fixed
+- XS implementation has been split into `src/houtou_xs/*.h` fragments and
+  `minil.toml` now points `c_source` at `src`.
+- schema compilation now has a public facade with:
+  - XS-preferred path
+  - PP fallback path
+- validation now has a public facade with:
+  - XS-preferred path
+  - PP fallback path
+- Houtou-owned public type classes now exist for:
+  - `Type`
+  - `Type::List`
+  - `Type::NonNull`
+  - `Type::Scalar`
+  - `Type::Enum`
+  - `Type::InputObject`
+  - `Type::Object`
+  - `Type::Interface`
+  - `Type::Union`
+- Houtou-owned public schema/directive classes now exist:
+  - `GraphQL::Houtou::Schema`
+  - `GraphQL::Houtou::Directive`
+- `GraphQL::Houtou::Type::Library` is now Houtou-owned instead of wrapping
+  upstream `GraphQL::Type::Library`.
 
 ## Recent Commits
 
-- `dca58ee` `Fix XS Unicode string escapes`
-- `2bb9b80` `Fix parser line_starts cleanup on croak`
-- `51693a4` `Unescape GraphQL strings in XS`
-- `6832f7f` `Speed up XS location lookup`
-- `93b5dd0` `Thin graphql-js canonical wrapper`
-- `62f4010` `Fix multi-line graphql-js loc mapping`
+- `1812f6b` `Split XS sources into src fragments`
+- `02f2b67` `Add initial schema compiler`
+- `d4656f0` `Split schema compiler into XS and PP paths`
+- `d3df5fa` `Add initial validation facade and rules`
+- `1f77e36` `Extend validation for subscriptions and fragments`
+- `b85b776` `Add Houtou-owned GraphQL type wrappers`
+- `70b94cb` `Move type library into Houtou namespace`
+- `791b6c8` `Implement Houtou list, non-null, and scalar types`
+- `b061db1` `Implement Houtou enum and input object types`
+- `89547bd` `Implement Houtou object, interface, and union types`
 
-## Local Environment
+## Dirty Worktree At Save Time
 
-Perl used during current verification:
+The following migration work was present but not yet committed when this
+context file was updated:
 
-```sh
-/Users/anatofuz/.local/share/mise/installs/perl/5.42.0.0/perl-darwin-arm64/bin/perl
-```
-
-Working repository:
-
-```sh
-/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou
-```
-
-`PERL5LIB` used for local build/test/benchmark:
-
-```sh
-/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/local/lib/perl5:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/local/lib/perl5/darwin-2level:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/blib/lib:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/blib/arch
-```
+- `GraphQL::Houtou::Directive` converted from upstream subclass to standalone
+  Houtou implementation
+- `GraphQL::Houtou::Schema` converted from upstream subclass to standalone
+  Houtou implementation
+- PP/XS schema compiler updated to accept both upstream and Houtou schema
+  objects during transition
+- schema compiler tests updated to assert that Houtou schema/directive objects
+  no longer use upstream classes
 
 ## Build And Test
 
 Build:
 
 ```sh
-env PERL5LIB=/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/local/lib/perl5:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/local/lib/perl5/darwin-2level:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/blib/lib:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/blib/arch \
-  ./Build build
+./Build build
 ```
 
 Full test:
 
 ```sh
-env PERL5LIB=/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/local/lib/perl5:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/local/lib/perl5/darwin-2level:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/blib/lib:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/blib/arch \
-  ./Build test
+env PERL5LIB=/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/lib:/Users/anatofuz/src/github.com/graphql-perl/graphql-perl/lib:/Users/anatofuz/src/github.com/graphql-perl/graphql-perl/local/lib/perl5:/Users/anatofuz/src/github.com/graphql-perl/graphql-perl/local/lib/perl5/darwin-2level ./Build test
 ```
 
 Current result:
 
-- `7 files / 74 tests / PASS`
+- `9 files / 116 tests / PASS`
 
-## Benchmark
+## Current Validation Coverage
 
-Current benchmark command:
+The PP validator currently checks:
 
-```sh
-env PERL5LIB=/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/local/lib/perl5:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/local/lib/perl5/darwin-2level:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/blib/lib:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/blib/arch \
-  /Users/anatofuz/.local/share/mise/installs/perl/5.42.0.0/perl-darwin-arm64/bin/perl \
-  util/parser-benchmark.pl --count=-5
-```
+- operation name uniqueness
+- lone anonymous operation
+- root operation type existence
+- variable definitions use input types
+- undefined variable use
+- field existence
+- unknown and missing required arguments
+- fragment target existence
+- fragment cycle detection
+- directive existence, location, and uniqueness
+- subscription single root field
+- fragment spread type compatibility
+- inline fragment type compatibility
 
-Current `t/kitchen-sink.graphql` result:
+## Remaining Upstream GraphQL Dependencies
 
-```text
-                             Rate graphql_perl_pegex graphql_perl_canonical_xs graphql_js_xs graphql_js_xs_noloc graphql_perl_xs
-graphql_perl_pegex          485/s                 --                      -96%          -98%                -99%            -99%
-graphql_perl_canonical_xs 13524/s              2687%                        --          -41%                -61%            -76%
-graphql_js_xs             22756/s              4590%                       68%            --                -35%            -60%
-graphql_js_xs_noloc       35076/s              7129%                      159%           54%                  --            -38%
-graphql_perl_xs           56879/s             11623%                      321%          150%                 62%              --
-```
+The largest remaining upstream dependency in Houtou public types is the role
+layer. Houtou classes still consume upstream roles such as:
 
-Interpretation:
+- `GraphQL::Role::Input`
+- `GraphQL::Role::Output`
+- `GraphQL::Role::Composite`
+- `GraphQL::Role::Leaf`
+- `GraphQL::Role::Abstract`
+- `GraphQL::Role::Named`
+- `GraphQL::Role::FieldsEither`
+- `GraphQL::Role::FieldsInput`
+- `GraphQL::Role::FieldsOutput`
+- `GraphQL::Role::FieldDeprecation`
+- `GraphQL::Role::HashMappable`
 
-- `graphql-perl + xs` is still the fastest path.
-- `graphql-js + xs` is now much faster than `canonical-xs`, but `loc` is still a major cost.
-- `graphql-js + xs + no_location` shows the remaining non-`loc` cost floor.
-
-## NYTProf
-
-### Raw profile collection
-
-Example for `graphql-perl + xs`:
-
-```sh
-env PERL5LIB=/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/local/lib/perl5:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/local/lib/perl5/darwin-2level:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/blib/lib:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/blib/arch \
-  NYTPROF=file=/tmp/graphql-houtou-nytprof-xs.out \
-  /Users/anatofuz/.local/share/mise/installs/perl/5.42.0.0/perl-darwin-arm64/bin/perl \
-  -d:NYTProf util/profile-parser.pl \
-  --dialect graphql-perl --backend xs --file t/kitchen-sink.graphql --iterations 300
-```
-
-Example for `graphql-js + xs`:
-
-```sh
-env PERL5LIB=/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/local/lib/perl5:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/local/lib/perl5/darwin-2level:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/blib/lib:/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/blib/arch \
-  NYTPROF=file=/tmp/graphql-houtou-nytprof-graphql-js-xs.out \
-  /Users/anatofuz/.local/share/mise/installs/perl/5.42.0.0/perl-darwin-arm64/bin/perl \
-  -d:NYTProf util/profile-parser.pl \
-  --dialect graphql-js --backend xs --file t/kitchen-sink.graphql --iterations 300
-```
-
-### HTML and flame graph generation
-
-`graphql-perl + xs`:
-
-```sh
-nytprofhtml --file=/tmp/graphql-houtou-nytprof-xs.out --out=/tmp/graphql-houtou-nytprof-xs
-```
-
-`graphql-js + xs`:
-
-```sh
-nytprofhtml --file=/tmp/graphql-houtou-nytprof-graphql-js-xs.out --out=/tmp/graphql-houtou-nytprof-graphql-js-xs
-```
-
-Artifacts:
-
-- HTML entry: `/tmp/.../index.html`
-- flame graph: `/tmp/.../all_stacks_by_time.svg`
-
-Previously used output locations:
-
-- `/tmp/graphql-houtou-nytprof-pegex`
-- `/tmp/graphql-houtou-nytprof-xs`
-- `/tmp/graphql-houtou-nytprof-canonical-xs`
-- `/tmp/graphql-houtou-nytprof-graphql-js-xs`
-
-## Recent Work Log
-
-- removed redundant directive `loc` rebasing in canonical processing
-- thinned the Perl wrapper around the graphql-js canonical XS entrypoint
-- made executable graphql-js parsing IR-first
-- moved executable `loc` assignment into the XS build path
-- added chunk arena allocation for executable IR nodes
-- added `\\uXXXX` and surrogate pair decoding in XS string unescape
-- fixed `line_starts` cleanup so parser-owned line tables are freed on `croak`
+Related runtime checks still inspect upstream role names via `DOES(...)` and
+Type::Tiny `ConsumerOf[...]` constraints.
 
 ## Next Work
 
 Priority order at this point:
 
-1. extend `canonical-xs -> graphql-perl` parity, especially `location` semantics
-2. re-profile `graphql-js + xs` and continue reducing `loc` overhead
-3. decide how much of upstream `GraphQL` parser dependency should remain
-4. refresh README / POD / release metadata for standalone distribution quality
+1. migrate `GraphQL::Role::*` usage into `GraphQL::Houtou::Role::*`
+2. update Houtou type/schema/compiler/validator code to depend on Houtou roles
+3. add tests that lock the Houtou role contract in place
+4. only after the role migration stabilizes, begin XS validation work
+5. after validation, move toward execution/subscription compatibility work
 
 ## Notes
 
-- keep using raw `require`; do not switch these call sites to `Module::Load`
-- tests and benchmarks assume local dependencies under `GraphQL-Houtou/local`
-- always rebuild before running tests or benchmarks after XS changes
+- keep parser/runtime verification using `./Build build` and `./Build test`
+- use PP implementations as behavior oracles before moving hot paths to XS
+- preserve compatibility with upstream `GraphQL` inputs during transition,
+  but keep the public Houtou namespace authoritative

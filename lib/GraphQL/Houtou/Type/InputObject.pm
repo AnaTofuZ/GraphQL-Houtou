@@ -10,11 +10,11 @@ use Types::Standard -all;
 
 extends 'GraphQL::Houtou::Type';
 with qw(
-  GraphQL::Role::Input
-  GraphQL::Role::Named
-  GraphQL::Role::FieldsInput
-  GraphQL::Role::HashMappable
-  GraphQL::Role::FieldsEither
+  GraphQL::Houtou::Role::Input
+  GraphQL::Houtou::Role::Named
+  GraphQL::Houtou::Role::FieldsInput
+  GraphQL::Houtou::Role::HashMappable
+  GraphQL::Houtou::Role::FieldsEither
 );
 
 sub list {

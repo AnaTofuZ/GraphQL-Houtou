@@ -6,46 +6,63 @@ use warnings;
 
 use Exporter 'import';
 use Moo;
-use Types::Standard qw(HashRef Object);
+use Types::Standard qw(HashRef Object ArrayRef);
 
 use GraphQL::Houtou::Directive ();
+use GraphQL::Houtou::Type::Library qw(StrNameValid);
 use GraphQL::Houtou::Type::Scalar qw($Int $Float $String $Boolean $ID);
 use GraphQL::Introspection qw($SCHEMA_META_TYPE);
 
-extends 'GraphQL::Schema';
-
 our @EXPORT_OK = qw(lookup_type);
 
-has '+query' => (
+has query => (
+  is => 'ro',
   isa => Object,
   required => 1,
 );
 
-has '+mutation' => (
+has mutation => (
+  is => 'ro',
   isa => Object,
 );
 
-has '+subscription' => (
+has subscription => (
+  is => 'ro',
   isa => Object,
 );
 
-has '+types' => (
+has types => (
+  is => 'ro',
+  isa => ArrayRef,
   default => sub { [ $Int, $Float, $String, $Boolean, $ID ] },
 );
 
-has '+directives' => (
+has directives => (
+  is => 'ro',
+  isa => ArrayRef,
   default => sub { \@GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES },
 );
 
-has '+name2type' => (
-  lazy => 1,
-  builder => '_build_name2type',
+has name2type => (
+  is => 'lazy',
+  isa => HashRef,
 );
 
-has '+_interface2types' => (
-  lazy => 1,
+has name2directive => (
+  is => 'lazy',
+  isa => HashRef,
+  builder => '_build_name2directive',
+);
+
+has _interface2types => (
+  is => 'lazy',
   isa => HashRef,
   builder => '_build__interface2types',
+);
+
+has _possible_type_map => (
+  is => 'rw',
+  isa => HashRef,
 );
 
 sub _build_name2type {
@@ -56,6 +73,17 @@ sub _build_name2type {
   my %name2type;
   _expand_type_houtou(\%name2type, $_) for @types;
   return \%name2type;
+}
+
+sub _does_any_role {
+  my ($type, @roles) = @_;
+  return if !$type || !$type->can('DOES');
+  return !!grep { $type->DOES($_) } @roles;
+}
+
+sub _build_name2directive {
+  my ($self) = @_;
+  return +{ map { ($_->name => $_) } @{ $self->directives || [] } };
 }
 
 sub _build__interface2types {
@@ -121,7 +149,12 @@ sub _expand_type_houtou {
     if $type->isa('GraphQL::Type::Object') || $type->isa('GraphQL::Houtou::Type::Object');
   push @types, ($type, map @{ _expand_type_houtou($map, $_) }, @{ $type->get_types })
     if $type->isa('GraphQL::Type::Union') || $type->isa('GraphQL::Houtou::Type::Union');
-  if (grep $type->DOES($_), qw(GraphQL::Role::FieldsInput GraphQL::Role::FieldsOutput)) {
+  if (_does_any_role($type, qw(
+    GraphQL::Houtou::Role::FieldsInput
+    GraphQL::Houtou::Role::FieldsOutput
+    GraphQL::Role::FieldsInput
+    GraphQL::Role::FieldsOutput
+  ))) {
     my $fields = $type->fields || {};
     push @types, map {
       map @{ _expand_type_houtou($map, $_->{type}) }, $_, values %{ $_->{args} || {} }

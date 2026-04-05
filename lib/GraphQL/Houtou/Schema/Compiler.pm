@@ -16,8 +16,9 @@ my $HAS_XS;
 sub compile_schema {
   my ($schema) = @_;
 
-  die "compile_schema expects a GraphQL::Schema instance\n"
-    if !blessed($schema) || !$schema->isa('GraphQL::Schema');
+  die "compile_schema expects a GraphQL::Houtou::Schema or GraphQL::Schema instance\n"
+    if !blessed($schema)
+    || (!$schema->isa('GraphQL::Houtou::Schema') && !$schema->isa('GraphQL::Schema'));
 
   if (!defined $HAS_XS) {
     $HAS_XS = eval {

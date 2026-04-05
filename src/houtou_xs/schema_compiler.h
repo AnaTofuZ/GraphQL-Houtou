@@ -83,6 +83,19 @@ gql_schema_does_role(pTHX_ SV *obj, const char *role) {
   return truth;
 }
 
+static int
+gql_schema_does_any_role(pTHX_ SV *obj, const char **roles, Size_t count) {
+  Size_t i;
+
+  for (i = 0; i < count; i++) {
+    if (gql_schema_does_role(aTHX_ obj, roles[i])) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
 static SV *
 gql_schema_clone_hashref_shallow(pTHX_ SV *hashref_sv) {
   HV *src_hv;
@@ -571,6 +584,18 @@ gql_schema_compile_named_type(pTHX_ SV *type_sv) {
   HV *compiled_hv = newHV();
   const char *kind = gql_schema_named_type_kind(type_sv);
   SV *fields_sv;
+  static const char *input_roles[] = {
+    "GraphQL::Houtou::Role::Input",
+    "GraphQL::Role::Input",
+  };
+  static const char *output_roles[] = {
+    "GraphQL::Houtou::Role::Output",
+    "GraphQL::Role::Output",
+  };
+  static const char *abstract_roles[] = {
+    "GraphQL::Houtou::Role::Abstract",
+    "GraphQL::Role::Abstract",
+  };
 
   hv_ksplit(compiled_hv, 12);
   gql_store_sv(compiled_hv, "kind", newSVpv(kind, 0));
@@ -580,9 +605,9 @@ gql_schema_compile_named_type(pTHX_ SV *type_sv) {
   gql_store_sv(compiled_hv, "type_string", gql_schema_call_method0(aTHX_ type_sv, "to_string"));
   gql_store_sv(compiled_hv, "source_type", newSVsv(type_sv));
   gql_store_sv(compiled_hv, "source_type_id", newSVuv(gql_schema_refaddr(type_sv)));
-  gql_store_sv(compiled_hv, "is_input", newSViv(gql_schema_does_role(aTHX_ type_sv, "GraphQL::Role::Input")));
-  gql_store_sv(compiled_hv, "is_output", newSViv(gql_schema_does_role(aTHX_ type_sv, "GraphQL::Role::Output")));
-  gql_store_sv(compiled_hv, "is_abstract", newSViv(gql_schema_does_role(aTHX_ type_sv, "GraphQL::Role::Abstract")));
+  gql_store_sv(compiled_hv, "is_input", newSViv(gql_schema_does_any_role(aTHX_ type_sv, input_roles, 2)));
+  gql_store_sv(compiled_hv, "is_output", newSViv(gql_schema_does_any_role(aTHX_ type_sv, output_roles, 2)));
+  gql_store_sv(compiled_hv, "is_abstract", newSViv(gql_schema_does_any_role(aTHX_ type_sv, abstract_roles, 2)));
 
   if (SvROK(type_sv) && SvTYPE(SvRV(type_sv)) == SVt_PVHV) {
     HV *type_hv = (HV *)SvRV(type_sv);
@@ -673,8 +698,9 @@ gql_schema_compile_schema(pTHX_ SV *schema_sv) {
   SV *directives_sv;
   AV *directives_av;
 
-  if (!sv_derived_from(schema_sv, "GraphQL::Schema")) {
-    croak("compile_schema_xs expects a GraphQL::Schema instance");
+  if (!sv_derived_from(schema_sv, "GraphQL::Schema")
+      && !sv_derived_from(schema_sv, "GraphQL::Houtou::Schema")) {
+    croak("compile_schema_xs expects a GraphQL::Houtou::Schema or GraphQL::Schema instance");
   }
 
   compiled_hv = newHV();

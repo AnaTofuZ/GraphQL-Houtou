@@ -142,10 +142,24 @@ subtest 'Houtou wrappers stay in the Houtou namespace' => sub {
   ok !$schema->query->fields->{search}{type}->isa('GraphQL::Type::NonNull'), 'non-null wrapper no longer uses upstream class';
   ok !$schema->query->fields->{search}{type}->of->isa('GraphQL::Type::List'), 'list wrapper no longer uses upstream class';
   ok !$schema->name2type->{String}->isa('GraphQL::Type::Scalar'), 'scalar no longer uses upstream class';
+  ok !$schema->isa('GraphQL::Schema'), 'schema no longer uses upstream class';
+  ok !$schema->directives->[-1]->isa('GraphQL::Directive'), 'directive no longer uses upstream class';
   ok !$schema->query->isa('GraphQL::Type::Object'), 'object no longer uses upstream class';
   ok !$schema->name2type->{Node}->isa('GraphQL::Type::Interface'), 'interface no longer uses upstream class';
   ok !$schema->name2type->{Status}->isa('GraphQL::Type::Enum'), 'enum no longer uses upstream class';
   ok !$schema->name2type->{Filter}->isa('GraphQL::Type::InputObject'), 'input object no longer uses upstream class';
+};
+
+subtest 'Houtou types consume Houtou roles' => sub {
+  ok $schema->query->DOES('GraphQL::Houtou::Role::Output'), 'object uses Houtou output role';
+  ok $schema->query->DOES('GraphQL::Houtou::Role::FieldsOutput'), 'object uses Houtou fields output role';
+  ok $schema->name2type->{Node}->DOES('GraphQL::Houtou::Role::Abstract'), 'interface uses Houtou abstract role';
+  ok $schema->name2type->{Filter}->DOES('GraphQL::Houtou::Role::Input'), 'input object uses Houtou input role';
+  ok $schema->name2type->{Filter}->DOES('GraphQL::Houtou::Role::FieldsInput'), 'input object uses Houtou fields input role';
+  ok $schema->name2type->{Status}->DOES('GraphQL::Houtou::Role::Leaf'), 'enum uses Houtou leaf role';
+  ok $schema->directives->[-1]->DOES('GraphQL::Houtou::Role::Named'), 'directive uses Houtou named role';
+  ok !$schema->query->DOES('GraphQL::Role::Output'), 'object no longer depends on upstream output role';
+  ok !$schema->name2type->{Filter}->DOES('GraphQL::Role::Input'), 'input object no longer depends on upstream input role';
 };
 
 subtest 'roots are normalized' => sub {

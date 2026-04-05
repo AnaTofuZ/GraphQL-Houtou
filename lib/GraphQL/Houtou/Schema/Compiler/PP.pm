@@ -11,11 +11,18 @@ our @EXPORT_OK = qw(
   compile_schema
 );
 
+sub _does_any_role {
+  my ($type, @roles) = @_;
+  return if !$type || !$type->can('DOES');
+  return !!grep { $type->DOES($_) } @roles;
+}
+
 sub compile_schema {
   my ($schema) = @_;
 
-  die "compile_schema expects a GraphQL::Schema instance\n"
-    if !blessed($schema) || !$schema->isa('GraphQL::Schema');
+  die "compile_schema expects a GraphQL::Houtou::Schema or GraphQL::Schema instance\n"
+    if !blessed($schema)
+    || (!$schema->isa('GraphQL::Houtou::Schema') && !$schema->isa('GraphQL::Schema'));
 
   my $name2type = $schema->name2type || {};
   my %compiled_types = map {
@@ -69,9 +76,9 @@ sub _compile_named_type {
     type_string => $type->to_string,
     source_type => $type,
     source_type_id => refaddr($type),
-    is_input => $type->DOES('GraphQL::Role::Input') ? 1 : 0,
-    is_output => $type->DOES('GraphQL::Role::Output') ? 1 : 0,
-    is_abstract => $type->DOES('GraphQL::Role::Abstract') ? 1 : 0,
+    is_input => _does_any_role($type, qw(GraphQL::Houtou::Role::Input GraphQL::Role::Input)) ? 1 : 0,
+    is_output => _does_any_role($type, qw(GraphQL::Houtou::Role::Output GraphQL::Role::Output)) ? 1 : 0,
+    is_abstract => _does_any_role($type, qw(GraphQL::Houtou::Role::Abstract GraphQL::Role::Abstract)) ? 1 : 0,
     is_introspection => $type->{is_introspection} ? 1 : 0,
   };
 

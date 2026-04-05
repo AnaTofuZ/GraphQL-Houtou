@@ -226,7 +226,7 @@ sub _validate_variable_definitions {
       next;
     }
 
-    next if $type->DOES('GraphQL::Role::Input');
+    next if $type->DOES('GraphQL::Houtou::Role::Input') || $type->DOES('GraphQL::Role::Input');
 
     push @$errors, _error(
       "Variable '\$$name' is type '" . $type->to_string . "' which cannot be used as an input type.",

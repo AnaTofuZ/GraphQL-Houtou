@@ -447,7 +447,12 @@ gql_execution_located_error_xs(pTHX_ SV *error, SV *nodes, SV *path) {
 
 static void
 gql_execution_require_pp(pTHX) {
-  eval_pv("require GraphQL::Houtou::Execution::PP; 1;", TRUE);
+  static int pp_loaded = 0;
+
+  if (!pp_loaded) {
+    eval_pv("require GraphQL::Houtou::Execution::PP; 1;", TRUE);
+    pp_loaded = 1;
+  }
 }
 
 static SV *

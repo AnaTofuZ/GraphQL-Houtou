@@ -23,6 +23,10 @@ my $Query = GraphQL::Houtou::Type::Object->new(
       type => $String->non_null,
       resolve => sub { 'world' },
     },
+    tags => {
+      type => $String->non_null->list->non_null,
+      resolve => sub { [ 'alpha', 'beta' ] },
+    },
     greet => {
       type => $String->non_null,
       args => {
@@ -284,6 +288,33 @@ subtest 'xs completion helper fast-path matches pp for leaf and null cases' => s
     undef,
   );
   is_deeply $xs_null, $pp_null, 'nullable null completion is handled identically';
+
+  my $pp_list = GraphQL::Houtou::Execution::PP::_complete_value_catching_error(
+    $context,
+    $String->non_null->list->non_null,
+    $nodes,
+    $info,
+    $path,
+    [ 'alpha', 'beta' ],
+  );
+  my $xs_list = GraphQL::Houtou::XS::Execution::_complete_value_catching_error_xs(
+    $context,
+    $String->non_null->list->non_null,
+    $nodes,
+    $info,
+    $path,
+    [ 'alpha', 'beta' ],
+  );
+  is_deeply $xs_list, $pp_list, 'leaf list completion is handled identically';
+};
+
+subtest 'execute list field through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $public = execute($schema, '{ tags }');
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, '{ tags }');
+
+  is_deeply $xs, $public, 'list field result matches public facade';
 };
 
 done_testing;

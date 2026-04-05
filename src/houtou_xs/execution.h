@@ -403,6 +403,50 @@ gql_execution_call_type_to_string(pTHX_ SV *type) {
 }
 
 static SV *
+gql_execution_path_with_index(pTHX_ SV *path, IV index) {
+  AV *path_copy_av = newAV();
+  SV *ret;
+
+  if (SvROK(path) && SvTYPE(SvRV(path)) == SVt_PVAV) {
+    AV *path_av = (AV *)SvRV(path);
+    I32 path_len = av_len(path_av);
+    I32 path_i;
+
+    for (path_i = 0; path_i <= path_len; path_i++) {
+      SV **path_part_svp = av_fetch(path_av, path_i, 0);
+      if (path_part_svp) {
+        av_push(path_copy_av, newSVsv(*path_part_svp));
+      }
+    }
+  }
+
+  av_push(path_copy_av, newSViv(index));
+  ret = newRV_noinc((SV *)path_copy_av);
+  return ret;
+}
+
+static int
+gql_execution_is_leaf_like_type(pTHX_ SV *type) {
+  SV *current = newSVsv(type);
+  int is_leaf = 0;
+
+  while (sv_derived_from(current, "GraphQL::Houtou::Type::NonNull")
+      || sv_derived_from(current, "GraphQL::Type::NonNull")) {
+    SV *inner = gql_execution_call_type_of(aTHX_ current);
+    SvREFCNT_dec(current);
+    current = inner;
+  }
+
+  if (sv_does(current, "GraphQL::Houtou::Role::Leaf")
+      || sv_does(current, "GraphQL::Role::Leaf")) {
+    is_leaf = 1;
+  }
+
+  SvREFCNT_dec(current);
+  return is_leaf;
+}
+
+static SV *
 gql_execution_coerce_ast(pTHX_ SV *document) {
   if (SvROK(document)) {
     return newSVsv(document);
@@ -640,6 +684,80 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
       (void)hv_store(ret_hv, "data", 4, serialized, 0);
       return newRV_noinc((SV *)ret_hv);
     }
+  }
+
+  if (sv_derived_from(return_type, "GraphQL::Houtou::Type::List")
+      || sv_derived_from(return_type, "GraphQL::Type::List")) {
+    SV *item_type = gql_execution_call_type_of(aTHX_ return_type);
+
+    if (SvROK(result) && SvTYPE(SvRV(result)) == SVt_PVAV
+        && gql_execution_is_leaf_like_type(aTHX_ item_type)) {
+      AV *result_av = (AV *)SvRV(result);
+      I32 result_len = av_len(result_av);
+      AV *data_av = newAV();
+      AV *errors_av = newAV();
+      I32 i;
+
+      for (i = 0; i <= result_len; i++) {
+        SV **item_svp = av_fetch(result_av, i, 0);
+        SV *item_path_sv = gql_execution_path_with_index(aTHX_ path, (IV)i);
+        SV *completed = gql_execution_complete_value_catching_error_xs_impl(
+          aTHX_ context,
+          item_type,
+          nodes,
+          info,
+          item_path_sv,
+          item_svp ? *item_svp : &PL_sv_undef
+        );
+
+        if (SvROK(completed) && SvTYPE(SvRV(completed)) == SVt_PVHV) {
+          HV *completed_hv = (HV *)SvRV(completed);
+          SV **data_svp = hv_fetch(completed_hv, "data", 4, 0);
+          SV **item_errors_svp = hv_fetch(completed_hv, "errors", 6, 0);
+          if (data_svp) {
+            av_push(data_av, newSVsv(*data_svp));
+          } else {
+            av_push(data_av, newSV(0));
+          }
+          if (item_errors_svp && SvROK(*item_errors_svp) && SvTYPE(SvRV(*item_errors_svp)) == SVt_PVAV) {
+            AV *item_errors_av = (AV *)SvRV(*item_errors_svp);
+            I32 err_len = av_len(item_errors_av);
+            I32 err_i;
+            for (err_i = 0; err_i <= err_len; err_i++) {
+              SV **err_svp = av_fetch(item_errors_av, err_i, 0);
+              if (err_svp) {
+                av_push(errors_av, newSVsv(*err_svp));
+              }
+            }
+          }
+        } else {
+          SvREFCNT_dec(item_path_sv);
+          SvREFCNT_dec(completed);
+          SvREFCNT_dec(item_type);
+          SvREFCNT_dec((SV *)data_av);
+          SvREFCNT_dec((SV *)errors_av);
+          return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
+        }
+
+        SvREFCNT_dec(item_path_sv);
+        SvREFCNT_dec(completed);
+      }
+
+      SvREFCNT_dec(item_type);
+      {
+        HV *ret_hv = newHV();
+        (void)hv_store(ret_hv, "data", 4, newRV_noinc((SV *)data_av), 0);
+        if (av_len(errors_av) >= 0) {
+          (void)hv_store(ret_hv, "errors", 6, newRV_noinc((SV *)errors_av), 0);
+        } else {
+          SvREFCNT_dec((SV *)errors_av);
+        }
+        return newRV_noinc((SV *)ret_hv);
+      }
+    }
+
+    SvREFCNT_dec(item_type);
+    return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
   }
 
   return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);

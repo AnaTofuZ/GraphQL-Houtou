@@ -402,12 +402,14 @@ static void gqljs_attach_magic_state(pTHX_ SV *sv, SV *state_sv);
 static SV *gqljs_new_lazy_arguments_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *arguments);
 static SV *gqljs_new_lazy_directives_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *directives);
 static SV *gqljs_new_lazy_variable_definitions_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *definitions);
+static SV *gqljs_new_lazy_object_fields_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *fields);
 static SV *gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos);
 static SV *gql_ir_make_sv_from_span(pTHX_ gql_ir_document_t *document, gql_ir_span_t span);
 static SV *gql_ir_make_string_value_sv(pTHX_ gql_ir_document_t *document, gql_ir_value_t *value);
 static SV *gqljs_build_type_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_type_t *type);
-static SV *gqljs_build_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_value_t *value);
-static AV *gqljs_build_arguments_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *arguments);
+static AV *gqljs_build_object_fields_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *fields, SV *state_sv);
+static SV *gqljs_build_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_value_t *value, SV *state_sv);
+static AV *gqljs_build_arguments_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *arguments, SV *state_sv);
 static AV *gqljs_build_directives_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *directives, SV *state_sv);
 static SV *gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_t *selection, SV *state_sv);
 static SV *gqljs_build_selection_set_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_set_t *selection_set, SV *state_sv);
@@ -1977,6 +1979,27 @@ gqljs_new_lazy_variable_definitions_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *d
   XPUSHs(sv_2mortal(newSVuv(PTR2UV(definitions))));
   PUTBACK;
   call_pv("GraphQL::Houtou::XS::LazyArray::VariableDefinitions::_new", G_SCALAR);
+  SPAGAIN;
+  ret_sv = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret_sv;
+}
+
+static SV *
+gqljs_new_lazy_object_fields_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *fields) {
+  dSP;
+  SV *ret_sv;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(state_sv)));
+  XPUSHs(sv_2mortal(newSVuv(PTR2UV(fields))));
+  PUTBACK;
+  call_pv("GraphQL::Houtou::XS::LazyArray::ObjectFields::_new", G_SCALAR);
   SPAGAIN;
   ret_sv = newSVsv(POPs);
   PUTBACK;
@@ -4455,8 +4478,42 @@ gqljs_build_type_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *docu
   return node_sv;
 }
 
+static AV *
+gqljs_build_object_fields_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *fields, SV *state_sv) {
+  AV *av = newAV();
+  I32 i;
+
+  if (!fields) {
+    return av;
+  }
+  if (fields->count > 0) {
+    av_extend(av, fields->count - 1);
+  }
+  for (i = 0; i < fields->count; i++) {
+    gql_ir_object_field_t *field = (gql_ir_object_field_t *)fields->items[i];
+    HV *field_hv = gqljs_new_node_hv_sized("ObjectField", 3);
+    SV *field_sv;
+    SV *field_name_value_sv = gql_ir_make_sv_from_span(aTHX_ document, field->name);
+    SV *field_name_sv = gqljs_new_name_node_sv(aTHX_ field_name_value_sv);
+    SvREFCNT_dec(field_name_value_sv);
+    hv_stores(field_hv, "name", field_name_sv);
+    hv_stores(field_hv, "value", gqljs_build_value_from_ir(aTHX_ ctx, document, field->value, state_sv));
+    field_sv = newRV_noinc((SV *)field_hv);
+    if (ctx) {
+      if (ctx->compact_location) {
+        gqljs_set_rewritten_loc_node(aTHX_ ctx, field_sv, field->start_pos);
+      } else {
+        gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, field->start_pos, field_sv, field_name_sv);
+      }
+    }
+    av_push(av, field_sv);
+  }
+
+  return av;
+}
+
 static SV *
-gqljs_build_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_value_t *value) {
+gqljs_build_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_value_t *value, SV *state_sv) {
   HV *hv;
   I32 i;
   SV *node_sv;
@@ -4515,38 +4572,24 @@ gqljs_build_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *doc
         av_extend(items, value->as.list_items.count - 1);
       }
       for (i = 0; i < value->as.list_items.count; i++) {
-        av_push(items, gqljs_build_value_from_ir(aTHX_ ctx, document, (gql_ir_value_t *)value->as.list_items.items[i]));
+        av_push(items, gqljs_build_value_from_ir(aTHX_ ctx, document, (gql_ir_value_t *)value->as.list_items.items[i], state_sv));
       }
       hv_stores(hv, "values", newRV_noinc((SV *)items));
       node_sv = newRV_noinc((SV *)hv);
       break;
     }
     case GQL_IR_VALUE_OBJECT: {
-      AV *fields = newAV();
       hv = gqljs_new_node_hv_sized("ObjectValue", 2);
-      if (value->as.object_fields.count > 0) {
-        av_extend(fields, value->as.object_fields.count - 1);
+      if (value->as.object_fields.count > 0 && state_sv) {
+        hv_stores(hv, "fields", gqljs_new_lazy_object_fields_sv(aTHX_ state_sv, &value->as.object_fields));
+      } else {
+        hv_stores(hv, "fields", newRV_noinc((SV *)gqljs_build_object_fields_from_ir(
+          aTHX_ ctx,
+          document,
+          &value->as.object_fields,
+          state_sv
+        )));
       }
-      for (i = 0; i < value->as.object_fields.count; i++) {
-        gql_ir_object_field_t *field = (gql_ir_object_field_t *)value->as.object_fields.items[i];
-        HV *field_hv = gqljs_new_node_hv_sized("ObjectField", 3);
-        SV *field_sv;
-        SV *field_name_value_sv = gql_ir_make_sv_from_span(aTHX_ document, field->name);
-        SV *field_name_sv = gqljs_new_name_node_sv(aTHX_ field_name_value_sv);
-        SvREFCNT_dec(field_name_value_sv);
-        hv_stores(field_hv, "name", field_name_sv);
-        hv_stores(field_hv, "value", gqljs_build_value_from_ir(aTHX_ ctx, document, field->value));
-        field_sv = newRV_noinc((SV *)field_hv);
-        if (ctx) {
-          if (ctx->compact_location) {
-            gqljs_set_rewritten_loc_node(aTHX_ ctx, field_sv, field->start_pos);
-          } else {
-            gqljs_set_shared_rewritten_loc_nodes(aTHX_ ctx, field->start_pos, field_sv, field_name_sv);
-          }
-        }
-        av_push(fields, field_sv);
-      }
-      hv_stores(hv, "fields", newRV_noinc((SV *)fields));
       node_sv = newRV_noinc((SV *)hv);
       break;
     }
@@ -4559,7 +4602,7 @@ gqljs_build_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *doc
 }
 
 static AV *
-gqljs_build_arguments_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *arguments) {
+gqljs_build_arguments_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *arguments, SV *state_sv) {
   AV *av = newAV();
   I32 i;
 
@@ -4577,7 +4620,7 @@ gqljs_build_arguments_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t 
     SV *name_sv = gqljs_new_name_node_sv(aTHX_ name_value_sv);
     SvREFCNT_dec(name_value_sv);
     hv_stores(arg_hv, "name", name_sv);
-    hv_stores(arg_hv, "value", gqljs_build_value_from_ir(aTHX_ ctx, document, argument->value));
+    hv_stores(arg_hv, "value", gqljs_build_value_from_ir(aTHX_ ctx, document, argument->value, state_sv));
     arg_sv = newRV_noinc((SV *)arg_hv);
     if (ctx) {
       if (ctx->compact_location) {
@@ -4613,7 +4656,7 @@ gqljs_build_directives_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t
     if (state_sv && directive->arguments.count > 0) {
       hv_stores(dir_hv, "arguments", gqljs_new_lazy_arguments_sv(aTHX_ state_sv, &directive->arguments));
     } else {
-      hv_stores(dir_hv, "arguments", newRV_noinc((SV *)gqljs_build_arguments_from_ir(aTHX_ ctx, document, &directive->arguments)));
+      hv_stores(dir_hv, "arguments", newRV_noinc((SV *)gqljs_build_arguments_from_ir(aTHX_ ctx, document, &directive->arguments, state_sv)));
     }
     dir_sv = newRV_noinc((SV *)dir_hv);
     if (ctx) {
@@ -4662,7 +4705,7 @@ gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t 
       if (state_sv && field->arguments.count > 0) {
         hv_stores(hv, "arguments", gqljs_new_lazy_arguments_sv(aTHX_ state_sv, &field->arguments));
       } else {
-        hv_stores(hv, "arguments", newRV_noinc((SV *)gqljs_build_arguments_from_ir(aTHX_ ctx, document, &field->arguments)));
+        hv_stores(hv, "arguments", newRV_noinc((SV *)gqljs_build_arguments_from_ir(aTHX_ ctx, document, &field->arguments, state_sv)));
       }
       if (state_sv && field->directives.count > 0) {
         hv_stores(hv, "directives", gqljs_new_lazy_directives_sv(aTHX_ state_sv, &field->directives));
@@ -4782,7 +4825,7 @@ gqljs_build_variable_definitions_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_
     hv_stores(def_hv, "variable", variable_sv);
     hv_stores(def_hv, "type", gqljs_build_type_from_ir(aTHX_ ctx, document, definition->type));
     if (definition->default_value) {
-      hv_stores(def_hv, "defaultValue", gqljs_build_value_from_ir(aTHX_ ctx, document, definition->default_value));
+      hv_stores(def_hv, "defaultValue", gqljs_build_value_from_ir(aTHX_ ctx, document, definition->default_value, state_sv));
     }
     if (state_sv && definition->directives.count > 0) {
       hv_stores(def_hv, "directives", gqljs_new_lazy_directives_sv(aTHX_ state_sv, &definition->directives));
@@ -7102,7 +7145,8 @@ _graphqljs_materialize_arguments_xs(state, ptr)
       RETVAL = newRV_noinc((SV *)gqljs_build_arguments_from_ir(
         aTHX_ lazy_state->has_ctx ? &lazy_state->ctx : NULL,
         lazy_state->document,
-        arguments
+        arguments,
+        state
       ));
     }
   OUTPUT:
@@ -7138,6 +7182,24 @@ _graphqljs_materialize_variable_definitions_xs(state, ptr)
         aTHX_ lazy_state->has_ctx ? &lazy_state->ctx : NULL,
         lazy_state->document,
         definitions,
+        state
+      ));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_graphqljs_materialize_object_fields_xs(state, ptr)
+    SV *state
+    UV ptr
+  CODE:
+    {
+      gqljs_lazy_state_t *lazy_state = gqljs_lazy_state_from_sv(state);
+      gql_ir_ptr_array_t *fields = INT2PTR(gql_ir_ptr_array_t *, ptr);
+      RETVAL = newRV_noinc((SV *)gqljs_build_object_fields_from_ir(
+        aTHX_ lazy_state->has_ctx ? &lazy_state->ctx : NULL,
+        lazy_state->document,
+        fields,
         state
       ));
     }

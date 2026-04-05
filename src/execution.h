@@ -787,64 +787,9 @@ gql_execution_builtin_scalar_is_boolish(SV *value, int *truthy) {
   return 1;
 }
 
-static void
-gql_execution_require_json_pp(pTHX) {
-  static int json_pp_loaded = 0;
-
-  if (json_pp_loaded) {
-    return;
-  }
-
-  eval_pv("require JSON::PP; 1;", TRUE);
-  if (SvTRUE(ERRSV)) {
-    croak_sv(newSVsv(ERRSV));
-  }
-
-  json_pp_loaded = 1;
-}
-
 static SV *
 gql_execution_builtin_scalar_json_boolean_sv(pTHX_ int truthy) {
-  dSP;
-  int count;
-  SV *ret;
-  static CV *true_cv = NULL;
-  static CV *false_cv = NULL;
-  CV *cv;
-
-  gql_execution_require_json_pp(aTHX);
-  if (!true_cv) {
-    true_cv = get_cv("JSON::PP::true", 0);
-  }
-  if (!false_cv) {
-    false_cv = get_cv("JSON::PP::false", 0);
-  }
-
-  cv = truthy ? true_cv : false_cv;
-  if (!cv) {
-    croak("unable to resolve JSON::PP boolean constructor");
-  }
-
-  ENTER;
-  SAVETMPS;
-  PUSHMARK(SP);
-  PUTBACK;
-
-  count = call_sv((SV *)cv, G_SCALAR);
-  SPAGAIN;
-  if (count != 1) {
-    PUTBACK;
-    FREETMPS;
-    LEAVE;
-    croak("JSON::PP boolean constructor did not return a scalar");
-  }
-
-  ret = newSVsv(POPs);
-  PUTBACK;
-  FREETMPS;
-  LEAVE;
-
-  return ret;
+  return newRV_noinc(newSViv(truthy ? 1 : 0));
 }
 
 static SV *

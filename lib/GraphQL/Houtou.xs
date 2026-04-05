@@ -440,7 +440,9 @@ static AV *gqljs_fetch_array(HV *hv, const char *key);
 static const char *gqljs_fetch_kind(HV *hv);
 static const char *gqljs_name_value(SV *node_sv);
 static SV *gqljs_find_named_node(AV *av, const char *name);
+static SV *gqljs_find_named_node_sv(AV *av, SV *name_sv);
 static SV *gqljs_find_variable_definition(AV *av, const char *name);
+static SV *gqljs_find_variable_definition_sv(AV *av, SV *name_sv);
 static SV *gqljs_locate_name_node(pTHX_ gql_parser_t *p, SV *node_sv);
 static SV *gqljs_locate_type_node(pTHX_ gql_parser_t *p, SV *node_sv);
 static SV *gqljs_locate_value_node(pTHX_ gql_parser_t *p, SV *node_sv);
@@ -1732,6 +1734,9 @@ gqljs_fetch_array(HV *hv, const char *key) {
 
     if (SvROK(mg->mg_obj) && SvTYPE(SvRV(mg->mg_obj)) == SVt_PVHV) {
       tied_hv = (HV *)SvRV(mg->mg_obj);
+      /* These hash keys are part of the XS fast-path contract with
+       * GraphQL::Houtou::XS::LazyArray::*::TIEARRAY. Keep tests in sync if
+       * they ever change. */
       data_sv = gqljs_fetch_sv(tied_hv, "data");
       if (data_sv && SvROK(data_sv) && SvTYPE(SvRV(data_sv)) == SVt_PVAV) {
         return (AV *)SvRV(data_sv);
@@ -1831,6 +1836,18 @@ gqljs_find_named_node(AV *av, const char *name) {
 }
 
 static SV *
+gqljs_find_named_node_sv(AV *av, SV *name_sv) {
+  STRLEN len;
+  const char *name;
+
+  if (!name_sv) {
+    return NULL;
+  }
+  name = SvPV(name_sv, len);
+  return gqljs_find_named_node(av, name);
+}
+
+static SV *
 gqljs_find_variable_definition(AV *av, const char *name) {
   I32 i;
   if (!av || !name) {
@@ -1855,6 +1872,18 @@ gqljs_find_variable_definition(AV *av, const char *name) {
     }
   }
   return NULL;
+}
+
+static SV *
+gqljs_find_variable_definition_sv(AV *av, SV *name_sv) {
+  STRLEN len;
+  const char *name;
+
+  if (!name_sv) {
+    return NULL;
+  }
+  name = SvPV(name_sv, len);
+  return gqljs_find_variable_definition(av, name);
 }
 
 static SV *
@@ -2422,11 +2451,10 @@ gqljs_locate_value_node(pTHX_ gql_parser_t *p, SV *node_sv) {
     gqljs_set_loc_node(aTHX_ node_sv, loc);
     av = gqljs_fetch_array(hv, "fields");
     while (p->kind != TOK_RBRACE) {
-      char *name = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
-      SV *field_sv = gqljs_find_named_node(av, name);
+      SV *name_sv = sv_2mortal(newSVpvn(p->src + p->tok_start, p->tok_end - p->tok_start));
+      SV *field_sv = gqljs_find_named_node_sv(av, name_sv);
       HV *field_hv;
       SV *field_loc;
-      Safefree(name);
       if (!field_sv) {
         croak("Missing object field node");
       }
@@ -2451,11 +2479,10 @@ gqljs_locate_arguments_nodes(pTHX_ gql_parser_t *p, AV *av) {
   }
   gql_expect(aTHX_ p, TOK_LPAREN, NULL);
   while (p->kind != TOK_RPAREN) {
-    char *name = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
-    SV *node_sv = gqljs_find_named_node(av, name);
+    SV *name_sv = sv_2mortal(newSVpvn(p->src + p->tok_start, p->tok_end - p->tok_start));
+    SV *node_sv = gqljs_find_named_node_sv(av, name_sv);
     HV *node_hv;
     SV *loc;
-    Safefree(name);
     if (!node_sv) {
       croak("Missing argument node");
     }
@@ -2502,7 +2529,6 @@ gqljs_locate_variable_definitions_nodes(pTHX_ gql_parser_t *p, AV *av) {
   gql_expect(aTHX_ p, TOK_LPAREN, NULL);
   while (p->kind != TOK_RPAREN) {
     SV *loc;
-    char *name;
     SV *node_sv;
     HV *node_hv;
     SV *variable_sv;
@@ -2514,9 +2540,10 @@ gqljs_locate_variable_definitions_nodes(pTHX_ gql_parser_t *p, AV *av) {
     if (p->kind != TOK_NAME) {
       gql_throw_expected_token(aTHX_ p, TOK_NAME);
     }
-    name = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
-    node_sv = gqljs_find_variable_definition(av, name);
-    Safefree(name);
+    {
+      SV *name_sv = sv_2mortal(newSVpvn(p->src + p->tok_start, p->tok_end - p->tok_start));
+      node_sv = gqljs_find_variable_definition_sv(av, name_sv);
+    }
     if (!node_sv) {
       croak("Missing variable definition node");
     }
@@ -2540,7 +2567,7 @@ static void
 gqljs_locate_input_value_definitions_nodes(pTHX_ gql_parser_t *p, AV *av) {
   while (p->kind != TOK_RBRACE && p->kind != TOK_RPAREN) {
     SV *description_loc = NULL;
-    char *name;
+    SV *name_sv;
     SV *node_sv;
     HV *node_hv;
     SV *description_sv;
@@ -2552,9 +2579,8 @@ gqljs_locate_input_value_definitions_nodes(pTHX_ gql_parser_t *p, AV *av) {
     if (p->kind != TOK_NAME) {
       gql_throw_expected_token(aTHX_ p, TOK_NAME);
     }
-    name = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
-    node_sv = gqljs_find_named_node(av, name);
-    Safefree(name);
+    name_sv = sv_2mortal(newSVpvn(p->src + p->tok_start, p->tok_end - p->tok_start));
+    node_sv = gqljs_find_named_node_sv(av, name_sv);
     if (!node_sv) {
       croak("Missing input value node");
     }
@@ -2593,7 +2619,7 @@ gqljs_locate_field_definitions_nodes(pTHX_ gql_parser_t *p, AV *av) {
   gql_expect(aTHX_ p, TOK_LBRACE, NULL);
   while (p->kind != TOK_RBRACE) {
     SV *description_loc = NULL;
-    char *name;
+    SV *name_sv;
     SV *node_sv;
     HV *node_hv;
     SV *description_sv;
@@ -2605,9 +2631,8 @@ gqljs_locate_field_definitions_nodes(pTHX_ gql_parser_t *p, AV *av) {
     if (p->kind != TOK_NAME) {
       gql_throw_expected_token(aTHX_ p, TOK_NAME);
     }
-    name = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
-    node_sv = gqljs_find_named_node(av, name);
-    Safefree(name);
+    name_sv = sv_2mortal(newSVpvn(p->src + p->tok_start, p->tok_end - p->tok_start));
+    node_sv = gqljs_find_named_node_sv(av, name_sv);
     if (!node_sv) {
       croak("Missing field definition node");
     }
@@ -2634,7 +2659,7 @@ gqljs_locate_enum_values_nodes(pTHX_ gql_parser_t *p, AV *av) {
   gql_expect(aTHX_ p, TOK_LBRACE, NULL);
   while (p->kind != TOK_RBRACE) {
     SV *description_loc = NULL;
-    char *name;
+    SV *name_sv;
     SV *node_sv;
     HV *node_hv;
     SV *description_sv;
@@ -2646,9 +2671,8 @@ gqljs_locate_enum_values_nodes(pTHX_ gql_parser_t *p, AV *av) {
     if (p->kind != TOK_NAME) {
       gql_throw_expected_token(aTHX_ p, TOK_NAME);
     }
-    name = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
-    node_sv = gqljs_find_named_node(av, name);
-    Safefree(name);
+    name_sv = sv_2mortal(newSVpvn(p->src + p->tok_start, p->tok_end - p->tok_start));
+    node_sv = gqljs_find_named_node_sv(av, name_sv);
     if (!node_sv) {
       croak("Missing enum value node");
     }
@@ -2702,7 +2726,7 @@ gqljs_locate_operation_types_nodes(pTHX_ gql_parser_t *p, AV *av) {
   }
   gql_expect(aTHX_ p, TOK_LBRACE, NULL);
   while (p->kind != TOK_RBRACE) {
-    char *operation;
+    SV *operation_sv;
     SV *node_sv;
     HV *node_hv;
     SV *loc;
@@ -2710,9 +2734,8 @@ gqljs_locate_operation_types_nodes(pTHX_ gql_parser_t *p, AV *av) {
     if (p->kind != TOK_NAME) {
       gql_throw_expected_token(aTHX_ p, TOK_NAME);
     }
-    operation = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
-    node_sv = gqljs_find_operation_type_definition(av, operation);
-    Safefree(operation);
+    operation_sv = sv_2mortal(newSVpvn(p->src + p->tok_start, p->tok_end - p->tok_start));
+    node_sv = gqljs_find_operation_type_definition(av, SvPV_nolen(operation_sv));
     if (!node_sv) {
       croak("Missing operation type node");
     }
@@ -2736,11 +2759,10 @@ gqljs_locate_interfaces_nodes(pTHX_ gql_parser_t *p, AV *av) {
     gql_advance(aTHX_ p);
   }
   while (p->kind == TOK_NAME) {
-    char *name = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
-    SV *node_sv = gqljs_find_named_node(av, name);
+    SV *name_sv = sv_2mortal(newSVpvn(p->src + p->tok_start, p->tok_end - p->tok_start));
+    SV *node_sv = gqljs_find_named_node_sv(av, name_sv);
     HV *node_hv;
     SV *loc;
-    Safefree(name);
     if (!node_sv) {
       croak("Missing interface node");
     }

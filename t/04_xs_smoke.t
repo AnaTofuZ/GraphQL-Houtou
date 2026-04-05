@@ -365,6 +365,43 @@ subtest 'parse_canonical_document supports lazy_location option', sub {
     is $doc->{definitions}[0]{selectionSet}{loc}->start, 8, 'canonical parser returns lazy loc payloads';
 };
 
+subtest 'graphqljs lazy arrays keep XS fast-path payload contract', sub {
+    my $source = 'query Q($input: Filter = { foo: 1 }) @root { user(input: { foo: 1 }) @skip(if: true) { id } }';
+    my $doc = graphqljs_parse_executable_document_xs($source, 1);
+    my $op = $doc->{definitions}[0];
+    my $field = $op->{selectionSet}{selections}[0];
+    my $field_args_tied = tied @{ $field->{arguments} };
+    my $field_dirs_tied = tied @{ $field->{directives} };
+    my $op_dirs_tied = tied @{ $op->{directives} };
+    my $var_defs_tied = tied @{ $op->{variableDefinitions} };
+    my $object_fields_tied = tied @{ $field->{arguments}[0]{value}{fields} };
+
+    isa_ok $field_args_tied, 'GraphQL::Houtou::XS::LazyArray::Arguments';
+    is_deeply [ sort keys %{$field_args_tied} ], [ qw(data kind ptr state) ],
+        'arguments tie payload keys stay aligned with XS fast-path';
+    is $field_args_tied->{kind}, 1, 'arguments kind matches XS enum';
+
+    isa_ok $field_dirs_tied, 'GraphQL::Houtou::XS::LazyArray::Directives';
+    is_deeply [ sort keys %{$field_dirs_tied} ], [ qw(data kind ptr state) ],
+        'field directives tie payload keys stay aligned with XS fast-path';
+    is $field_dirs_tied->{kind}, 2, 'directives kind matches XS enum';
+
+    isa_ok $op_dirs_tied, 'GraphQL::Houtou::XS::LazyArray::Directives';
+    is_deeply [ sort keys %{$op_dirs_tied} ], [ qw(data kind ptr state) ],
+        'operation directives tie payload keys stay aligned with XS fast-path';
+    is $op_dirs_tied->{kind}, 2, 'operation directives kind matches XS enum';
+
+    isa_ok $var_defs_tied, 'GraphQL::Houtou::XS::LazyArray::VariableDefinitions';
+    is_deeply [ sort keys %{$var_defs_tied} ], [ qw(data kind ptr state) ],
+        'variableDefinitions tie payload keys stay aligned with XS fast-path';
+    is $var_defs_tied->{kind}, 3, 'variableDefinitions kind matches XS enum';
+
+    isa_ok $object_fields_tied, 'GraphQL::Houtou::XS::LazyArray::ObjectFields';
+    is_deeply [ sort keys %{$object_fields_tied} ], [ qw(data kind ptr state) ],
+        'object fields tie payload keys stay aligned with XS fast-path';
+    is $object_fields_tied->{kind}, 4, 'object fields kind matches XS enum';
+};
+
 subtest 'graphqljs_parse_document_xs supports compact_loc for executable documents', sub {
     my $source = "query Q {\n  user(id: 1) { id }\n}";
     my $doc = graphqljs_parse_document_xs($source, 0, 0, 1);

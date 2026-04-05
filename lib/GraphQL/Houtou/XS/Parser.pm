@@ -92,6 +92,25 @@ sub _line_column {
   return ($line, $column);
 }
 
+sub _new_lazy_array_ref {
+  my ($class, $state, $ptr) = @_;
+  my @items;
+  tie @items, $class, $state, $ptr;
+  return \@items;
+}
+
+sub _new_lazy_array_tie {
+  my ($class, $state, $ptr, $kind) = @_;
+  # NOTE: these keys are part of the XS fast-path contract in gqljs_fetch_array().
+  # If you rename them, update the XS reader and the contract test together.
+  return bless {
+    state => $state,
+    ptr => $ptr,
+    kind => $kind,
+    data => undef,
+  }, $class;
+}
+
 package GraphQL::Houtou::XS::LazyLoc;
 
 use 5.014;
@@ -131,19 +150,12 @@ use warnings;
 
 sub _new {
   my ($state, $ptr) = @_;
-  my @items;
-  tie @items, __PACKAGE__, $state, $ptr;
-  return \@items;
+  return GraphQL::Houtou::XS::Parser::_new_lazy_array_ref(__PACKAGE__, $state, $ptr);
 }
 
 sub TIEARRAY {
   my ($class, $state, $ptr) = @_;
-  return bless {
-    state => $state,
-    ptr => $ptr,
-    kind => 1,
-    data => undef,
-  }, $class;
+  return GraphQL::Houtou::XS::Parser::_new_lazy_array_tie($class, $state, $ptr, 1);
 }
 
 sub _materialize {
@@ -227,19 +239,12 @@ use warnings;
 
 sub _new {
   my ($state, $ptr) = @_;
-  my @items;
-  tie @items, __PACKAGE__, $state, $ptr;
-  return \@items;
+  return GraphQL::Houtou::XS::Parser::_new_lazy_array_ref(__PACKAGE__, $state, $ptr);
 }
 
 sub TIEARRAY {
   my ($class, $state, $ptr) = @_;
-  return bless {
-    state => $state,
-    ptr => $ptr,
-    kind => 2,
-    data => undef,
-  }, $class;
+  return GraphQL::Houtou::XS::Parser::_new_lazy_array_tie($class, $state, $ptr, 2);
 }
 
 sub _materialize {
@@ -323,19 +328,12 @@ use warnings;
 
 sub _new {
   my ($state, $ptr) = @_;
-  my @items;
-  tie @items, __PACKAGE__, $state, $ptr;
-  return \@items;
+  return GraphQL::Houtou::XS::Parser::_new_lazy_array_ref(__PACKAGE__, $state, $ptr);
 }
 
 sub TIEARRAY {
   my ($class, $state, $ptr) = @_;
-  return bless {
-    state => $state,
-    ptr => $ptr,
-    kind => 3,
-    data => undef,
-  }, $class;
+  return GraphQL::Houtou::XS::Parser::_new_lazy_array_tie($class, $state, $ptr, 3);
 }
 
 sub _materialize {
@@ -419,19 +417,12 @@ use warnings;
 
 sub _new {
   my ($state, $ptr) = @_;
-  my @items;
-  tie @items, __PACKAGE__, $state, $ptr;
-  return \@items;
+  return GraphQL::Houtou::XS::Parser::_new_lazy_array_ref(__PACKAGE__, $state, $ptr);
 }
 
 sub TIEARRAY {
   my ($class, $state, $ptr) = @_;
-  return bless {
-    state => $state,
-    ptr => $ptr,
-    kind => 4,
-    data => undef,
-  }, $class;
+  return GraphQL::Houtou::XS::Parser::_new_lazy_array_tie($class, $state, $ptr, 4);
 }
 
 sub _materialize {

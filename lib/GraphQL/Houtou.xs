@@ -299,3 +299,46 @@ _complete_value_catching_error_xs(context, return_type, nodes, info, path, resul
     );
   OUTPUT:
     RETVAL
+
+SV *
+_promise_is_promise_xs(promise_code, value)
+    SV *promise_code
+    SV *value
+  CODE:
+    RETVAL = gql_promise_call_is_promise(aTHX_ promise_code, value);
+  OUTPUT:
+    RETVAL
+
+SV *
+_promise_all_xs(promise_code, values)
+    SV *promise_code
+    SV *values
+  CODE:
+    if (!SvROK(values) || SvTYPE(SvRV(values)) != SVt_PVAV) {
+      croak("values must be an array reference");
+    }
+    RETVAL = gql_promise_call_all(aTHX_ promise_code, (AV *)SvRV(values));
+  OUTPUT:
+    RETVAL
+
+SV *
+_promise_then_xs(promise_code, promise, on_fulfilled, on_rejected = NULL)
+    SV *promise_code
+    SV *promise
+    SV *on_fulfilled
+    SV *on_rejected
+  CODE:
+    RETVAL = gql_promise_call_then(aTHX_ promise_code, promise, on_fulfilled, on_rejected);
+  OUTPUT:
+    RETVAL
+
+SV *
+_merge_completed_list_xs(list)
+    SV *list
+  CODE:
+    if (!SvROK(list) || SvTYPE(SvRV(list)) != SVt_PVAV) {
+      croak("list must be an array reference");
+    }
+    RETVAL = gql_execution_merge_completed_list(aTHX_ (AV *)SvRV(list));
+  OUTPUT:
+    RETVAL

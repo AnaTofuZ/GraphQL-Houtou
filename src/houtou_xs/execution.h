@@ -7,6 +7,179 @@
 static SV *gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value, SV *path, SV *fields);
 static SV *gql_execution_collect_fields_xs(pTHX_ SV *context, SV *object_type, SV *selections);
 
+static HV *
+gql_promise_code_hv(SV *promise_code) {
+  if (!promise_code || !SvOK(promise_code) || !SvROK(promise_code) || SvTYPE(SvRV(promise_code)) != SVt_PVHV) {
+    return NULL;
+  }
+  return (HV *)SvRV(promise_code);
+}
+
+static SV *
+gql_promise_get_hook(pTHX_ SV *promise_code, const char *name, I32 name_len) {
+  HV *promise_hv = gql_promise_code_hv(promise_code);
+  SV **hook_svp;
+
+  if (!promise_hv) {
+    return &PL_sv_undef;
+  }
+
+  hook_svp = hv_fetch(promise_hv, name, name_len, 0);
+  if (!hook_svp || !SvOK(*hook_svp)) {
+    return &PL_sv_undef;
+  }
+
+  return *hook_svp;
+}
+
+static SV *
+gql_promise_call_is_promise(pTHX_ SV *promise_code, SV *value) {
+  dSP;
+  SV *hook = gql_promise_get_hook(aTHX_ promise_code, "is_promise", 10);
+  int count;
+  SV *ret;
+
+  if (!SvOK(hook)) {
+    return &PL_sv_no;
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(value)));
+  PUTBACK;
+  count = call_sv(hook, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("promise is_promise hook did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
+gql_promise_call_all(pTHX_ SV *promise_code, AV *values_av) {
+  dSP;
+  SV *hook = gql_promise_get_hook(aTHX_ promise_code, "all", 3);
+  I32 i;
+  I32 len = av_len(values_av);
+  int count;
+  SV *ret;
+
+  if (!SvOK(hook)) {
+    croak("promise all hook is not configured");
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  EXTEND(SP, len + 1);
+  for (i = 0; i <= len; i++) {
+    SV **svp = av_fetch(values_av, i, 0);
+    XPUSHs(sv_2mortal(svp ? newSVsv(*svp) : newSV(0)));
+  }
+  PUTBACK;
+  count = call_sv(hook, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("promise all hook did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
+gql_promise_call_then(pTHX_ SV *promise_code, SV *promise, SV *on_fulfilled, SV *on_rejected) {
+  dSP;
+  SV *hook = gql_promise_get_hook(aTHX_ promise_code, "then", 4);
+  int count;
+  SV *ret;
+
+  if (!SvOK(hook)) {
+    croak("promise then hook is not configured");
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(promise)));
+  XPUSHs(sv_2mortal(newSVsv(on_fulfilled)));
+  XPUSHs(sv_2mortal(on_rejected ? newSVsv(on_rejected) : newSV(0)));
+  PUTBACK;
+  count = call_sv(hook, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("promise then hook did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
+gql_execution_merge_completed_list(pTHX_ AV *list_av) {
+  HV *ret_hv = newHV();
+  AV *data_av = newAV();
+  AV *errors_av = newAV();
+  I32 len = av_len(list_av);
+  I32 i;
+
+  for (i = 0; i <= len; i++) {
+    SV **item_svp = av_fetch(list_av, i, 0);
+    HV *item_hv;
+    SV **data_svp;
+    SV **item_errors_svp;
+
+    if (!item_svp || !SvROK(*item_svp) || SvTYPE(SvRV(*item_svp)) != SVt_PVHV) {
+      av_push(data_av, newSV(0));
+      continue;
+    }
+
+    item_hv = (HV *)SvRV(*item_svp);
+    data_svp = hv_fetch(item_hv, "data", 4, 0);
+    av_push(data_av, data_svp ? newSVsv(*data_svp) : newSV(0));
+
+    item_errors_svp = hv_fetch(item_hv, "errors", 6, 0);
+    if (item_errors_svp && SvROK(*item_errors_svp) && SvTYPE(SvRV(*item_errors_svp)) == SVt_PVAV) {
+      AV *item_errors_av = (AV *)SvRV(*item_errors_svp);
+      I32 err_len = av_len(item_errors_av);
+      I32 err_i;
+      for (err_i = 0; err_i <= err_len; err_i++) {
+        SV **err_svp = av_fetch(item_errors_av, err_i, 0);
+        if (err_svp) {
+          av_push(errors_av, newSVsv(*err_svp));
+        }
+      }
+    }
+  }
+
+  gql_store_sv(ret_hv, "data", newRV_noinc((SV *)data_av));
+  if (av_len(errors_av) >= 0) {
+    gql_store_sv(ret_hv, "errors", newRV_noinc((SV *)errors_av));
+  } else {
+    SvREFCNT_dec((SV *)errors_av);
+  }
+
+  return newRV_noinc((SV *)ret_hv);
+}
+
 static void
 gql_execution_require_pp(pTHX) {
   eval_pv("require GraphQL::Houtou::Execution::PP; 1;", TRUE);

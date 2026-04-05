@@ -17,6 +17,7 @@ use GraphQL::Houtou::Introspection qw(
   $TYPE_NAME_META_FIELD_DEF
 );
 use GraphQL::Houtou::Promise::Adapter qw(
+  all_promise
   is_promise_value
   normalize_promise_code
   then_promise
@@ -344,7 +345,7 @@ sub _promise_for_hash {
   die "Given a promise in object but no PromiseCode given\n"
     if !$promise_code;
 
-  return then_promise($promise_code, $promise_code->{all}->(@$values), sub {
+  return then_promise($promise_code, all_promise($promise_code, @$values), sub {
     return _merge_hash($keys, $_[0], $errors);
   });
 }

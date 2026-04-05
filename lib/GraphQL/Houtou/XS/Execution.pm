@@ -14,6 +14,10 @@ our @EXPORT_OK = qw(
   _execute_fields_xs
   _get_argument_values_xs
   _complete_value_catching_error_xs
+  _promise_is_promise_xs
+  _promise_all_xs
+  _promise_then_xs
+  _merge_completed_list_xs
 );
 
 require GraphQL::Houtou::XS::Parser;

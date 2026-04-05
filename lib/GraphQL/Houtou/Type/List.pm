@@ -31,7 +31,7 @@ has of => (
 );
 
 sub BUILD {
-  my ($self) = @_;
+my ($self) = @_;
   my $of = $self->of;
   my @roles;
   push @roles, 'GraphQL::Houtou::Role::Input'
@@ -102,6 +102,8 @@ sub perl_to_graphql {
   return \@values;
 }
 
+my $HAS_XS_PROMISE_HELPERS;
+
 sub _complete_value {
   my ($self, $context, $nodes, $info, $path, $result) = @_;
   my $item_type = $self->of;
@@ -127,6 +129,34 @@ sub _complete_value {
 
 sub _merge_list {
   my ($list) = @_;
+  if (!_load_xs_promise_helpers()) {
+    my @errors = map @{ $_->{errors} || [] }, @$list;
+    my @data = map $_->{data}, @$list;
+    return +{
+      data => \@data,
+      @errors ? (errors => \@errors) : (),
+    };
+  }
+
+  return GraphQL::Houtou::XS::Execution::_merge_completed_list_xs($list);
+}
+
+sub _load_xs_promise_helpers {
+  if (!defined $HAS_XS_PROMISE_HELPERS) {
+    $HAS_XS_PROMISE_HELPERS = eval {
+      require GraphQL::Houtou::XS::Execution;
+      GraphQL::Houtou::XS::Execution->can('_promise_is_promise_xs')
+        && GraphQL::Houtou::XS::Execution->can('_promise_all_xs')
+        && GraphQL::Houtou::XS::Execution->can('_promise_then_xs')
+        && GraphQL::Houtou::XS::Execution->can('_merge_completed_list_xs');
+    } ? 1 : 0;
+  }
+
+  return $HAS_XS_PROMISE_HELPERS;
+}
+
+sub _merge_list_pp {
+  my ($list) = @_;
   my @errors = map @{ $_->{errors} || [] }, @$list;
   my @data = map $_->{data}, @$list;
   return +{
@@ -140,13 +170,26 @@ sub _promise_for_list {
   die "Given a promise in list but no PromiseCode given\n"
     if !$context->{promise_code};
 
+  if (_load_xs_promise_helpers()) {
+    my $aggregate = GraphQL::Houtou::XS::Execution::_promise_all_xs($context->{promise_code}, $list);
+    return GraphQL::Houtou::XS::Execution::_promise_then_xs(
+      $context->{promise_code},
+      $aggregate,
+      sub { GraphQL::Houtou::XS::Execution::_merge_completed_list_xs($_[0]) },
+      undef,
+    );
+  }
+
   return then_promise($context->{promise_code}, $context->{promise_code}{all}->(@$list), sub {
-    return _merge_list($_[0]);
+    return _merge_list_pp($_[0]);
   });
 }
 
 sub _is_promise {
   my ($context, $value) = @_;
+  if (_load_xs_promise_helpers()) {
+    return !!GraphQL::Houtou::XS::Execution::_promise_is_promise_xs($context->{promise_code}, $value);
+  }
   return is_promise_value($context->{promise_code}, $value);
 }
 

@@ -142,6 +142,12 @@ typedef struct {
   gql_ir_document_t *document;
 } gql_ir_document_cleanup_t;
 
+typedef struct {
+  gql_ir_document_t *document;
+  gqljs_loc_context_t ctx;
+  bool has_ctx;
+} gqljs_lazy_state_t;
+
 struct gql_ir_type {
   gql_ir_type_kind_t kind;
   UV start_pos;
@@ -389,18 +395,23 @@ static void gqljs_loc_context_destroy(gqljs_loc_context_t *ctx);
 static UV gqljs_original_pos_from_rewritten_pos(gqljs_loc_context_t *ctx, UV rewritten_pos);
 static SV *gqljs_new_loc_sv(pTHX_ IV line, IV column);
 static SV *gqljs_new_lazy_loc_sv(pTHX_ UV start);
+static SV *gqljs_new_lazy_state_sv(pTHX_ gql_ir_document_t *document, SV *source_sv, SV *lazy_location_sv, SV *compact_location_sv);
+static gqljs_lazy_state_t *gqljs_lazy_state_from_sv(SV *state_sv);
+static void gqljs_lazy_state_destroy(gqljs_lazy_state_t *state);
+static void gqljs_attach_magic_state(pTHX_ SV *sv, SV *state_sv);
+static SV *gqljs_new_lazy_arguments_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *arguments);
 static SV *gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos);
 static SV *gql_ir_make_sv_from_span(pTHX_ gql_ir_document_t *document, gql_ir_span_t span);
 static SV *gql_ir_make_string_value_sv(pTHX_ gql_ir_document_t *document, gql_ir_value_t *value);
 static SV *gqljs_build_type_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_type_t *type);
 static SV *gqljs_build_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_value_t *value);
 static AV *gqljs_build_arguments_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *arguments);
-static AV *gqljs_build_directives_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *directives);
-static SV *gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_t *selection);
-static SV *gqljs_build_selection_set_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_set_t *selection_set);
-static AV *gqljs_build_variable_definitions_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *definitions);
-static SV *gqljs_build_executable_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_definition_t *definition);
-static SV *gqljs_build_executable_document_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document);
+static AV *gqljs_build_directives_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *directives, SV *state_sv);
+static SV *gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_t *selection, SV *state_sv);
+static SV *gqljs_build_selection_set_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_set_t *selection_set, SV *state_sv);
+static AV *gqljs_build_variable_definitions_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *definitions, SV *state_sv);
+static SV *gqljs_build_executable_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_definition_t *definition, SV *state_sv);
+static SV *gqljs_build_executable_document_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, SV *state_sv);
 static SV *gqljs_clone_with_loc(pTHX_ SV *value, SV *loc_sv);
 static int gqljs_sv_eq_pv(SV *sv, const char *literal);
 static const char *gqljs_definition_source_kind(SV *kind_sv);
@@ -1683,10 +1694,37 @@ gqljs_fetch_sv(HV *hv, const char *key) {
 static AV *
 gqljs_fetch_array(HV *hv, const char *key) {
   SV *sv = gqljs_fetch_sv(hv, key);
+  AV *av;
+  MAGIC *mg;
   if (!sv || !SvROK(sv) || SvTYPE(SvRV(sv)) != SVt_PVAV) {
     return NULL;
   }
-  return (AV *)SvRV(sv);
+  av = (AV *)SvRV(sv);
+  mg = mg_find((SV *)av, PERL_MAGIC_tied);
+  if (mg && mg->mg_obj) {
+    dSP;
+    SV *materialized_sv;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(sv_2mortal(newSVsv(mg->mg_obj)));
+    PUTBACK;
+    call_method("_materialize", G_SCALAR);
+    SPAGAIN;
+    materialized_sv = newSVsv(POPs);
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+
+    if (!materialized_sv || !SvROK(materialized_sv) || SvTYPE(SvRV(materialized_sv)) != SVt_PVAV) {
+      SvREFCNT_dec(materialized_sv);
+      croak("graphql-js lazy array materialization returned a non-array reference");
+    }
+    av = (AV *)SvRV(materialized_sv);
+    SvREFCNT_dec(materialized_sv);
+  }
+  return av;
 }
 
 static const char *
@@ -1792,6 +1830,116 @@ gqljs_new_lazy_loc_sv(pTHX_ UV start) {
   av_push(loc_av, newSVuv(start));
   loc_sv = newRV_noinc((SV *)loc_av);
   return sv_bless(loc_sv, stash);
+}
+
+static int
+gqljs_magic_free_state(pTHX_ SV *sv, MAGIC *mg) {
+  SV *state_sv = mg && mg->mg_ptr ? (SV *)mg->mg_ptr : NULL;
+
+  if (state_sv) {
+    SvREFCNT_dec(state_sv);
+    mg->mg_ptr = NULL;
+  }
+  return 0;
+}
+
+static MGVTBL gqljs_lazy_state_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gqljs_magic_free_state
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
+
+static void
+gqljs_attach_magic_state(pTHX_ SV *sv, SV *state_sv) {
+  MAGIC *mg;
+
+  if (!sv || !state_sv) {
+    return;
+  }
+
+  sv_magicext(sv, NULL, PERL_MAGIC_ext, &gqljs_lazy_state_vtbl, NULL, 0);
+  mg = mg_findext(sv, PERL_MAGIC_ext, &gqljs_lazy_state_vtbl);
+  if (!mg) {
+    croak("failed to attach graphql-js lazy state");
+  }
+  mg->mg_ptr = (char *)SvREFCNT_inc_simple_NN(state_sv);
+}
+
+static void
+gqljs_lazy_state_destroy(gqljs_lazy_state_t *state) {
+  if (!state) {
+    return;
+  }
+  if (state->has_ctx) {
+    gqljs_loc_context_destroy(&state->ctx);
+    state->has_ctx = 0;
+  }
+  if (state->document) {
+    gql_ir_free_document(state->document);
+    state->document = NULL;
+  }
+  Safefree(state);
+}
+
+static SV *
+gqljs_new_lazy_state_sv(pTHX_ gql_ir_document_t *document, SV *source_sv, SV *lazy_location_sv, SV *compact_location_sv) {
+  SV *state_sv;
+  HV *stash = gv_stashpv("GraphQL::Houtou::XS::LazyState", GV_ADD);
+  gqljs_lazy_state_t *state;
+
+  Newxz(state, 1, gqljs_lazy_state_t);
+  state->document = document;
+  if (source_sv) {
+    gqljs_loc_context_init(aTHX_ &state->ctx, source_sv, NULL);
+    state->ctx.lazy_location = SvTRUE(lazy_location_sv) ? 1 : 0;
+    state->ctx.compact_location = SvTRUE(compact_location_sv) ? 1 : 0;
+    state->has_ctx = 1;
+  }
+
+  state_sv = newSVuv(PTR2UV(state));
+  return sv_bless(newRV_noinc(state_sv), stash);
+}
+
+static gqljs_lazy_state_t *
+gqljs_lazy_state_from_sv(SV *state_sv) {
+  SV *inner_sv;
+
+  if (!state_sv || !SvROK(state_sv)) {
+    croak("expected GraphQL::Houtou::XS::LazyState object");
+  }
+  inner_sv = SvRV(state_sv);
+  if (!SvIOK(inner_sv)) {
+    croak("invalid GraphQL::Houtou::XS::LazyState payload");
+  }
+  return INT2PTR(gqljs_lazy_state_t *, SvUV(inner_sv));
+}
+
+static SV *
+gqljs_new_lazy_arguments_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *arguments) {
+  dSP;
+  SV *ret_sv;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(state_sv)));
+  XPUSHs(sv_2mortal(newSVuv(PTR2UV(arguments))));
+  PUTBACK;
+  call_pv("GraphQL::Houtou::XS::LazyArray::Arguments::_new", G_SCALAR);
+  SPAGAIN;
+  ret_sv = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret_sv;
 }
 
 static UV
@@ -3492,25 +3640,29 @@ static SV *
 gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_location_sv, SV *compact_location_sv) {
   gql_ir_document_t *ir_document;
   SV *doc_sv;
-  gqljs_loc_context_t ctx;
+  SV *state_sv;
+  gqljs_lazy_state_t *state;
   gqljs_loc_context_t *ctx_ptr = NULL;
 
   ir_document = gql_ir_parse_executable_document(aTHX_ source_sv);
-  if (!SvTRUE(no_location_sv)) {
-    gqljs_loc_context_init(aTHX_ &ctx, source_sv, NULL);
-    ctx.lazy_location = SvTRUE(lazy_location_sv) ? 1 : 0;
-    ctx.compact_location = SvTRUE(compact_location_sv) ? 1 : 0;
-    ctx_ptr = &ctx;
+  state_sv = gqljs_new_lazy_state_sv(
+    aTHX_
+    ir_document,
+    SvTRUE(no_location_sv) ? NULL : source_sv,
+    lazy_location_sv,
+    compact_location_sv
+  );
+  state = gqljs_lazy_state_from_sv(state_sv);
+  if (state->has_ctx) {
+    ctx_ptr = &state->ctx;
   }
-  doc_sv = gqljs_build_executable_document_from_ir(aTHX_ ctx_ptr, ir_document);
-  if (ctx_ptr) {
-    gqljs_loc_context_destroy(ctx_ptr);
-  }
+  doc_sv = gqljs_build_executable_document_from_ir(aTHX_ ctx_ptr, ir_document, state_sv);
   if (!doc_sv || !SvOK(doc_sv) || doc_sv == &PL_sv_undef) {
-    gql_ir_free_document(ir_document);
+    SvREFCNT_dec(state_sv);
     return &PL_sv_undef;
   }
-  gql_ir_free_document(ir_document);
+  gqljs_attach_magic_state(aTHX_ doc_sv, state_sv);
+  SvREFCNT_dec(state_sv);
 
   return doc_sv;
 }
@@ -4396,7 +4548,7 @@ gqljs_build_arguments_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t 
 }
 
 static AV *
-gqljs_build_directives_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *directives) {
+gqljs_build_directives_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *directives, SV *state_sv) {
   AV *av = newAV();
   I32 i;
 
@@ -4414,7 +4566,11 @@ gqljs_build_directives_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t
     SV *name_sv = gqljs_new_name_node_sv(aTHX_ name_value_sv);
     SvREFCNT_dec(name_value_sv);
     hv_stores(dir_hv, "name", name_sv);
-    hv_stores(dir_hv, "arguments", newRV_noinc((SV *)gqljs_build_arguments_from_ir(aTHX_ ctx, document, &directive->arguments)));
+    if (state_sv && directive->arguments.count > 0) {
+      hv_stores(dir_hv, "arguments", gqljs_new_lazy_arguments_sv(aTHX_ state_sv, &directive->arguments));
+    } else {
+      hv_stores(dir_hv, "arguments", newRV_noinc((SV *)gqljs_build_arguments_from_ir(aTHX_ ctx, document, &directive->arguments)));
+    }
     dir_sv = newRV_noinc((SV *)dir_hv);
     if (ctx) {
       gqljs_set_rewritten_loc_node(aTHX_ ctx, dir_sv, directive->start_pos);
@@ -4428,7 +4584,7 @@ gqljs_build_directives_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t
 }
 
 static SV *
-gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_t *selection) {
+gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_t *selection, SV *state_sv) {
   HV *hv;
   SV *node_sv;
 
@@ -4459,10 +4615,14 @@ gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t 
           }
         }
       }
-      hv_stores(hv, "arguments", newRV_noinc((SV *)gqljs_build_arguments_from_ir(aTHX_ ctx, document, &field->arguments)));
-      hv_stores(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, document, &field->directives)));
+      if (state_sv && field->arguments.count > 0) {
+        hv_stores(hv, "arguments", gqljs_new_lazy_arguments_sv(aTHX_ state_sv, &field->arguments));
+      } else {
+        hv_stores(hv, "arguments", newRV_noinc((SV *)gqljs_build_arguments_from_ir(aTHX_ ctx, document, &field->arguments)));
+      }
+      hv_stores(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, document, &field->directives, state_sv)));
       if (field->selection_set) {
-        hv_stores(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ ctx, document, field->selection_set));
+        hv_stores(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ ctx, document, field->selection_set, state_sv));
       }
       node_sv = newRV_noinc((SV *)hv);
       if (ctx) {
@@ -4487,7 +4647,7 @@ gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t 
           gqljs_set_rewritten_loc_node(aTHX_ ctx, name_sv, spread->name_pos);
         }
       }
-      hv_stores(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, document, &spread->directives)));
+      hv_stores(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, document, &spread->directives, state_sv)));
       node_sv = newRV_noinc((SV *)hv);
       if (ctx) {
         gqljs_set_rewritten_loc_node(aTHX_ ctx, node_sv, spread->start_pos);
@@ -4511,8 +4671,8 @@ gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t 
           }
         }
       }
-      hv_stores(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, document, &fragment->directives)));
-      hv_stores(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ ctx, document, fragment->selection_set));
+      hv_stores(hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, document, &fragment->directives, state_sv)));
+      hv_stores(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ ctx, document, fragment->selection_set, state_sv));
       node_sv = newRV_noinc((SV *)hv);
       if (ctx) {
         gqljs_set_rewritten_loc_node(aTHX_ ctx, node_sv, fragment->start_pos);
@@ -4525,7 +4685,7 @@ gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t 
 }
 
 static SV *
-gqljs_build_selection_set_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_set_t *selection_set) {
+gqljs_build_selection_set_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_set_t *selection_set, SV *state_sv) {
   HV *hv = gqljs_new_node_hv_sized("SelectionSet", 2);
   AV *selections = newAV();
   I32 i;
@@ -4535,7 +4695,7 @@ gqljs_build_selection_set_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_documen
     av_extend(selections, selection_set->selections.count - 1);
   }
   for (i = 0; selection_set && i < selection_set->selections.count; i++) {
-    av_push(selections, gqljs_build_selection_from_ir(aTHX_ ctx, document, (gql_ir_selection_t *)selection_set->selections.items[i]));
+    av_push(selections, gqljs_build_selection_from_ir(aTHX_ ctx, document, (gql_ir_selection_t *)selection_set->selections.items[i], state_sv));
   }
   hv_stores(hv, "selections", newRV_noinc((SV *)selections));
   node_sv = newRV_noinc((SV *)hv);
@@ -4546,7 +4706,7 @@ gqljs_build_selection_set_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_documen
 }
 
 static AV *
-gqljs_build_variable_definitions_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *definitions) {
+gqljs_build_variable_definitions_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *definitions, SV *state_sv) {
   AV *av = newAV();
   I32 i;
 
@@ -4568,7 +4728,7 @@ gqljs_build_variable_definitions_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_
     if (definition->default_value) {
       hv_stores(def_hv, "defaultValue", gqljs_build_value_from_ir(aTHX_ ctx, document, definition->default_value));
     }
-    hv_stores(def_hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, document, &definition->directives)));
+    hv_stores(def_hv, "directives", newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, document, &definition->directives, state_sv)));
     def_sv = newRV_noinc((SV *)def_hv);
     if (ctx) {
       SV *variable_name_sv = gqljs_fetch_sv(gqljs_node_hv(variable_sv), "name");
@@ -4583,7 +4743,7 @@ gqljs_build_variable_definitions_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_
 }
 
 static SV *
-gqljs_build_executable_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_definition_t *definition) {
+gqljs_build_executable_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_definition_t *definition, SV *state_sv) {
   HV *hv;
   SV *node_sv;
 
@@ -4608,10 +4768,10 @@ gqljs_build_executable_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir
       }
     }
     hv_stores(hv, "variableDefinitions",
-      newRV_noinc((SV *)gqljs_build_variable_definitions_from_ir(aTHX_ ctx, document, &operation->variable_definitions)));
+      newRV_noinc((SV *)gqljs_build_variable_definitions_from_ir(aTHX_ ctx, document, &operation->variable_definitions, state_sv)));
     hv_stores(hv, "directives",
-      newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, document, &operation->directives)));
-    hv_stores(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ ctx, document, operation->selection_set));
+      newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, document, &operation->directives, state_sv)));
+    hv_stores(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ ctx, document, operation->selection_set, state_sv));
     node_sv = newRV_noinc((SV *)hv);
     if (ctx) {
       gqljs_set_rewritten_loc_node(aTHX_ ctx, node_sv, operation->start_pos);
@@ -4644,8 +4804,8 @@ gqljs_build_executable_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir
       }
     }
     hv_stores(hv, "directives",
-      newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, document, &fragment->directives)));
-    hv_stores(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ ctx, document, fragment->selection_set));
+      newRV_noinc((SV *)gqljs_build_directives_from_ir(aTHX_ ctx, document, &fragment->directives, state_sv)));
+    hv_stores(hv, "selectionSet", gqljs_build_selection_set_from_ir(aTHX_ ctx, document, fragment->selection_set, state_sv));
     node_sv = newRV_noinc((SV *)hv);
     if (ctx) {
       gqljs_set_rewritten_loc_node(aTHX_ ctx, node_sv, fragment->start_pos);
@@ -4655,7 +4815,7 @@ gqljs_build_executable_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir
 }
 
 static SV *
-gqljs_build_executable_document_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document) {
+gqljs_build_executable_document_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, SV *state_sv) {
   HV *hv = gqljs_new_node_hv_sized("Document", 2);
   AV *definitions = newAV();
   I32 i;
@@ -4665,7 +4825,7 @@ gqljs_build_executable_document_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_d
     av_extend(definitions, document->definitions.count - 1);
   }
   for (i = 0; document && i < document->definitions.count; i++) {
-    av_push(definitions, gqljs_build_executable_definition_from_ir(aTHX_ ctx, document, (gql_ir_definition_t *)document->definitions.items[i]));
+    av_push(definitions, gqljs_build_executable_definition_from_ir(aTHX_ ctx, document, (gql_ir_definition_t *)document->definitions.items[i], state_sv));
   }
   hv_stores(hv, "definitions", newRV_noinc((SV *)definitions));
   node_sv = newRV_noinc((SV *)hv);
@@ -6860,6 +7020,23 @@ graphqljs_parse_executable_document_xs(source, no_location = &PL_sv_undef, lazy_
     RETVAL
 
 SV *
+_graphqljs_materialize_arguments_xs(state, ptr)
+    SV *state
+    UV ptr
+  CODE:
+    {
+      gqljs_lazy_state_t *lazy_state = gqljs_lazy_state_from_sv(state);
+      gql_ir_ptr_array_t *arguments = INT2PTR(gql_ir_ptr_array_t *, ptr);
+      RETVAL = newRV_noinc((SV *)gqljs_build_arguments_from_ir(
+        aTHX_ lazy_state->has_ctx ? &lazy_state->ctx : NULL,
+        lazy_state->document,
+        arguments
+      ));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 parse_directives_xs(source)
     SV *source
   CODE:
@@ -6890,6 +7067,23 @@ graphqlperl_find_legacy_empty_object_location_xs(source)
     RETVAL = gql_graphqlperl_find_legacy_empty_object_location(aTHX_ source);
   OUTPUT:
     RETVAL
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::LazyState
+
+void
+DESTROY(self)
+    SV *self
+  CODE:
+    if (self && SvROK(self)) {
+      SV *inner_sv = SvRV(self);
+      if (SvIOK(inner_sv) && SvUV(inner_sv) != 0) {
+        gqljs_lazy_state_t *state = INT2PTR(gqljs_lazy_state_t *, SvUV(inner_sv));
+        sv_setuv(inner_sv, 0);
+        gqljs_lazy_state_destroy(state);
+      }
+    }
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Parser
 
 SV *
 graphqljs_patch_document_xs(doc, meta)

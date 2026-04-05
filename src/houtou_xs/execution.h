@@ -749,7 +749,7 @@ gql_execution_collect_simple_selections(
         int same_type = sv_eq(*on_svp, object_name_sv);
         SvREFCNT_dec(object_name_sv);
         if (!same_type) {
-          return 0;
+          continue;
         }
       }
       if (!selections_svp || !SvROK(*selections_svp) || SvTYPE(SvRV(*selections_svp)) != SVt_PVAV) {
@@ -792,7 +792,7 @@ gql_execution_collect_simple_selections(
         int same_type = sv_eq(*on_svp, object_name_sv);
         SvREFCNT_dec(object_name_sv);
         if (!same_type) {
-          return 0;
+          continue;
         }
       }
       selections_svp = hv_fetch(fragment_hv, "selections", 10, 0);

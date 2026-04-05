@@ -510,6 +510,29 @@ GRAPHQL
   is_deeply $xs, $public, 'object field with simple fragment spread matches public facade';
 };
 
+subtest 'execute object field with skipped concrete fragments through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = <<'GRAPHQL';
+query {
+  user(id: "9") {
+    ... on CheckedUser { id }
+    ...UserFields
+  }
+}
+
+fragment UserFields on User {
+  id
+  name
+}
+GRAPHQL
+
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'irrelevant concrete fragments are skipped without PP fallback';
+};
+
 subtest 'execute object field with is_type_of through xs path' => sub {
   require GraphQL::Houtou::XS::Execution;
 

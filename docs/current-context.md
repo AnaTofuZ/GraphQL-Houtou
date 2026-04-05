@@ -46,6 +46,10 @@ It should stay short enough to recover momentum quickly after context resets.
 - `171a072` Handle execution callback exceptions in XS
 - `758f0f9` Normalize promise code hooks
 - `0c0b9f7` Reduce XS execution fixed overhead
+- `838747b` Reduce promise execution merge overhead
+- `8eb07cc` Profile PP bridges and batch promise list completion
+- `1343219` Move prepared execution entrypoint into XS
+- `41477aa` Make XS field execution promise-aware
 - `a17a659` Add global default promise hooks
 - `7a5d061` Normalize promise hooks for XS execution
 - `ad56343` Move promise adapter dispatch into XS
@@ -156,6 +160,8 @@ Still delegated to PP helpers:
   backend names
 - promise dispatch, list/hash merge, response shaping, and located error
   decoration are now XS-backed
+- prepared operation execution now runs in XS
+- promise-aware top-level field execution now runs in XS
 
 ## Testing Snapshot
 
@@ -168,7 +174,7 @@ Latest local verification:
 - Latest local verification:
   - `./Build build`
   - `./Build test`
-  - `13 files / 172 tests / PASS`
+  - `13 files / 173 tests / PASS`
 
 ## Next Work
 
@@ -182,32 +188,32 @@ Key constraint:
 - Houtou runtime helpers should stop calling upstream execution internals and
   instead call Houtou-owned execution helpers.
 
+Recent benchmark snapshot:
+
+- `simple_scalar`
+  - `houtou_xs_ast`: about `55.8k/s`
+  - `upstream_ast`: about `41.1k/s`
+- `async_scalar`
+  - `houtou_facade_ast`: about `54.1k/s`
+  - `upstream_ast`: about `42.6k/s`
+- `async_list`
+  - `houtou_facade_ast`: about `30.2k/s`
+  - `upstream_ast`: about `26.5k/s`
+
+Recent PP bridge profile snapshot (`HOUTOU_PROFILE_PP_BRIDGE=1`):
+
+- `async_scalar`
+  - `variables_apply_defaults=1`
+  - `execute_prepared_context=0`
+  - `complete_value_catching_error=1`
+- `async_list`
+  - `variables_apply_defaults=1`
+  - `execute_prepared_context=0`
+  - `complete_value_catching_error=2`
+
 Immediate next step:
 
-- benchmark practical execute workloads against upstream `GraphQL`
-- keep promise-heavy execution in PP for now
-- continue shrinking common-case PP fallbacks only where benchmarks justify it
-- benchmark analysis shows `simple_scalar` on prebuilt AST is still limited by
-  fixed overhead rather than deep execution work
-- recent benchmark snapshot:
-  - `simple_scalar`
-    - `houtou_xs_ast`: about `40.3k/s`
-    - `upstream_ast`: about `43.0k/s`
-  - `nested_variable_object`
-    - `houtou_xs_ast`: about `27.8k/s`
-    - `upstream_ast`: about `25.5k/s`
-  - `list_of_objects`
-    - `houtou_xs_ast`: about `20.0k/s`
-    - `upstream_ast`: about `18.1k/s`
-  - `abstract_with_fragment`
-    - `houtou_xs_ast`: about `19.1k/s`
-    - `upstream_ast`: about `23.8k/s`
-  - `async_scalar`
-    - `houtou_facade_ast`: about `31.2k/s`
-    - `upstream_ast`: about `42.6k/s`
-- current execution-focused optimization themes are:
-  - keep shrinking fixed overhead for flat AST queries
-  - move abstract fragment / abstract completion deeper into XS
-  - move promise completion continuations deeper into XS
-  - keep adapter flexibility while treating promise hooks as pre-resolved
-    execution hooks
+- remove the unconditional `variables_apply_defaults` PP bridge when an
+  operation has no variable definitions
+- continue shrinking `complete_value_catching_error` fallback counts
+- keep abstract/object error paths moving deeper into XS

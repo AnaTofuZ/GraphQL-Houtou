@@ -2141,11 +2141,26 @@ gql_execution_build_context(pTHX_ SV *schema, SV *ast, SV *root_value, SV *conte
     runtime_variables_sv = newRV_noinc((SV *)newHV());
   }
 
-  applied_variables_sv = gql_execution_call_pp_variables_apply_defaults(
-    aTHX_ schema,
-    (variables_svp && SvOK(*variables_svp)) ? *variables_svp : empty_variables_sv,
-    (variable_values && SvOK(variable_values)) ? variable_values : runtime_variables_sv
-  );
+  {
+    SV *operation_variables_sv = (variables_svp && SvOK(*variables_svp)) ? *variables_svp : empty_variables_sv;
+    HV *operation_variables_hv = NULL;
+
+    if (operation_variables_sv
+        && SvROK(operation_variables_sv)
+        && SvTYPE(SvRV(operation_variables_sv)) == SVt_PVHV) {
+      operation_variables_hv = (HV *)SvRV(operation_variables_sv);
+    }
+
+    if (operation_variables_hv && HvUSEDKEYS(operation_variables_hv) == 0) {
+      applied_variables_sv = newRV_noinc((SV *)newHV());
+    } else {
+      applied_variables_sv = gql_execution_call_pp_variables_apply_defaults(
+        aTHX_ schema,
+        operation_variables_sv,
+        (variable_values && SvOK(variable_values)) ? variable_values : runtime_variables_sv
+      );
+    }
+  }
 
   gql_store_sv(context_hv, "schema", newSVsv(schema));
   gql_store_sv(context_hv, "fragments", newRV_noinc((SV *)fragments_hv));

@@ -1180,6 +1180,32 @@ gql_execution_path_with_index(pTHX_ SV *path, IV index) {
   return ret;
 }
 
+static SV *
+gql_execution_path_with_key(pTHX_ SV *path, SV *key_sv) {
+  AV *path_copy_av = newAV();
+  SV *ret;
+
+  if (SvROK(path) && SvTYPE(SvRV(path)) == SVt_PVAV) {
+    AV *path_av = (AV *)SvRV(path);
+    I32 path_len = av_len(path_av);
+    I32 path_i;
+
+    if (path_len >= 0) {
+      av_extend(path_copy_av, path_len + 1);
+    }
+    for (path_i = 0; path_i <= path_len; path_i++) {
+      SV **path_part_svp = av_fetch(path_av, path_i, 0);
+      if (path_part_svp) {
+        av_push(path_copy_av, newSVsv(*path_part_svp));
+      }
+    }
+  }
+
+  av_push(path_copy_av, newSVsv(key_sv));
+  ret = newRV_noinc((SV *)path_copy_av);
+  return ret;
+}
+
 static int
 gql_execution_is_leaf_like_type(pTHX_ SV *type) {
   SV *current = newSVsv(type);
@@ -1708,7 +1734,7 @@ gql_execution_build_context(pTHX_ SV *schema, SV *ast, SV *root_value, SV *conte
   gql_store_sv(resolve_info_base_hv, "fragments", newRV_inc((SV *)fragments_hv));
   gql_store_sv(resolve_info_base_hv, "root_value", root_value && SvOK(root_value) ? newSVsv(root_value) : newSV(0));
   gql_store_sv(resolve_info_base_hv, "operation", newSVsv(operation_sv));
-  gql_store_sv(resolve_info_base_hv, "variable_values", newSV(0));
+  gql_store_sv(resolve_info_base_hv, "variable_values", newSVsv(applied_variables_sv));
   gql_store_sv(resolve_info_base_hv, "promise_code", promise_code && SvOK(promise_code) ? newSVsv(promise_code) : newSV(0));
   gql_store_sv(context_hv, "resolve_info_base", newRV_noinc((SV *)resolve_info_base_hv));
 
@@ -2147,12 +2173,6 @@ gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_d
   SV **field_name_svp;
   HV *field_def_hv;
   SV **return_type_svp;
-  SV **fragments_svp;
-  SV **root_value_svp;
-  SV **operation_svp;
-  SV **variable_values_svp;
-  SV **promise_code_svp;
-  SV **schema_svp;
 
   if (!SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
     croak("context must be a hash reference");
@@ -2188,14 +2208,11 @@ gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_d
     croak("field definition has no type");
   }
 
-  variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
-
   gql_store_sv(info_hv, "field_name", newSVsv(*field_name_svp));
   gql_store_sv(info_hv, "field_nodes", newSVsv(nodes));
   gql_store_sv(info_hv, "return_type", newSVsv(*return_type_svp));
   gql_store_sv(info_hv, "parent_type", newSVsv(parent_type));
   gql_store_sv(info_hv, "path", newSVsv(path));
-  gql_store_sv(info_hv, "variable_values", (variable_values_svp && SvOK(*variable_values_svp)) ? newSVsv(*variable_values_svp) : newSV(0));
 
   return newRV_noinc((SV *)info_hv);
 }
@@ -2623,7 +2640,6 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     HV *field_def_hv;
     SV **resolve_svp;
     SV *resolve_sv;
-    AV *path_copy_av;
     SV *path_copy_sv;
     SV *info_sv;
     SV *result_sv;
@@ -2685,23 +2701,7 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
         : newSV(0);
     }
 
-    path_copy_av = newAV();
-    if (SvROK(path) && SvTYPE(SvRV(path)) == SVt_PVAV) {
-      AV *path_av = (AV *)SvRV(path);
-      I32 path_len = av_len(path_av);
-      if (path_len >= 0) {
-        I32 path_i;
-        av_extend(path_copy_av, path_len + 1);
-        for (path_i = 0; path_i <= path_len; path_i++) {
-          SV **path_part_svp = av_fetch(path_av, path_i, 0);
-          if (path_part_svp) {
-            av_push(path_copy_av, newSVsv(*path_part_svp));
-          }
-        }
-      }
-    }
-    av_push(path_copy_av, newSVsv(*result_name_svp));
-    path_copy_sv = newRV_noinc((SV *)path_copy_av);
+    path_copy_sv = gql_execution_path_with_key(aTHX_ path, *result_name_svp);
 
     info_sv = gql_execution_build_resolve_info(aTHX_ context, parent_type, field_def_sv, path_copy_sv, nodes_sv);
     field_args_svp = hv_fetch(field_def_hv, "args", 4, 0);

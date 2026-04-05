@@ -103,6 +103,7 @@ sub perl_to_graphql {
 }
 
 my $HAS_XS_PROMISE_HELPERS;
+my $HAS_XS_COMPLETE_VALUE;
 
 sub _complete_value {
   my ($self, $context, $nodes, $info, $path, $result) = @_;
@@ -110,9 +111,8 @@ sub _complete_value {
   my $index = 0;
   my @completed;
 
-  require GraphQL::Houtou::Execution::PP;
   @completed = map {
-    GraphQL::Houtou::Execution::PP::_complete_value_catching_error(
+    _complete_item_value(
       $context,
       $item_type,
       $nodes,
@@ -125,6 +125,38 @@ sub _complete_value {
   return (grep { _is_promise($context, $_) } @completed)
     ? _promise_for_list($context, \@completed)
     : _merge_list(\@completed);
+}
+
+sub _complete_item_value {
+  my ($context, $item_type, $nodes, $info, $path, $value) = @_;
+
+  if (!defined $HAS_XS_COMPLETE_VALUE) {
+    $HAS_XS_COMPLETE_VALUE = eval {
+      require GraphQL::Houtou::XS::Execution;
+      GraphQL::Houtou::XS::Execution->can('_complete_value_catching_error_xs');
+    } ? 1 : 0;
+  }
+
+  if ($HAS_XS_COMPLETE_VALUE) {
+    return GraphQL::Houtou::XS::Execution::_complete_value_catching_error_xs(
+      $context,
+      $item_type,
+      $nodes,
+      $info,
+      $path,
+      $value,
+    );
+  }
+
+  require GraphQL::Houtou::Execution::PP;
+  return GraphQL::Houtou::Execution::PP::_complete_value_catching_error(
+    $context,
+    $item_type,
+    $nodes,
+    $info,
+    $path,
+    $value,
+  );
 }
 
 sub _merge_list {

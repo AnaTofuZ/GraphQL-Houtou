@@ -96,6 +96,8 @@ sub _validate_operation {
     _directive_location_for_operation($operation_type),
     $variables,
   );
+  _validate_subscription_operation($errors, $operation, $fragments)
+    if $operation_type eq 'subscription';
   _validate_selections(
     $errors,
     $schema,
@@ -254,6 +256,7 @@ sub _validate_selections {
     }
 
     if ($selection->{kind} eq 'fragment_spread') {
+      my $fragment;
       _validate_directives(
         $errors,
         $compiled,
@@ -264,6 +267,16 @@ sub _validate_selections {
       if (!$fragments->{$selection->{name}}) {
         push @$errors, _error(
           "Unknown fragment '$selection->{name}'.",
+          $selection->{location},
+        );
+        next;
+      }
+
+      $fragment = $fragments->{$selection->{name}};
+      if ($compiled->{types}{ $fragment->{on} }
+          && !_selection_types_overlap($compiled, $parent_type->{name}, $fragment->{on})) {
+        push @$errors, _error(
+          "Fragment '$selection->{name}' cannot be spread here because type '$fragment->{on}' can never apply to '$parent_type->{name}'.",
           $selection->{location},
         );
       }
@@ -285,6 +298,14 @@ sub _validate_selections {
       if (!$target_type) {
         push @$errors, _error(
           "Inline fragment references unknown type '$target_type_name'.",
+          $selection->{location},
+        );
+        next;
+      }
+
+      if (!_selection_types_overlap($compiled, $parent_type->{name}, $target_type_name)) {
+        push @$errors, _error(
+          "Inline fragment on '$target_type_name' cannot be used where type '$parent_type->{name}' is expected.",
           $selection->{location},
         );
         next;
@@ -394,6 +415,43 @@ sub _validate_directives {
 sub _directive_allows_location {
   my ($definition, $location) = @_;
   return scalar grep { $_ eq $location } @{ $definition->{locations} || [] };
+}
+
+sub _validate_subscription_operation {
+  my ($errors, $operation, $fragments) = @_;
+  my @field_names = _collect_top_level_subscription_fields($operation->{selections} || [], $fragments);
+
+  if (@field_names != 1) {
+    push @$errors, _error(
+      "Subscription needs to have only one field; got (@field_names)",
+      $operation->{location},
+    );
+  }
+}
+
+sub _collect_top_level_subscription_fields {
+  my ($selections, $fragments) = @_;
+  my @field_names;
+
+  for my $selection (@$selections) {
+    if ($selection->{kind} eq 'field') {
+      push @field_names, $selection->{name} if defined $selection->{name};
+      next;
+    }
+
+    if ($selection->{kind} eq 'fragment_spread') {
+      my $fragment = $fragments->{$selection->{name}};
+      next if !$fragment;
+      push @field_names, _collect_top_level_subscription_fields($fragment->{selections} || [], $fragments);
+      next;
+    }
+
+    if ($selection->{kind} eq 'inline_fragment') {
+      push @field_names, _collect_top_level_subscription_fields($selection->{selections} || [], $fragments);
+    }
+  }
+
+  return @field_names;
 }
 
 sub _validate_arguments {
@@ -532,6 +590,30 @@ sub _unwrap_named_type {
   my ($compiled, $type_ref) = @_;
   my $name = _named_type_name($type_ref);
   return $name ? $compiled->{types}{$name} : undef;
+}
+
+sub _selection_types_overlap {
+  my ($compiled, $left_name, $right_name) = @_;
+  my $left = $compiled->{types}{$left_name};
+  my $right = $compiled->{types}{$right_name};
+  my %left_objects;
+
+  return 0 if !$left || !$right;
+  return 1 if $left_name eq $right_name;
+
+  %left_objects = map { ($_ => 1) } _possible_object_names($compiled, $left_name);
+  return scalar grep { $left_objects{$_} } _possible_object_names($compiled, $right_name);
+}
+
+sub _possible_object_names {
+  my ($compiled, $type_name) = @_;
+  my $type = $compiled->{types}{$type_name};
+
+  return () if !$type;
+  return ($type_name) if $type->{kind} eq 'OBJECT';
+  return @{ $compiled->{possible_types}{$type_name} || [] }
+    if $type->{kind} eq 'INTERFACE' || $type->{kind} eq 'UNION';
+  return ();
 }
 
 sub _type_kind {

@@ -44,6 +44,20 @@ my $Mutation = GraphQL::Type::Object->new(
   },
 );
 
+my $Subscription = GraphQL::Type::Object->new(
+  name => 'Subscription',
+  fields => {
+    importantUser => {
+      type => $User,
+      resolve => sub { +{} },
+    },
+    otherUser => {
+      type => $User,
+      resolve => sub { +{} },
+    },
+  },
+);
+
 my $schema = GraphQL::Schema->new(
   query => GraphQL::Type::Object->new(
     name => 'Query',
@@ -63,6 +77,7 @@ my $schema = GraphQL::Schema->new(
     },
   ),
   mutation => $Mutation,
+  subscription => $Subscription,
   types => [ $User, $Node ],
 );
 
@@ -153,6 +168,53 @@ subtest 'unknown fragment targets and cycles are rejected' => sub {
   is_deeply messages($errors), [
     "Fragment 'Loop' references unknown type 'MissingType'.",
     "Fragment 'Loop' participates in a cycle.",
+  ];
+};
+
+subtest 'fragment spreads must be type-compatible' => sub {
+  my $errors = validate($schema, q|
+    query Q {
+      viewer {
+        ...OnQuery
+      }
+    }
+
+    fragment OnQuery on Query {
+      viewer { id }
+    }
+  |);
+
+  is_deeply messages($errors), [
+    "Fragment 'OnQuery' cannot be spread here because type 'Query' can never apply to 'User'.",
+  ];
+};
+
+subtest 'inline fragments must be type-compatible' => sub {
+  my $errors = validate($schema, q|
+    query Q {
+      viewer {
+        ... on Query {
+          viewer { id }
+        }
+      }
+    }
+  |);
+
+  is_deeply messages($errors), [
+    "Inline fragment on 'Query' cannot be used where type 'User' is expected.",
+  ];
+};
+
+subtest 'subscription must have a single top-level field' => sub {
+  my $errors = validate($schema, q|
+    subscription S {
+      importantUser { id }
+      otherUser { id }
+    }
+  |);
+
+  is_deeply messages($errors), [
+    'Subscription needs to have only one field; got (importantUser otherUser)',
   ];
 };
 

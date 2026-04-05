@@ -8,6 +8,75 @@ static SV *gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *
 static SV *gql_execution_collect_fields_xs(pTHX_ SV *context, SV *object_type, SV *selections);
 static SV *gql_execution_call_graphql_error_but(pTHX_ SV *error, SV *locations, SV *path);
 
+typedef struct {
+  UV variables_apply_defaults_calls;
+  UV execute_prepared_context_calls;
+  UV resolve_field_value_or_error_calls;
+  UV complete_value_catching_error_calls;
+  UV get_argument_values_calls;
+  UV type_will_accept_calls;
+} gql_execution_pp_bridge_profile_t;
+
+static int gql_execution_pp_bridge_profile_enabled = -1;
+static gql_execution_pp_bridge_profile_t gql_execution_pp_bridge_profile_counts;
+
+static int
+gql_execution_pp_bridge_profile_is_enabled(void) {
+  if (gql_execution_pp_bridge_profile_enabled < 0) {
+    const char *value = getenv("HOUTOU_PROFILE_PP_BRIDGE");
+    gql_execution_pp_bridge_profile_enabled = (value && *value && strNE(value, "0")) ? 1 : 0;
+  }
+  return gql_execution_pp_bridge_profile_enabled;
+}
+
+static void
+gql_execution_pp_bridge_profile_reset(void) {
+  Zero(&gql_execution_pp_bridge_profile_counts, 1, gql_execution_pp_bridge_profile_t);
+}
+
+static void
+gql_execution_pp_bridge_profile_report(pTHX_ const char *label) {
+  if (!gql_execution_pp_bridge_profile_is_enabled()) {
+    return;
+  }
+
+  PerlIO_printf(
+    PerlIO_stderr(),
+    "[houtou][pp-bridge] %s variables_apply_defaults=%" UVuf
+    " execute_prepared_context=%" UVuf
+    " resolve_field_value_or_error=%" UVuf
+    " complete_value_catching_error=%" UVuf
+    " get_argument_values=%" UVuf
+    " type_will_accept=%" UVuf
+    "\n",
+    label,
+    gql_execution_pp_bridge_profile_counts.variables_apply_defaults_calls,
+    gql_execution_pp_bridge_profile_counts.execute_prepared_context_calls,
+    gql_execution_pp_bridge_profile_counts.resolve_field_value_or_error_calls,
+    gql_execution_pp_bridge_profile_counts.complete_value_catching_error_calls,
+    gql_execution_pp_bridge_profile_counts.get_argument_values_calls,
+    gql_execution_pp_bridge_profile_counts.type_will_accept_calls
+  );
+}
+
+static SV *
+gql_execution_context_promise_code(SV *context) {
+  HV *context_hv;
+  SV **promise_code_svp;
+
+  if (!context || !SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+
+  context_hv = (HV *)SvRV(context);
+  promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  if (!promise_code_svp || !SvOK(*promise_code_svp)) {
+    return &PL_sv_undef;
+  }
+
+  return *promise_code_svp;
+}
+
 
 static HV *
 gql_promise_code_hv(SV *promise_code) {
@@ -623,6 +692,10 @@ gql_execution_call_pp_variables_apply_defaults(pTHX_ SV *schema, SV *operation_v
   int count;
   SV *ret;
   static CV *cv = NULL;
+
+  if (gql_execution_pp_bridge_profile_is_enabled()) {
+    gql_execution_pp_bridge_profile_counts.variables_apply_defaults_calls++;
+  }
   if (!cv) {
     cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_variables_apply_defaults");
   }
@@ -658,6 +731,10 @@ gql_execution_call_pp_execute_prepared_context(pTHX_ SV *context) {
   int count;
   SV *ret;
   static CV *cv = NULL;
+
+  if (gql_execution_pp_bridge_profile_is_enabled()) {
+    gql_execution_pp_bridge_profile_counts.execute_prepared_context_calls++;
+  }
   if (!cv) {
     cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::execute_prepared_context");
   }
@@ -691,6 +768,10 @@ gql_execution_call_pp_resolve_field_value_or_error(pTHX_ SV *context, SV *field_
   int count;
   SV *ret;
   static CV *cv = NULL;
+
+  if (gql_execution_pp_bridge_profile_is_enabled()) {
+    gql_execution_pp_bridge_profile_counts.resolve_field_value_or_error_calls++;
+  }
   if (!cv) {
     cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_resolve_field_value_or_error");
   }
@@ -729,6 +810,10 @@ gql_execution_call_pp_complete_value_catching_error(pTHX_ SV *context, SV *retur
   int count;
   SV *ret;
   static CV *cv = NULL;
+
+  if (gql_execution_pp_bridge_profile_is_enabled()) {
+    gql_execution_pp_bridge_profile_counts.complete_value_catching_error_calls++;
+  }
   if (!cv) {
     cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_complete_value_catching_error");
   }
@@ -806,6 +891,10 @@ gql_execution_call_pp_get_argument_values(pTHX_ SV *def, SV *node, SV *variable_
   int count;
   SV *ret;
   static CV *cv = NULL;
+
+  if (gql_execution_pp_bridge_profile_is_enabled()) {
+    gql_execution_pp_bridge_profile_counts.get_argument_values_calls++;
+  }
   if (!cv) {
     cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_get_argument_values_pp");
   }
@@ -841,6 +930,10 @@ gql_execution_call_pp_type_will_accept(pTHX_ SV *arg_type, SV *var_type) {
   int count;
   SV *ret;
   static CV *cv = NULL;
+
+  if (gql_execution_pp_bridge_profile_is_enabled()) {
+    gql_execution_pp_bridge_profile_counts.type_will_accept_calls++;
+  }
   if (!cv) {
     cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_type_will_accept");
   }
@@ -866,6 +959,82 @@ gql_execution_call_pp_type_will_accept(pTHX_ SV *arg_type, SV *var_type) {
   FREETMPS;
   LEAVE;
 
+  return ret;
+}
+
+static SV *
+gql_execution_call_xs_then_complete_value(pTHX_ SV *context, SV *return_type, SV *nodes, SV *info, SV *path, SV *promise) {
+  dSP;
+  int count;
+  SV *ret;
+  static CV *cv = NULL;
+
+  if (!cv) {
+    cv = get_cv("GraphQL::Houtou::XS::Execution::_then_complete_value_xs", 0);
+    if (!cv) {
+      croak("unable to resolve GraphQL::Houtou::XS::Execution::_then_complete_value_xs");
+    }
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  EXTEND(SP, 6);
+  XPUSHs(gql_execution_mortal_sv_ref(context));
+  XPUSHs(gql_execution_mortal_sv_ref(return_type));
+  XPUSHs(gql_execution_mortal_sv_ref(nodes));
+  XPUSHs(gql_execution_mortal_sv_ref(info));
+  XPUSHs(gql_execution_mortal_sv_ref(path));
+  XPUSHs(gql_execution_mortal_sv_ref(promise));
+  PUTBACK;
+  count = call_sv((SV *)cv, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("_then_complete_value_xs did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
+gql_execution_call_xs_then_merge_completed_list(pTHX_ SV *promise_code, SV *promise) {
+  dSP;
+  int count;
+  SV *ret;
+  static CV *cv = NULL;
+
+  if (!cv) {
+    cv = get_cv("GraphQL::Houtou::XS::Execution::_then_merge_completed_list_xs", 0);
+    if (!cv) {
+      croak("unable to resolve GraphQL::Houtou::XS::Execution::_then_merge_completed_list_xs");
+    }
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  EXTEND(SP, 2);
+  XPUSHs(gql_execution_mortal_sv_ref(promise_code));
+  XPUSHs(gql_execution_mortal_sv_ref(promise));
+  PUTBACK;
+  count = call_sv((SV *)cv, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("_then_merge_completed_list_xs did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
   return ret;
 }
 
@@ -1754,6 +1923,10 @@ gql_execution_execute(pTHX_ SV *schema, SV *document, SV *root_value, SV *contex
   SV *context = NULL;
   SV *result = NULL;
 
+  if (gql_execution_pp_bridge_profile_is_enabled()) {
+    gql_execution_pp_bridge_profile_reset();
+  }
+
   ast = gql_execution_coerce_ast(aTHX_ document);
   context = gql_execution_build_context(
     aTHX_ schema,
@@ -1766,6 +1939,7 @@ gql_execution_execute(pTHX_ SV *schema, SV *document, SV *root_value, SV *contex
     promise_code
   );
   result = gql_execution_call_pp_execute_prepared_context(aTHX_ context);
+  gql_execution_pp_bridge_profile_report(aTHX_ "execute");
 
   /*
    * TODO: the execution path still shares Perl-side structures across the
@@ -1777,8 +1951,20 @@ gql_execution_execute(pTHX_ SV *schema, SV *document, SV *root_value, SV *contex
 
 static SV *
 gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *return_type, SV *nodes, SV *info, SV *path, SV *result) {
+  SV *promise_code = gql_execution_context_promise_code(context);
+
   if (result && SvROK(result) && sv_derived_from(result, "GraphQL::Error")) {
     return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
+  }
+
+  if (SvOK(promise_code) && result && SvROK(result)) {
+    SV *is_promise_sv = gql_promise_call_is_promise(aTHX_ promise_code, result);
+    int is_promise = SvTRUE(is_promise_sv);
+
+    SvREFCNT_dec(is_promise_sv);
+    if (is_promise) {
+      return gql_execution_call_xs_then_complete_value(aTHX_ context, return_type, nodes, info, path, result);
+    }
   }
 
   if (sv_derived_from(return_type, "GraphQL::Houtou::Type::NonNull")
@@ -1835,9 +2021,11 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
     if (SvROK(result) && SvTYPE(SvRV(result)) == SVt_PVAV) {
       AV *result_av = (AV *)SvRV(result);
       I32 result_len = av_len(result_av);
+      AV *completed_values_av = newAV();
       AV *data_av = newAV();
       AV *errors_av = newAV();
       I32 i;
+      int promise_present = 0;
 
       for (i = 0; i <= result_len; i++) {
         SV **item_svp = av_fetch(result_av, i, 0);
@@ -1851,29 +2039,27 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
           item_svp ? *item_svp : &PL_sv_undef
         );
 
-        if (SvROK(completed) && SvTYPE(SvRV(completed)) == SVt_PVHV) {
-          HV *completed_hv = (HV *)SvRV(completed);
-          SV **data_svp = hv_fetch(completed_hv, "data", 4, 0);
-          SV **item_errors_svp = hv_fetch(completed_hv, "errors", 6, 0);
-          if (data_svp) {
-            av_push(data_av, newSVsv(*data_svp));
-          } else {
-            av_push(data_av, newSV(0));
+        if (SvOK(promise_code) && completed && SvROK(completed)) {
+          SV *is_completed_promise_sv = gql_promise_call_is_promise(aTHX_ promise_code, completed);
+          int is_completed_promise = SvTRUE(is_completed_promise_sv);
+
+          SvREFCNT_dec(is_completed_promise_sv);
+          if (is_completed_promise) {
+            promise_present = 1;
+            av_push(completed_values_av, completed);
+            completed = NULL;
           }
-          if (item_errors_svp && SvROK(*item_errors_svp) && SvTYPE(SvRV(*item_errors_svp)) == SVt_PVAV) {
-            AV *item_errors_av = (AV *)SvRV(*item_errors_svp);
-            I32 err_len = av_len(item_errors_av);
-            I32 err_i;
-            for (err_i = 0; err_i <= err_len; err_i++) {
-              SV **err_svp = av_fetch(item_errors_av, err_i, 0);
-              if (err_svp) {
-                av_push(errors_av, newSVsv(*err_svp));
-              }
-            }
-          }
-        } else {
+        }
+
+        if (completed && SvROK(completed) && SvTYPE(SvRV(completed)) == SVt_PVHV) {
+          av_push(completed_values_av, completed);
+          completed = NULL;
+        } else if (!promise_present) {
           SvREFCNT_dec(item_path_sv);
-          SvREFCNT_dec(completed);
+          SvREFCNT_dec((SV *)completed_values_av);
+          if (completed) {
+            SvREFCNT_dec(completed);
+          }
           SvREFCNT_dec(item_type);
           SvREFCNT_dec((SV *)data_av);
           SvREFCNT_dec((SV *)errors_av);
@@ -1881,10 +2067,53 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
         }
 
         SvREFCNT_dec(item_path_sv);
-        SvREFCNT_dec(completed);
+      }
+
+      if (promise_present) {
+        SV *aggregate = gql_promise_call_all(aTHX_ promise_code, completed_values_av);
+        SV *ret = gql_execution_call_xs_then_merge_completed_list(aTHX_ promise_code, aggregate);
+
+        SvREFCNT_dec(aggregate);
+        SvREFCNT_dec(item_type);
+        SvREFCNT_dec((SV *)completed_values_av);
+        SvREFCNT_dec((SV *)data_av);
+        SvREFCNT_dec((SV *)errors_av);
+        return ret;
+      }
+
+      for (i = 0; i <= av_len(completed_values_av); i++) {
+        SV **completed_svp = av_fetch(completed_values_av, i, 0);
+        HV *completed_hv;
+        SV **data_svp;
+        SV **item_errors_svp;
+
+        if (!completed_svp || !SvROK(*completed_svp) || SvTYPE(SvRV(*completed_svp)) != SVt_PVHV) {
+          continue;
+        }
+
+        completed_hv = (HV *)SvRV(*completed_svp);
+        data_svp = hv_fetch(completed_hv, "data", 4, 0);
+        item_errors_svp = hv_fetch(completed_hv, "errors", 6, 0);
+        if (data_svp) {
+          av_push(data_av, newSVsv(*data_svp));
+        } else {
+          av_push(data_av, newSV(0));
+        }
+        if (item_errors_svp && SvROK(*item_errors_svp) && SvTYPE(SvRV(*item_errors_svp)) == SVt_PVAV) {
+          AV *item_errors_av = (AV *)SvRV(*item_errors_svp);
+          I32 err_len = av_len(item_errors_av);
+          I32 err_i;
+          for (err_i = 0; err_i <= err_len; err_i++) {
+            SV **err_svp = av_fetch(item_errors_av, err_i, 0);
+            if (err_svp) {
+              av_push(errors_av, newSVsv(*err_svp));
+            }
+          }
+        }
       }
 
       SvREFCNT_dec(item_type);
+      SvREFCNT_dec((SV *)completed_values_av);
       {
         HV *ret_hv = newHV();
         (void)hv_store(ret_hv, "data", 4, newRV_noinc((SV *)data_av), 0);

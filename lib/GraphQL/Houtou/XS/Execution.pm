@@ -33,6 +33,7 @@ our @EXPORT_OK = qw(
   _then_resolve_wrapped_error_xs
   _then_reject_located_error_xs
   _then_complete_value_xs
+  _then_merge_completed_list_xs
   _then_build_response_xs
   _then_merge_hash_xs
   _then_resolve_operation_error_xs
@@ -109,6 +110,13 @@ sub _then_complete_value_xs {
       $path,
       $_[0],
     );
+  });
+}
+
+sub _then_merge_completed_list_xs {
+  my ($promise_code, $promise) = @_;
+  return then_promise($promise_code, $promise, sub {
+    return _merge_completed_list_xs(_promise_all_values_to_arrayref(@_));
   });
 }
 

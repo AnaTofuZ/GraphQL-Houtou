@@ -39,6 +39,39 @@ gql_execution_call_graphql_error_coerce(pTHX_ SV *error) {
 }
 
 static SV *
+gql_execution_try_type_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok) {
+  dSP;
+  int count;
+  SV *ret;
+
+  *ok = 0;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(type)));
+  XPUSHs(sv_2mortal(newSVsv(value)));
+  PUTBACK;
+
+  count = call_method("graphql_to_perl", G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV) || count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return &PL_sv_undef;
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  *ok = 1;
+
+  return ret;
+}
+
+static SV *
 gql_execution_call_pp_variables_apply_defaults(pTHX_ SV *schema, SV *operation_variables, SV *variable_values) {
   dSP;
   int count;
@@ -247,6 +280,129 @@ gql_execution_call_pp_get_argument_values(pTHX_ SV *def, SV *node, SV *variable_
 }
 
 static SV *
+gql_execution_call_pp_type_will_accept(pTHX_ SV *arg_type, SV *var_type) {
+  dSP;
+  int count;
+  SV *ret;
+
+  gql_execution_require_pp(aTHX);
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(arg_type)));
+  XPUSHs(sv_2mortal(newSVsv(var_type)));
+  PUTBACK;
+
+  count = call_pv("GraphQL::Houtou::Execution::PP::_type_will_accept", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("GraphQL::Houtou::Execution::PP::_type_will_accept did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
+static SV *
+gql_execution_call_type_perl_to_graphql(pTHX_ SV *type, SV *value, int *ok) {
+  dSP;
+  int count;
+  SV *ret;
+
+  *ok = 0;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(type)));
+  XPUSHs(sv_2mortal(newSVsv(value)));
+  PUTBACK;
+
+  count = call_method("perl_to_graphql", G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV) || count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return &PL_sv_undef;
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  *ok = 1;
+
+  return ret;
+}
+
+static SV *
+gql_execution_call_type_of(pTHX_ SV *type) {
+  dSP;
+  int count;
+  SV *ret;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(type)));
+  PUTBACK;
+
+  count = call_method("of", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("type->of did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
+static SV *
+gql_execution_call_type_to_string(pTHX_ SV *type) {
+  dSP;
+  int count;
+  SV *ret;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(type)));
+  PUTBACK;
+
+  count = call_method("to_string", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("type->to_string did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
+static SV *
 gql_execution_coerce_ast(pTHX_ SV *document) {
   if (SvROK(document)) {
     return newSVsv(document);
@@ -434,6 +590,62 @@ gql_execution_execute(pTHX_ SV *schema, SV *document, SV *root_value, SV *contex
 }
 
 static SV *
+gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *return_type, SV *nodes, SV *info, SV *path, SV *result) {
+  if (result && SvROK(result) && sv_derived_from(result, "GraphQL::Error")) {
+    return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
+  }
+
+  if (sv_derived_from(return_type, "GraphQL::Houtou::Type::NonNull")
+      || sv_derived_from(return_type, "GraphQL::Type::NonNull")) {
+    SV *inner_type = gql_execution_call_type_of(aTHX_ return_type);
+    SV *completed = gql_execution_complete_value_catching_error_xs_impl(
+      aTHX_ context,
+      inner_type,
+      nodes,
+      info,
+      path,
+      result
+    );
+
+    SvREFCNT_dec(inner_type);
+    if (SvROK(completed) && SvTYPE(SvRV(completed)) == SVt_PVHV) {
+      HV *completed_hv = (HV *)SvRV(completed);
+      SV **data_svp = hv_fetch(completed_hv, "data", 4, 0);
+      if (data_svp && !SvOK(*data_svp)) {
+        SvREFCNT_dec(completed);
+        return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
+      }
+    }
+
+    return completed;
+  }
+
+  if (!result || !SvOK(result)) {
+    HV *ret_hv = newHV();
+    (void)hv_store(ret_hv, "data", 4, newSV(0), 0);
+    return newRV_noinc((SV *)ret_hv);
+  }
+
+  if (sv_does(return_type, "GraphQL::Houtou::Role::Leaf")
+      || sv_does(return_type, "GraphQL::Role::Leaf")) {
+    int ok = 0;
+    SV *serialized = gql_execution_call_type_perl_to_graphql(aTHX_ return_type, result, &ok);
+
+    if (!ok) {
+      return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
+    }
+
+    {
+      HV *ret_hv = newHV();
+      (void)hv_store(ret_hv, "data", 4, serialized, 0);
+      return newRV_noinc((SV *)ret_hv);
+    }
+  }
+
+  return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
+}
+
+static SV *
 gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_def, SV *path, SV *nodes) {
   HV *info_hv = newHV();
   HV *context_hv;
@@ -505,6 +717,7 @@ static SV *
 gql_execution_get_argument_values_xs_impl(pTHX_ SV *def, SV *node, SV *variable_values) {
   HV *def_hv;
   HV *node_hv;
+  HV *variable_values_hv = NULL;
   SV **arg_defs_svp;
   SV **arg_nodes_svp;
   HV *arg_defs_hv;
@@ -523,6 +736,9 @@ gql_execution_get_argument_values_xs_impl(pTHX_ SV *def, SV *node, SV *variable_
 
   def_hv = (HV *)SvRV(def);
   node_hv = (HV *)SvRV(node);
+  if (variable_values && SvROK(variable_values) && SvTYPE(SvRV(variable_values)) == SVt_PVHV) {
+    variable_values_hv = (HV *)SvRV(variable_values);
+  }
   arg_defs_svp = hv_fetch(def_hv, "args", 4, 0);
   arg_nodes_svp = hv_fetch(node_hv, "arguments", 9, 0);
 
@@ -555,6 +771,7 @@ gql_execution_get_argument_values_xs_impl(pTHX_ SV *def, SV *node, SV *variable_
     SV **default_svp;
     SV **type_svp;
     HE *arg_node_he = NULL;
+    SV *arg_node_sv = NULL;
 
     if (!SvROK(arg_def_sv) || SvTYPE(SvRV(arg_def_sv)) != SVt_PVHV) {
       SvREFCNT_dec((SV *)coerced_hv);
@@ -568,21 +785,82 @@ gql_execution_get_argument_values_xs_impl(pTHX_ SV *def, SV *node, SV *variable_
       arg_node_he = hv_fetch_ent(arg_nodes_hv, name_sv, 0, 0);
     }
 
-    if (arg_node_he) {
-      SvREFCNT_dec((SV *)coerced_hv);
-      return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+    if (default_svp && SvOK(*default_svp)) {
+      if (!arg_node_he) {
+        (void)hv_store_ent(coerced_hv, name_sv, newSVsv(*default_svp), 0);
+        continue;
+      }
     }
 
-    if (default_svp && SvOK(*default_svp)) {
-      (void)hv_store_ent(coerced_hv, name_sv, newSVsv(*default_svp), 0);
+    if (!arg_node_he) {
+      if (type_svp && SvOK(*type_svp)
+          && (sv_derived_from(*type_svp, "GraphQL::Houtou::Type::NonNull")
+              || sv_derived_from(*type_svp, "GraphQL::Type::NonNull"))) {
+        SvREFCNT_dec((SV *)coerced_hv);
+        return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+      }
       continue;
     }
 
-    if (type_svp && SvOK(*type_svp)
-        && (sv_derived_from(*type_svp, "GraphQL::Houtou::Type::NonNull")
-            || sv_derived_from(*type_svp, "GraphQL::Type::NonNull"))) {
+    arg_node_sv = HeVAL(arg_node_he);
+    if (SvROK(arg_node_sv)) {
+      SV *inner = SvRV(arg_node_sv);
+
+      if (!SvROK(inner) && variable_values_hv) {
+        STRLEN var_len;
+        const char *var_name = SvPV(inner, var_len);
+        SV **var_svp = hv_fetch(variable_values_hv, var_name, (I32)var_len, 0);
+
+        if (var_svp && SvROK(*var_svp) && SvTYPE(SvRV(*var_svp)) == SVt_PVHV) {
+          HV *var_hv = (HV *)SvRV(*var_svp);
+          SV **value_svp = hv_fetch(var_hv, "value", 5, 0);
+          SV **var_type_svp = hv_fetch(var_hv, "type", 4, 0);
+          SV *type_ok_sv;
+
+          if (!value_svp || !var_type_svp || !SvOK(*var_type_svp)) {
+            SvREFCNT_dec((SV *)coerced_hv);
+            return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+          }
+
+          type_ok_sv = gql_execution_call_pp_type_will_accept(aTHX_ *type_svp, *var_type_svp);
+          if (!SvTRUE(type_ok_sv)) {
+            SvREFCNT_dec(type_ok_sv);
+            SvREFCNT_dec((SV *)coerced_hv);
+            return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+          }
+
+          SvREFCNT_dec(type_ok_sv);
+          (void)hv_store_ent(coerced_hv, name_sv, newSVsv(*value_svp), 0);
+          continue;
+        }
+
+        if (default_svp && SvOK(*default_svp)) {
+          (void)hv_store_ent(coerced_hv, name_sv, newSVsv(*default_svp), 0);
+          continue;
+        }
+
+        SvREFCNT_dec((SV *)coerced_hv);
+        return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+      }
+
       SvREFCNT_dec((SV *)coerced_hv);
       return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+    }
+
+    if (!type_svp || !SvOK(*type_svp)) {
+      SvREFCNT_dec((SV *)coerced_hv);
+      return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+    }
+
+    {
+      int ok = 0;
+      SV *parsed = gql_execution_try_type_graphql_to_perl(aTHX_ *type_svp, arg_node_sv, &ok);
+      if (!ok) {
+        SvREFCNT_dec((SV *)coerced_hv);
+        return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+      }
+      (void)hv_store_ent(coerced_hv, name_sv, parsed, 0);
+      continue;
     }
   }
 
@@ -922,7 +1200,7 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     info_sv = gql_execution_build_resolve_info(aTHX_ context, parent_type, field_def_sv, path_copy_sv, nodes_sv);
     context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
     variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
-    args_sv = gql_execution_call_pp_get_argument_values(
+    args_sv = gql_execution_get_argument_values_xs_impl(
       aTHX_ field_def_sv,
       *field_node_svp,
       (variable_values_svp && SvOK(*variable_values_svp)) ? *variable_values_svp : &PL_sv_undef
@@ -944,7 +1222,7 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
       continue;
     }
 
-    completed_sv = gql_execution_call_pp_complete_value_catching_error(
+    completed_sv = gql_execution_complete_value_catching_error_xs_impl(
       aTHX_ context,
       *type_svp,
       nodes_sv,

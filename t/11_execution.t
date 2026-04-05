@@ -192,4 +192,98 @@ subtest 'xs argument helper fast-path matches pp for no-arg field' => sub {
   is_deeply $xs, $pp, 'no-arg field is handled identically';
 };
 
+subtest 'xs argument helper fast-path matches pp for scalar literal arg' => sub {
+  require GraphQL::Houtou::XS::Execution;
+  require GraphQL::Houtou::Execution::PP;
+
+  my $field_def = $schema->query->fields->{greet};
+  my $node = {
+    name => 'greet',
+    arguments => {
+      name => 'houtou',
+    },
+  };
+  my $pp = GraphQL::Houtou::Execution::PP::_get_argument_values_pp($field_def, $node, {});
+  my $xs = GraphQL::Houtou::XS::Execution::_get_argument_values_xs($field_def, $node, {});
+
+  is_deeply $xs, $pp, 'scalar literal arg is handled identically';
+};
+
+subtest 'xs argument helper fast-path matches pp for provided variable arg' => sub {
+  require GraphQL::Houtou::XS::Execution;
+  require GraphQL::Houtou::Execution::PP;
+
+  my $field_def = $schema->query->fields->{user};
+  my $node = {
+    name => 'user',
+    arguments => {
+      id => \'id',
+    },
+  };
+  my $vars = {
+    id => {
+      value => '77',
+      type => $ID->non_null,
+    },
+  };
+  my $pp = GraphQL::Houtou::Execution::PP::_get_argument_values_pp($field_def, $node, $vars);
+  my $xs = GraphQL::Houtou::XS::Execution::_get_argument_values_xs($field_def, $node, $vars);
+
+  is_deeply $xs, $pp, 'provided variable arg is handled identically';
+};
+
+subtest 'xs completion helper fast-path matches pp for leaf and null cases' => sub {
+  require GraphQL::Houtou::XS::Execution;
+  require GraphQL::Houtou::Execution::PP;
+  require GraphQL::Error;
+
+  my $context = {
+    schema => $schema,
+    variable_values => {},
+    fragments => {},
+  };
+  my $nodes = [ { location => undef } ];
+  my $info = {
+    parent_type => $schema->query,
+    field_name => 'hello',
+  };
+  my $path = ['hello'];
+
+  my $pp_leaf = GraphQL::Houtou::Execution::PP::_complete_value_catching_error(
+    $context,
+    $String->non_null,
+    $nodes,
+    $info,
+    $path,
+    'world',
+  );
+  my $xs_leaf = GraphQL::Houtou::XS::Execution::_complete_value_catching_error_xs(
+    $context,
+    $String->non_null,
+    $nodes,
+    $info,
+    $path,
+    'world',
+  );
+  is_deeply $xs_leaf, $pp_leaf, 'leaf completion is handled identically';
+
+  my $pp_null = GraphQL::Houtou::Execution::PP::_complete_value_catching_error(
+    $context,
+    $String,
+    $nodes,
+    $info,
+    $path,
+    undef,
+  );
+  my $xs_null = GraphQL::Houtou::XS::Execution::_complete_value_catching_error_xs(
+    $context,
+    $String,
+    $nodes,
+    $info,
+    $path,
+    undef,
+  );
+  is_deeply $xs_null, $pp_null, 'nullable null completion is handled identically';
+};
+
 done_testing;

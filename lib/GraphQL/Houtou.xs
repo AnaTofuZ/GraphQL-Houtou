@@ -269,3 +269,23 @@ _get_argument_values_xs(def, node, variable_values = NULL)
     RETVAL = gql_execution_get_argument_values_xs_impl(aTHX_ def, node, variable_values);
   OUTPUT:
     RETVAL
+
+SV *
+_complete_value_catching_error_xs(context, return_type, nodes, info, path, result)
+    SV *context
+    SV *return_type
+    SV *nodes
+    SV *info
+    SV *path
+    SV *result
+  CODE:
+    RETVAL = gql_execution_complete_value_catching_error_xs_impl(
+      aTHX_ context,
+      return_type,
+      nodes,
+      info,
+      path,
+      result
+    );
+  OUTPUT:
+    RETVAL

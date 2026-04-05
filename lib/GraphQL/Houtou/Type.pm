@@ -5,6 +5,13 @@ use strict;
 use warnings;
 
 use Moo;
+use Types::Standard qw(Bool);
+
+has is_introspection => (
+  is => 'ro',
+  isa => Bool,
+  default => sub { 0 },
+);
 
 sub list {
   require GraphQL::Houtou::Type::List;

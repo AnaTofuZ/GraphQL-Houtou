@@ -44,6 +44,7 @@ my $HAS_XS_THEN_REJECT_LOCATED_ERROR;
 my $HAS_XS_THEN_COMPLETE_VALUE;
 my $HAS_XS_LOCATED_ERROR;
 my $HAS_XS_THEN_RESOLVE_OPERATION_ERROR;
+my $HAS_XS_WRAP_ERROR;
 
 sub _has_xs_execution_helper {
   my ($name) = @_;
@@ -135,10 +136,8 @@ sub _build_response {
 
 sub _wrap_error {
   my ($error) = @_;
-  if (eval {
-    require GraphQL::Houtou::XS::Execution;
-    GraphQL::Houtou::XS::Execution->can('_wrap_error_xs');
-  }) {
+  $HAS_XS_WRAP_ERROR //= _has_xs_execution_helper('_wrap_error_xs');
+  if ($HAS_XS_WRAP_ERROR) {
     return GraphQL::Houtou::XS::Execution::_wrap_error_xs($error);
   }
 
@@ -248,21 +247,19 @@ sub _execute_operation {
 
   return _wrap_error("No $op_type in schema") if !$type;
 
-  if (!$context->{promise_code}) {
-    if (!defined $HAS_XS_COLLECT_FIELDS) {
-      $HAS_XS_COLLECT_FIELDS = eval {
-        require GraphQL::Houtou::XS::Execution;
-        GraphQL::Houtou::XS::Execution->can('_collect_fields_xs');
-      } ? 1 : 0;
-    }
+  if (!defined $HAS_XS_COLLECT_FIELDS) {
+    $HAS_XS_COLLECT_FIELDS = eval {
+      require GraphQL::Houtou::XS::Execution;
+      GraphQL::Houtou::XS::Execution->can('_collect_fields_xs');
+    } ? 1 : 0;
+  }
 
-    if ($HAS_XS_COLLECT_FIELDS) {
-      $fields = GraphQL::Houtou::XS::Execution::_collect_fields_xs(
-        $context,
-        $type,
-        $operation->{selections},
-      );
-    }
+  if ($HAS_XS_COLLECT_FIELDS) {
+    $fields = GraphQL::Houtou::XS::Execution::_collect_fields_xs(
+      $context,
+      $type,
+      $operation->{selections},
+    );
   }
 
   ($fields) = $type->_collect_fields(

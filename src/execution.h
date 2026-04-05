@@ -668,13 +668,200 @@ gql_execution_make_error_result(pTHX_ SV *message, SV *nodes, SV *path) {
   return newRV_noinc((SV *)ret_hv);
 }
 
+typedef enum {
+  GQL_EXECUTION_BUILTIN_SCALAR_NONE = 0,
+  GQL_EXECUTION_BUILTIN_SCALAR_INT,
+  GQL_EXECUTION_BUILTIN_SCALAR_FLOAT,
+  GQL_EXECUTION_BUILTIN_SCALAR_STRING,
+  GQL_EXECUTION_BUILTIN_SCALAR_BOOLEAN,
+  GQL_EXECUTION_BUILTIN_SCALAR_ID
+} gql_execution_builtin_scalar_kind_t;
+
+static gql_execution_builtin_scalar_kind_t
+gql_execution_builtin_scalar_kind_from_type(SV *type) {
+  SV **kind_svp;
+  const char *kind_pv;
+  STRLEN kind_len;
+  HV *type_hv;
+
+  if (!type || !SvROK(type) || SvTYPE(SvRV(type)) != SVt_PVHV) {
+    return GQL_EXECUTION_BUILTIN_SCALAR_NONE;
+  }
+
+  if (!sv_derived_from(type, "GraphQL::Houtou::Type::Scalar")) {
+    return GQL_EXECUTION_BUILTIN_SCALAR_NONE;
+  }
+
+  type_hv = (HV *)SvRV(type);
+  kind_svp = hv_fetch(type_hv, "_builtin_kind", 13, 0);
+  if (!kind_svp || !SvOK(*kind_svp)) {
+    return GQL_EXECUTION_BUILTIN_SCALAR_NONE;
+  }
+
+  kind_pv = SvPV(*kind_svp, kind_len);
+  if (kind_len == 3 && memEQ(kind_pv, "Int", 3)) {
+    return GQL_EXECUTION_BUILTIN_SCALAR_INT;
+  }
+  if (kind_len == 5 && memEQ(kind_pv, "Float", 5)) {
+    return GQL_EXECUTION_BUILTIN_SCALAR_FLOAT;
+  }
+  if (kind_len == 6 && memEQ(kind_pv, "String", 6)) {
+    return GQL_EXECUTION_BUILTIN_SCALAR_STRING;
+  }
+  if (kind_len == 7 && memEQ(kind_pv, "Boolean", 7)) {
+    return GQL_EXECUTION_BUILTIN_SCALAR_BOOLEAN;
+  }
+  if (kind_len == 2 && memEQ(kind_pv, "ID", 2)) {
+    return GQL_EXECUTION_BUILTIN_SCALAR_ID;
+  }
+
+  return GQL_EXECUTION_BUILTIN_SCALAR_NONE;
+}
+
+static int
+gql_execution_builtin_scalar_is_nonref_defined(SV *value) {
+  return value && SvOK(value) && !SvROK(value);
+}
+
+static int
+gql_execution_builtin_scalar_is_int32(SV *value, IV *out) {
+  IV iv;
+
+  if (!gql_execution_builtin_scalar_is_nonref_defined(value) || !looks_like_number(value)) {
+    return 0;
+  }
+
+  iv = SvIV(value);
+  if (SvNV(value) != (NV)iv) {
+    return 0;
+  }
+  if (iv < (-2147483647 - 1) || iv > 2147483647) {
+    return 0;
+  }
+
+  if (out) {
+    *out = iv;
+  }
+  return 1;
+}
+
+static int
+gql_execution_builtin_scalar_is_num(SV *value, NV *out) {
+  NV nv;
+
+  if (!gql_execution_builtin_scalar_is_nonref_defined(value) || !looks_like_number(value)) {
+    return 0;
+  }
+
+  nv = SvNV(value);
+  if (out) {
+    *out = nv;
+  }
+  return 1;
+}
+
+static SV *
+gql_execution_builtin_scalar_graphql_to_perl(pTHX_ gql_execution_builtin_scalar_kind_t kind, SV *value, int *ok) {
+  IV iv;
+  NV nv;
+
+  *ok = 0;
+
+  if (!value || !SvOK(value)) {
+    *ok = 1;
+    return newSV(0);
+  }
+
+  switch (kind) {
+    case GQL_EXECUTION_BUILTIN_SCALAR_INT:
+      if (!gql_execution_builtin_scalar_is_int32(value, &iv)) {
+        return &PL_sv_undef;
+      }
+      *ok = 1;
+      return newSViv(iv);
+    case GQL_EXECUTION_BUILTIN_SCALAR_FLOAT:
+      if (!gql_execution_builtin_scalar_is_num(value, &nv)) {
+        return &PL_sv_undef;
+      }
+      *ok = 1;
+      return newSVnv(nv);
+    case GQL_EXECUTION_BUILTIN_SCALAR_STRING:
+      if (!gql_execution_builtin_scalar_is_nonref_defined(value)) {
+        return &PL_sv_undef;
+      }
+      *ok = 1;
+      return newSVsv(value);
+    case GQL_EXECUTION_BUILTIN_SCALAR_ID:
+      if (!gql_execution_builtin_scalar_is_nonref_defined(value)) {
+        return &PL_sv_undef;
+      }
+      *ok = 1;
+      return newSVsv(value);
+    default:
+      return &PL_sv_undef;
+  }
+}
+
+static SV *
+gql_execution_builtin_scalar_perl_to_graphql(pTHX_ gql_execution_builtin_scalar_kind_t kind, SV *value, int *ok) {
+  IV iv;
+  NV nv;
+  STRLEN len;
+  const char *pv;
+
+  *ok = 0;
+
+  if (!value || !SvOK(value)) {
+    *ok = 1;
+    return newSV(0);
+  }
+
+  switch (kind) {
+    case GQL_EXECUTION_BUILTIN_SCALAR_INT:
+      if (!gql_execution_builtin_scalar_is_int32(value, &iv)) {
+        return &PL_sv_undef;
+      }
+      *ok = 1;
+      return newSViv(iv);
+    case GQL_EXECUTION_BUILTIN_SCALAR_FLOAT:
+      if (!gql_execution_builtin_scalar_is_num(value, &nv)) {
+        return &PL_sv_undef;
+      }
+      *ok = 1;
+      return newSVnv(nv);
+    case GQL_EXECUTION_BUILTIN_SCALAR_STRING:
+      if (!gql_execution_builtin_scalar_is_nonref_defined(value)) {
+        return &PL_sv_undef;
+      }
+      *ok = 1;
+      pv = SvPV(value, len);
+      return newSVpvn(pv, len);
+    case GQL_EXECUTION_BUILTIN_SCALAR_ID:
+      if (!gql_execution_builtin_scalar_is_nonref_defined(value)) {
+        return &PL_sv_undef;
+      }
+      *ok = 1;
+      pv = SvPV(value, len);
+      return newSVpvn(pv, len);
+    default:
+      return &PL_sv_undef;
+  }
+}
+
 static SV *
 gql_execution_try_type_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok) {
   dSP;
   int count;
   SV *ret;
+  gql_execution_builtin_scalar_kind_t builtin_kind;
 
   *ok = 0;
+
+  builtin_kind = gql_execution_builtin_scalar_kind_from_type(type);
+  if (builtin_kind != GQL_EXECUTION_BUILTIN_SCALAR_NONE
+      && builtin_kind != GQL_EXECUTION_BUILTIN_SCALAR_BOOLEAN) {
+    return gql_execution_builtin_scalar_graphql_to_perl(aTHX_ builtin_kind, value, ok);
+  }
 
   ENTER;
   SAVETMPS;
@@ -1323,8 +1510,15 @@ gql_execution_call_type_perl_to_graphql(pTHX_ SV *type, SV *value, int *ok) {
   dSP;
   int count;
   SV *ret;
+  gql_execution_builtin_scalar_kind_t builtin_kind;
 
   *ok = 0;
+
+  builtin_kind = gql_execution_builtin_scalar_kind_from_type(type);
+  if (builtin_kind != GQL_EXECUTION_BUILTIN_SCALAR_NONE
+      && builtin_kind != GQL_EXECUTION_BUILTIN_SCALAR_BOOLEAN) {
+    return gql_execution_builtin_scalar_perl_to_graphql(aTHX_ builtin_kind, value, ok);
+  }
 
   ENTER;
   SAVETMPS;

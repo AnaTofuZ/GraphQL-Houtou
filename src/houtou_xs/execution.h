@@ -1109,8 +1109,7 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
       || sv_derived_from(return_type, "GraphQL::Type::List")) {
     SV *item_type = gql_execution_call_type_of(aTHX_ return_type);
 
-    if (SvROK(result) && SvTYPE(SvRV(result)) == SVt_PVAV
-        && gql_execution_is_leaf_like_type(aTHX_ item_type)) {
+    if (SvROK(result) && SvTYPE(SvRV(result)) == SVt_PVAV) {
       AV *result_av = (AV *)SvRV(result);
       I32 result_len = av_len(result_av);
       AV *data_av = newAV();

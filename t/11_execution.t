@@ -74,6 +74,15 @@ my $Query = GraphQL::Houtou::Type::Object->new(
       type => $String->non_null->list->non_null,
       resolve => sub { [ 'alpha', 'beta' ] },
     },
+    users => {
+      type => $User->list->non_null,
+      resolve => sub {
+        return [
+          { id => '21', name => 'user:21' },
+          { id => '22', name => 'user:22' },
+        ];
+      },
+    },
     greet => {
       type => $String->non_null,
       args => {
@@ -407,6 +416,15 @@ subtest 'execute list field through xs path' => sub {
   my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, '{ tags }');
 
   is_deeply $xs, $public, 'list field result matches public facade';
+};
+
+subtest 'execute object list field through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $public = execute($schema, '{ users { id name } }');
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, '{ users { id name } }');
+
+  is_deeply $xs, $public, 'object list field result matches public facade';
 };
 
 subtest 'xs completion helper fast-path matches pp for simple object case' => sub {

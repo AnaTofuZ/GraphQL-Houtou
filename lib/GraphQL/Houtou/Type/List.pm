@@ -7,6 +7,10 @@ use warnings;
 use Moo;
 use Role::Tiny ();
 use Types::Standard qw(Object Any ArrayRef Bool HashRef);
+use GraphQL::Houtou::Promise::Adapter qw(
+  is_promise_value
+  then_promise
+);
 
 extends 'GraphQL::Houtou::Type';
 
@@ -116,7 +120,7 @@ sub _complete_value {
     );
   } @$result;
 
-  return (grep { _is_promise($_) } @completed)
+  return (grep { _is_promise($context, $_) } @completed)
     ? _promise_for_list($context, \@completed)
     : _merge_list(\@completed);
 }
@@ -136,14 +140,14 @@ sub _promise_for_list {
   die "Given a promise in list but no PromiseCode given\n"
     if !$context->{promise_code};
 
-  return $context->{promise_code}{all}->(@$list)->then(sub {
-    return _merge_list([ map $_->[0], @_ ]);
+  return then_promise($context->{promise_code}, $context->{promise_code}{all}->(@$list), sub {
+    return _merge_list($_[0]);
   });
 }
 
 sub _is_promise {
-  my ($value) = @_;
-  return !!($value && ref($value) && eval { $value->can('then') });
+  my ($context, $value) = @_;
+  return is_promise_value($context->{promise_code}, $value);
 }
 
 1;

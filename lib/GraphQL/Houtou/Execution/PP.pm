@@ -16,6 +16,11 @@ use GraphQL::Houtou::Introspection qw(
   $TYPE_META_FIELD_DEF
   $TYPE_NAME_META_FIELD_DEF
 );
+use GraphQL::Houtou::Promise::Adapter qw(
+  is_promise_value
+  normalize_promise_code
+  then_promise
+);
 use GraphQL::Houtou::Schema qw(lookup_type);
 
 our @EXPORT_OK = qw(
@@ -52,8 +57,8 @@ sub execute {
     );
   };
 
-  return _build_response(_wrap_error($@)) if $@;
-  return _build_response(execute_prepared_context($context), 1);
+  return _build_response(_wrap_error($@), 0, undef) if $@;
+  return _build_response(execute_prepared_context($context), 1, $context->{promise_code});
 }
 
 sub execute_prepared_context {
@@ -73,7 +78,14 @@ sub _coerce_ast {
 }
 
 sub _build_response {
-  my ($result, $force_data) = @_;
+  my ($result, $force_data, $promise_code) = @_;
+
+  if (is_promise_value($promise_code, $result)) {
+    return then_promise($promise_code, $result, sub {
+      return _build_response($_[0], $force_data, $promise_code);
+    });
+  }
+
   my @errors = @{ $result->{errors} || [] };
 
   return {
@@ -121,7 +133,7 @@ sub _build_context {
       $variable_values || {},
     ),
     field_resolver => $field_resolver || \&_default_field_resolver,
-    promise_code => $promise_code,
+    promise_code => normalize_promise_code($promise_code),
   };
 }
 
@@ -188,12 +200,26 @@ sub _execute_operation {
     {},
   );
 
-  return ($op_type eq 'mutation')
-    ? _execute_fields_serially($context, $type, $root_value, [], $fields)
-    : _execute_fields($context, $type, $root_value, [], $fields);
+  my $execute = $op_type eq 'mutation'
+    ? \&_execute_fields_serially
+    : \&_execute_fields;
+  my $result = eval {
+    my $result = $execute->($context, $type, $root_value, [], $fields);
+    return $result if !_is_promise($context, $result);
+    return then_promise($context->{promise_code}, $result, undef, sub {
+      return $context->{promise_code}{resolve}->(
+        +{ data => undef, %{_wrap_error($_[0])} }
+      );
+    });
+  };
+
+  return _wrap_error($@) if $@;
+  return $result;
 }
 
 sub _execute_fields {
+  return _execute_fields_pp(@_) if $_[0] && $_[0]{promise_code};
+
   if (!defined $HAS_XS_EXECUTE_FIELDS) {
     $HAS_XS_EXECUTE_FIELDS = eval {
       require GraphQL::Houtou::XS::Execution;
@@ -213,6 +239,7 @@ sub _execute_fields_pp {
   my ($field_names, $nodes_defs) = @$fields;
   my %name2executionresult;
   my @errors;
+  my $promise_present;
 
   for my $result_name (@$field_names) {
     my $nodes = $nodes_defs->{$result_name};
@@ -249,7 +276,11 @@ sub _execute_fields_pp {
       [ @$path, $result_name ],
       $result,
     );
+    $promise_present ||= _is_promise($context, $name2executionresult{$result_name});
   }
+
+  return _promise_for_hash($context, \%name2executionresult, \@errors)
+    if $promise_present;
 
   return _merge_hash(
     [ keys %name2executionresult ],
@@ -275,6 +306,19 @@ sub _merge_hash {
 
 sub _execute_fields_serially {
   goto &_execute_fields;
+}
+
+sub _promise_for_hash {
+  my ($context, $hash, $errors) = @_;
+  my $promise_code = $context->{promise_code};
+  my ($keys, $values) = ([ keys %$hash ], [ values %$hash ]);
+
+  die "Given a promise in object but no PromiseCode given\n"
+    if !$promise_code;
+
+  return then_promise($promise_code, $promise_code->{all}->(@$values), sub {
+    return _merge_hash($keys, $_[0], $errors);
+  });
 }
 
 sub _get_field_def {
@@ -327,7 +371,11 @@ sub _complete_value_catching_error {
   }
 
   $result = eval {
-    _complete_value_with_located_error(@_);
+    my $completed = _complete_value_with_located_error(@_);
+    return $completed if !_is_promise($context, $completed);
+    return then_promise($context->{promise_code}, $completed, undef, sub {
+      return $context->{promise_code}{resolve}->(_wrap_error($_[0]));
+    });
   };
 
   return _wrap_error($@) if $@;
@@ -338,7 +386,13 @@ sub _complete_value_with_located_error {
   my ($context, $return_type, $nodes, $info, $path, $result) = @_;
 
   $result = eval {
-    _complete_value(@_);
+    my $completed = _complete_value(@_);
+    return $completed if !_is_promise($context, $completed);
+    return then_promise($context->{promise_code}, $completed, undef, sub {
+      return $context->{promise_code}{reject}->(
+        _located_error($_[0], $nodes, $path)
+      );
+    });
   };
 
   die _located_error($@, $nodes, $path) if $@;
@@ -347,6 +401,13 @@ sub _complete_value_with_located_error {
 
 sub _complete_value {
   my ($context, $return_type, $nodes, $info, $path, $result) = @_;
+
+  if (_is_promise($context, $result)) {
+    my @outer = @_[0..4];
+    return then_promise($context->{promise_code}, $result, sub {
+      return _complete_value(@outer, $_[0]);
+    });
+  }
 
   die $result if GraphQL::Error->is($result);
 
@@ -362,7 +423,7 @@ sub _complete_value {
 
     die GraphQL::Error->coerce(
       "Cannot return null for non-nullable field @{[$info->{parent_type}->name]}.@{[$info->{field_name}]}."
-    ) if !defined $completed->{data};
+    ) if !_is_promise($context, $completed) && !defined $completed->{data};
     return $completed;
   }
 
@@ -545,6 +606,11 @@ sub _default_field_resolver {
 sub _is_non_null_type {
   my ($type) = @_;
   return $type->isa('GraphQL::Houtou::Type::NonNull') || $type->isa('GraphQL::Type::NonNull');
+}
+
+sub _is_promise {
+  my ($context, $value) = @_;
+  return is_promise_value($context->{promise_code}, $value);
 }
 
 1;

@@ -147,6 +147,8 @@ declare "PromiseCode",
     all => CodeLike,
     reject => CodeLike,
     new => Optional[CodeLike],
+    then => Optional[CodeLike],
+    is_promise => Optional[CodeLike],
   ];
 
 declare "AsyncIterator",

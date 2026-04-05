@@ -13,6 +13,11 @@ our @EXPORT_OK = qw(
 my $HAS_XS;
 
 sub execute {
+  if (@_ >= 8 && defined $_[7]) {
+    require GraphQL::Houtou::Execution::PP;
+    return GraphQL::Houtou::Execution::PP::execute(@_);
+  }
+
   if (!defined $HAS_XS) {
     $HAS_XS = eval {
       require GraphQL::Houtou::XS::Execution;

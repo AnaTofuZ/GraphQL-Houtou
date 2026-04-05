@@ -439,9 +439,17 @@ static SV *gqljs_locate_value_node(pTHX_ gql_parser_t *p, SV *node_sv);
 static void gqljs_locate_arguments_nodes(pTHX_ gql_parser_t *p, AV *av);
 static void gqljs_locate_directives_nodes(pTHX_ gql_parser_t *p, AV *av);
 static void gqljs_locate_variable_definitions_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gqljs_locate_input_value_definitions_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gqljs_locate_arguments_definition_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gqljs_locate_field_definitions_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gqljs_locate_enum_values_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gqljs_locate_operation_types_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gqljs_locate_interfaces_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gqljs_locate_union_types_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gqljs_locate_directive_locations_nodes(pTHX_ gql_parser_t *p, AV *av);
 static SV *gqljs_locate_selection_set_node(pTHX_ gql_parser_t *p, SV *node_sv);
 static void gqljs_locate_selection_node(pTHX_ gql_parser_t *p, SV *node_sv);
-static int gqljs_locate_executable_definition(pTHX_ gql_parser_t *p, SV *node_sv);
+static int gqljs_locate_definition(pTHX_ gql_parser_t *p, SV *node_sv);
 static SV *gql_graphqljs_build_executable_document(pTHX_ SV *legacy_sv);
 static SV *gql_graphqlperl_build_document(pTHX_ SV *doc_sv);
 static HV *gqljs_new_node_hv_sized(const char *kind, I32 keys);
@@ -2457,6 +2465,268 @@ gqljs_locate_variable_definitions_nodes(pTHX_ gql_parser_t *p, AV *av) {
   gql_expect(aTHX_ p, TOK_RPAREN, NULL);
 }
 
+static void
+gqljs_locate_input_value_definitions_nodes(pTHX_ gql_parser_t *p, AV *av) {
+  while (p->kind != TOK_RBRACE && p->kind != TOK_RPAREN) {
+    SV *description_loc = NULL;
+    char *name;
+    SV *node_sv;
+    HV *node_hv;
+    SV *description_sv;
+
+    if (p->kind == TOK_STRING || p->kind == TOK_BLOCK_STRING) {
+      description_loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+      gql_advance(aTHX_ p);
+    }
+    if (p->kind != TOK_NAME) {
+      gql_throw_expected_token(aTHX_ p, TOK_NAME);
+    }
+    name = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
+    node_sv = gqljs_find_named_node(av, name);
+    Safefree(name);
+    if (!node_sv) {
+      croak("Missing input value node");
+    }
+    node_hv = gqljs_node_hv(node_sv);
+    gqljs_set_loc_node(aTHX_ node_sv, description_loc ? description_loc : sv_2mortal(gql_make_current_location(aTHX_ p)));
+    description_sv = gqljs_fetch_sv(node_hv, "description");
+    if (description_sv && description_loc) {
+      gqljs_set_loc_node(aTHX_ description_sv, description_loc);
+    }
+    gqljs_locate_name_node(aTHX_ p, gqljs_fetch_sv(node_hv, "name"));
+    gql_expect(aTHX_ p, TOK_COLON, NULL);
+    gqljs_locate_type_node(aTHX_ p, gqljs_fetch_sv(node_hv, "type"));
+    if (gqljs_fetch_sv(node_hv, "defaultValue")) {
+      gql_expect(aTHX_ p, TOK_EQUALS, NULL);
+      gqljs_locate_value_node(aTHX_ p, gqljs_fetch_sv(node_hv, "defaultValue"));
+    }
+    gqljs_locate_directives_nodes(aTHX_ p, gqljs_fetch_array(node_hv, "directives"));
+  }
+}
+
+static void
+gqljs_locate_arguments_definition_nodes(pTHX_ gql_parser_t *p, AV *av) {
+  if (!av || av_len(av) < 0) {
+    return;
+  }
+  gql_expect(aTHX_ p, TOK_LPAREN, NULL);
+  gqljs_locate_input_value_definitions_nodes(aTHX_ p, av);
+  gql_expect(aTHX_ p, TOK_RPAREN, NULL);
+}
+
+static void
+gqljs_locate_field_definitions_nodes(pTHX_ gql_parser_t *p, AV *av) {
+  if (!av || av_len(av) < 0) {
+    return;
+  }
+  gql_expect(aTHX_ p, TOK_LBRACE, NULL);
+  while (p->kind != TOK_RBRACE) {
+    SV *description_loc = NULL;
+    char *name;
+    SV *node_sv;
+    HV *node_hv;
+    SV *description_sv;
+
+    if (p->kind == TOK_STRING || p->kind == TOK_BLOCK_STRING) {
+      description_loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+      gql_advance(aTHX_ p);
+    }
+    if (p->kind != TOK_NAME) {
+      gql_throw_expected_token(aTHX_ p, TOK_NAME);
+    }
+    name = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
+    node_sv = gqljs_find_named_node(av, name);
+    Safefree(name);
+    if (!node_sv) {
+      croak("Missing field definition node");
+    }
+    node_hv = gqljs_node_hv(node_sv);
+    gqljs_set_loc_node(aTHX_ node_sv, description_loc ? description_loc : sv_2mortal(gql_make_current_location(aTHX_ p)));
+    description_sv = gqljs_fetch_sv(node_hv, "description");
+    if (description_sv && description_loc) {
+      gqljs_set_loc_node(aTHX_ description_sv, description_loc);
+    }
+    gqljs_locate_name_node(aTHX_ p, gqljs_fetch_sv(node_hv, "name"));
+    gqljs_locate_arguments_definition_nodes(aTHX_ p, gqljs_fetch_array(node_hv, "arguments"));
+    gql_expect(aTHX_ p, TOK_COLON, NULL);
+    gqljs_locate_type_node(aTHX_ p, gqljs_fetch_sv(node_hv, "type"));
+    gqljs_locate_directives_nodes(aTHX_ p, gqljs_fetch_array(node_hv, "directives"));
+  }
+  gql_expect(aTHX_ p, TOK_RBRACE, NULL);
+}
+
+static void
+gqljs_locate_enum_values_nodes(pTHX_ gql_parser_t *p, AV *av) {
+  if (!av || av_len(av) < 0) {
+    return;
+  }
+  gql_expect(aTHX_ p, TOK_LBRACE, NULL);
+  while (p->kind != TOK_RBRACE) {
+    SV *description_loc = NULL;
+    char *name;
+    SV *node_sv;
+    HV *node_hv;
+    SV *description_sv;
+
+    if (p->kind == TOK_STRING || p->kind == TOK_BLOCK_STRING) {
+      description_loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+      gql_advance(aTHX_ p);
+    }
+    if (p->kind != TOK_NAME) {
+      gql_throw_expected_token(aTHX_ p, TOK_NAME);
+    }
+    name = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
+    node_sv = gqljs_find_named_node(av, name);
+    Safefree(name);
+    if (!node_sv) {
+      croak("Missing enum value node");
+    }
+    node_hv = gqljs_node_hv(node_sv);
+    gqljs_set_loc_node(aTHX_ node_sv, description_loc ? description_loc : sv_2mortal(gql_make_current_location(aTHX_ p)));
+    description_sv = gqljs_fetch_sv(node_hv, "description");
+    if (description_sv && description_loc) {
+      gqljs_set_loc_node(aTHX_ description_sv, description_loc);
+    }
+    gqljs_locate_name_node(aTHX_ p, gqljs_fetch_sv(node_hv, "name"));
+    gqljs_locate_directives_nodes(aTHX_ p, gqljs_fetch_array(node_hv, "directives"));
+  }
+  gql_expect(aTHX_ p, TOK_RBRACE, NULL);
+}
+
+static SV *
+gqljs_find_operation_type_definition(AV *av, const char *operation) {
+  I32 i;
+  if (!av || !operation) {
+    return NULL;
+  }
+  for (i = 0; i <= av_len(av); i++) {
+    SV **svp = av_fetch(av, i, 0);
+    HV *hv;
+    SV *op_sv;
+    STRLEN len;
+    const char *value;
+    if (!svp) {
+      continue;
+    }
+    hv = gqljs_node_hv(*svp);
+    if (!hv) {
+      continue;
+    }
+    op_sv = gqljs_fetch_sv(hv, "operation");
+    if (!op_sv) {
+      continue;
+    }
+    value = SvPV(op_sv, len);
+    if (strcmp(value, operation) == 0) {
+      return *svp;
+    }
+  }
+  return NULL;
+}
+
+static void
+gqljs_locate_operation_types_nodes(pTHX_ gql_parser_t *p, AV *av) {
+  if (!av || av_len(av) < 0) {
+    return;
+  }
+  gql_expect(aTHX_ p, TOK_LBRACE, NULL);
+  while (p->kind != TOK_RBRACE) {
+    char *operation;
+    SV *node_sv;
+    HV *node_hv;
+    SV *loc;
+
+    if (p->kind != TOK_NAME) {
+      gql_throw_expected_token(aTHX_ p, TOK_NAME);
+    }
+    operation = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
+    node_sv = gqljs_find_operation_type_definition(av, operation);
+    Safefree(operation);
+    if (!node_sv) {
+      croak("Missing operation type node");
+    }
+    node_hv = gqljs_node_hv(node_sv);
+    loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+    gqljs_set_loc_node(aTHX_ node_sv, loc);
+    gql_expect(aTHX_ p, TOK_NAME, NULL);
+    gql_expect(aTHX_ p, TOK_COLON, NULL);
+    gqljs_locate_type_node(aTHX_ p, gqljs_fetch_sv(node_hv, "type"));
+  }
+  gql_expect(aTHX_ p, TOK_RBRACE, NULL);
+}
+
+static void
+gqljs_locate_interfaces_nodes(pTHX_ gql_parser_t *p, AV *av) {
+  if (!av || av_len(av) < 0) {
+    return;
+  }
+  gql_expect(aTHX_ p, TOK_NAME, NULL);
+  if (p->kind == TOK_AMP) {
+    gql_advance(aTHX_ p);
+  }
+  while (p->kind == TOK_NAME) {
+    char *name = savepvn(p->src + p->tok_start, p->tok_end - p->tok_start);
+    SV *node_sv = gqljs_find_named_node(av, name);
+    HV *node_hv;
+    SV *loc;
+    Safefree(name);
+    if (!node_sv) {
+      croak("Missing interface node");
+    }
+    node_hv = gqljs_node_hv(node_sv);
+    loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+    gqljs_set_loc_node(aTHX_ node_sv, loc);
+    gqljs_locate_name_node(aTHX_ p, gqljs_fetch_sv(node_hv, "name"));
+    if (p->kind == TOK_AMP) {
+      gql_advance(aTHX_ p);
+    }
+  }
+}
+
+static void
+gqljs_locate_union_types_nodes(pTHX_ gql_parser_t *p, AV *av) {
+  I32 i;
+  if (!av || av_len(av) < 0) {
+    return;
+  }
+  gql_expect(aTHX_ p, TOK_EQUALS, NULL);
+  if (p->kind == TOK_PIPE) {
+    gql_advance(aTHX_ p);
+  }
+  for (i = 0; i <= av_len(av); i++) {
+    SV **svp = av_fetch(av, i, 0);
+    if (!svp) {
+      continue;
+    }
+    gqljs_locate_type_node(aTHX_ p, *svp);
+    if (p->kind == TOK_PIPE) {
+      gql_advance(aTHX_ p);
+    }
+  }
+}
+
+static void
+gqljs_locate_directive_locations_nodes(pTHX_ gql_parser_t *p, AV *av) {
+  I32 i;
+  if (!av || av_len(av) < 0) {
+    return;
+  }
+  gql_expect(aTHX_ p, TOK_NAME, NULL);
+  if (p->kind == TOK_PIPE) {
+    gql_advance(aTHX_ p);
+  }
+  for (i = 0; i <= av_len(av); i++) {
+    SV **svp = av_fetch(av, i, 0);
+    if (!svp) {
+      continue;
+    }
+    gqljs_locate_name_node(aTHX_ p, *svp);
+    if (p->kind == TOK_PIPE) {
+      gql_advance(aTHX_ p);
+    }
+  }
+}
+
 static SV *
 gqljs_locate_selection_set_node(pTHX_ gql_parser_t *p, SV *node_sv) {
   HV *hv = gqljs_node_hv(node_sv);
@@ -2529,13 +2799,15 @@ gqljs_locate_selection_node(pTHX_ gql_parser_t *p, SV *node_sv) {
 }
 
 static int
-gqljs_locate_executable_definition(pTHX_ gql_parser_t *p, SV *node_sv) {
+gqljs_locate_definition(pTHX_ gql_parser_t *p, SV *node_sv) {
   HV *hv = gqljs_node_hv(node_sv);
   const char *kind = gqljs_fetch_kind(hv);
   SV *loc;
+  SV *description_loc = NULL;
+  int is_extension = 0;
 
   if (!kind) {
-    croak("graphqljs executable loc expected definition node");
+    croak("graphqljs loc expected definition node");
   }
 
   if (strcmp(kind, "OperationDefinition") == 0) {
@@ -2568,7 +2840,127 @@ gqljs_locate_executable_definition(pTHX_ gql_parser_t *p, SV *node_sv) {
     return 1;
   }
 
-  return 0;
+  if (p->kind == TOK_STRING || p->kind == TOK_BLOCK_STRING) {
+    description_loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+    gql_advance(aTHX_ p);
+    if (gqljs_fetch_sv(hv, "description")) {
+      gqljs_set_loc_node(aTHX_ gqljs_fetch_sv(hv, "description"), description_loc);
+    }
+  }
+
+  {
+    STRLEN kind_len = strlen(kind);
+    static const char *suffix = "Extension";
+    STRLEN suffix_len = strlen(suffix);
+    if (kind_len >= suffix_len && strcmp(kind + kind_len - suffix_len, suffix) == 0) {
+      is_extension = 1;
+      loc = description_loc ? description_loc : sv_2mortal(gql_make_current_location(aTHX_ p));
+      gql_expect(aTHX_ p, TOK_NAME, NULL);
+    } else {
+      loc = description_loc;
+    }
+  }
+
+  if (strcmp(kind, "SchemaDefinition") == 0 || strcmp(kind, "SchemaExtension") == 0) {
+    if (!loc) {
+      loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+    }
+    gql_expect(aTHX_ p, TOK_NAME, NULL);
+    gqljs_set_loc_node(aTHX_ node_sv, loc);
+    gqljs_locate_directives_nodes(aTHX_ p, gqljs_fetch_array(hv, "directives"));
+    gqljs_locate_operation_types_nodes(aTHX_ p, gqljs_fetch_array(hv, "operationTypes"));
+    return 1;
+  }
+
+  if (strcmp(kind, "ScalarTypeDefinition") == 0 || strcmp(kind, "ScalarTypeExtension") == 0) {
+    if (!loc) {
+      loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+    }
+    gql_expect(aTHX_ p, TOK_NAME, NULL);
+    gqljs_locate_name_node(aTHX_ p, gqljs_fetch_sv(hv, "name"));
+    gqljs_set_loc_node(aTHX_ node_sv, loc);
+    gqljs_locate_directives_nodes(aTHX_ p, gqljs_fetch_array(hv, "directives"));
+    return 1;
+  }
+
+  if (strcmp(kind, "ObjectTypeDefinition") == 0 || strcmp(kind, "ObjectTypeExtension") == 0 ||
+      strcmp(kind, "InterfaceTypeDefinition") == 0 || strcmp(kind, "InterfaceTypeExtension") == 0) {
+    if (!loc) {
+      loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+    }
+    gql_expect(aTHX_ p, TOK_NAME, NULL);
+    gqljs_locate_name_node(aTHX_ p, gqljs_fetch_sv(hv, "name"));
+    gqljs_set_loc_node(aTHX_ node_sv, loc);
+    gqljs_locate_interfaces_nodes(aTHX_ p, gqljs_fetch_array(hv, "interfaces"));
+    gqljs_locate_directives_nodes(aTHX_ p, gqljs_fetch_array(hv, "directives"));
+    gqljs_locate_field_definitions_nodes(aTHX_ p, gqljs_fetch_array(hv, "fields"));
+    return 1;
+  }
+
+  if (strcmp(kind, "UnionTypeDefinition") == 0 || strcmp(kind, "UnionTypeExtension") == 0) {
+    if (!loc) {
+      loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+    }
+    gql_expect(aTHX_ p, TOK_NAME, NULL);
+    gqljs_locate_name_node(aTHX_ p, gqljs_fetch_sv(hv, "name"));
+    gqljs_set_loc_node(aTHX_ node_sv, loc);
+    gqljs_locate_directives_nodes(aTHX_ p, gqljs_fetch_array(hv, "directives"));
+    gqljs_locate_union_types_nodes(aTHX_ p, gqljs_fetch_array(hv, "types"));
+    return 1;
+  }
+
+  if (strcmp(kind, "EnumTypeDefinition") == 0 || strcmp(kind, "EnumTypeExtension") == 0) {
+    if (!loc) {
+      loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+    }
+    gql_expect(aTHX_ p, TOK_NAME, NULL);
+    gqljs_locate_name_node(aTHX_ p, gqljs_fetch_sv(hv, "name"));
+    gqljs_set_loc_node(aTHX_ node_sv, loc);
+    gqljs_locate_directives_nodes(aTHX_ p, gqljs_fetch_array(hv, "directives"));
+    gqljs_locate_enum_values_nodes(aTHX_ p, gqljs_fetch_array(hv, "values"));
+    return 1;
+  }
+
+  if (strcmp(kind, "InputObjectTypeDefinition") == 0 || strcmp(kind, "InputObjectTypeExtension") == 0) {
+    AV *fields_av;
+    if (!loc) {
+      loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+    }
+    gql_expect(aTHX_ p, TOK_NAME, NULL);
+    gqljs_locate_name_node(aTHX_ p, gqljs_fetch_sv(hv, "name"));
+    gqljs_set_loc_node(aTHX_ node_sv, loc);
+    gqljs_locate_directives_nodes(aTHX_ p, gqljs_fetch_array(hv, "directives"));
+    fields_av = gqljs_fetch_array(hv, "fields");
+    if (fields_av && av_len(fields_av) >= 0) {
+      gql_expect(aTHX_ p, TOK_LBRACE, NULL);
+      gqljs_locate_input_value_definitions_nodes(aTHX_ p, fields_av);
+      gql_expect(aTHX_ p, TOK_RBRACE, NULL);
+    }
+    return 1;
+  }
+
+  if (strcmp(kind, "DirectiveDefinition") == 0 || strcmp(kind, "DirectiveExtension") == 0) {
+    SV *repeatable_sv;
+    if (!loc) {
+      loc = sv_2mortal(gql_make_current_location(aTHX_ p));
+    }
+    gql_expect(aTHX_ p, TOK_NAME, NULL);
+    gql_expect(aTHX_ p, TOK_AT, NULL);
+    gqljs_locate_name_node(aTHX_ p, gqljs_fetch_sv(hv, "name"));
+    gqljs_set_loc_node(aTHX_ node_sv, loc);
+    gqljs_locate_arguments_definition_nodes(aTHX_ p, gqljs_fetch_array(hv, "arguments"));
+    repeatable_sv = gqljs_fetch_sv(hv, "repeatable");
+    if (repeatable_sv && SvTRUE(repeatable_sv)) {
+      gql_expect(aTHX_ p, TOK_NAME, NULL);
+    }
+    gqljs_locate_directive_locations_nodes(aTHX_ p, gqljs_fetch_array(hv, "locations"));
+    return 1;
+  }
+
+  if (is_extension) {
+    croak("Unsupported graphqljs extension loc node %s", kind);
+  }
+  croak("Unsupported graphqljs loc definition node %s", kind);
 }
 
 static SV *
@@ -2603,7 +2995,7 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
     if (!svp) {
       continue;
     }
-    if (!gqljs_locate_executable_definition(aTHX_ &p, *svp)) {
+    if (!gqljs_locate_definition(aTHX_ &p, *svp)) {
       gql_parser_invalidate(&p);
       FREETMPS;
       LEAVE;
@@ -3716,8 +4108,11 @@ gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_l
   if (SvTRUE(no_location_sv)) {
     return doc_sv;
   }
+  if (SvTRUE(lazy_location_sv) || SvTRUE(compact_location_sv)) {
+    return &PL_sv_undef;
+  }
 
-  return &PL_sv_undef;
+  return gql_graphqljs_apply_executable_loc(aTHX_ doc_sv, source_sv);
 }
 
 static SV *

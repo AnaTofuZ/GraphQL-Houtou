@@ -333,6 +333,16 @@ subtest 'graphqljs_parse_document_xs materializes type system documents without 
     cmp_deeply $built, $expected, 'xs canonical entrypoint handles non-executable documents in no_location mode';
 };
 
+subtest 'graphqljs_parse_document_xs materializes type system documents with locations', sub {
+    my $source = "type User {\n  id: ID!\n}";
+    my $built = graphqljs_parse_document_xs($source);
+    my $expected = parse_canonical_document($source, {
+        backend => 'xs',
+    });
+
+    cmp_deeply $built, $expected, 'xs canonical entrypoint handles non-executable documents with locations';
+};
+
 subtest 'graphqljs_parse_document_xs can return lazy locations for executable documents', sub {
     my $source = "query Q {\n  user { id }\n}";
     my $doc = graphqljs_parse_document_xs($source, 0, 1);

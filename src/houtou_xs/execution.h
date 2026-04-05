@@ -242,6 +242,121 @@ gql_execution_merge_completed_list(pTHX_ AV *list_av) {
   return newRV_noinc((SV *)ret_hv);
 }
 
+static SV *
+gql_execution_build_response_xs(pTHX_ SV *result, int force_data) {
+  HV *out_hv = newHV();
+  HV *result_hv = NULL;
+  SV **errors_svp;
+
+  if (!SvROK(result) || SvTYPE(SvRV(result)) != SVt_PVHV) {
+    SvREFCNT_dec((SV *)out_hv);
+    croak("result must be a hash reference");
+  }
+
+  result_hv = (HV *)SvRV(result);
+
+  if (force_data && !hv_exists(result_hv, "data", 4)) {
+    gql_store_sv(out_hv, "data", newSV(0));
+  }
+
+  if (hv_exists(result_hv, "data", 4)) {
+    SV **data_svp = hv_fetch(result_hv, "data", 4, 0);
+    if (data_svp) {
+      gql_store_sv(out_hv, "data", newSVsv(*data_svp));
+    }
+  }
+
+  errors_svp = hv_fetch(result_hv, "errors", 6, 0);
+  if (errors_svp && SvROK(*errors_svp) && SvTYPE(SvRV(*errors_svp)) == SVt_PVAV) {
+    AV *errors_av = (AV *)SvRV(*errors_svp);
+    AV *json_errors_av = newAV();
+    I32 len = av_len(errors_av);
+    I32 i;
+
+    for (i = 0; i <= len; i++) {
+      SV **error_svp = av_fetch(errors_av, i, 0);
+      dSP;
+      int count;
+      SV *json_sv;
+
+      if (!error_svp) {
+        continue;
+      }
+
+      ENTER;
+      SAVETMPS;
+      PUSHMARK(SP);
+      XPUSHs(sv_2mortal(newSVsv(*error_svp)));
+      PUTBACK;
+      count = call_method("to_json", G_SCALAR);
+      SPAGAIN;
+      if (count != 1) {
+        PUTBACK;
+        FREETMPS;
+        LEAVE;
+        SvREFCNT_dec((SV *)json_errors_av);
+        SvREFCNT_dec((SV *)out_hv);
+        croak("GraphQL::Error->to_json did not return a scalar");
+      }
+      json_sv = newSVsv(POPs);
+      PUTBACK;
+      FREETMPS;
+      LEAVE;
+      av_push(json_errors_av, json_sv);
+    }
+
+    if (av_len(json_errors_av) >= 0) {
+      gql_store_sv(out_hv, "errors", newRV_noinc((SV *)json_errors_av));
+    } else {
+      SvREFCNT_dec((SV *)json_errors_av);
+    }
+  }
+
+  return newRV_noinc((SV *)out_hv);
+}
+
+static SV *
+gql_execution_wrap_error_xs(pTHX_ SV *error) {
+  dSP;
+  HV *ret_hv;
+  AV *errors_av;
+  int count;
+  SV *coerced;
+
+  if (SvROK(error) && SvTYPE(SvRV(error)) == SVt_PVHV) {
+    HV *error_hv = (HV *)SvRV(error);
+    SV **errors_svp = hv_fetch(error_hv, "errors", 6, 0);
+    if (errors_svp && SvROK(*errors_svp) && SvTYPE(SvRV(*errors_svp)) == SVt_PVAV) {
+      return newSVsv(error);
+    }
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVpv("GraphQL::Error", 0)));
+  XPUSHs(sv_2mortal(newSVsv(error)));
+  PUTBACK;
+  count = call_method("coerce", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("GraphQL::Error::coerce did not return a scalar");
+  }
+  coerced = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  ret_hv = newHV();
+  errors_av = newAV();
+  av_push(errors_av, coerced);
+  gql_store_sv(ret_hv, "errors", newRV_noinc((SV *)errors_av));
+  return newRV_noinc((SV *)ret_hv);
+}
+
 static void
 gql_execution_require_pp(pTHX) {
   eval_pv("require GraphQL::Houtou::Execution::PP; 1;", TRUE);

@@ -379,3 +379,20 @@ _merge_hash_xs(keys, values, errors)
     RETVAL = gql_execution_merge_hash(aTHX_ (AV *)SvRV(keys), (AV *)SvRV(values), (AV *)SvRV(errors));
   OUTPUT:
     RETVAL
+
+SV *
+_build_response_xs(result, force_data = 0)
+    SV *result
+    int force_data
+  CODE:
+    RETVAL = gql_execution_build_response_xs(aTHX_ result, force_data);
+  OUTPUT:
+    RETVAL
+
+SV *
+_wrap_error_xs(error)
+    SV *error
+  CODE:
+    RETVAL = gql_execution_wrap_error_xs(aTHX_ error);
+  OUTPUT:
+    RETVAL

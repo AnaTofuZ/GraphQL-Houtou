@@ -91,8 +91,14 @@ sub _build_response {
     });
   }
 
-  my @errors = @{ $result->{errors} || [] };
+  if (eval {
+    require GraphQL::Houtou::XS::Execution;
+    GraphQL::Houtou::XS::Execution->can('_build_response_xs');
+  }) {
+    return GraphQL::Houtou::XS::Execution::_build_response_xs($result, $force_data ? 1 : 0);
+  }
 
+  my @errors = @{ $result->{errors} || [] };
   return {
     $force_data ? (data => undef) : (),
     %$result,
@@ -102,6 +108,13 @@ sub _build_response {
 
 sub _wrap_error {
   my ($error) = @_;
+  if (eval {
+    require GraphQL::Houtou::XS::Execution;
+    GraphQL::Houtou::XS::Execution->can('_wrap_error_xs');
+  }) {
+    return GraphQL::Houtou::XS::Execution::_wrap_error_xs($error);
+  }
+
   return $error if ref($error) eq 'HASH' && ref($error->{errors}) eq 'ARRAY';
   return { errors => [ GraphQL::Error->coerce($error) ] };
 }

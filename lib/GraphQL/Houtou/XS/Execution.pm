@@ -35,6 +35,7 @@ our @EXPORT_OK = qw(
   _then_complete_value_xs
   _then_build_response_xs
   _then_merge_hash_xs
+  _then_resolve_operation_error_xs
 );
 
 require GraphQL::Houtou::XS::Parser;
@@ -122,6 +123,16 @@ sub _then_merge_hash_xs {
   my ($promise_code, $keys, $promise, $errors) = @_;
   return then_promise($promise_code, $promise, sub {
     return _merge_hash_xs($keys, _promise_all_values_to_arrayref(@_), $errors);
+  });
+}
+
+sub _then_resolve_operation_error_xs {
+  my ($promise_code, $promise) = @_;
+  return then_promise($promise_code, $promise, undef, sub {
+    return resolve_promise(
+      $promise_code,
+      +{ data => undef, %{ _wrap_error_xs($_[0]) } },
+    );
   });
 }
 

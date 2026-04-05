@@ -268,6 +268,12 @@ sub _execute_operation {
   my $result = eval {
     my $result = $execute->($context, $type, $root_value, [], $fields);
     return $result if !_is_promise($context, $result);
+    if (_has_xs_execution_helper('_then_resolve_operation_error_xs')) {
+      return GraphQL::Houtou::XS::Execution::_then_resolve_operation_error_xs(
+        $context->{promise_code},
+        $result,
+      );
+    }
     return then_promise($context->{promise_code}, $result, undef, sub {
       return resolve_promise($context->{promise_code},
         +{ data => undef, %{_wrap_error($_[0])} }

@@ -455,6 +455,19 @@ gql_execution_require_pp(pTHX) {
   }
 }
 
+static CV *
+gql_execution_pp_cv(pTHX_ const char *name) {
+  CV *cv = get_cv(name, 0);
+  if (!cv) {
+    gql_execution_require_pp(aTHX);
+    cv = get_cv(name, 0);
+  }
+  if (!cv) {
+    croak("Unable to resolve %s", name);
+  }
+  return cv;
+}
+
 static SV *
 gql_execution_call_graphql_error_coerce(pTHX_ SV *error) {
   dSP;
@@ -485,6 +498,11 @@ gql_execution_call_graphql_error_coerce(pTHX_ SV *error) {
 }
 
 static SV *
+gql_execution_mortal_sv_ref(SV *value) {
+  return value ? sv_2mortal(SvREFCNT_inc_simple_NN(value)) : &PL_sv_undef;
+}
+
+static SV *
 gql_execution_call_graphql_error_but(pTHX_ SV *error, SV *locations, SV *path) {
   dSP;
   int count;
@@ -493,11 +511,11 @@ gql_execution_call_graphql_error_but(pTHX_ SV *error, SV *locations, SV *path) {
   ENTER;
   SAVETMPS;
   PUSHMARK(SP);
-  XPUSHs(sv_2mortal(newSVsv(error)));
+  XPUSHs(gql_execution_mortal_sv_ref(error));
   XPUSHs(sv_2mortal(newSVpvs("locations")));
-  XPUSHs(sv_2mortal(newSVsv(locations)));
+  XPUSHs(gql_execution_mortal_sv_ref(locations));
   XPUSHs(sv_2mortal(newSVpvs("path")));
-  XPUSHs(sv_2mortal(newSVsv(path)));
+  XPUSHs(gql_execution_mortal_sv_ref(path));
   PUTBACK;
 
   count = call_method("but", G_SCALAR);
@@ -591,18 +609,20 @@ gql_execution_call_pp_variables_apply_defaults(pTHX_ SV *schema, SV *operation_v
   dSP;
   int count;
   SV *ret;
-
-  gql_execution_require_pp(aTHX);
+  static CV *cv = NULL;
+  if (!cv) {
+    cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_variables_apply_defaults");
+  }
 
   ENTER;
   SAVETMPS;
   PUSHMARK(SP);
-  XPUSHs(sv_2mortal(newSVsv(schema)));
-  XPUSHs(sv_2mortal(newSVsv(operation_variables)));
-  XPUSHs(sv_2mortal(variable_values ? newSVsv(variable_values) : newSV(0)));
+  XPUSHs(gql_execution_mortal_sv_ref(schema));
+  XPUSHs(gql_execution_mortal_sv_ref(operation_variables));
+  XPUSHs(gql_execution_mortal_sv_ref(variable_values));
   PUTBACK;
 
-  count = call_pv("GraphQL::Houtou::Execution::PP::_variables_apply_defaults", G_SCALAR);
+  count = call_sv((SV *)cv, G_SCALAR);
   SPAGAIN;
   if (count != 1) {
     PUTBACK;
@@ -624,16 +644,18 @@ gql_execution_call_pp_execute_prepared_context(pTHX_ SV *context) {
   dSP;
   int count;
   SV *ret;
-
-  gql_execution_require_pp(aTHX);
+  static CV *cv = NULL;
+  if (!cv) {
+    cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::execute_prepared_context");
+  }
 
   ENTER;
   SAVETMPS;
   PUSHMARK(SP);
-  XPUSHs(sv_2mortal(newSVsv(context)));
+  XPUSHs(gql_execution_mortal_sv_ref(context));
   PUTBACK;
 
-  count = call_pv("GraphQL::Houtou::Execution::PP::execute_prepared_context", G_SCALAR);
+  count = call_sv((SV *)cv, G_SCALAR);
   SPAGAIN;
   if (count != 1) {
     PUTBACK;
@@ -655,21 +677,23 @@ gql_execution_call_pp_resolve_field_value_or_error(pTHX_ SV *context, SV *field_
   dSP;
   int count;
   SV *ret;
-
-  gql_execution_require_pp(aTHX);
+  static CV *cv = NULL;
+  if (!cv) {
+    cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_resolve_field_value_or_error");
+  }
 
   ENTER;
   SAVETMPS;
   PUSHMARK(SP);
-  XPUSHs(sv_2mortal(newSVsv(context)));
-  XPUSHs(sv_2mortal(newSVsv(field_def)));
-  XPUSHs(sv_2mortal(newSVsv(nodes)));
-  XPUSHs(sv_2mortal(newSVsv(resolve)));
-  XPUSHs(sv_2mortal(root_value ? newSVsv(root_value) : newSV(0)));
-  XPUSHs(sv_2mortal(newSVsv(info)));
+  XPUSHs(gql_execution_mortal_sv_ref(context));
+  XPUSHs(gql_execution_mortal_sv_ref(field_def));
+  XPUSHs(gql_execution_mortal_sv_ref(nodes));
+  XPUSHs(gql_execution_mortal_sv_ref(resolve));
+  XPUSHs(gql_execution_mortal_sv_ref(root_value));
+  XPUSHs(gql_execution_mortal_sv_ref(info));
   PUTBACK;
 
-  count = call_pv("GraphQL::Houtou::Execution::PP::_resolve_field_value_or_error", G_SCALAR);
+  count = call_sv((SV *)cv, G_SCALAR);
   SPAGAIN;
   if (count != 1) {
     PUTBACK;
@@ -691,21 +715,23 @@ gql_execution_call_pp_complete_value_catching_error(pTHX_ SV *context, SV *retur
   dSP;
   int count;
   SV *ret;
-
-  gql_execution_require_pp(aTHX);
+  static CV *cv = NULL;
+  if (!cv) {
+    cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_complete_value_catching_error");
+  }
 
   ENTER;
   SAVETMPS;
   PUSHMARK(SP);
-  XPUSHs(sv_2mortal(newSVsv(context)));
-  XPUSHs(sv_2mortal(newSVsv(return_type)));
-  XPUSHs(sv_2mortal(newSVsv(nodes)));
-  XPUSHs(sv_2mortal(newSVsv(info)));
-  XPUSHs(sv_2mortal(newSVsv(path)));
-  XPUSHs(sv_2mortal(newSVsv(result)));
+  XPUSHs(gql_execution_mortal_sv_ref(context));
+  XPUSHs(gql_execution_mortal_sv_ref(return_type));
+  XPUSHs(gql_execution_mortal_sv_ref(nodes));
+  XPUSHs(gql_execution_mortal_sv_ref(info));
+  XPUSHs(gql_execution_mortal_sv_ref(path));
+  XPUSHs(gql_execution_mortal_sv_ref(result));
   PUTBACK;
 
-  count = call_pv("GraphQL::Houtou::Execution::PP::_complete_value_catching_error", G_SCALAR);
+  count = call_sv((SV *)cv, G_SCALAR);
   SPAGAIN;
   if (count != 1) {
     PUTBACK;
@@ -731,10 +757,10 @@ gql_execution_call_resolver(pTHX_ SV *resolve, SV *root_value, SV *args, SV *con
   ENTER;
   SAVETMPS;
   PUSHMARK(SP);
-  XPUSHs(sv_2mortal(newSVsv(root_value ? root_value : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVsv(args)));
-  XPUSHs(sv_2mortal(newSVsv(context_value ? context_value : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVsv(info)));
+  XPUSHs(gql_execution_mortal_sv_ref(root_value));
+  XPUSHs(gql_execution_mortal_sv_ref(args));
+  XPUSHs(gql_execution_mortal_sv_ref(context_value));
+  XPUSHs(gql_execution_mortal_sv_ref(info));
   PUTBACK;
 
   count = call_sv(resolve, G_SCALAR | G_EVAL);
@@ -766,18 +792,20 @@ gql_execution_call_pp_get_argument_values(pTHX_ SV *def, SV *node, SV *variable_
   dSP;
   int count;
   SV *ret;
-
-  gql_execution_require_pp(aTHX);
+  static CV *cv = NULL;
+  if (!cv) {
+    cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_get_argument_values_pp");
+  }
 
   ENTER;
   SAVETMPS;
   PUSHMARK(SP);
-  XPUSHs(sv_2mortal(newSVsv(def)));
-  XPUSHs(sv_2mortal(newSVsv(node)));
-  XPUSHs(sv_2mortal(variable_values ? newSVsv(variable_values) : newSV(0)));
+  XPUSHs(gql_execution_mortal_sv_ref(def));
+  XPUSHs(gql_execution_mortal_sv_ref(node));
+  XPUSHs(gql_execution_mortal_sv_ref(variable_values));
   PUTBACK;
 
-  count = call_pv("GraphQL::Houtou::Execution::PP::_get_argument_values_pp", G_SCALAR);
+  count = call_sv((SV *)cv, G_SCALAR);
   SPAGAIN;
   if (count != 1) {
     PUTBACK;
@@ -799,17 +827,19 @@ gql_execution_call_pp_type_will_accept(pTHX_ SV *arg_type, SV *var_type) {
   dSP;
   int count;
   SV *ret;
-
-  gql_execution_require_pp(aTHX);
+  static CV *cv = NULL;
+  if (!cv) {
+    cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_type_will_accept");
+  }
 
   ENTER;
   SAVETMPS;
   PUSHMARK(SP);
-  XPUSHs(sv_2mortal(newSVsv(arg_type)));
-  XPUSHs(sv_2mortal(newSVsv(var_type)));
+  XPUSHs(gql_execution_mortal_sv_ref(arg_type));
+  XPUSHs(gql_execution_mortal_sv_ref(var_type));
   PUTBACK;
 
-  count = call_pv("GraphQL::Houtou::Execution::PP::_type_will_accept", G_SCALAR);
+  count = call_sv((SV *)cv, G_SCALAR);
   SPAGAIN;
   if (count != 1) {
     PUTBACK;

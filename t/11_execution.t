@@ -41,6 +41,28 @@ my $SearchResult = GraphQL::Houtou::Type::Union->new(
   types => [ $User ],
 );
 
+my $AutoNamedEntity = GraphQL::Houtou::Type::Interface->new(
+  name => 'AutoNamedEntity',
+  fields => {
+    name => { type => $String->non_null },
+  },
+);
+
+my $AutoCheckedUser = GraphQL::Houtou::Type::Object->new(
+  name => 'AutoCheckedUser',
+  interfaces => [ $AutoNamedEntity ],
+  is_type_of => sub { ref($_[0]) eq 'HASH' && exists $_[0]{id} && ($_[0]{name} || '') =~ /^auto/ },
+  fields => {
+    id => { type => $ID->non_null },
+    name => { type => $String->non_null },
+  },
+);
+
+my $AutoSearchResult = GraphQL::Houtou::Type::Union->new(
+  name => 'AutoSearchResult',
+  types => [ $AutoCheckedUser ],
+);
+
 my $Query = GraphQL::Houtou::Type::Object->new(
   name => 'Query',
   fields => {
@@ -97,12 +119,30 @@ my $Query = GraphQL::Houtou::Type::Object->new(
         };
       },
     },
+    auto_named_entity => {
+      type => $AutoNamedEntity,
+      resolve => sub {
+        return {
+          id => '14',
+          name => 'auto:14',
+        };
+      },
+    },
     search_result => {
       type => $SearchResult,
       resolve => sub {
         return {
           id => '13',
           name => 'search:13',
+        };
+      },
+    },
+    auto_search_result => {
+      type => $AutoSearchResult,
+      resolve => sub {
+        return {
+          id => '15',
+          name => 'auto-search:15',
         };
       },
     },
@@ -115,7 +155,7 @@ my $Query = GraphQL::Houtou::Type::Object->new(
 
 my $schema = GraphQL::Houtou::Schema->new(
   query => $Query,
-  types => [ $User, $CheckedUser, $NamedEntity, $SearchResult ],
+  types => [ $User, $CheckedUser, $NamedEntity, $SearchResult, $AutoNamedEntity, $AutoCheckedUser, $AutoSearchResult ],
 );
 
 subtest 'execute simple query from source' => sub {
@@ -480,6 +520,26 @@ subtest 'execute union field with resolve_type through xs path' => sub {
   my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
 
   is_deeply $xs, $public, 'union field with resolve_type matches public facade';
+};
+
+subtest 'execute interface field with default resolve_type through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ auto_named_entity { ... on AutoCheckedUser { id name } } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'interface field with default resolve_type matches public facade';
+};
+
+subtest 'execute union field with default resolve_type through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ auto_search_result { ... on AutoCheckedUser { id name } } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'union field with default resolve_type matches public facade';
 };
 
 done_testing;

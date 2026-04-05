@@ -12,6 +12,8 @@ use GraphQL::Type::Object;
 use GraphQL::Type::Scalar qw($Boolean $Int $String);
 use GraphQL::Type::Union;
 use GraphQL::Houtou::Schema::Compiler qw(compile_schema);
+use GraphQL::Houtou::Schema::Compiler::PP ();
+use GraphQL::Houtou::XS::SchemaCompiler qw(compile_schema_xs);
 
 my $Node;
 my $User;
@@ -94,6 +96,36 @@ my $schema = GraphQL::Schema->new(
 );
 
 my $compiled = compile_schema($schema);
+my $compiled_pp = GraphQL::Houtou::Schema::Compiler::PP::compile_schema($schema);
+my $compiled_xs = compile_schema_xs($schema);
+
+sub _strip_runtime {
+  my ($value) = @_;
+
+  if (!ref $value) {
+    return $value;
+  }
+
+  if (ref $value eq 'ARRAY') {
+    return [ map _strip_runtime($_), @$value ];
+  }
+
+  if (ref $value eq 'HASH') {
+    my %copy;
+    for my $key (sort keys %$value) {
+      next if $key =~ /\A(?:source_|resolve|subscribe|serialize|parse_value|resolve_type|is_type_of)\z/;
+      $copy{$key} = _strip_runtime($value->{$key});
+    }
+    return \%copy;
+  }
+
+  return ref $value;
+}
+
+subtest 'facade, PP, and XS agree on normalized shape' => sub {
+  is_deeply _strip_runtime($compiled), _strip_runtime($compiled_pp), 'facade matches PP';
+  is_deeply _strip_runtime($compiled), _strip_runtime($compiled_xs), 'facade matches XS';
+};
 
 subtest 'roots are normalized' => sub {
   is_deeply $compiled->{roots}, {

@@ -13,8 +13,10 @@ use_ok $_ for qw(
     GraphQL::Houtou::GraphQLPerl::Parser
     GraphQL::Houtou::GraphQLJS::Parser
     GraphQL::Houtou::Schema::Compiler
+    GraphQL::Houtou::Schema::Compiler::PP
     GraphQL::Houtou::GraphQLJS::Util
     GraphQL::Houtou::XS::Parser
+    GraphQL::Houtou::XS::SchemaCompiler
 );
 
 done_testing;

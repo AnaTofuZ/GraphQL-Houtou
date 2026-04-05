@@ -2,6 +2,7 @@
 #include "houtou_xs/parser_core.h"
 #include "houtou_xs/graphqljs_runtime.h"
 #include "houtou_xs/graphqljs_convert.h"
+#include "houtou_xs/schema_compiler.h"
 #include "houtou_xs/ir_engine.h"
 #include "houtou_xs/legacy_compat.h"
 
@@ -194,5 +195,15 @@ graphqljs_apply_executable_loc_xs(doc, source)
     SV *source
   CODE:
     RETVAL = gql_graphqljs_apply_executable_loc(aTHX_ doc, source);
+  OUTPUT:
+    RETVAL
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::SchemaCompiler
+
+SV *
+compile_schema_xs(schema)
+    SV *schema
+  CODE:
+    RETVAL = gql_schema_compile_schema(aTHX_ schema);
   OUTPUT:
     RETVAL

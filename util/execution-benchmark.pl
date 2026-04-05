@@ -215,6 +215,15 @@ sub build_upstream_schema {
         return Local::ImmediatePromise->resolve('async-world');
       },
     };
+    $fields{asyncList} = {
+      type => $GraphQL::Type::Scalar::String->non_null->list->non_null,
+      resolve => sub {
+        return [
+          Local::ImmediatePromise->resolve('alpha'),
+          Local::ImmediatePromise->resolve('beta'),
+        ];
+      },
+    };
   }
 
   my $Query = GraphQL::Type::Object->new(
@@ -306,6 +315,15 @@ sub build_houtou_schema {
       type => $GraphQL::Houtou::Type::Scalar::String->non_null,
       resolve => sub {
         return Local::ImmediatePromise->resolve('async-world');
+      },
+    };
+    $fields{asyncList} = {
+      type => $GraphQL::Houtou::Type::Scalar::String->non_null->list->non_null,
+      resolve => sub {
+        return [
+          Local::ImmediatePromise->resolve('alpha'),
+          Local::ImmediatePromise->resolve('beta'),
+        ];
       },
     };
   }
@@ -418,6 +436,12 @@ my @cases = (
 push @cases, {
   name => 'async_scalar',
   query => '{ asyncHello }',
+  promise => 1,
+} if $include_async;
+
+push @cases, {
+  name => 'async_list',
+  query => '{ asyncList }',
   promise => 1,
 } if $include_async;
 

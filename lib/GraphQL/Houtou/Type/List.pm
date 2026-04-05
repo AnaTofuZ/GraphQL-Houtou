@@ -208,13 +208,17 @@ sub _promise_for_list {
     return GraphQL::Houtou::XS::Execution::_promise_then_xs(
       $context->{promise_code},
       $aggregate,
-      sub { GraphQL::Houtou::XS::Execution::_merge_completed_list_xs($_[0]) },
+      sub {
+        return GraphQL::Houtou::XS::Execution::_merge_completed_list_xs(
+          GraphQL::Houtou::XS::Execution::_promise_all_values_to_arrayref(@_)
+        );
+      },
       undef,
     );
   }
 
   return then_promise($context->{promise_code}, $context->{promise_code}{all}->(@$list), sub {
-    return _merge_list_pp($_[0]);
+    return _merge_list_pp(GraphQL::Houtou::XS::Execution::_promise_all_values_to_arrayref(@_));
   });
 }
 

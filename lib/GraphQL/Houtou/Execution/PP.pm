@@ -35,6 +35,18 @@ my $JSON = JSON::MaybeXS->new->allow_nonref;
 my $HAS_XS_EXECUTE_FIELDS;
 my $HAS_XS_ARGUMENT_VALUES;
 my $HAS_XS_COLLECT_FIELDS;
+my %HAS_XS_EXECUTION_HELPER;
+
+sub _has_xs_execution_helper {
+  my ($name) = @_;
+  return $HAS_XS_EXECUTION_HELPER{$name}
+    if exists $HAS_XS_EXECUTION_HELPER{$name};
+
+  return $HAS_XS_EXECUTION_HELPER{$name} = eval {
+    require GraphQL::Houtou::XS::Execution;
+    GraphQL::Houtou::XS::Execution->can($name);
+  } ? 1 : 0;
+}
 
 sub execute {
   my (
@@ -86,10 +98,7 @@ sub _build_response {
   my ($result, $force_data, $promise_code) = @_;
 
   if (is_promise_value($promise_code, $result)) {
-    if (eval {
-      require GraphQL::Houtou::XS::Execution;
-      GraphQL::Houtou::XS::Execution->can('_then_build_response_xs');
-    }) {
+    if (_has_xs_execution_helper('_then_build_response_xs')) {
       return GraphQL::Houtou::XS::Execution::_then_build_response_xs(
         $promise_code,
         $result,
@@ -102,10 +111,7 @@ sub _build_response {
     });
   }
 
-  if (eval {
-    require GraphQL::Houtou::XS::Execution;
-    GraphQL::Houtou::XS::Execution->can('_build_response_xs');
-  }) {
+  if (_has_xs_execution_helper('_build_response_xs')) {
     return GraphQL::Houtou::XS::Execution::_build_response_xs($result, $force_data ? 1 : 0);
   }
 
@@ -362,10 +368,7 @@ sub _promise_for_hash {
     if !$promise_code;
 
   my $aggregate = all_promise($promise_code, @$values);
-  if (eval {
-    require GraphQL::Houtou::XS::Execution;
-    GraphQL::Houtou::XS::Execution->can('_then_merge_hash_xs');
-  }) {
+  if (_has_xs_execution_helper('_then_merge_hash_xs')) {
     return GraphQL::Houtou::XS::Execution::_then_merge_hash_xs(
       $promise_code,
       $keys,
@@ -454,10 +457,7 @@ sub _complete_value_with_located_error {
 
 sub _then_resolve_wrapped_error {
   my ($context, $promise) = @_;
-  if (eval {
-    require GraphQL::Houtou::XS::Execution;
-    GraphQL::Houtou::XS::Execution->can('_then_resolve_wrapped_error_xs');
-  }) {
+  if (_has_xs_execution_helper('_then_resolve_wrapped_error_xs')) {
     return GraphQL::Houtou::XS::Execution::_then_resolve_wrapped_error_xs(
       $context->{promise_code},
       $promise,
@@ -471,10 +471,7 @@ sub _then_resolve_wrapped_error {
 
 sub _then_reject_located_error {
   my ($context, $promise, $nodes, $path) = @_;
-  if (eval {
-    require GraphQL::Houtou::XS::Execution;
-    GraphQL::Houtou::XS::Execution->can('_then_reject_located_error_xs');
-  }) {
+  if (_has_xs_execution_helper('_then_reject_located_error_xs')) {
     return GraphQL::Houtou::XS::Execution::_then_reject_located_error_xs(
       $context->{promise_code},
       $promise,
@@ -494,10 +491,7 @@ sub _complete_value {
   my ($context, $return_type, $nodes, $info, $path, $result) = @_;
 
   if (_is_promise($context, $result)) {
-    if (eval {
-      require GraphQL::Houtou::XS::Execution;
-      GraphQL::Houtou::XS::Execution->can('_then_complete_value_xs');
-    }) {
+    if (_has_xs_execution_helper('_then_complete_value_xs')) {
       return GraphQL::Houtou::XS::Execution::_then_complete_value_xs(
         $context,
         $return_type,
@@ -538,10 +532,7 @@ sub _complete_value {
 
 sub _located_error {
   my ($error, $nodes, $path) = @_;
-  if (eval {
-    require GraphQL::Houtou::XS::Execution;
-    GraphQL::Houtou::XS::Execution->can('_located_error_xs');
-  }) {
+  if (_has_xs_execution_helper('_located_error_xs')) {
     return GraphQL::Houtou::XS::Execution::_located_error_xs($error, $nodes, $path);
   }
 

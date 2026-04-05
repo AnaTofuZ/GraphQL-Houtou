@@ -178,6 +178,51 @@ subtest 'execute returns a promise when promise_code is supplied' => sub {
   }, 'promise-backed execution resolves to the final response';
 };
 
+subtest 'promise all hooks may fulfill with multiple values' => sub {
+  my $promise_code = normalize_promise_code({
+    resolve => sub { Local::Test::ChainPromise->resolve(@_) },
+    reject => sub { Local::Test::ChainPromise->reject(@_) },
+    all => sub {
+      my @resolved;
+      for my $value (@_) {
+        if (ref($value) && eval { $value->isa('Local::Test::ChainPromise') }) {
+          die @{ $value->{values} } if $value->{status} eq 'rejected';
+          push @resolved, $value->{values}[0];
+          next;
+        }
+        push @resolved, $value;
+      }
+      return Local::Test::ChainPromise->resolve(@resolved);
+    },
+    then => sub {
+      my ($promise, $on_fulfilled, $on_rejected) = @_;
+      return $promise->chain($on_fulfilled, $on_rejected);
+    },
+    is_promise => sub {
+      my ($value) = @_;
+      return ref($value) eq 'Local::Test::ChainPromise';
+    },
+  });
+
+  my $result = execute(
+    $schema,
+    '{ later_list }',
+    undef,
+    undef,
+    undef,
+    undef,
+    undef,
+    $promise_code,
+  );
+
+  isa_ok $result, 'Local::Test::ChainPromise';
+  is_deeply $result->get, {
+    data => {
+      later_list => [ 'alpha', 'beta' ],
+    },
+  }, 'list completion accepts multi-value promise all hooks';
+};
+
 subtest 'global default promise code is used when request override is absent' => sub {
   my $promise_code = set_default_promise_code({
     resolve => sub { Local::Test::ChainPromise->resolve(@_) },

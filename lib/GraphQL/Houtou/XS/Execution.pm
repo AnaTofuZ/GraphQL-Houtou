@@ -39,6 +39,26 @@ our @EXPORT_OK = qw(
 
 require GraphQL::Houtou::XS::Parser;
 
+sub _promise_all_value_to_scalar {
+  my ($value) = @_;
+  return $value->[0]
+    if ref($value) eq 'ARRAY' && @$value == 1;
+  return $value;
+}
+
+sub _promise_all_values_to_arrayref {
+  if (@_ == 1 && ref($_[0]) eq 'ARRAY') {
+    my $values = $_[0];
+    return [
+      map { _promise_all_value_to_scalar($_) } @$values
+    ];
+  }
+
+  return [
+    map { _promise_all_value_to_scalar($_) } @_
+  ];
+}
+
 sub execute_xs {
   my (
     $schema,
@@ -101,7 +121,7 @@ sub _then_build_response_xs {
 sub _then_merge_hash_xs {
   my ($promise_code, $keys, $promise, $errors) = @_;
   return then_promise($promise_code, $promise, sub {
-    return _merge_hash_xs($keys, $_[0], $errors);
+    return _merge_hash_xs($keys, _promise_all_values_to_arrayref(@_), $errors);
   });
 }
 

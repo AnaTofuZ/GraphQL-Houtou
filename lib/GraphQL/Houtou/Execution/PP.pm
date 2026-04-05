@@ -51,13 +51,18 @@ sub execute {
   };
 
   return _build_response(_wrap_error($@)) if $@;
+  return _build_response(execute_prepared_context($context), 1);
+}
 
+sub execute_prepared_context {
+  my ($context) = @_;
   my $result = eval {
-    _execute_operation($context, $context->{operation}, $root_value);
+    $context->{field_resolver} ||= \&_default_field_resolver;
+    _execute_operation($context, $context->{operation}, $context->{root_value});
   };
 
-  return _build_response(_wrap_error($@)) if $@;
-  return _build_response($result, 1);
+  return _wrap_error($@) if $@;
+  return $result;
 }
 
 sub _coerce_ast {

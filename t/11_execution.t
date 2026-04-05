@@ -99,4 +99,30 @@ subtest 'xs facade matches public facade' => sub {
   is_deeply $xs, $public, 'xs entrypoint matches facade result';
 };
 
+subtest 'xs facade selects named operation' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = <<'GRAPHQL';
+query first { hello }
+query second($id: ID!) { user(id: $id) { id } }
+GRAPHQL
+
+  my $result = GraphQL::Houtou::XS::Execution::execute_xs(
+    $schema,
+    $query,
+    undef,
+    undef,
+    { id => '7' },
+    'second',
+  );
+
+  is_deeply $result, {
+    data => {
+      user => {
+        id => '7',
+      },
+    },
+  }, 'xs path chooses the requested operation';
+};
+
 done_testing;

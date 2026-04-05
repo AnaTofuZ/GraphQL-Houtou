@@ -63,6 +63,22 @@ my $AutoSearchResult = GraphQL::Houtou::Type::Union->new(
   types => [ $AutoCheckedUser ],
 );
 
+my $ThrowingCheckedUser = GraphQL::Houtou::Type::Object->new(
+  name => 'ThrowingCheckedUser',
+  is_type_of => sub { die "is_type_of exploded\n" },
+  fields => {
+    id => { type => $ID->non_null },
+  },
+);
+
+my $ThrowingNamedEntity = GraphQL::Houtou::Type::Interface->new(
+  name => 'ThrowingNamedEntity',
+  resolve_type => sub { die "resolve_type exploded\n" },
+  fields => {
+    name => { type => $String->non_null },
+  },
+);
+
 my $Query = GraphQL::Houtou::Type::Object->new(
   name => 'Query',
   fields => {
@@ -119,6 +135,18 @@ my $Query = GraphQL::Houtou::Type::Object->new(
         };
       },
     },
+    checked_user_bad => {
+      type => $CheckedUser,
+      resolve => sub {
+        return 'not-a-user';
+      },
+    },
+    throwing_checked_user => {
+      type => $ThrowingCheckedUser,
+      resolve => sub {
+        return { id => '31' };
+      },
+    },
     named_entity => {
       type => $NamedEntity,
       resolve => sub {
@@ -155,6 +183,15 @@ my $Query = GraphQL::Houtou::Type::Object->new(
         };
       },
     },
+    throwing_named_entity => {
+      type => $ThrowingNamedEntity,
+      resolve => sub {
+        return {
+          id => '32',
+          name => 'throwing:32',
+        };
+      },
+    },
     boom => {
       type => $String,
       resolve => sub { die "boom\n" },
@@ -164,7 +201,7 @@ my $Query = GraphQL::Houtou::Type::Object->new(
 
 my $schema = GraphQL::Houtou::Schema->new(
   query => $Query,
-  types => [ $User, $CheckedUser, $NamedEntity, $SearchResult, $AutoNamedEntity, $AutoCheckedUser, $AutoSearchResult ],
+  types => [ $User, $CheckedUser, $NamedEntity, $SearchResult, $AutoNamedEntity, $AutoCheckedUser, $AutoSearchResult, $ThrowingCheckedUser, $ThrowingNamedEntity ],
 );
 
 subtest 'execute simple query from source' => sub {
@@ -543,6 +580,26 @@ subtest 'execute object field with is_type_of through xs path' => sub {
   is_deeply $xs, $public, 'object field with is_type_of matches public facade';
 };
 
+subtest 'execute object field with failing is_type_of through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ checked_user_bad { id } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'object field with failing is_type_of matches public facade';
+};
+
+subtest 'execute object field with dying is_type_of through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ throwing_checked_user { id } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'object field with dying is_type_of matches public facade';
+};
+
 subtest 'execute interface field with resolve_type through xs path' => sub {
   require GraphQL::Houtou::XS::Execution;
 
@@ -551,6 +608,16 @@ subtest 'execute interface field with resolve_type through xs path' => sub {
   my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
 
   is_deeply $xs, $public, 'interface field with resolve_type matches public facade';
+};
+
+subtest 'execute interface field with dying resolve_type through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ throwing_named_entity { name } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'interface field with dying resolve_type matches public facade';
 };
 
 subtest 'execute union field with resolve_type through xs path' => sub {

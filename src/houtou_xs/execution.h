@@ -41,6 +41,75 @@ gql_execution_call_graphql_error_coerce(pTHX_ SV *error) {
 }
 
 static SV *
+gql_execution_call_graphql_error_but(pTHX_ SV *error, SV *locations, SV *path) {
+  dSP;
+  int count;
+  SV *ret;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(error)));
+  XPUSHs(sv_2mortal(newSVpvs("locations")));
+  XPUSHs(sv_2mortal(newSVsv(locations)));
+  XPUSHs(sv_2mortal(newSVpvs("path")));
+  XPUSHs(sv_2mortal(newSVsv(path)));
+  PUTBACK;
+
+  count = call_method("but", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("GraphQL::Error->but did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
+static SV *
+gql_execution_collect_node_locations(pTHX_ SV *nodes) {
+  AV *locations_av = newAV();
+
+  if (SvROK(nodes) && SvTYPE(SvRV(nodes)) == SVt_PVAV) {
+    AV *nodes_av = (AV *)SvRV(nodes);
+    I32 node_len = av_len(nodes_av);
+    I32 i;
+    for (i = 0; i <= node_len; i++) {
+      SV **node_svp = av_fetch(nodes_av, i, 0);
+      if (node_svp && SvROK(*node_svp) && SvTYPE(SvRV(*node_svp)) == SVt_PVHV) {
+        SV **location_svp = hv_fetch((HV *)SvRV(*node_svp), "location", 8, 0);
+        av_push(locations_av, location_svp ? newSVsv(*location_svp) : newSV(0));
+      }
+    }
+  }
+
+  return newRV_noinc((SV *)locations_av);
+}
+
+static SV *
+gql_execution_make_error_result(pTHX_ SV *message, SV *nodes, SV *path) {
+  HV *ret_hv = newHV();
+  AV *errors_av = newAV();
+  SV *error = gql_execution_call_graphql_error_coerce(aTHX_ message);
+  SV *locations = gql_execution_collect_node_locations(aTHX_ nodes);
+  SV *located = gql_execution_call_graphql_error_but(aTHX_ error, locations, path);
+
+  av_push(errors_av, located);
+  (void)hv_store(ret_hv, "data", 4, newSV(0), 0);
+  (void)hv_store(ret_hv, "errors", 6, newRV_noinc((SV *)errors_av), 0);
+  SvREFCNT_dec(error);
+  SvREFCNT_dec(locations);
+  return newRV_noinc((SV *)ret_hv);
+}
+
+static SV *
 gql_execution_try_type_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok) {
   dSP;
   int count;
@@ -509,13 +578,16 @@ gql_execution_call_object_is_type_of(pTHX_ SV *type) {
 }
 
 static SV *
-gql_execution_call_is_type_of_cb(pTHX_ SV *cb, SV *result, SV *context, SV *info, int *ok) {
+gql_execution_call_is_type_of_cb(pTHX_ SV *cb, SV *result, SV *context, SV *info, int *ok, SV **error_out) {
   dSP;
   int count;
   SV *ret;
   SV *context_value = &PL_sv_undef;
 
   *ok = 0;
+  if (error_out) {
+    *error_out = NULL;
+  }
   if (context && SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV) {
     SV **context_value_svp = hv_fetch((HV *)SvRV(context), "context_value", 13, 0);
     if (context_value_svp && SvOK(*context_value_svp)) {
@@ -534,6 +606,9 @@ gql_execution_call_is_type_of_cb(pTHX_ SV *cb, SV *result, SV *context, SV *info
   count = call_sv(cb, G_SCALAR | G_EVAL);
   SPAGAIN;
   if (SvTRUE(ERRSV) || count != 1) {
+    if (SvTRUE(ERRSV) && error_out) {
+      *error_out = newSVsv(ERRSV);
+    }
     PUTBACK;
     FREETMPS;
     LEAVE;
@@ -549,13 +624,16 @@ gql_execution_call_is_type_of_cb(pTHX_ SV *cb, SV *result, SV *context, SV *info
 }
 
 static SV *
-gql_execution_call_abstract_resolve_type_cb(pTHX_ SV *cb, SV *result, SV *context, SV *info, SV *abstract_type, int *ok) {
+gql_execution_call_abstract_resolve_type_cb(pTHX_ SV *cb, SV *result, SV *context, SV *info, SV *abstract_type, int *ok, SV **error_out) {
   dSP;
   int count;
   SV *ret;
   SV *context_value = &PL_sv_undef;
 
   *ok = 0;
+  if (error_out) {
+    *error_out = NULL;
+  }
   if (context && SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV) {
     SV **context_value_svp = hv_fetch((HV *)SvRV(context), "context_value", 13, 0);
     if (context_value_svp && SvOK(*context_value_svp)) {
@@ -575,6 +653,9 @@ gql_execution_call_abstract_resolve_type_cb(pTHX_ SV *cb, SV *result, SV *contex
   count = call_sv(cb, G_SCALAR | G_EVAL);
   SPAGAIN;
   if (SvTRUE(ERRSV) || count != 1) {
+    if (SvTRUE(ERRSV) && error_out) {
+      *error_out = newSVsv(ERRSV);
+    }
     PUTBACK;
     FREETMPS;
     LEAVE;
@@ -1269,11 +1350,40 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
 
     if (SvOK(is_type_of_sv)) {
       int type_ok = 0;
-      SV *type_match = gql_execution_call_is_type_of_cb(aTHX_ is_type_of_sv, result, context, info, &type_ok);
+      SV *type_error = NULL;
+      SV *type_match = gql_execution_call_is_type_of_cb(aTHX_ is_type_of_sv, result, context, info, &type_ok, &type_error);
       SvREFCNT_dec(is_type_of_sv);
       if (!type_ok || !SvTRUE(type_match)) {
         if (type_ok) {
+          if (!SvTRUE(type_match)) {
+            STRLEN type_len;
+            STRLEN result_len;
+            SV *type_name = gql_execution_call_type_to_string(aTHX_ return_type);
+            const char *type_pv = SvPV(type_name, type_len);
+            const char *result_pv;
+            if (SvROK(result)) {
+              result_pv = sv_reftype(SvRV(result), 0);
+              result_len = strlen(result_pv);
+            } else {
+              result_pv = SvPV(result, result_len);
+            }
+            SV *message = newSVpvf(
+              "Expected a value of type '%s' but received: '%s'.",
+              type_pv,
+              result_pv
+            );
+            SV *error_result = gql_execution_make_error_result(aTHX_ message, nodes, path);
+            SvREFCNT_dec(type_name);
+            SvREFCNT_dec(message);
+            SvREFCNT_dec(type_match);
+            return error_result;
+          }
           SvREFCNT_dec(type_match);
+        }
+        if (type_error) {
+          SV *error_result = gql_execution_make_error_result(aTHX_ type_error, nodes, path);
+          SvREFCNT_dec(type_error);
+          return error_result;
         }
         return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
       }
@@ -1329,13 +1439,15 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
 
     if (SvOK(resolve_type_sv)) {
       int ok = 0;
+      SV *resolve_error = NULL;
       SV *runtime_type_or_name = gql_execution_call_abstract_resolve_type_cb(
         aTHX_ resolve_type_sv,
         result,
         context,
         info,
         return_type,
-        &ok
+        &ok,
+        &resolve_error
       );
 
       SvREFCNT_dec(resolve_type_sv);
@@ -1407,6 +1519,10 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
         SvREFCNT_dec(runtime_type_or_name);
       } else if (ok) {
         SvREFCNT_dec(runtime_type_or_name);
+      } else if (resolve_error) {
+        SV *error_result = gql_execution_make_error_result(aTHX_ resolve_error, nodes, path);
+        SvREFCNT_dec(resolve_error);
+        return error_result;
       }
     } else {
       SvREFCNT_dec(resolve_type_sv);
@@ -1442,7 +1558,8 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
                 SV *is_type_of_sv = gql_execution_call_object_is_type_of(aTHX_ possible_type);
                 if (SvOK(is_type_of_sv)) {
                   int match_ok = 0;
-                  SV *type_match = gql_execution_call_is_type_of_cb(aTHX_ is_type_of_sv, result, context, info, &match_ok);
+                  SV *match_error = NULL;
+                  SV *type_match = gql_execution_call_is_type_of_cb(aTHX_ is_type_of_sv, result, context, info, &match_ok, &match_error);
                   SvREFCNT_dec(is_type_of_sv);
                   if (match_ok && SvTRUE(type_match)) {
                     SV *completed = gql_execution_complete_value_catching_error_xs_impl(
@@ -1459,6 +1576,11 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
                   }
                   if (match_ok) {
                     SvREFCNT_dec(type_match);
+                  } else if (match_error) {
+                    SV *error_result = gql_execution_make_error_result(aTHX_ match_error, nodes, path);
+                    SvREFCNT_dec(match_error);
+                    SvREFCNT_dec(possible_types_sv);
+                    return error_result;
                   }
                 } else {
                   SvREFCNT_dec(is_type_of_sv);

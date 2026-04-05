@@ -141,6 +141,7 @@ sub TIEARRAY {
   return bless {
     state => $state,
     ptr => $ptr,
+    kind => 1,
     data => undef,
   }, $class;
 }
@@ -236,6 +237,7 @@ sub TIEARRAY {
   return bless {
     state => $state,
     ptr => $ptr,
+    kind => 2,
     data => undef,
   }, $class;
 }
@@ -331,6 +333,7 @@ sub TIEARRAY {
   return bless {
     state => $state,
     ptr => $ptr,
+    kind => 3,
     data => undef,
   }, $class;
 }
@@ -426,6 +429,7 @@ sub TIEARRAY {
   return bless {
     state => $state,
     ptr => $ptr,
+    kind => 4,
     data => undef,
   }, $class;
 }

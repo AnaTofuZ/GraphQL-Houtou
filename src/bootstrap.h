@@ -6,7 +6,7 @@
 #include "EXTERN.h"
 #include "perl.h"
 #include "XSUB.h"
-#include "ppport.h"
+#include "../lib/GraphQL/ppport.h"
 
 typedef enum {
   TOK_EOF = 0,

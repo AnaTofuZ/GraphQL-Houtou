@@ -1,12 +1,12 @@
-#include "houtou_xs/bootstrap.h"
-#include "houtou_xs/parser_core.h"
-#include "houtou_xs/graphqljs_runtime.h"
-#include "houtou_xs/graphqljs_convert.h"
-#include "houtou_xs/schema_compiler.h"
-#include "houtou_xs/validation.h"
-#include "houtou_xs/execution.h"
-#include "houtou_xs/ir_engine.h"
-#include "houtou_xs/legacy_compat.h"
+#include "bootstrap.h"
+#include "parser_core.h"
+#include "graphqljs_runtime.h"
+#include "graphqljs_convert.h"
+#include "schema_compiler.h"
+#include "validation.h"
+#include "execution.h"
+#include "ir_engine.h"
+#include "legacy_compat.h"
 
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Parser
 

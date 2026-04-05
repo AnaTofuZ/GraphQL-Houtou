@@ -3,7 +3,7 @@ requires 'GraphQL', '0.54';
 requires 'XSLoader';
 
 on configure => sub {
-    requires 'Module::Build::Tiny';
+    requires 'Module::Build', '0.4005';
 };
 
 on 'test' => sub {

@@ -24,7 +24,7 @@ validator through `validate_prepared`.
 - subscription single root field
 - fragment cycle detection
 
-These rules are executed in `src/houtou_xs/validation.h`.
+These rules are executed in `src/validation.h`.
 
 ## Rules Still Running In PP
 

@@ -9,7 +9,7 @@ It should stay short enough to recover momentum quickly after context resets.
 - Parser / graphql-js compatibility / lazy AST materialization remain in XS and
   are stable enough for incremental work on schema, validation, introspection,
   and execution.
-- XS source has been split under `src/houtou_xs/` and `lib/GraphQL/Houtou.xs`
+- XS source has been split under `src/` and `lib/GraphQL/Houtou.xs`
   is now a thin entrypoint.
 - Houtou now owns its public type / schema / directive / role namespaces
   instead of only subclassing upstream wrappers.

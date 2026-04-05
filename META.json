@@ -1,5 +1,5 @@
 {
-   "abstract" : "XS recursive-descent GraphQL parser toolkit for Perl",
+   "abstract" : "XS-backed GraphQL parser and execution toolkit for Perl",
    "author" : [
       "anatofuz <anatofuz@gmail.com>"
    ],
@@ -28,7 +28,7 @@
    "prereqs" : {
       "configure" : {
          "requires" : {
-            "Module::Build::Tiny" : "0.035"
+            "Module::Build" : "0.4005"
          }
       },
       "develop" : {

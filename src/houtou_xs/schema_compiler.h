@@ -149,13 +149,16 @@ gql_schema_named_type_kind(SV *type_sv) {
       || sv_derived_from(type_sv, "GraphQL::Houtou::Type::Scalar")) {
     return "SCALAR";
   }
-  if (sv_derived_from(type_sv, "GraphQL::Type::Object")) {
+  if (sv_derived_from(type_sv, "GraphQL::Type::Object")
+      || sv_derived_from(type_sv, "GraphQL::Houtou::Type::Object")) {
     return "OBJECT";
   }
-  if (sv_derived_from(type_sv, "GraphQL::Type::Interface")) {
+  if (sv_derived_from(type_sv, "GraphQL::Type::Interface")
+      || sv_derived_from(type_sv, "GraphQL::Houtou::Type::Interface")) {
     return "INTERFACE";
   }
-  if (sv_derived_from(type_sv, "GraphQL::Type::Union")) {
+  if (sv_derived_from(type_sv, "GraphQL::Type::Union")
+      || sv_derived_from(type_sv, "GraphQL::Houtou::Type::Union")) {
     return "UNION";
   }
   if (sv_derived_from(type_sv, "GraphQL::Type::Enum")
@@ -724,7 +727,8 @@ gql_schema_compile_schema(pTHX_ SV *schema_sv) {
       }
       type_sv = HeVAL(he);
 
-      if (sv_derived_from(type_sv, "GraphQL::Type::Object")) {
+      if (sv_derived_from(type_sv, "GraphQL::Type::Object")
+          || sv_derived_from(type_sv, "GraphQL::Houtou::Type::Object")) {
         SV *interfaces_sv = gql_schema_call_method0(aTHX_ type_sv, "interfaces");
         if (SvROK(interfaces_sv) && SvTYPE(SvRV(interfaces_sv)) == SVt_PVAV) {
           AV *interfaces_av = (AV *)SvRV(interfaces_sv);
@@ -757,7 +761,9 @@ gql_schema_compile_schema(pTHX_ SV *schema_sv) {
       }
 
       if (sv_derived_from(type_sv, "GraphQL::Type::Interface")
-          || sv_derived_from(type_sv, "GraphQL::Type::Union")) {
+          || sv_derived_from(type_sv, "GraphQL::Houtou::Type::Interface")
+          || sv_derived_from(type_sv, "GraphQL::Type::Union")
+          || sv_derived_from(type_sv, "GraphQL::Houtou::Type::Union")) {
         SV *possible_sv = gql_schema_call_method1(aTHX_ schema_sv, "get_possible_types", newSVsv(type_sv));
         gqljs_store_hash_key_sv(possible_types_hv, type_keys[i], gql_schema_compile_type_name_array(aTHX_ possible_sv));
         SvREFCNT_dec(possible_sv);

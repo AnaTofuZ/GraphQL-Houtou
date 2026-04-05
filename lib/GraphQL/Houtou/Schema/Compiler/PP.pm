@@ -75,14 +75,14 @@ sub _compile_named_type {
     is_introspection => $type->{is_introspection} ? 1 : 0,
   };
 
-  if ($type->isa('GraphQL::Type::Object')) {
+  if ($type->isa('GraphQL::Type::Object') || $type->isa('GraphQL::Houtou::Type::Object')) {
     $compiled->{interfaces} = [ map $_->name, @{ $type->interfaces || [] } ];
     $compiled->{fields} = _compile_fields($type->fields || {});
     $compiled->{is_type_of} = $type->is_type_of if $type->is_type_of;
-  } elsif ($type->isa('GraphQL::Type::Interface')) {
+  } elsif ($type->isa('GraphQL::Type::Interface') || $type->isa('GraphQL::Houtou::Type::Interface')) {
     $compiled->{fields} = _compile_fields($type->fields || {});
     $compiled->{resolve_type} = $type->resolve_type if $type->resolve_type;
-  } elsif ($type->isa('GraphQL::Type::Union')) {
+  } elsif ($type->isa('GraphQL::Type::Union') || $type->isa('GraphQL::Houtou::Type::Union')) {
     $compiled->{types} = [ map $_->name, @{ $type->get_types || [] } ];
     $compiled->{resolve_type} = $type->resolve_type if $type->resolve_type;
   } elsif ($type->isa('GraphQL::Type::InputObject') || $type->isa('GraphQL::Houtou::Type::InputObject')) {
@@ -229,9 +229,9 @@ sub _named_type_kind {
   my ($type) = @_;
 
   return 'SCALAR' if $type->isa('GraphQL::Type::Scalar') || $type->isa('GraphQL::Houtou::Type::Scalar');
-  return 'OBJECT' if $type->isa('GraphQL::Type::Object');
-  return 'INTERFACE' if $type->isa('GraphQL::Type::Interface');
-  return 'UNION' if $type->isa('GraphQL::Type::Union');
+  return 'OBJECT' if $type->isa('GraphQL::Type::Object') || $type->isa('GraphQL::Houtou::Type::Object');
+  return 'INTERFACE' if $type->isa('GraphQL::Type::Interface') || $type->isa('GraphQL::Houtou::Type::Interface');
+  return 'UNION' if $type->isa('GraphQL::Type::Union') || $type->isa('GraphQL::Houtou::Type::Union');
   return 'ENUM' if $type->isa('GraphQL::Type::Enum') || $type->isa('GraphQL::Houtou::Type::Enum');
   return 'INPUT_OBJECT' if $type->isa('GraphQL::Type::InputObject') || $type->isa('GraphQL::Houtou::Type::InputObject');
 

@@ -225,7 +225,7 @@ validate_xs(schema, document, options = NULL)
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Execution
 
 SV *
-execute_xs(schema, document, root_value = NULL, context_value = NULL, variable_values = NULL, operation_name = NULL, field_resolver = NULL, promise_code = NULL)
+_execute_xs_raw(schema, document, root_value = NULL, context_value = NULL, variable_values = NULL, operation_name = NULL, field_resolver = NULL, promise_code = NULL)
     SV *schema
     SV *document
     SV *root_value

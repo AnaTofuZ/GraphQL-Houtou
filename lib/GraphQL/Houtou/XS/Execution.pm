@@ -5,6 +5,7 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use GraphQL::Houtou::Promise::Adapter qw(normalize_promise_code);
 
 our $VERSION = '0.01';
 our @EXPORT_OK = qw(
@@ -16,5 +17,29 @@ our @EXPORT_OK = qw(
 );
 
 require GraphQL::Houtou::XS::Parser;
+
+sub execute_xs {
+  my (
+    $schema,
+    $document,
+    $root_value,
+    $context_value,
+    $variable_values,
+    $operation_name,
+    $field_resolver,
+    $promise_code,
+  ) = @_;
+
+  return _execute_xs_raw(
+    $schema,
+    $document,
+    $root_value,
+    $context_value,
+    $variable_values,
+    $operation_name,
+    $field_resolver,
+    normalize_promise_code($promise_code),
+  );
+}
 
 1;

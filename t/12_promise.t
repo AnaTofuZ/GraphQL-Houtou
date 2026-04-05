@@ -72,6 +72,7 @@ use GraphQL::Houtou qw(
   get_default_promise_code
   set_default_promise_code
 );
+use GraphQL::Houtou::XS::Execution qw(execute_xs);
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String $ID);
@@ -210,6 +211,36 @@ subtest 'global default promise code is used when request override is absent' =>
   is get_default_promise_code(), $promise_code, 'installed adapter is the normalized default';
   clear_default_promise_code();
   ok !get_default_promise_code(), 'default promise code can be cleared';
+};
+
+subtest 'XS execute_xs also normalizes and uses global default promise code' => sub {
+  set_default_promise_code({
+    resolve => sub { Local::Test::ChainPromise->resolve(@_) },
+    reject => sub { Local::Test::ChainPromise->reject(@_) },
+    all => sub { Local::Test::ChainPromise->all(@_) },
+    then => sub {
+      my ($promise, $on_fulfilled, $on_rejected) = @_;
+      return $promise->chain($on_fulfilled, $on_rejected);
+    },
+    is_promise => sub {
+      my ($value) = @_;
+      return ref($value) eq 'Local::Test::ChainPromise';
+    },
+  });
+
+  my $result = execute_xs(
+    $schema,
+    '{ later }',
+  );
+
+  isa_ok $result, 'Local::Test::ChainPromise';
+  is_deeply $result->get, {
+    data => {
+      later => 'world',
+    },
+  }, 'XS execution path uses normalized global default promise code';
+
+  clear_default_promise_code();
 };
 
 done_testing;

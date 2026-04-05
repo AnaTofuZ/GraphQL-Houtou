@@ -193,6 +193,19 @@ Practical rule:
 - do not assume `gql_execution_call_*` helpers consume ownership unless that is
   documented explicitly
 
+## Memory Leak Check
+
+- Leak-check harness: `perl util/leak-check.pl`
+- Backend policy:
+  - macOS: `leaks`
+  - other platforms: `asan`
+- Latest run on 2026-04-05:
+  - `parser_graphqljs`: `0 leaks`
+  - `xs_smoke`: `0 leaks`
+  - `execution`: `0 leaks`
+  - `promise`: `0 leaks`
+- Detailed usage and notes: `docs/memory-leak-check.md`
+
 ## Next Work
 
 Execution is now the active compatibility surface and the public path already

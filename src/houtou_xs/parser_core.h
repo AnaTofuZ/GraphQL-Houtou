@@ -862,6 +862,7 @@ gql_graphqljs_preprocess(pTHX_ SV *source_sv) {
   gql_store_sv(meta, "interface_implements", newRV_noinc((SV *)interface_implements));
   gql_store_sv(meta, "repeatable_directives", newRV_noinc((SV *)repeatable_directives));
   gql_store_sv(meta, "operation_variable_directives", newRV_noinc((SV *)operation_variable_directives));
+  SvREFCNT_dec((SV *)definition_counts);
   return newRV_noinc((SV *)meta);
 }
 
@@ -1196,4 +1197,3 @@ gqljs_set_shared_rewritten_loc_nodes(pTHX_ gqljs_loc_context_t *ctx, UV rewritte
   gqljs_set_loc_node(aTHX_ right_sv, loc_sv);
   SvREFCNT_dec(loc_sv);
 }
-

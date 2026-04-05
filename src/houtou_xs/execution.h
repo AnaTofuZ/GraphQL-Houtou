@@ -134,6 +134,68 @@ gql_promise_call_then(pTHX_ SV *promise_code, SV *promise, SV *on_fulfilled, SV 
 }
 
 static SV *
+gql_promise_call_resolve(pTHX_ SV *promise_code, SV *value) {
+  dSP;
+  SV *hook = gql_promise_get_hook(aTHX_ promise_code, "resolve", 7);
+  int count;
+  SV *ret;
+
+  if (!SvOK(hook)) {
+    croak("promise resolve hook is not configured");
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(value)));
+  PUTBACK;
+  count = call_sv(hook, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("promise resolve hook did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
+gql_promise_call_reject(pTHX_ SV *promise_code, SV *value) {
+  dSP;
+  SV *hook = gql_promise_get_hook(aTHX_ promise_code, "reject", 6);
+  int count;
+  SV *ret;
+
+  if (!SvOK(hook)) {
+    croak("promise reject hook is not configured");
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(value)));
+  PUTBACK;
+  count = call_sv(hook, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("promise reject hook did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
 gql_execution_merge_completed_list(pTHX_ AV *list_av) {
   HV *ret_hv = newHV();
   AV *data_av = newAV();

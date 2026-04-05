@@ -333,6 +333,24 @@ _promise_then_xs(promise_code, promise, on_fulfilled, on_rejected = NULL)
     RETVAL
 
 SV *
+_promise_resolve_xs(promise_code, value)
+    SV *promise_code
+    SV *value
+  CODE:
+    RETVAL = gql_promise_call_resolve(aTHX_ promise_code, value);
+  OUTPUT:
+    RETVAL
+
+SV *
+_promise_reject_xs(promise_code, value)
+    SV *promise_code
+    SV *value
+  CODE:
+    RETVAL = gql_promise_call_reject(aTHX_ promise_code, value);
+  OUTPUT:
+    RETVAL
+
+SV *
 _merge_completed_list_xs(list)
     SV *list
   CODE:

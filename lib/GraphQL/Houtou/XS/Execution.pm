@@ -17,6 +17,8 @@ our @EXPORT_OK = qw(
   _promise_is_promise_xs
   _promise_all_xs
   _promise_then_xs
+  _promise_resolve_xs
+  _promise_reject_xs
   _merge_completed_list_xs
   _merge_hash_xs
 );

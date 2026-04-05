@@ -19,6 +19,8 @@ use GraphQL::Houtou::Introspection qw(
 use GraphQL::Houtou::Promise::Adapter qw(
   all_promise
   merge_hash_result
+  reject_promise
+  resolve_promise
   is_promise_value
   normalize_promise_code
   then_promise
@@ -237,7 +239,7 @@ sub _execute_operation {
     my $result = $execute->($context, $type, $root_value, [], $fields);
     return $result if !_is_promise($context, $result);
     return then_promise($context->{promise_code}, $result, undef, sub {
-      return $context->{promise_code}{resolve}->(
+      return resolve_promise($context->{promise_code},
         +{ data => undef, %{_wrap_error($_[0])} }
       );
     });
@@ -394,7 +396,7 @@ sub _complete_value_catching_error {
     my $completed = _complete_value_with_located_error(@_);
     return $completed if !_is_promise($context, $completed);
     return then_promise($context->{promise_code}, $completed, undef, sub {
-      return $context->{promise_code}{resolve}->(_wrap_error($_[0]));
+      return resolve_promise($context->{promise_code}, _wrap_error($_[0]));
     });
   };
 
@@ -409,7 +411,7 @@ sub _complete_value_with_located_error {
     my $completed = _complete_value(@_);
     return $completed if !_is_promise($context, $completed);
     return then_promise($context->{promise_code}, $completed, undef, sub {
-      return $context->{promise_code}{reject}->(
+      return reject_promise($context->{promise_code},
         _located_error($_[0], $nodes, $path)
       );
     });

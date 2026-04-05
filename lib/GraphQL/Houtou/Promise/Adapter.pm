@@ -13,6 +13,8 @@ our @EXPORT_OK = qw(
   normalize_promise_code
   all_promise
   merge_hash_result
+  resolve_promise
+  reject_promise
   is_promise_value
   then_promise
 );
@@ -73,7 +75,9 @@ sub _load_xs_promise_helpers {
       require GraphQL::Houtou::XS::Execution;
       GraphQL::Houtou::XS::Execution->can('_promise_is_promise_xs')
         && GraphQL::Houtou::XS::Execution->can('_promise_all_xs')
-        && GraphQL::Houtou::XS::Execution->can('_promise_then_xs');
+        && GraphQL::Houtou::XS::Execution->can('_promise_then_xs')
+        && GraphQL::Houtou::XS::Execution->can('_promise_resolve_xs')
+        && GraphQL::Houtou::XS::Execution->can('_promise_reject_xs');
     } ? 1 : 0;
   }
 
@@ -110,6 +114,30 @@ sub merge_hash_result {
     %name2data ? (data => \%name2data) : (),
     @all_errors ? (errors => \@all_errors) : (),
   };
+}
+
+sub resolve_promise {
+  my ($promise_code, $value) = @_;
+  die "resolve_promise requires promise_code\n"
+    if !$promise_code || ref($promise_code) ne 'HASH' || !$promise_code->{resolve};
+
+  if (_load_xs_promise_helpers()) {
+    return GraphQL::Houtou::XS::Execution::_promise_resolve_xs($promise_code, $value);
+  }
+
+  return $promise_code->{resolve}->($value);
+}
+
+sub reject_promise {
+  my ($promise_code, $value) = @_;
+  die "reject_promise requires promise_code\n"
+    if !$promise_code || ref($promise_code) ne 'HASH' || !$promise_code->{reject};
+
+  if (_load_xs_promise_helpers()) {
+    return GraphQL::Houtou::XS::Execution::_promise_reject_xs($promise_code, $value);
+  }
+
+  return $promise_code->{reject}->($value);
 }
 
 sub is_promise_value {

@@ -2545,6 +2545,10 @@ static SV *
 gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value, SV *path, SV *fields) {
   HV *context_hv;
   SV **schema_svp;
+  SV **context_value_svp;
+  SV **variable_values_svp;
+  SV **empty_args_svp;
+  SV **field_resolver_svp;
   AV *field_names_av;
   HV *nodes_defs_hv;
   HV *result_hv = newHV();
@@ -2571,6 +2575,10 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
 
   context_hv = (HV *)SvRV(context);
   schema_svp = hv_fetch(context_hv, "schema", 6, 0);
+  context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
+  variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
+  empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
+  field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
   if (!schema_svp || !SvOK(*schema_svp)) {
     SvREFCNT_dec((SV *)result_hv);
     SvREFCNT_dec((SV *)data_hv);
@@ -2621,9 +2629,6 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     SV *result_sv;
     SV *completed_sv;
     SV *args_sv;
-    SV **context_value_svp;
-    SV **variable_values_svp;
-    SV **empty_args_svp;
     SV **type_svp;
     SV **field_args_svp;
     SV **node_args_svp;
@@ -2675,7 +2680,6 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     if (resolve_svp && SvOK(*resolve_svp)) {
       resolve_sv = newSVsv(*resolve_svp);
     } else {
-      SV **field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
       resolve_sv = (field_resolver_svp && SvOK(*field_resolver_svp))
         ? newSVsv(*field_resolver_svp)
         : newSV(0);
@@ -2700,9 +2704,6 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     path_copy_sv = newRV_noinc((SV *)path_copy_av);
 
     info_sv = gql_execution_build_resolve_info(aTHX_ context, parent_type, field_def_sv, path_copy_sv, nodes_sv);
-    context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
-    variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
-    empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
     field_args_svp = hv_fetch(field_def_hv, "args", 4, 0);
     node_args_svp = hv_fetch(field_node_hv, "arguments", 9, 0);
     if ((!field_args_svp || !SvOK(*field_args_svp)

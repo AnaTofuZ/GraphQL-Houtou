@@ -8,8 +8,8 @@ use Exporter 'import';
 use Scalar::Util qw(reftype);
 
 use GraphQL::Houtou::GraphQLPerl::Parser qw(parse_with_options);
+use GraphQL::Houtou::Schema qw(lookup_type);
 use GraphQL::Houtou::Schema::Compiler qw(compile_schema);
-use GraphQL::Schema ();
 
 our @EXPORT_OK = qw(
   validate
@@ -214,7 +214,7 @@ sub _validate_variable_definitions {
     my $type;
     my $error;
     eval {
-      $type = GraphQL::Schema::lookup_type($variables->{$name}, $schema->name2type);
+      $type = lookup_type($variables->{$name}, $schema->name2type);
       1;
     } or do {
       $error = $@ || "Unknown variable type for '\$$name'.";

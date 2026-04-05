@@ -6,7 +6,7 @@ use warnings;
 
 use Moo;
 use Exporter 'import';
-use GraphQL::Type::Library -all;
+use GraphQL::Houtou::Type::Library -all;
 use JSON::MaybeXS qw(JSON is_bool);
 use Types::Standard -all;
 

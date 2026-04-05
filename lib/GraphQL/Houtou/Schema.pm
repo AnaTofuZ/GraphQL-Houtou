@@ -4,13 +4,17 @@ use 5.014;
 use strict;
 use warnings;
 
+use Exporter 'import';
 use Moo;
+use Types::Standard qw(HashRef);
 
 use GraphQL::Houtou::Directive ();
 use GraphQL::Houtou::Type::Scalar qw($Int $Float $String $Boolean $ID);
 use GraphQL::Introspection qw($SCHEMA_META_TYPE);
 
 extends 'GraphQL::Schema';
+
+our @EXPORT_OK = qw(lookup_type);
 
 has '+types' => (
   default => sub { [ $Int, $Float, $String, $Boolean, $ID ] },
@@ -75,6 +79,30 @@ sub _is_builtin_scalar_pair {
   return 0 if !$left->isa('GraphQL::Type::Scalar') || !$right->isa('GraphQL::Type::Scalar');
   return 0 if !(grep { $_ eq $left->name } qw(Int Float String Boolean ID));
   return $left->name eq $right->name ? 1 : 0;
+}
+
+sub lookup_type {
+  my ($typedef, $name2type) = @_;
+  my ($type, $wrapper_type, $wrapped);
+
+  die "lookup_type expects a type definition hash reference\n"
+    if ref($typedef) ne 'HASH';
+  die "lookup_type expects a name2type hash reference\n"
+    if ref($name2type) ne 'HASH';
+
+  $type = $typedef->{type};
+  die "Undefined type given\n" if !defined $type;
+
+  if (!ref($type)) {
+    return $name2type->{$type} // die "Unknown type '$type'.\n";
+  }
+
+  if (ref($type) ne 'ARRAY') {
+    die "Unknown wrapped type representation\n";
+  }
+
+  ($wrapper_type, $wrapped) = @$type;
+  return lookup_type($wrapped, $name2type)->$wrapper_type;
 }
 
 1;

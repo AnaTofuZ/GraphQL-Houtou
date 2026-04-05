@@ -7,6 +7,7 @@ use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
+use GraphQL::Houtou::Schema qw(lookup_type);
 
 use GraphQL::Houtou::Validation qw(validate);
 
@@ -95,6 +96,18 @@ subtest 'valid query passes' => sub {
   }|);
 
   is_deeply $errors, [], 'no validation errors';
+};
+
+subtest 'lookup_type resolves Houtou wrappers' => sub {
+  my $type = lookup_type(
+    { type => [ list => { type => [ non_null => { type => 'String' } ] } ] },
+    $schema->name2type,
+  );
+
+  isa_ok $type, 'GraphQL::Houtou::Type::List';
+  isa_ok $type->of, 'GraphQL::Houtou::Type::NonNull';
+  isa_ok $type->of->of, 'GraphQL::Houtou::Type::Scalar';
+  is $type->of->of->name, 'String', 'named leaf stays Houtou scalar';
 };
 
 subtest 'duplicate operation names are rejected' => sub {

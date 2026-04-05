@@ -10,7 +10,20 @@ our @EXPORT_OK = qw(
   validate
 );
 
+my $HAS_XS;
+
 sub validate {
+  if (!defined $HAS_XS) {
+    $HAS_XS = eval {
+      require GraphQL::Houtou::XS::Validation;
+      1;
+    } ? 1 : 0;
+  }
+
+  if ($HAS_XS) {
+    return GraphQL::Houtou::XS::Validation::validate_xs(@_);
+  }
+
   require GraphQL::Houtou::Validation::PP;
   return GraphQL::Houtou::Validation::PP::validate(@_);
 }
@@ -34,7 +47,7 @@ GraphQL::Houtou::Validation - GraphQL document validation facade
 =head1 DESCRIPTION
 
 This module is the public entry point for GraphQL validation.
-It currently delegates to the pure-Perl implementation while the
-validation ruleset and normalized error shape are stabilized.
+It prefers an XS implementation when available and otherwise falls back
+to the pure-Perl validator.
 
 =cut

@@ -33,7 +33,10 @@ jobs:
         with:
           perl-version: ${{ matrix.perl }}
       - name: Install dependencies
-        run: cpanm -nq --installdeps --with-develop --with-recommends .
+        run: cpm install -g --with-all --show-build-log-on-failure -v
+      - name: Build XS distribution
+        run: |
+          perl Build.PL
+          ./Build build
       - name: Run test
-        run: prove -lr t
-
+        run: ./Build test

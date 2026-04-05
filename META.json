@@ -43,6 +43,7 @@
       "runtime" : {
          "requires" : {
             "GraphQL" : "0.54",
+            "XSLoader" : "0",
             "perl" : "5.014"
          }
       },

@@ -408,9 +408,7 @@ sub _complete_value_catching_error {
   $result = eval {
     my $completed = _complete_value_with_located_error(@_);
     return $completed if !_is_promise($context, $completed);
-    return then_promise($context->{promise_code}, $completed, undef, sub {
-      return resolve_promise($context->{promise_code}, _wrap_error($_[0]));
-    });
+    return _then_resolve_wrapped_error($context, $completed);
   };
 
   return _wrap_error($@) if $@;
@@ -423,15 +421,27 @@ sub _complete_value_with_located_error {
   $result = eval {
     my $completed = _complete_value(@_);
     return $completed if !_is_promise($context, $completed);
-    return then_promise($context->{promise_code}, $completed, undef, sub {
-      return reject_promise($context->{promise_code},
-        _located_error($_[0], $nodes, $path)
-      );
-    });
+    return _then_reject_located_error($context, $completed, $nodes, $path);
   };
 
   die _located_error($@, $nodes, $path) if $@;
   return $result;
+}
+
+sub _then_resolve_wrapped_error {
+  my ($context, $promise) = @_;
+  return then_promise($context->{promise_code}, $promise, undef, sub {
+    return resolve_promise($context->{promise_code}, _wrap_error($_[0]));
+  });
+}
+
+sub _then_reject_located_error {
+  my ($context, $promise, $nodes, $path) = @_;
+  return then_promise($context->{promise_code}, $promise, undef, sub {
+    return reject_promise($context->{promise_code},
+      _located_error($_[0], $nodes, $path)
+    );
+  });
 }
 
 sub _complete_value {

@@ -30,6 +30,7 @@ our @EXPORT_OK = qw(
 my $JSON = JSON::MaybeXS->new->allow_nonref;
 my $HAS_XS_EXECUTE_FIELDS;
 my $HAS_XS_ARGUMENT_VALUES;
+my $HAS_XS_COLLECT_FIELDS;
 
 sub execute {
   my (
@@ -112,6 +113,7 @@ sub _build_context {
     $field_resolver,
     $promise_code,
   ) = @_;
+  my $normalized_promise_code = normalize_promise_code($promise_code);
 
   my %fragments = map { ($_->{name} => $_) } grep { ($_->{kind} || '') eq 'fragment' } @$ast;
   my @operations = grep { ($_->{kind} || '') eq 'operation' } @$ast;
@@ -133,7 +135,16 @@ sub _build_context {
       $variable_values || {},
     ),
     field_resolver => $field_resolver || \&_default_field_resolver,
-    promise_code => normalize_promise_code($promise_code),
+    promise_code => $normalized_promise_code,
+    empty_args => {},
+    resolve_info_base => {
+      schema => $schema,
+      fragments => \%fragments,
+      root_value => $root_value,
+      operation => $operation,
+      variable_values => undef,
+      promise_code => $normalized_promise_code,
+    },
   };
 }
 
@@ -193,12 +204,29 @@ sub _execute_operation {
 
   return _wrap_error("No $op_type in schema") if !$type;
 
+  if (!$context->{promise_code}) {
+    if (!defined $HAS_XS_COLLECT_FIELDS) {
+      $HAS_XS_COLLECT_FIELDS = eval {
+        require GraphQL::Houtou::XS::Execution;
+        GraphQL::Houtou::XS::Execution->can('_collect_fields_xs');
+      } ? 1 : 0;
+    }
+
+    if ($HAS_XS_COLLECT_FIELDS) {
+      $fields = GraphQL::Houtou::XS::Execution::_collect_fields_xs(
+        $context,
+        $type,
+        $operation->{selections},
+      );
+    }
+  }
+
   ($fields) = $type->_collect_fields(
     $context,
     $operation->{selections},
     [ [], {} ],
     {},
-  );
+  ) if !$fields;
 
   my $execute = $op_type eq 'mutation'
     ? \&_execute_fields_serially
@@ -338,24 +366,25 @@ sub _get_field_def {
 sub _build_resolve_info {
   my ($context, $parent_type, $field_def, $path, $nodes) = @_;
   return {
+    %{ $context->{resolve_info_base} || {} },
     field_name => $nodes->[0]{name},
     field_nodes => $nodes,
     return_type => $field_def->{type},
     parent_type => $parent_type,
     path => $path,
-    schema => $context->{schema},
-    fragments => $context->{fragments},
-    root_value => $context->{root_value},
-    operation => $context->{operation},
     variable_values => $context->{variable_values},
-    promise_code => $context->{promise_code},
   };
 }
 
 sub _resolve_field_value_or_error {
   my ($context, $field_def, $nodes, $resolve, $root_value, $info) = @_;
   my $result = eval {
-    my $args = _get_argument_values($field_def, $nodes->[0], $context->{variable_values});
+    my $args = (
+      (!$field_def->{args} || !keys %{ $field_def->{args} || {} })
+      && !($nodes->[0]{arguments} && keys %{ $nodes->[0]{arguments} || {} })
+    )
+      ? $context->{empty_args}
+      : _get_argument_values($field_def, $nodes->[0], $context->{variable_values});
     $resolve->($root_value, $args, $context->{context_value}, $info);
   };
 

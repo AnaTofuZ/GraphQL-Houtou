@@ -9,6 +9,7 @@ use Exporter 'import';
 our $VERSION = '0.01';
 our @EXPORT_OK = qw(
   execute_xs
+  _collect_fields_xs
   _execute_fields_xs
   _get_argument_values_xs
   _complete_value_catching_error_xs

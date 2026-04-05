@@ -261,6 +261,16 @@ _execute_fields_xs(context, parent_type, root_value, path, fields)
     RETVAL
 
 SV *
+_collect_fields_xs(context, parent_type, selections)
+    SV *context
+    SV *parent_type
+    SV *selections
+  CODE:
+    RETVAL = gql_execution_collect_fields_xs(aTHX_ context, parent_type, selections);
+  OUTPUT:
+    RETVAL
+
+SV *
 _get_argument_values_xs(def, node, variable_values = NULL)
     SV *def
     SV *node

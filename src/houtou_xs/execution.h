@@ -474,6 +474,47 @@ gql_execution_call_is_type_of_cb(pTHX_ SV *cb, SV *result, SV *context, SV *info
 }
 
 static SV *
+gql_execution_call_abstract_resolve_type_cb(pTHX_ SV *cb, SV *result, SV *context, SV *info, SV *abstract_type, int *ok) {
+  dSP;
+  int count;
+  SV *ret;
+  SV *context_value = &PL_sv_undef;
+
+  *ok = 0;
+  if (context && SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV) {
+    SV **context_value_svp = hv_fetch((HV *)SvRV(context), "context_value", 13, 0);
+    if (context_value_svp && SvOK(*context_value_svp)) {
+      context_value = *context_value_svp;
+    }
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(result ? result : &PL_sv_undef)));
+  XPUSHs(sv_2mortal(newSVsv(context_value)));
+  XPUSHs(sv_2mortal(newSVsv(info)));
+  XPUSHs(sv_2mortal(newSVsv(abstract_type)));
+  PUTBACK;
+
+  count = call_sv(cb, G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV) || count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return &PL_sv_undef;
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  *ok = 1;
+  return ret;
+}
+
+static SV *
 gql_execution_path_with_index(pTHX_ SV *path, IV index) {
   AV *path_copy_av = newAV();
   SV *ret;
@@ -1171,6 +1212,120 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
         SvREFCNT_dec(subfields);
         return ret;
       }
+    }
+
+    return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
+  }
+
+  if (sv_does(return_type, "GraphQL::Houtou::Role::Abstract")
+      || sv_does(return_type, "GraphQL::Role::Abstract")) {
+    dSP;
+    int count;
+    SV *resolve_type_sv;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(sv_2mortal(newSVsv(return_type)));
+    PUTBACK;
+    count = call_method("resolve_type", G_SCALAR);
+    SPAGAIN;
+    if (count != 1) {
+      PUTBACK;
+      FREETMPS;
+      LEAVE;
+      return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
+    }
+    resolve_type_sv = newSVsv(POPs);
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+
+    if (SvOK(resolve_type_sv)) {
+      int ok = 0;
+      SV *runtime_type_or_name = gql_execution_call_abstract_resolve_type_cb(
+        aTHX_ resolve_type_sv,
+        result,
+        context,
+        info,
+        return_type,
+        &ok
+      );
+
+      SvREFCNT_dec(resolve_type_sv);
+      if (ok && SvOK(runtime_type_or_name)) {
+        HV *context_hv = (SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV) ? (HV *)SvRV(context) : NULL;
+        SV **schema_svp = context_hv ? hv_fetch(context_hv, "schema", 6, 0) : NULL;
+        SV *runtime_type = runtime_type_or_name;
+
+        if (!SvROK(runtime_type_or_name) && schema_svp && SvROK(*schema_svp) && SvTYPE(SvRV(*schema_svp)) == SVt_PVHV) {
+          SV **name2type_svp = hv_fetch((HV *)SvRV(*schema_svp), "name2type", 9, 0);
+          if (name2type_svp && SvROK(*name2type_svp) && SvTYPE(SvRV(*name2type_svp)) == SVt_PVHV) {
+            STRLEN name_len;
+            const char *name_pv = SvPV(runtime_type_or_name, name_len);
+            HE *runtime_he = hv_fetch_ent((HV *)SvRV(*name2type_svp), runtime_type_or_name, 0, 0);
+            (void)name_pv;
+            if (runtime_he) {
+              runtime_type = HeVAL(runtime_he);
+            }
+          }
+        }
+
+        if (SvROK(runtime_type)
+            && (sv_derived_from(runtime_type, "GraphQL::Houtou::Type::Object")
+                || sv_derived_from(runtime_type, "GraphQL::Type::Object"))
+            && schema_svp
+            && SvROK(*schema_svp)
+            && SvTYPE(SvRV(*schema_svp)) == SVt_PVHV) {
+          dSP;
+          int possible_count;
+          SV *possible_sv;
+
+          ENTER;
+          SAVETMPS;
+          PUSHMARK(SP);
+          XPUSHs(sv_2mortal(newSVsv(*schema_svp)));
+          XPUSHs(sv_2mortal(newSVsv(return_type)));
+          XPUSHs(sv_2mortal(newSVsv(runtime_type)));
+          PUTBACK;
+          possible_count = call_method("is_possible_type", G_SCALAR | G_EVAL);
+          SPAGAIN;
+          if (!SvTRUE(ERRSV) && possible_count == 1) {
+            possible_sv = newSVsv(POPs);
+            PUTBACK;
+            FREETMPS;
+            LEAVE;
+            if (SvTRUE(possible_sv)) {
+              SV *completed = gql_execution_complete_value_catching_error_xs_impl(
+                aTHX_ context,
+                runtime_type,
+                nodes,
+                info,
+                path,
+                result
+              );
+              SvREFCNT_dec(possible_sv);
+              if (runtime_type != runtime_type_or_name) {
+                SvREFCNT_dec(runtime_type_or_name);
+              } else {
+                SvREFCNT_dec(runtime_type_or_name);
+              }
+              return completed;
+            }
+            SvREFCNT_dec(possible_sv);
+          } else {
+            PUTBACK;
+            FREETMPS;
+            LEAVE;
+          }
+        }
+
+        SvREFCNT_dec(runtime_type_or_name);
+      } else if (ok) {
+        SvREFCNT_dec(runtime_type_or_name);
+      }
+    } else {
+      SvREFCNT_dec(resolve_type_sv);
     }
 
     return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);

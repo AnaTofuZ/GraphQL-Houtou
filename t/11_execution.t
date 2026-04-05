@@ -6,6 +6,8 @@ use GraphQL::Houtou::Execution qw(execute);
 use GraphQL::Houtou::GraphQLPerl::Parser qw(parse_with_options);
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
+use GraphQL::Houtou::Type::Interface;
+use GraphQL::Houtou::Type::Union;
 use GraphQL::Houtou::Type::Scalar qw($String $ID);
 
 my $User = GraphQL::Houtou::Type::Object->new(
@@ -23,6 +25,20 @@ my $CheckedUser = GraphQL::Houtou::Type::Object->new(
     id => { type => $ID->non_null },
     name => { type => $String->non_null },
   },
+);
+
+my $NamedEntity = GraphQL::Houtou::Type::Interface->new(
+  name => 'NamedEntity',
+  resolve_type => sub { 'User' },
+  fields => {
+    name => { type => $String->non_null },
+  },
+);
+
+my $SearchResult = GraphQL::Houtou::Type::Union->new(
+  name => 'SearchResult',
+  resolve_type => sub { 'User' },
+  types => [ $User ],
 );
 
 my $Query = GraphQL::Houtou::Type::Object->new(
@@ -72,6 +88,24 @@ my $Query = GraphQL::Houtou::Type::Object->new(
         };
       },
     },
+    named_entity => {
+      type => $NamedEntity,
+      resolve => sub {
+        return {
+          id => '12',
+          name => 'named:12',
+        };
+      },
+    },
+    search_result => {
+      type => $SearchResult,
+      resolve => sub {
+        return {
+          id => '13',
+          name => 'search:13',
+        };
+      },
+    },
     boom => {
       type => $String,
       resolve => sub { die "boom\n" },
@@ -81,7 +115,7 @@ my $Query = GraphQL::Houtou::Type::Object->new(
 
 my $schema = GraphQL::Houtou::Schema->new(
   query => $Query,
-  types => [ $User, $CheckedUser ],
+  types => [ $User, $CheckedUser, $NamedEntity, $SearchResult ],
 );
 
 subtest 'execute simple query from source' => sub {
@@ -426,6 +460,26 @@ subtest 'execute object field with is_type_of through xs path' => sub {
   my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
 
   is_deeply $xs, $public, 'object field with is_type_of matches public facade';
+};
+
+subtest 'execute interface field with resolve_type through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ named_entity { ... on User { id name } } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'interface field with resolve_type matches public facade';
+};
+
+subtest 'execute union field with resolve_type through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ search_result { ... on User { id name } } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'union field with resolve_type matches public facade';
 };
 
 done_testing;

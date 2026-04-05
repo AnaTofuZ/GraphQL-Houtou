@@ -29,6 +29,16 @@ It should stay short enough to recover momentum quickly after context resets.
 - `962e411` Add initial Houtou execution facade
 - `d49a2d7` Move execution context setup into XS
 - `64fa2e3` Move execution field loop into XS
+- `83f81a3` Move execution info build and merge into XS
+- `93a85b8` Move execution resolver calls into XS
+- `73991f5` Coerce XS resolver failures into GraphQL errors
+- `8ec0444` Add XS fast path for simple argument coercion
+- `cc8642f` Expand XS execution fast paths
+- `da8259d` Add XS list completion fast path
+- `01bd372` Add XS object completion fast path
+- `4bfe85d` Handle simple object directives in XS
+- `a0b8d35` Handle simple fragments in XS object completion
+- `a75af49` Support object completion fast paths in XS
 
 ## Current Architecture
 
@@ -103,22 +113,38 @@ Current XS-owned pieces:
 - operation selection
 - variable default application dispatch
 - field execution loop
+- resolve info construction
+- final hash merge
+- resolver invocation and error coercion
+- simple / variable argument coercion common cases
+- leaf / null / non-null completion common cases
+- leaf list completion common cases
+- object completion common cases
+  - plain nested selections
+  - simple `@include` / `@skip`
+  - simple inline fragments
+  - simple fragment spreads
+  - `is_type_of` happy path
 
 Still delegated to PP helpers:
 
-- resolve info construction
-- argument coercion
-- resolver invocation
-- value completion
-- final hash merge
+- full argument coercion fallback
+- abstract type completion
+- complex object/list completion fallback
+- promise-heavy completion paths
 
 ## Testing Snapshot
 
 Latest local verification:
 
-- `./Build build`
-- `./Build test`
-- `12 files / 146 tests / PASS`
+- Always run sequentially:
+  1. `./Build build`
+  2. `./Build test`
+- Do not run `build` and `test` in parallel.
+- Latest local verification:
+  - `./Build build`
+  - `./Build test`
+  - `12 files / 157 tests / PASS`
 
 ## Next Work
 
@@ -134,7 +160,5 @@ Key constraint:
 
 Immediate next step:
 
-- move `_build_resolve_info`, `_resolve_field_value_or_error`, and
-  `_get_argument_values` from `GraphQL::Houtou::Execution::PP` into
-  `src/houtou_xs/execution.h`
-- keep completion in PP until resolver and coercion boundaries are cleaner
+- move abstract type completion happy paths into `src/houtou_xs/execution.h`
+- keep complex union/interface validation and promise-heavy completion in PP

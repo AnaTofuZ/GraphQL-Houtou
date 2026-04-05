@@ -74,6 +74,146 @@ gql_execution_call_pp_execute_prepared_context(pTHX_ SV *context) {
 }
 
 static SV *
+gql_execution_call_pp_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_def, SV *path, SV *nodes) {
+  dSP;
+  int count;
+  SV *ret;
+
+  gql_execution_require_pp(aTHX);
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(context)));
+  XPUSHs(sv_2mortal(newSVsv(parent_type)));
+  XPUSHs(sv_2mortal(newSVsv(field_def)));
+  XPUSHs(sv_2mortal(newSVsv(path)));
+  XPUSHs(sv_2mortal(newSVsv(nodes)));
+  PUTBACK;
+
+  count = call_pv("GraphQL::Houtou::Execution::PP::_build_resolve_info", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("GraphQL::Houtou::Execution::PP::_build_resolve_info did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
+static SV *
+gql_execution_call_pp_resolve_field_value_or_error(pTHX_ SV *context, SV *field_def, SV *nodes, SV *resolve, SV *root_value, SV *info) {
+  dSP;
+  int count;
+  SV *ret;
+
+  gql_execution_require_pp(aTHX);
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(context)));
+  XPUSHs(sv_2mortal(newSVsv(field_def)));
+  XPUSHs(sv_2mortal(newSVsv(nodes)));
+  XPUSHs(sv_2mortal(newSVsv(resolve)));
+  XPUSHs(sv_2mortal(root_value ? newSVsv(root_value) : newSV(0)));
+  XPUSHs(sv_2mortal(newSVsv(info)));
+  PUTBACK;
+
+  count = call_pv("GraphQL::Houtou::Execution::PP::_resolve_field_value_or_error", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("GraphQL::Houtou::Execution::PP::_resolve_field_value_or_error did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
+static SV *
+gql_execution_call_pp_complete_value_catching_error(pTHX_ SV *context, SV *return_type, SV *nodes, SV *info, SV *path, SV *result) {
+  dSP;
+  int count;
+  SV *ret;
+
+  gql_execution_require_pp(aTHX);
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(context)));
+  XPUSHs(sv_2mortal(newSVsv(return_type)));
+  XPUSHs(sv_2mortal(newSVsv(nodes)));
+  XPUSHs(sv_2mortal(newSVsv(info)));
+  XPUSHs(sv_2mortal(newSVsv(path)));
+  XPUSHs(sv_2mortal(newSVsv(result)));
+  PUTBACK;
+
+  count = call_pv("GraphQL::Houtou::Execution::PP::_complete_value_catching_error", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("GraphQL::Houtou::Execution::PP::_complete_value_catching_error did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
+static SV *
+gql_execution_call_pp_merge_hash(pTHX_ SV *keys, SV *values, SV *errors) {
+  dSP;
+  int count;
+  SV *ret;
+
+  gql_execution_require_pp(aTHX);
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(keys)));
+  XPUSHs(sv_2mortal(newSVsv(values)));
+  XPUSHs(sv_2mortal(newSVsv(errors)));
+  PUTBACK;
+
+  count = call_pv("GraphQL::Houtou::Execution::PP::_merge_hash", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("GraphQL::Houtou::Execution::PP::_merge_hash did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
+static SV *
 gql_execution_coerce_ast(pTHX_ SV *document) {
   if (SvROK(document)) {
     return newSVsv(document);
@@ -88,7 +228,7 @@ gql_execution_select_operation(pTHX_ AV *operations_av, SV *operation_name) {
   I32 operation_count = operation_len >= 0 ? operation_len + 1 : 0;
   I32 i;
 
-  if (!SvOK(operation_name) || operation_name == &PL_sv_undef) {
+  if (!operation_name || operation_name == &PL_sv_undef || !SvOK(operation_name)) {
     if (operation_count > 1) {
       croak("Must provide operation name if query contains multiple operations.\n");
     }
@@ -252,7 +392,324 @@ gql_execution_execute(pTHX_ SV *schema, SV *document, SV *root_value, SV *contex
   );
   result = gql_execution_call_pp_execute_prepared_context(aTHX_ context);
 
-  SvREFCNT_dec(ast);
-  SvREFCNT_dec(context);
+  /*
+   * TODO: the execution path still shares Perl-side structures across the
+   * PP/XS boundary. Keep the prepared AST/context alive for now rather than
+   * risking premature destruction while the field loop is mid-migration.
+   */
   return result;
+}
+
+static SV *
+gql_execution_get_field_def(pTHX_ SV *schema, SV *parent_type, SV *field_name) {
+  HV *schema_hv;
+  SV **query_svp;
+  HV *parent_type_hv;
+  SV **fields_svp;
+  HV *fields_hv;
+  HE *field_he;
+  const char *name;
+  STRLEN name_len;
+
+  if (!SvROK(schema) || SvTYPE(SvRV(schema)) != SVt_PVHV) {
+    if (sv_derived_from(schema, "GraphQL::Houtou::Schema") || sv_derived_from(schema, "GraphQL::Schema")) {
+      dSP;
+      int count;
+      SV *ret;
+
+      ENTER;
+      SAVETMPS;
+      PUSHMARK(SP);
+      XPUSHs(sv_2mortal(newSVsv(schema)));
+      XPUSHs(sv_2mortal(newSVsv(parent_type)));
+      XPUSHs(sv_2mortal(newSVsv(field_name)));
+      PUTBACK;
+      count = call_pv("GraphQL::Houtou::Execution::PP::_get_field_def", G_SCALAR);
+      SPAGAIN;
+      if (count != 1) {
+        PUTBACK;
+        FREETMPS;
+        LEAVE;
+        croak("GraphQL::Houtou::Execution::PP::_get_field_def did not return a scalar");
+      }
+      ret = newSVsv(POPs);
+      PUTBACK;
+      FREETMPS;
+      LEAVE;
+      return ret;
+    }
+    return &PL_sv_undef;
+  }
+
+  schema_hv = (HV *)SvRV(schema);
+  query_svp = hv_fetch(schema_hv, "query", 5, 0);
+  name = SvPV(field_name, name_len);
+
+  if (strEQ(name, "__typename")) {
+    GV *gv = gv_fetchpv("GraphQL::Houtou::Introspection::TYPE_NAME_META_FIELD_DEF", GV_ADD, SVt_PV);
+    return newSVsv(GvSV(gv));
+  }
+
+  if (query_svp && sv_eq(*query_svp, parent_type)) {
+    if (strEQ(name, "__schema")) {
+      GV *gv = gv_fetchpv("GraphQL::Houtou::Introspection::SCHEMA_META_FIELD_DEF", GV_ADD, SVt_PV);
+      return newSVsv(GvSV(gv));
+    }
+    if (strEQ(name, "__type")) {
+      GV *gv = gv_fetchpv("GraphQL::Houtou::Introspection::TYPE_META_FIELD_DEF", GV_ADD, SVt_PV);
+      return newSVsv(GvSV(gv));
+    }
+  }
+
+  if (!SvROK(parent_type) || SvTYPE(SvRV(parent_type)) != SVt_PVHV) {
+    dSP;
+    int count;
+    SV *ret;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(sv_2mortal(newSVsv(parent_type)));
+    PUTBACK;
+    count = call_method("fields", G_SCALAR);
+    SPAGAIN;
+    if (count != 1) {
+      PUTBACK;
+      FREETMPS;
+      LEAVE;
+      croak("parent_type->fields did not return a scalar");
+    }
+    ret = newSVsv(POPs);
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    if (!SvROK(ret) || SvTYPE(SvRV(ret)) != SVt_PVHV) {
+      SvREFCNT_dec(ret);
+      return &PL_sv_undef;
+    }
+    fields_hv = (HV *)SvRV(ret);
+    field_he = hv_fetch_ent(fields_hv, field_name, 0, 0);
+    if (!field_he) {
+      SvREFCNT_dec(ret);
+      return &PL_sv_undef;
+    }
+    {
+      SV *field_ret = newSVsv(HeVAL(field_he));
+      SvREFCNT_dec(ret);
+      return field_ret;
+    }
+  }
+
+  parent_type_hv = (HV *)SvRV(parent_type);
+  fields_svp = hv_fetch(parent_type_hv, "fields", 6, 0);
+  if (!fields_svp || !SvROK(*fields_svp) || SvTYPE(SvRV(*fields_svp)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+
+  fields_hv = (HV *)SvRV(*fields_svp);
+  field_he = hv_fetch_ent(fields_hv, field_name, 0, 0);
+  if (!field_he) {
+    return &PL_sv_undef;
+  }
+
+  return newSVsv(HeVAL(field_he));
+}
+
+static SV *
+gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value, SV *path, SV *fields) {
+  HV *context_hv;
+  SV **schema_svp;
+  AV *field_names_av;
+  HV *nodes_defs_hv;
+  AV *keys_av = newAV();
+  AV *values_av = newAV();
+  AV *errors_av = newAV();
+  AV *fields_av;
+  I32 field_len;
+  I32 i;
+
+  if (!SvROK(fields) || SvTYPE(SvRV(fields)) != SVt_PVAV) {
+    SvREFCNT_dec((SV *)keys_av);
+    SvREFCNT_dec((SV *)values_av);
+    SvREFCNT_dec((SV *)errors_av);
+    croak("fields must be an array reference");
+  }
+
+  if (!SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
+    SvREFCNT_dec((SV *)keys_av);
+    SvREFCNT_dec((SV *)values_av);
+    SvREFCNT_dec((SV *)errors_av);
+    croak("context must be a hash reference");
+  }
+
+  context_hv = (HV *)SvRV(context);
+  schema_svp = hv_fetch(context_hv, "schema", 6, 0);
+  if (!schema_svp || !SvOK(*schema_svp)) {
+    SvREFCNT_dec((SV *)keys_av);
+    SvREFCNT_dec((SV *)values_av);
+    SvREFCNT_dec((SV *)errors_av);
+    croak("execution context has no schema");
+  }
+
+  fields_av = (AV *)SvRV(fields);
+  if (av_len(fields_av) != 1) {
+    SvREFCNT_dec((SV *)keys_av);
+    SvREFCNT_dec((SV *)values_av);
+    SvREFCNT_dec((SV *)errors_av);
+    croak("fields must contain names and node definitions");
+  }
+
+  {
+    SV **field_names_svp = av_fetch(fields_av, 0, 0);
+    SV **nodes_defs_svp = av_fetch(fields_av, 1, 0);
+
+    if (!field_names_svp || !SvROK(*field_names_svp) || SvTYPE(SvRV(*field_names_svp)) != SVt_PVAV ||
+        !nodes_defs_svp || !SvROK(*nodes_defs_svp) || SvTYPE(SvRV(*nodes_defs_svp)) != SVt_PVHV) {
+      SvREFCNT_dec((SV *)keys_av);
+      SvREFCNT_dec((SV *)values_av);
+      SvREFCNT_dec((SV *)errors_av);
+      croak("fields structure is invalid");
+    }
+
+    field_names_av = (AV *)SvRV(*field_names_svp);
+    nodes_defs_hv = (HV *)SvRV(*nodes_defs_svp);
+  }
+
+  field_len = av_len(field_names_av);
+  for (i = 0; i <= field_len; i++) {
+    SV **result_name_svp = av_fetch(field_names_av, i, 0);
+    HE *nodes_he;
+    SV *nodes_sv;
+    AV *nodes_av;
+    SV **field_node_svp;
+    HV *field_node_hv;
+    SV **field_name_svp;
+    SV *field_def_sv;
+    HV *field_def_hv;
+    SV **resolve_svp;
+    SV *resolve_sv;
+    AV *path_copy_av;
+    SV *path_copy_sv;
+    SV *info_sv;
+    SV *result_sv;
+    SV *completed_sv;
+    SV **type_svp;
+
+    if (!result_name_svp || !SvOK(*result_name_svp)) {
+      continue;
+    }
+
+    nodes_he = hv_fetch_ent(nodes_defs_hv, *result_name_svp, 0, 0);
+    if (!nodes_he) {
+      continue;
+    }
+
+    nodes_sv = HeVAL(nodes_he);
+    if (!SvROK(nodes_sv) || SvTYPE(SvRV(nodes_sv)) != SVt_PVAV) {
+      continue;
+    }
+
+    nodes_av = (AV *)SvRV(nodes_sv);
+    field_node_svp = av_fetch(nodes_av, 0, 0);
+    if (!field_node_svp || !SvROK(*field_node_svp) || SvTYPE(SvRV(*field_node_svp)) != SVt_PVHV) {
+      continue;
+    }
+
+    field_node_hv = (HV *)SvRV(*field_node_svp);
+    field_name_svp = hv_fetch(field_node_hv, "name", 4, 0);
+    if (!field_name_svp || !SvOK(*field_name_svp)) {
+      continue;
+    }
+
+    field_def_sv = gql_execution_get_field_def(aTHX_ *schema_svp, parent_type, *field_name_svp);
+    if (!SvOK(field_def_sv) || field_def_sv == &PL_sv_undef) {
+      if (field_def_sv != &PL_sv_undef) {
+        SvREFCNT_dec(field_def_sv);
+      }
+      continue;
+    }
+
+    if (!SvROK(field_def_sv) || SvTYPE(SvRV(field_def_sv)) != SVt_PVHV) {
+      SvREFCNT_dec(field_def_sv);
+      continue;
+    }
+
+    field_def_hv = (HV *)SvRV(field_def_sv);
+    resolve_svp = hv_fetch(field_def_hv, "resolve", 7, 0);
+    if (resolve_svp && SvOK(*resolve_svp)) {
+      resolve_sv = newSVsv(*resolve_svp);
+    } else {
+      SV **field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
+      resolve_sv = (field_resolver_svp && SvOK(*field_resolver_svp))
+        ? newSVsv(*field_resolver_svp)
+        : newSV(0);
+    }
+
+    path_copy_av = newAV();
+    if (SvROK(path) && SvTYPE(SvRV(path)) == SVt_PVAV) {
+      AV *path_av = (AV *)SvRV(path);
+      I32 path_len = av_len(path_av);
+      I32 path_i;
+      for (path_i = 0; path_i <= path_len; path_i++) {
+        SV **path_part_svp = av_fetch(path_av, path_i, 0);
+        if (path_part_svp) {
+          av_push(path_copy_av, newSVsv(*path_part_svp));
+        }
+      }
+    }
+    av_push(path_copy_av, newSVsv(*result_name_svp));
+    path_copy_sv = newRV_noinc((SV *)path_copy_av);
+
+    info_sv = gql_execution_call_pp_build_resolve_info(
+      aTHX_ context,
+      parent_type,
+      field_def_sv,
+      path_copy_sv,
+      nodes_sv
+    );
+    result_sv = gql_execution_call_pp_resolve_field_value_or_error(
+      aTHX_ context,
+      field_def_sv,
+      nodes_sv,
+      resolve_sv,
+      root_value,
+      info_sv
+    );
+    type_svp = hv_fetch(field_def_hv, "type", 4, 0);
+    if (!type_svp || !SvOK(*type_svp)) {
+      SvREFCNT_dec(info_sv);
+      SvREFCNT_dec(result_sv);
+      SvREFCNT_dec(resolve_sv);
+      SvREFCNT_dec(path_copy_sv);
+      SvREFCNT_dec(field_def_sv);
+      continue;
+    }
+
+    completed_sv = gql_execution_call_pp_complete_value_catching_error(
+      aTHX_ context,
+      *type_svp,
+      nodes_sv,
+      info_sv,
+      path_copy_sv,
+      result_sv
+    );
+
+    av_push(keys_av, newSVsv(*result_name_svp));
+    av_push(values_av, completed_sv);
+
+    SvREFCNT_dec(info_sv);
+    SvREFCNT_dec(result_sv);
+    SvREFCNT_dec(resolve_sv);
+    SvREFCNT_dec(path_copy_sv);
+    SvREFCNT_dec(field_def_sv);
+  }
+
+  {
+    SV *ret = gql_execution_call_pp_merge_hash(
+      aTHX_ newRV_noinc((SV *)keys_av),
+      newRV_noinc((SV *)values_av),
+      newRV_noinc((SV *)errors_av)
+    );
+    return ret;
+  }
 }

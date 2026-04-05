@@ -9,6 +9,7 @@ use Exporter 'import';
 our $VERSION = '0.01';
 our @EXPORT_OK = qw(
   execute_xs
+  _execute_fields_xs
 );
 
 require GraphQL::Houtou::XS::Parser;

@@ -23,6 +23,7 @@ our @EXPORT_OK = qw(
 );
 
 my $JSON = JSON::MaybeXS->new->allow_nonref;
+my $HAS_XS_EXECUTE_FIELDS;
 
 sub execute {
   my (
@@ -192,6 +193,21 @@ sub _execute_operation {
 }
 
 sub _execute_fields {
+  if (!defined $HAS_XS_EXECUTE_FIELDS) {
+    $HAS_XS_EXECUTE_FIELDS = eval {
+      require GraphQL::Houtou::XS::Execution;
+      GraphQL::Houtou::XS::Execution->can('_execute_fields_xs');
+    } ? 1 : 0;
+  }
+
+  if ($HAS_XS_EXECUTE_FIELDS) {
+    return GraphQL::Houtou::XS::Execution::_execute_fields_xs(@_);
+  }
+
+  return _execute_fields_pp(@_);
+}
+
+sub _execute_fields_pp {
   my ($context, $parent_type, $root_value, $path, $fields) = @_;
   my ($field_names, $nodes_defs) = @$fields;
   my %name2executionresult;

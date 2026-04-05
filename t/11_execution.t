@@ -125,4 +125,44 @@ GRAPHQL
   }, 'xs path chooses the requested operation';
 };
 
+subtest 'xs field loop matches pp field loop' => sub {
+  require GraphQL::Houtou::XS::Execution;
+  require GraphQL::Houtou::Execution::PP;
+
+  my $ast = parse_with_options('{ user(id: "9") { id name } }', { backend => 'xs' });
+  my $context = GraphQL::Houtou::Execution::PP::_build_context(
+    $schema,
+    $ast,
+    undef,
+    undef,
+    {},
+    undef,
+    undef,
+    undef,
+  );
+  my ($fields) = $schema->query->_collect_fields(
+    $context,
+    $context->{operation}{selections},
+    [ [], {} ],
+    {},
+  );
+
+  my $pp = GraphQL::Houtou::Execution::PP::_execute_fields_pp(
+    $context,
+    $schema->query,
+    undef,
+    [],
+    $fields,
+  );
+  my $xs = GraphQL::Houtou::XS::Execution::_execute_fields_xs(
+    $context,
+    $schema->query,
+    undef,
+    [],
+    $fields,
+  );
+
+  is_deeply $xs, $pp, 'xs field loop matches pp field loop';
+};
+
 done_testing;

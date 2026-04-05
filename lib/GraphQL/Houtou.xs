@@ -247,3 +247,15 @@ execute_xs(schema, document, root_value = NULL, context_value = NULL, variable_v
     );
   OUTPUT:
     RETVAL
+
+SV *
+_execute_fields_xs(context, parent_type, root_value, path, fields)
+    SV *context
+    SV *parent_type
+    SV *root_value
+    SV *path
+    SV *fields
+  CODE:
+    RETVAL = gql_execution_execute_fields(aTHX_ context, parent_type, root_value, path, fields);
+  OUTPUT:
+    RETVAL

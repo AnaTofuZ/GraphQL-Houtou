@@ -405,6 +405,81 @@ gql_execution_call_type_to_string(pTHX_ SV *type) {
 }
 
 static SV *
+gql_execution_fragment_condition_matches_simple(pTHX_ SV *context, SV *object_type, SV *condition_name, int *ok) {
+  HV *context_hv;
+  SV **schema_svp;
+  SV **name2type_svp;
+  HE *condition_he;
+  SV *condition_type;
+  SV *object_name_sv;
+
+  *ok = 0;
+  if (!condition_name || !SvOK(condition_name)) {
+    *ok = 1;
+    return newSViv(1);
+  }
+  if (!SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
+    return newSViv(0);
+  }
+
+  object_name_sv = gql_execution_call_type_to_string(aTHX_ object_type);
+  if (sv_eq(condition_name, object_name_sv)) {
+    SvREFCNT_dec(object_name_sv);
+    *ok = 1;
+    return newSViv(1);
+  }
+  SvREFCNT_dec(object_name_sv);
+
+  context_hv = (HV *)SvRV(context);
+  schema_svp = hv_fetch(context_hv, "schema", 6, 0);
+  if (!schema_svp || !SvROK(*schema_svp) || SvTYPE(SvRV(*schema_svp)) != SVt_PVHV) {
+    return newSViv(0);
+  }
+  name2type_svp = hv_fetch((HV *)SvRV(*schema_svp), "name2type", 9, 0);
+  if (!name2type_svp || !SvROK(*name2type_svp) || SvTYPE(SvRV(*name2type_svp)) != SVt_PVHV) {
+    return newSViv(0);
+  }
+
+  condition_he = hv_fetch_ent((HV *)SvRV(*name2type_svp), condition_name, 0, 0);
+  condition_type = condition_he ? HeVAL(condition_he) : NULL;
+  if (!condition_type || !SvROK(condition_type)) {
+    return newSViv(0);
+  }
+
+  if (sv_does(condition_type, "GraphQL::Houtou::Role::Abstract")
+      || sv_does(condition_type, "GraphQL::Role::Abstract")) {
+    dSP;
+    int count;
+    SV *ret;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(sv_2mortal(newSVsv(*schema_svp)));
+    XPUSHs(sv_2mortal(newSVsv(condition_type)));
+    XPUSHs(sv_2mortal(newSVsv(object_type)));
+    PUTBACK;
+    count = call_method("is_possible_type", G_SCALAR | G_EVAL);
+    SPAGAIN;
+    if (SvTRUE(ERRSV) || count != 1) {
+      PUTBACK;
+      FREETMPS;
+      LEAVE;
+      return newSViv(0);
+    }
+    ret = newSVsv(POPs);
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    *ok = 1;
+    return ret;
+  }
+
+  *ok = 1;
+  return newSViv(0);
+}
+
+static SV *
 gql_execution_call_object_is_type_of(pTHX_ SV *type) {
   dSP;
   int count;
@@ -745,12 +820,17 @@ gql_execution_collect_simple_selections(
       SV **on_svp = hv_fetch(selection_hv, "on", 2, 0);
       SV **selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
       if (on_svp && SvOK(*on_svp)) {
-        SV *object_name_sv = gql_execution_call_type_to_string(aTHX_ object_type);
-        int same_type = sv_eq(*on_svp, object_name_sv);
-        SvREFCNT_dec(object_name_sv);
-        if (!same_type) {
+        int match_ok = 0;
+        SV *matches = gql_execution_fragment_condition_matches_simple(aTHX_ context, object_type, *on_svp, &match_ok);
+        if (!match_ok) {
+          SvREFCNT_dec(matches);
+          return 0;
+        }
+        if (!SvTRUE(matches)) {
+          SvREFCNT_dec(matches);
           continue;
         }
+        SvREFCNT_dec(matches);
       }
       if (!selections_svp || !SvROK(*selections_svp) || SvTYPE(SvRV(*selections_svp)) != SVt_PVAV) {
         return 0;
@@ -788,12 +868,17 @@ gql_execution_collect_simple_selections(
       fragment_hv = (HV *)SvRV(fragment_sv);
       on_svp = hv_fetch(fragment_hv, "on", 2, 0);
       if (on_svp && SvOK(*on_svp)) {
-        SV *object_name_sv = gql_execution_call_type_to_string(aTHX_ object_type);
-        int same_type = sv_eq(*on_svp, object_name_sv);
-        SvREFCNT_dec(object_name_sv);
-        if (!same_type) {
+        int match_ok = 0;
+        SV *matches = gql_execution_fragment_condition_matches_simple(aTHX_ context, object_type, *on_svp, &match_ok);
+        if (!match_ok) {
+          SvREFCNT_dec(matches);
+          return 0;
+        }
+        if (!SvTRUE(matches)) {
+          SvREFCNT_dec(matches);
           continue;
         }
+        SvREFCNT_dec(matches);
       }
       selections_svp = hv_fetch(fragment_hv, "selections", 10, 0);
       if (!selections_svp || !SvROK(*selections_svp) || SvTYPE(SvRV(*selections_svp)) != SVt_PVAV) {

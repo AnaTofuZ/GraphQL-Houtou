@@ -583,4 +583,14 @@ subtest 'execute union field with default resolve_type through xs path' => sub {
   is_deeply $xs, $public, 'union field with default resolve_type matches public facade';
 };
 
+subtest 'execute abstract fragment condition through xs object completion path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ auto_search_result { ... on AutoNamedEntity { name } ... on AutoCheckedUser { id } } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'abstract fragment condition is handled in xs object completion';
+};
+
 done_testing;

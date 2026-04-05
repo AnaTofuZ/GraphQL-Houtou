@@ -1,5 +1,10 @@
 requires 'perl', '5.014000';
 requires 'GraphQL', '0.54';
+requires 'XSLoader';
+
+on configure => sub {
+    requires 'Module::Build::Tiny';
+};
 
 on 'test' => sub {
     requires 'Test::More', '0.98';

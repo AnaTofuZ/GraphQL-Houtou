@@ -44,8 +44,9 @@ For promise-backed execution, the benchmark currently compares:
 - upstream `GraphQL::Execution::execute`
 - `GraphQL::Houtou::Execution::execute`
 
-`GraphQL::Houtou::XS::Execution::execute_xs` is not included there because
-promise-heavy execution still intentionally stays on the PP path.
+`GraphQL::Houtou::XS::Execution::execute_xs` is not listed separately there
+because the public Houtou facade now routes promise-aware execution through the
+XS-backed path internally.
 
 ## Results
 
@@ -59,17 +60,18 @@ Query:
 
 Rates:
 
-- `upstream_string`: `5009/s`
-- `houtou_facade_string`: `37118/s`
-- `houtou_xs_string`: `37716/s`
-- `houtou_facade_ast`: `39565/s`
-- `houtou_xs_ast`: `40328/s`
-- `upstream_ast`: `42991/s`
+- `upstream_string`: `4859/s`
+- `upstream_ast`: `42334/s`
+- `houtou_facade_string`: `111655/s`
+- `houtou_xs_string`: `118791/s`
+- `houtou_facade_ast`: `124889/s`
+- `houtou_xs_ast`: `133720/s`
 
 Observations:
 
-- Houtou is much faster for end-to-end string execution.
-- Upstream still wins when AST is already available and the query is flat.
+- Houtou is much faster for both source-string and prebuilt-AST execution.
+- The flat-query fixed overhead work that previously hurt `simple_scalar` is no
+  longer a bottleneck in this benchmark.
 
 ### nested_variable_object
 
@@ -81,17 +83,17 @@ query q($id: ID!) { user(id: $id) { id name } }
 
 Rates:
 
-- `upstream_string`: `3170/s`
-- `houtou_facade_string`: `26314/s`
-- `houtou_xs_string`: `26625/s`
-- `upstream_ast`: `25497/s`
-- `houtou_facade_ast`: `27722/s`
-- `houtou_xs_ast`: `27825/s`
+- `upstream_string`: `3084/s`
+- `upstream_ast`: `25038/s`
+- `houtou_facade_string`: `56170/s`
+- `houtou_xs_string`: `59513/s`
+- `houtou_facade_ast`: `63352/s`
+- `houtou_xs_ast`: `66215/s`
 
 Observations:
 
 - Houtou is far ahead on source-string execution.
-- For nested object execution with variable coercion, Houtou XS also edges out upstream AST.
+- On prebuilt AST, Houtou now clearly beats upstream as well.
 
 ### list_of_objects
 
@@ -103,17 +105,17 @@ Query:
 
 Rates:
 
-- `upstream_string`: `3974/s`
-- `upstream_ast`: `18095/s`
-- `houtou_facade_string`: `19243/s`
-- `houtou_xs_string`: `19611/s`
-- `houtou_facade_ast`: `19756/s`
-- `houtou_xs_ast`: `20032/s`
+- `upstream_string`: `3889/s`
+- `upstream_ast`: `17926/s`
+- `houtou_facade_string`: `44929/s`
+- `houtou_xs_string`: `47184/s`
+- `houtou_facade_ast`: `47900/s`
+- `houtou_xs_ast`: `49028/s`
 
 Observations:
 
 - Houtou is again much faster on string execution.
-- On AST execution, Houtou is slightly ahead in this list-of-objects case.
+- On AST execution, Houtou now has a wide margin in this list-of-objects case.
 
 ### abstract_with_fragment
 
@@ -125,17 +127,17 @@ Query:
 
 Rates:
 
-- `upstream_string`: `3081/s`
-- `houtou_facade_string`: `18095/s`
-- `houtou_xs_string`: `18466/s`
-- `houtou_facade_ast`: `18794/s`
-- `houtou_xs_ast`: `19079/s`
+- `upstream_string`: `3032/s`
 - `upstream_ast`: `23801/s`
+- `houtou_facade_string`: `34238/s`
+- `houtou_xs_string`: `35318/s`
+- `houtou_facade_ast`: `36559/s`
+- `houtou_xs_ast`: `37449/s`
 
 Observations:
 
 - Houtou still dominates source-string execution.
-- Upstream remains stronger when AST is already materialized and abstract-type work is involved.
+- The abstract-type / fragment path now also beats upstream on prebuilt AST.
 
 ### async_scalar
 
@@ -147,32 +149,56 @@ Query:
 
 Rates:
 
-- `upstream_string`: `7062/s`
-- `houtou_facade_string`: `29281/s`
-- `houtou_facade_ast`: `31220/s`
-- `upstream_ast`: `42593/s`
+- `upstream_string`: `6957/s`
+- `upstream_ast`: `42173/s`
+- `houtou_facade_string`: `71050/s`
+- `houtou_facade_ast`: `74722/s`
 
 Observations:
 
-- Even on the current PP-oriented promise path, Houtou is much faster for source-string execution.
-- Upstream still wins for AST-only promise-backed execution.
+- Promise-backed execution is now strongly XS-backed through the public facade.
+- Houtou now beats upstream even for AST-only promise-backed scalar execution.
+
+### async_list
+
+Query:
+
+```graphql
+{ asyncList }
+```
+
+Rates:
+
+- `upstream_string`: `6198/s`
+- `upstream_ast`: `26212/s`
+- `houtou_facade_string`: `40163/s`
+- `houtou_facade_ast`: `41505/s`
+
+Observations:
+
+- Promise-backed list execution also now beats upstream on both string and AST paths.
+- This case improved materially once prepared execution, field merge, and leaf
+  completion stopped crossing the PP bridge.
 
 ## Summary
 
 Current takeaways:
 
-- `GraphQL::Houtou` is already strong for practical end-to-end execute from source strings.
-- The execution XS work is paying off most in nested object, list, and variable-heavy paths.
-- Upstream `GraphQL` still has an advantage when AST is already parsed, especially in flatter or more abstract-type-heavy cases.
-- Promise-backed execution is not yet an XS-driven win area. It remains mostly a PP path by design.
+- `GraphQL::Houtou` is now strong both for practical source-string execution
+  and for the prebuilt-AST workloads covered by this benchmark.
+- The execution XS work is paying off across flat, nested, list, abstract, and
+  promise-backed cases.
+- Promise-backed execution is no longer just a compatibility path in this
+  benchmark set; it is now a performance win area too.
 
 In short:
 
-- parser + execute together: Houtou is already very competitive and often much faster
-- execute on prebuilt AST only: still a meaningful optimization target
-- promise-heavy execution: still primarily a compatibility path, not yet a performance path
+- parser + execute together: Houtou is much faster
+- execute on prebuilt AST: Houtou now also wins across the benchmarked cases
+- promise-heavy execution: now XS-backed enough to outperform upstream in the
+  benchmarked scalar and list cases
 
-## Why `simple_scalar` Still Loses On Prebuilt AST
+## Why `simple_scalar` Used To Lose On Prebuilt AST
 
 The `simple_scalar` case is:
 
@@ -180,7 +206,7 @@ The `simple_scalar` case is:
 { hello greet(name: "houtou") }
 ```
 
-This is almost the worst case for the current XS migration strategy, because it
+This used to be almost the worst case for the XS migration strategy, because it
 contains very little of the work that XS currently helps most with:
 
 - no nested object traversal
@@ -189,10 +215,10 @@ contains very little of the work that XS currently helps most with:
 - no fragment-heavy field collection
 - no meaningful null-propagation work
 
-So in this case, the result is dominated by fixed per-field overhead rather than
-deep execution work.
+So the result used to be dominated by fixed per-field overhead rather than deep
+execution work.
 
-In the current Houtou implementation, that fixed overhead still includes:
+The main fixed costs were:
 
 - Perl root field collection via `GraphQL::Houtou::Type::Object::_collect_fields`
 - per-field `path` copying
@@ -200,64 +226,24 @@ In the current Houtou implementation, that fixed overhead still includes:
 - argument hash construction even for tiny argument sets
 - result hash merge for a very small number of leaf fields
 
-For more complex queries, XS fast paths amortize these costs well enough to pull
-ahead. For `simple_scalar`, they do not.
+The later execution work changed that picture by:
 
-That explains the current pattern:
+- trimming `ResolveInfo` construction
+- moving prepared execution into XS
+- making top-level field execution promise-aware in XS
+- eliminating the remaining PP bridge in promise leaf completion
 
-- source-string execution: Houtou wins due to parser + execute integration
-- prebuilt AST execution on a flat query: upstream still wins on lower fixed overhead
+That is why `simple_scalar` now swings heavily in Houtou's favor.
 
 ## Next Optimization Targets
 
-The most likely next wins for prebuilt-AST flat queries are:
+The next likely wins are no longer the old flat-query basics. The more useful
+remaining directions are:
 
-1. Reduce `ResolveInfo` construction cost.
-2. Add a thinner no-args leaf-field fast path.
-3. Move root `_collect_fields()` into XS.
-4. Trim result merge overhead for tiny leaf-only selections.
-
-In practice, the first two are likely the best low-risk next step, while root
-field collection in XS is the larger structural improvement.
-
-## Updated Performance Read
-
-After the recent execution work, the benchmark picture is now more polarized:
-
-- `simple_scalar` on prebuilt AST is close, but upstream still leads by a small margin.
-- `nested_variable_object` and `list_of_objects` now favor Houtou even on prebuilt AST.
-- `abstract_with_fragment` still leaves a larger gap on prebuilt AST.
-- `async_scalar` remains the weakest area for Houtou when AST is already available.
-
-This suggests that Houtou is no longer broadly "slow on AST execution". Instead,
-the remaining gaps are concentrated in two kinds of workloads:
-
-1. very flat queries where fixed overhead dominates
-2. promise-heavy or abstract-type-heavy queries where more work still falls back
-   through Perl continuations and object-heavy compatibility structures
-
-## Why The Remaining Gaps Exist
-
-### Flat AST Queries: Fixed Overhead Still Matters
-
-`simple_scalar` is now much closer than before, but it still pays for:
-
-- `ResolveInfo` and path object construction
-- field-definition lookup and dispatch glue
-- leaf-field completion framing even when the field body is trivial
-- compatibility-shape result objects and error/result wrappers
-
-Those costs are small individually, but on a two-field flat query they dominate.
-
-### Abstract Fragments: Compatibility Shape Still Costs
-
-`abstract_with_fragment` remains slower mainly because the compatibility path
-still materializes and checks more Perl-visible structure than upstream in the
-already-parsed-AST case:
-
-- abstract runtime type resolution still crosses compatibility layers
-- fragment condition checks still require more shape adaptation than the simplest
-  object/list paths
+1. Shrink the remaining complex object/list completion fallbacks.
+2. Push abstract-type and fragment-heavy error paths deeper into XS.
+3. Continue reducing compatibility-shape allocation in the AST execution path.
+4. Extend benchmark coverage to more schema-heavy and mutation-oriented cases.
 - the fast path is present, but the fallback boundary is still comparatively near
 
 This is no longer a parser problem; it is execution-front-end overhead around

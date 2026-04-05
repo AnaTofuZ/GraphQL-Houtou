@@ -50,6 +50,8 @@ It should stay short enough to recover momentum quickly after context resets.
 - `8eb07cc` Profile PP bridges and batch promise list completion
 - `1343219` Move prepared execution entrypoint into XS
 - `41477aa` Make XS field execution promise-aware
+- `095fc8e` Skip PP variable defaults for empty operations
+- `f8d5699` Handle promise leaf completion in XS
 - `a17a659` Add global default promise hooks
 - `7a5d061` Normalize promise hooks for XS execution
 - `ad56343` Move promise adapter dispatch into XS
@@ -153,7 +155,6 @@ Still delegated to PP helpers:
 
 - full argument coercion fallback
 - complex object/list completion fallback
-- deeper promise completion continuations
 - promise-backed execution now keeps upstream-style `promise_code`, supports a
   global default hook set, and allows optional `then` / `is_promise` hooks so
   the caller can adapt arbitrary promise libraries without Houtou hardcoding
@@ -162,6 +163,7 @@ Still delegated to PP helpers:
   decoration are now XS-backed
 - prepared operation execution now runs in XS
 - promise-aware top-level field execution now runs in XS
+- promise leaf completion now runs in XS
 
 ## Testing Snapshot
 
@@ -191,29 +193,36 @@ Key constraint:
 Recent benchmark snapshot:
 
 - `simple_scalar`
-  - `houtou_xs_ast`: about `55.8k/s`
-  - `upstream_ast`: about `41.1k/s`
+  - `houtou_xs_ast`: about `133.7k/s`
+  - `upstream_ast`: about `42.3k/s`
+- `nested_variable_object`
+  - `houtou_xs_ast`: about `66.2k/s`
+  - `upstream_ast`: about `25.0k/s`
+- `list_of_objects`
+  - `houtou_xs_ast`: about `49.0k/s`
+  - `upstream_ast`: about `17.9k/s`
+- `abstract_with_fragment`
+  - `houtou_xs_ast`: about `37.4k/s`
+  - `upstream_ast`: about `23.8k/s`
 - `async_scalar`
-  - `houtou_facade_ast`: about `54.1k/s`
-  - `upstream_ast`: about `42.6k/s`
+  - `houtou_facade_ast`: about `74.7k/s`
+  - `upstream_ast`: about `42.2k/s`
 - `async_list`
-  - `houtou_facade_ast`: about `30.2k/s`
-  - `upstream_ast`: about `26.5k/s`
+  - `houtou_facade_ast`: about `41.5k/s`
+  - `upstream_ast`: about `26.2k/s`
 
 Recent PP bridge profile snapshot (`HOUTOU_PROFILE_PP_BRIDGE=1`):
 
 - `async_scalar`
-  - `variables_apply_defaults=1`
+  - `variables_apply_defaults=0`
   - `execute_prepared_context=0`
-  - `complete_value_catching_error=1`
+  - `complete_value_catching_error=0`
 - `async_list`
-  - `variables_apply_defaults=1`
+  - `variables_apply_defaults=0`
   - `execute_prepared_context=0`
-  - `complete_value_catching_error=2`
+  - `complete_value_catching_error=0`
 
 Immediate next step:
 
-- remove the unconditional `variables_apply_defaults` PP bridge when an
-  operation has no variable definitions
-- continue shrinking `complete_value_catching_error` fallback counts
+- continue shrinking complex object/list completion fallbacks
 - keep abstract/object error paths moving deeper into XS

@@ -47,11 +47,20 @@ __END__
 
 =head1 NAME
 
-GraphQL::Houtou - XS recursive-descent GraphQL parser toolkit for Perl
+GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
 
 =head1 SYNOPSIS
 
-    use GraphQL::Houtou qw(parse parse_with_options);
+    use GraphQL::Houtou qw(
+      parse
+      parse_with_options
+      set_default_promise_code
+    );
+    use GraphQL::Houtou::Execution qw(execute);
+    use GraphQL::Houtou::Schema;
+    use GraphQL::Houtou::Type;
+    use GraphQL::Houtou::Type::Object;
+    use GraphQL::Houtou::Type::Scalar;
 
     my $legacy_ast = parse('{ user { id } }');
 
@@ -71,18 +80,145 @@ GraphQL::Houtou - XS recursive-descent GraphQL parser toolkit for Perl
       no_location => 1,
     });
 
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          hello => {
+            type => GraphQL::Houtou::Type::Scalar->new(
+              name => 'String',
+              graphql_to_perl => sub { $_[0] },
+              perl_to_graphql => sub { $_[0] },
+            ),
+            resolve => sub { 'world' },
+          },
+        },
+      ),
+    );
+
+    my $result = execute($schema, '{ hello }');
+
+    set_default_promise_code({
+      resolve => sub { ... },
+      reject  => sub { ... },
+      all     => sub { ... },
+      then    => sub { my ($promise, $ok, $ng) = @_; ... },
+      is_promise => sub { my ($value) = @_; ... },
+    });
+
 =head1 DESCRIPTION
 
-GraphQL::Houtou provides an XS recursive-descent GraphQL parser plus
+GraphQL::Houtou provides XS-backed GraphQL parsing and execution with
 compatibility layers for both the legacy C<graphql-perl> AST and a
 C<graphql-js>-style AST.
 
 This distribution was split out from local parser work that originally lived
 in a fork of L<graphql-perl|https://github.com/graphql-perl/graphql-perl>.
 It still uses the upstream C<GraphQL> distribution as a dependency for some
-compatibility behavior, while making the XS parser path the normal fast path.
+compatibility behavior, while making the XS path the normal fast path for both
+parser and execution work.
 
-=head1 DIALECTS AND USAGE
+=head1 USAGE
+
+=head2 Parsing
+
+The default C<parse()> entry point returns the traditional
+C<graphql-perl>-compatible AST.
+
+    my $ast = parse($source);
+
+If you want to choose the dialect explicitly, use C<parse_with_options()>.
+
+    my $legacy = parse_with_options($source, {
+      dialect => 'graphql-perl',
+      backend => 'xs',
+    });
+
+    my $graphql_js = parse_with_options($source, {
+      dialect => 'graphql-js',
+      backend => 'xs',
+    });
+
+For throughput-sensitive parsing where you do not need location data, passing
+C<no_location =E<gt> 1> is still recommended.
+
+    my $doc = parse_with_options($source, {
+      dialect => 'graphql-js',
+      backend => 'xs',
+      no_location => 1,
+    });
+
+=head2 Executing Queries
+
+Execution lives under L<GraphQL::Houtou::Execution>. The public entry point is:
+
+    my $result = GraphQL::Houtou::Execution::execute($schema, $document, \%vars);
+
+Where C<$document> can be either:
+
+=over 4
+
+=item *
+
+a source string
+
+=item *
+
+a pre-parsed C<graphql-perl>-compatible AST
+
+=back
+
+In current practical benchmark coverage, the XS-backed execution path is the
+normal fast path and outperforms upstream C<GraphQL::Execution::execute> in
+the benchmarked string and AST cases.
+
+=head2 Promise Hooks
+
+Promise support is configured by user-supplied hooks rather than by naming a
+specific promise library. You can set global defaults via:
+
+    set_default_promise_code({
+      resolve => sub { ... },
+      reject  => sub { ... },
+      all     => sub { ... },
+      then    => sub { my ($promise, $ok, $ng) = @_; ... },    # optional
+      is_promise => sub { my ($value) = @_; ... },             # optional
+    });
+
+The intended contract is:
+
+=over 4
+
+=item *
+
+C<resolve($value)> returns a fulfilled promise
+
+=item *
+
+C<reject($error)> returns a rejected promise
+
+=item *
+
+C<all(@promises)> returns an aggregate promise that fulfills to the resolved
+values
+
+=item *
+
+C<then($promise, $on_fulfilled, $on_rejected)> chains a promise
+
+=item *
+
+C<is_promise($value)> returns true when the value should be treated as a
+promise
+
+=back
+
+Per-request overrides are also supported by the execution layer. The public
+API keeps the hook contract generic so that adapters can be supplied by user
+code for C<Promises>, C<Future>, C<Promise::XS>, C<Promise::ES6>,
+C<Mojo::Promise>, or any other library with a suitable wrapper.
+
+=head1 DIALECTS
 
 =head2 graphql-perl compatible layer
 
@@ -128,49 +264,66 @@ Example:
 
 =head1 BENCHMARK SNAPSHOT
 
-As of 2026-04-03, a local benchmark on C<t/kitchen-sink.graphql> produced the
-following rough results:
+As of 2026-04-05, practical execution benchmarks using
+C<util/execution-benchmark.pl --count=-3> produced the following snapshot:
 
 =over 4
 
 =item *
 
-C<graphql_perl_pegex>: about 485 parses/sec
+C<simple_scalar> AST execution:
+C<houtou_xs_ast> about 133,720/s, C<upstream_ast> about 42,334/s
 
 =item *
 
-C<graphql_perl_canonical_xs>: about 13,524 parses/sec
+C<nested_variable_object> AST execution:
+C<houtou_xs_ast> about 66,215/s, C<upstream_ast> about 25,038/s
 
 =item *
 
-C<graphql_js_xs>: about 22,756 parses/sec
+C<list_of_objects> AST execution:
+C<houtou_xs_ast> about 49,028/s, C<upstream_ast> about 17,926/s
 
 =item *
 
-C<graphql_js_xs_noloc>: about 35,076 parses/sec
+C<abstract_with_fragment> AST execution:
+C<houtou_xs_ast> about 37,449/s, C<upstream_ast> about 23,801/s
 
 =item *
 
-C<graphql_perl_xs>: about 56,879 parses/sec
+C<async_scalar> AST execution:
+C<houtou_facade_ast> about 74,722/s, C<upstream_ast> about 42,173/s
+
+=item *
+
+C<async_list> AST execution:
+C<houtou_facade_ast> about 41,505/s, C<upstream_ast> about 26,212/s
 
 =back
 
-This confirms two practical points:
+This confirms several practical points:
 
 =over 4
 
 =item *
 
-the XS parser path is substantially faster than the Pegex path
+the XS path is now materially faster than upstream execution in the benchmarked
+AST and source-string cases
 
 =item *
 
-turning off location handling materially improves throughput
+the execution XS work is paying off not only for nested/list/object workloads
+but also for promise-backed scalar and list cases
+
+=item *
+
+turning off parser location handling still materially improves parse-only
+throughput when you do not need C<loc> or C<location> data
 
 =back
 
 The exact benchmark command and more detailed performance notes are kept in
-C<docs/current-context.md> and C<docs/performance.md>.
+C<docs/execution-benchmark.md> and C<docs/current-context.md>.
 
 =head1 NAME ORIGIN
 

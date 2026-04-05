@@ -2163,16 +2163,20 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
 
 static SV *
 gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_def, SV *path, SV *nodes) {
-  HV *info_hv = NULL;
+  HV *info_hv = newHV();
   HV *context_hv;
-  SV **resolve_info_base_svp;
-  HV *resolve_info_base_hv = NULL;
   AV *nodes_av;
   SV **field_node_svp;
   HV *field_node_hv;
   SV **field_name_svp;
   HV *field_def_hv;
   SV **return_type_svp;
+  SV **schema_svp;
+  SV **fragments_svp;
+  SV **root_value_svp;
+  SV **operation_svp;
+  SV **variable_values_svp;
+  SV **promise_code_svp;
 
   if (!SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
     croak("context must be a hash reference");
@@ -2185,11 +2189,6 @@ gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_d
   }
 
   context_hv = (HV *)SvRV(context);
-  resolve_info_base_svp = hv_fetch(context_hv, "resolve_info_base", 17, 0);
-  if (resolve_info_base_svp && SvROK(*resolve_info_base_svp) && SvTYPE(SvRV(*resolve_info_base_svp)) == SVt_PVHV) {
-    resolve_info_base_hv = (HV *)SvRV(*resolve_info_base_svp);
-  }
-  info_hv = resolve_info_base_hv ? newHVhv(resolve_info_base_hv) : newHV();
   nodes_av = (AV *)SvRV(nodes);
   field_node_svp = av_fetch(nodes_av, 0, 0);
   if (!field_node_svp || !SvROK(*field_node_svp) || SvTYPE(SvRV(*field_node_svp)) != SVt_PVHV) {
@@ -2208,6 +2207,19 @@ gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_d
     croak("field definition has no type");
   }
 
+  schema_svp = hv_fetch(context_hv, "schema", 6, 0);
+  fragments_svp = hv_fetch(context_hv, "fragments", 9, 0);
+  root_value_svp = hv_fetch(context_hv, "root_value", 10, 0);
+  operation_svp = hv_fetch(context_hv, "operation", 9, 0);
+  variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
+  promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+
+  gql_store_sv(info_hv, "schema", (schema_svp && SvOK(*schema_svp)) ? newSVsv(*schema_svp) : newSV(0));
+  gql_store_sv(info_hv, "fragments", (fragments_svp && SvOK(*fragments_svp)) ? newSVsv(*fragments_svp) : newSV(0));
+  gql_store_sv(info_hv, "root_value", (root_value_svp && SvOK(*root_value_svp)) ? newSVsv(*root_value_svp) : newSV(0));
+  gql_store_sv(info_hv, "operation", (operation_svp && SvOK(*operation_svp)) ? newSVsv(*operation_svp) : newSV(0));
+  gql_store_sv(info_hv, "variable_values", (variable_values_svp && SvOK(*variable_values_svp)) ? newSVsv(*variable_values_svp) : newSV(0));
+  gql_store_sv(info_hv, "promise_code", (promise_code_svp && SvOK(*promise_code_svp)) ? newSVsv(*promise_code_svp) : newSV(0));
   gql_store_sv(info_hv, "field_name", newSVsv(*field_name_svp));
   gql_store_sv(info_hv, "field_nodes", newSVsv(nodes));
   gql_store_sv(info_hv, "return_type", newSVsv(*return_type_svp));

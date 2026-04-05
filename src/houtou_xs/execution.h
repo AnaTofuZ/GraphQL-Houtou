@@ -434,6 +434,46 @@ gql_execution_call_object_is_type_of(pTHX_ SV *type) {
 }
 
 static SV *
+gql_execution_call_is_type_of_cb(pTHX_ SV *cb, SV *result, SV *context, SV *info, int *ok) {
+  dSP;
+  int count;
+  SV *ret;
+  SV *context_value = &PL_sv_undef;
+
+  *ok = 0;
+  if (context && SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV) {
+    SV **context_value_svp = hv_fetch((HV *)SvRV(context), "context_value", 13, 0);
+    if (context_value_svp && SvOK(*context_value_svp)) {
+      context_value = *context_value_svp;
+    }
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(result ? result : &PL_sv_undef)));
+  XPUSHs(sv_2mortal(newSVsv(context_value)));
+  XPUSHs(sv_2mortal(newSVsv(info)));
+  PUTBACK;
+
+  count = call_sv(cb, G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV) || count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return &PL_sv_undef;
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  *ok = 1;
+  return ret;
+}
+
+static SV *
 gql_execution_path_with_index(pTHX_ SV *path, IV index) {
   AV *path_copy_av = newAV();
   SV *ret;
@@ -1102,17 +1142,35 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
       || sv_derived_from(return_type, "GraphQL::Type::Object")) {
     SV *is_type_of_sv = gql_execution_call_object_is_type_of(aTHX_ return_type);
 
-    if (!SvOK(is_type_of_sv)) {
+    if (SvOK(is_type_of_sv)) {
+      int type_ok = 0;
+      SV *type_match = gql_execution_call_is_type_of_cb(aTHX_ is_type_of_sv, result, context, info, &type_ok);
+      SvREFCNT_dec(is_type_of_sv);
+      if (!type_ok || !SvTRUE(type_match)) {
+        if (type_ok) {
+          SvREFCNT_dec(type_match);
+        }
+        return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
+      }
+      SvREFCNT_dec(type_match);
+    } else {
       int ok = 0;
       SV *subfields = gql_execution_collect_simple_object_fields(aTHX_ context, return_type, nodes, &ok);
-      SvREFCNT_dec(is_type_of_sv);
       if (ok) {
         SV *ret = gql_execution_execute_fields(aTHX_ context, return_type, result, path, subfields);
         SvREFCNT_dec(subfields);
         return ret;
       }
-    } else {
-      SvREFCNT_dec(is_type_of_sv);
+    }
+
+    {
+      int ok = 0;
+      SV *subfields = gql_execution_collect_simple_object_fields(aTHX_ context, return_type, nodes, &ok);
+      if (ok) {
+        SV *ret = gql_execution_execute_fields(aTHX_ context, return_type, result, path, subfields);
+        SvREFCNT_dec(subfields);
+        return ret;
+      }
     }
 
     return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);

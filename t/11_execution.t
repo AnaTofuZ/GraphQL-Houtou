@@ -16,6 +16,15 @@ my $User = GraphQL::Houtou::Type::Object->new(
   },
 );
 
+my $CheckedUser = GraphQL::Houtou::Type::Object->new(
+  name => 'CheckedUser',
+  is_type_of => sub { ref($_[0]) eq 'HASH' && exists $_[0]{id} },
+  fields => {
+    id => { type => $ID->non_null },
+    name => { type => $String->non_null },
+  },
+);
+
 my $Query = GraphQL::Houtou::Type::Object->new(
   name => 'Query',
   fields => {
@@ -54,6 +63,15 @@ my $Query = GraphQL::Houtou::Type::Object->new(
         };
       },
     },
+    checked_user => {
+      type => $CheckedUser,
+      resolve => sub {
+        return {
+          id => '11',
+          name => 'checked:11',
+        };
+      },
+    },
     boom => {
       type => $String,
       resolve => sub { die "boom\n" },
@@ -63,7 +81,7 @@ my $Query = GraphQL::Houtou::Type::Object->new(
 
 my $schema = GraphQL::Houtou::Schema->new(
   query => $Query,
-  types => [ $User ],
+  types => [ $User, $CheckedUser ],
 );
 
 subtest 'execute simple query from source' => sub {
@@ -398,6 +416,16 @@ GRAPHQL
   my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
 
   is_deeply $xs, $public, 'object field with simple fragment spread matches public facade';
+};
+
+subtest 'execute object field with is_type_of through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ checked_user { id name } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'object field with is_type_of matches public facade';
 };
 
 done_testing;

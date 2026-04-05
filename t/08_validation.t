@@ -3,17 +3,17 @@ use warnings;
 
 use Test::More 0.98;
 
-use GraphQL::Schema;
-use GraphQL::Type::Interface;
-use GraphQL::Type::Object;
-use GraphQL::Type::Scalar qw($Boolean $String);
+use GraphQL::Houtou::Schema;
+use GraphQL::Houtou::Type::Interface;
+use GraphQL::Houtou::Type::Object;
+use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 
 use GraphQL::Houtou::Validation qw(validate);
 
 my $Node;
 my $User;
 
-$Node = GraphQL::Type::Interface->new(
+$Node = GraphQL::Houtou::Type::Interface->new(
   name => 'Node',
   fields => {
     id => { type => $String->non_null },
@@ -21,7 +21,7 @@ $Node = GraphQL::Type::Interface->new(
   resolve_type => sub { $User },
 );
 
-$User = GraphQL::Type::Object->new(
+$User = GraphQL::Houtou::Type::Object->new(
   name => 'User',
   interfaces => [ $Node ],
   fields => {
@@ -30,7 +30,7 @@ $User = GraphQL::Type::Object->new(
   },
 );
 
-my $Mutation = GraphQL::Type::Object->new(
+my $Mutation = GraphQL::Houtou::Type::Object->new(
   name => 'Mutation',
   fields => {
     renameUser => {
@@ -44,7 +44,7 @@ my $Mutation = GraphQL::Type::Object->new(
   },
 );
 
-my $Subscription = GraphQL::Type::Object->new(
+my $Subscription = GraphQL::Houtou::Type::Object->new(
   name => 'Subscription',
   fields => {
     importantUser => {
@@ -58,8 +58,8 @@ my $Subscription = GraphQL::Type::Object->new(
   },
 );
 
-my $schema = GraphQL::Schema->new(
-  query => GraphQL::Type::Object->new(
+my $schema = GraphQL::Houtou::Schema->new(
+  query => GraphQL::Houtou::Type::Object->new(
     name => 'Query',
     fields => {
       viewer => {

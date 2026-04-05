@@ -3,14 +3,14 @@ use warnings;
 
 use Test::More 0.98;
 
-use GraphQL::Directive;
-use GraphQL::Schema;
-use GraphQL::Type::Enum;
-use GraphQL::Type::InputObject;
-use GraphQL::Type::Interface;
-use GraphQL::Type::Object;
-use GraphQL::Type::Scalar qw($Boolean $Int $String);
-use GraphQL::Type::Union;
+use GraphQL::Houtou::Directive;
+use GraphQL::Houtou::Schema;
+use GraphQL::Houtou::Type::Enum;
+use GraphQL::Houtou::Type::InputObject;
+use GraphQL::Houtou::Type::Interface;
+use GraphQL::Houtou::Type::Object;
+use GraphQL::Houtou::Type::Scalar qw($Boolean $Int $String);
+use GraphQL::Houtou::Type::Union;
 use GraphQL::Houtou::Schema::Compiler qw(compile_schema);
 use GraphQL::Houtou::Schema::Compiler::PP ();
 use GraphQL::Houtou::XS::SchemaCompiler qw(compile_schema_xs);
@@ -18,7 +18,7 @@ use GraphQL::Houtou::XS::SchemaCompiler qw(compile_schema_xs);
 my $Node;
 my $User;
 
-$Node = GraphQL::Type::Interface->new(
+$Node = GraphQL::Houtou::Type::Interface->new(
   name => 'Node',
   fields => {
     id => { type => $String->non_null },
@@ -26,7 +26,7 @@ $Node = GraphQL::Type::Interface->new(
   resolve_type => sub { $User },
 );
 
-my $Status = GraphQL::Type::Enum->new(
+my $Status = GraphQL::Houtou::Type::Enum->new(
   name => 'Status',
   values => {
     ACTIVE => {},
@@ -36,7 +36,7 @@ my $Status = GraphQL::Type::Enum->new(
   },
 );
 
-my $Filter = GraphQL::Type::InputObject->new(
+my $Filter = GraphQL::Houtou::Type::InputObject->new(
   name => 'Filter',
   fields => {
     q => { type => $String },
@@ -45,7 +45,7 @@ my $Filter = GraphQL::Type::InputObject->new(
   },
 );
 
-$User = GraphQL::Type::Object->new(
+$User = GraphQL::Houtou::Type::Object->new(
   name => 'User',
   interfaces => [ $Node ],
   is_type_of => sub { ref($_[0]) eq 'HASH' && $_[0]{kind} && $_[0]{kind} eq 'user' },
@@ -56,13 +56,13 @@ $User = GraphQL::Type::Object->new(
   },
 );
 
-my $SearchResult = GraphQL::Type::Union->new(
+my $SearchResult = GraphQL::Houtou::Type::Union->new(
   name => 'SearchResult',
   types => [ $User ],
   resolve_type => sub { $User },
 );
 
-my $auth = GraphQL::Directive->new(
+my $auth = GraphQL::Houtou::Directive->new(
   name => 'auth',
   locations => [ qw(FIELD OBJECT) ],
   args => {
@@ -70,8 +70,8 @@ my $auth = GraphQL::Directive->new(
   },
 );
 
-my $schema = GraphQL::Schema->new(
-  query => GraphQL::Type::Object->new(
+my $schema = GraphQL::Houtou::Schema->new(
+  query => GraphQL::Houtou::Type::Object->new(
     name => 'Query',
     fields => {
       viewer => {
@@ -92,7 +92,7 @@ my $schema = GraphQL::Schema->new(
     },
   ),
   types => [ $User, $Node, $SearchResult, $Filter, $Status ],
-  directives => [ @GraphQL::Directive::SPECIFIED_DIRECTIVES, $auth ],
+  directives => [ @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES, $auth ],
 );
 
 my $compiled = compile_schema($schema);
@@ -125,6 +125,16 @@ sub _strip_runtime {
 subtest 'facade, PP, and XS agree on normalized shape' => sub {
   is_deeply _strip_runtime($compiled), _strip_runtime($compiled_pp), 'facade matches PP';
   is_deeply _strip_runtime($compiled), _strip_runtime($compiled_xs), 'facade matches XS';
+};
+
+subtest 'Houtou wrappers stay in the Houtou namespace' => sub {
+  isa_ok $schema, 'GraphQL::Houtou::Schema';
+  isa_ok $schema->query, 'GraphQL::Houtou::Type::Object';
+  isa_ok $schema->query->fields->{viewer}{type}, 'GraphQL::Houtou::Type::Object';
+  isa_ok $schema->query->fields->{search}{type}, 'GraphQL::Houtou::Type::NonNull';
+  isa_ok $schema->query->fields->{search}{type}->of, 'GraphQL::Houtou::Type::List';
+  isa_ok $schema->query->fields->{search}{args}{ids}{type}->of, 'GraphQL::Houtou::Type::NonNull';
+  isa_ok $schema->directives->[-1], 'GraphQL::Houtou::Directive';
 };
 
 subtest 'roots are normalized' => sub {

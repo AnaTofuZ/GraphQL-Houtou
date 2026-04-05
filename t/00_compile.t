@@ -14,6 +14,17 @@ use_ok $_ for qw(
     GraphQL::Houtou::GraphQLJS::Parser
     GraphQL::Houtou::Schema::Compiler
     GraphQL::Houtou::Schema::Compiler::PP
+    GraphQL::Houtou::Schema
+    GraphQL::Houtou::Directive
+    GraphQL::Houtou::Type
+    GraphQL::Houtou::Type::Object
+    GraphQL::Houtou::Type::Interface
+    GraphQL::Houtou::Type::Union
+    GraphQL::Houtou::Type::InputObject
+    GraphQL::Houtou::Type::Enum
+    GraphQL::Houtou::Type::List
+    GraphQL::Houtou::Type::NonNull
+    GraphQL::Houtou::Type::Scalar
     GraphQL::Houtou::Validation
     GraphQL::Houtou::Validation::PP
     GraphQL::Houtou::GraphQLJS::Util

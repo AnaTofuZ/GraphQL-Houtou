@@ -144,6 +144,7 @@ typedef struct {
 
 typedef struct {
   gql_ir_document_t *document;
+  SV *source_sv;
   gqljs_loc_context_t ctx;
   bool has_ctx;
 } gqljs_lazy_state_t;
@@ -395,7 +396,7 @@ static void gqljs_loc_context_destroy(gqljs_loc_context_t *ctx);
 static UV gqljs_original_pos_from_rewritten_pos(gqljs_loc_context_t *ctx, UV rewritten_pos);
 static SV *gqljs_new_loc_sv(pTHX_ IV line, IV column);
 static SV *gqljs_new_lazy_loc_sv(pTHX_ UV start);
-static SV *gqljs_new_lazy_state_sv(pTHX_ gql_ir_document_t *document, SV *source_sv, SV *lazy_location_sv, SV *compact_location_sv);
+static SV *gqljs_new_lazy_state_sv(pTHX_ gql_ir_document_t *document, SV *source_sv, int with_locations, SV *lazy_location_sv, SV *compact_location_sv);
 static gqljs_lazy_state_t *gqljs_lazy_state_from_sv(SV *state_sv);
 static void gqljs_lazy_state_destroy(gqljs_lazy_state_t *state);
 static void gqljs_attach_magic_state(pTHX_ SV *sv, SV *state_sv);
@@ -745,9 +746,10 @@ gql_throw_expected_message(pTHX_ gql_parser_t *p, STRLEN pos, const char *msg) {
 
 static void
 gql_throw_expected_token(pTHX_ gql_parser_t *p, gql_token_kind_t kind) {
-  SV *prefix = newSVpvf("Expected %s", gql_expected_token_label(kind));
-  gql_throw_expected_message(aTHX_ p, p->tok_start, SvPV_nolen(prefix));
-  SvREFCNT_dec(prefix);
+  char msg[64];
+
+  my_snprintf(msg, sizeof(msg), "Expected %s", gql_expected_token_label(kind));
+  gql_throw_expected_message(aTHX_ p, p->tok_start, msg);
 }
 
 static void
@@ -1881,6 +1883,10 @@ gqljs_lazy_state_destroy(gqljs_lazy_state_t *state) {
   if (!state) {
     return;
   }
+  if (state->source_sv) {
+    SvREFCNT_dec(state->source_sv);
+    state->source_sv = NULL;
+  }
   if (state->has_ctx) {
     gqljs_loc_context_destroy(&state->ctx);
     state->has_ctx = 0;
@@ -1893,18 +1899,25 @@ gqljs_lazy_state_destroy(gqljs_lazy_state_t *state) {
 }
 
 static SV *
-gqljs_new_lazy_state_sv(pTHX_ gql_ir_document_t *document, SV *source_sv, SV *lazy_location_sv, SV *compact_location_sv) {
+gqljs_new_lazy_state_sv(pTHX_ gql_ir_document_t *document, SV *source_sv, int with_locations, SV *lazy_location_sv, SV *compact_location_sv) {
   SV *state_sv;
   HV *stash = gv_stashpv("GraphQL::Houtou::XS::LazyState", GV_ADD);
   gqljs_lazy_state_t *state;
+  STRLEN source_len;
 
   Newxz(state, 1, gqljs_lazy_state_t);
   state->document = document;
   if (source_sv) {
-    gqljs_loc_context_init(aTHX_ &state->ctx, source_sv, NULL);
-    state->ctx.lazy_location = SvTRUE(lazy_location_sv) ? 1 : 0;
-    state->ctx.compact_location = SvTRUE(compact_location_sv) ? 1 : 0;
-    state->has_ctx = 1;
+    state->source_sv = newSVsv(source_sv);
+    document->src = SvPV(state->source_sv, source_len);
+    document->len = source_len;
+    document->is_utf8 = SvUTF8(state->source_sv) ? 1 : 0;
+    if (with_locations) {
+      gqljs_loc_context_init(aTHX_ &state->ctx, state->source_sv, NULL);
+      state->ctx.lazy_location = SvTRUE(lazy_location_sv) ? 1 : 0;
+      state->ctx.compact_location = SvTRUE(compact_location_sv) ? 1 : 0;
+      state->has_ctx = 1;
+    }
   }
 
   state_sv = newSVuv(PTR2UV(state));
@@ -3677,11 +3690,13 @@ gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_l
   meta_hv = (HV *)SvRV(meta_sv);
   rewritten_svp = hv_fetch(meta_hv, "rewritten_source", 16, 0);
   if (!rewritten_svp) {
+    SvREFCNT_dec(meta_sv);
     return &PL_sv_undef;
   }
 
   legacy_sv = gql_parse_document(aTHX_ *rewritten_svp, no_location_sv);
   if (!legacy_sv || !SvROK(legacy_sv) || SvTYPE(SvRV(legacy_sv)) != SVt_PVAV) {
+    SvREFCNT_dec(meta_sv);
     return &PL_sv_undef;
   }
 
@@ -3691,11 +3706,13 @@ gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_l
     doc_sv = gql_graphqljs_build_document(aTHX_ legacy_sv);
   }
   if (!doc_sv || !SvOK(doc_sv) || doc_sv == &PL_sv_undef) {
+    SvREFCNT_dec(meta_sv);
     return &PL_sv_undef;
   }
 
   gqljs_materialize_operation_variable_directives(aTHX_ meta_hv);
   doc_sv = gql_graphqljs_patch_document(aTHX_ doc_sv, meta_sv);
+  SvREFCNT_dec(meta_sv);
   if (SvTRUE(no_location_sv)) {
     return doc_sv;
   }
@@ -3715,7 +3732,8 @@ gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv,
   state_sv = gqljs_new_lazy_state_sv(
     aTHX_
     ir_document,
-    SvTRUE(no_location_sv) ? NULL : source_sv,
+    source_sv,
+    !SvTRUE(no_location_sv),
     lazy_location_sv,
     compact_location_sv
   );
@@ -6359,6 +6377,7 @@ gql_parse_object_value(pTHX_ gql_parser_t *p, int is_const) {
     SV *name = gql_parse_name(aTHX_ p, "Expected name");
     gql_expect(aTHX_ p, TOK_COLON, NULL);
     gql_store_sv(hv, SvPV_nolen(name), gql_parse_value(aTHX_ p, is_const));
+    SvREFCNT_dec(name);
   }
   gql_expect(aTHX_ p, TOK_RBRACE, NULL);
   return newRV_noinc((SV *)hv);
@@ -6435,6 +6454,7 @@ gql_parse_arguments(pTHX_ gql_parser_t *p, int is_const) {
     SV *name = gql_parse_name(aTHX_ p, "Expected name");
     gql_expect(aTHX_ p, TOK_COLON, NULL);
     gql_store_sv(hv, SvPV_nolen(name), gql_parse_value(aTHX_ p, is_const));
+    SvREFCNT_dec(name);
   }
   gql_expect(aTHX_ p, TOK_RPAREN, NULL);
   return newRV_noinc((SV *)hv);
@@ -6502,6 +6522,7 @@ gql_parse_field(pTHX_ gql_parser_t *p) {
     HV *selhv = (HV *)SvRV(sel);
     SV **svp = hv_fetch(selhv, "selections", 10, 0);
     gql_store_sv(hv, "selections", newSVsv(*svp));
+    SvREFCNT_dec(sel);
   }
   gql_store_sv(hv, "kind", newSVpv("field", 0));
   if (had_selection_set) {
@@ -6535,6 +6556,7 @@ gql_parse_selection(pTHX_ gql_parser_t *p) {
         HV *selhv = (HV *)SvRV(sel);
         SV **svp = hv_fetch(selhv, "selections", 10, 0);
         gql_store_sv(hv, "selections", newSVsv(*svp));
+        SvREFCNT_dec(sel);
       }
       gql_store_sv(hv, "kind", newSVpv("inline_fragment", 0));
       gql_store_current_location(aTHX_ p, hv);
@@ -6545,6 +6567,7 @@ gql_parse_selection(pTHX_ gql_parser_t *p) {
       HV *selhv = (HV *)SvRV(sel);
       SV **svp = hv_fetch(selhv, "selections", 10, 0);
       gql_store_sv(hv, "selections", newSVsv(*svp));
+      SvREFCNT_dec(sel);
       gql_store_sv(hv, "kind", newSVpv("inline_fragment", 0));
       gql_store_current_location(aTHX_ p, hv);
       return newRV_noinc((SV *)hv);
@@ -6556,6 +6579,7 @@ gql_parse_selection(pTHX_ gql_parser_t *p) {
         HV *selhv = (HV *)SvRV(sel);
         SV **svp = hv_fetch(selhv, "selections", 10, 0);
         gql_store_sv(hv, "selections", newSVsv(*svp));
+        SvREFCNT_dec(sel);
       }
       gql_store_sv(hv, "kind", newSVpv("inline_fragment", 0));
       gql_store_current_location(aTHX_ p, hv);
@@ -6594,6 +6618,7 @@ gql_parse_variable_definitions(pTHX_ gql_parser_t *p) {
       gql_store_sv(def, "default_value", gql_parse_value(aTHX_ p, 1));
     }
     gql_store_sv(hv, SvPV_nolen(name), newRV_noinc((SV *)def));
+    SvREFCNT_dec(name);
   }
   gql_expect(aTHX_ p, TOK_RPAREN, NULL);
   {
@@ -6629,6 +6654,7 @@ gql_parse_operation_definition(pTHX_ gql_parser_t *p) {
     HV *selhv = (HV *)SvRV(sel);
     SV **svp = hv_fetch(selhv, "selections", 10, 0);
     gql_store_sv(hv, "selections", newSVsv(*svp));
+    SvREFCNT_dec(sel);
     gql_store_sv(hv, "kind", newSVpv("operation", 0));
     gql_store_current_location(aTHX_ p, hv);
     return newRV_noinc((SV *)hv);
@@ -6646,6 +6672,7 @@ gql_parse_operation_definition(pTHX_ gql_parser_t *p) {
     HV *varhv = (HV *)SvRV(vars);
     SV **svp = hv_fetch(varhv, "variables", 9, 0);
     gql_store_sv(hv, "variables", newSVsv(*svp));
+    SvREFCNT_dec(vars);
   }
   if (p->kind == TOK_AT) {
     gql_store_sv(hv, "directives", gql_parse_directives(aTHX_ p));
@@ -6655,6 +6682,7 @@ gql_parse_operation_definition(pTHX_ gql_parser_t *p) {
     HV *selhv = (HV *)SvRV(sel);
     SV **svp = hv_fetch(selhv, "selections", 10, 0);
     gql_store_sv(hv, "selections", newSVsv(*svp));
+    SvREFCNT_dec(sel);
   }
   gql_store_sv(hv, "kind", newSVpv("operation", 0));
   gql_store_current_location(aTHX_ p, hv);
@@ -6679,6 +6707,7 @@ gql_parse_fragment_definition(pTHX_ gql_parser_t *p) {
     HV *selhv = (HV *)SvRV(sel);
     SV **svp = hv_fetch(selhv, "selections", 10, 0);
     gql_store_sv(hv, "selections", newSVsv(*svp));
+    SvREFCNT_dec(sel);
   }
   gql_store_sv(hv, "kind", newSVpv("fragment", 0));
   gql_store_current_location(aTHX_ p, hv);
@@ -6721,6 +6750,10 @@ gql_parse_input_value_definition(pTHX_ gql_parser_t *p) {
   {
     HV *wrap = newHV();
     gql_store_sv(wrap, SvPV_nolen(name), newRV_noinc((SV *)def));
+    SvREFCNT_dec(name);
+    if (SvOK(description)) {
+      SvREFCNT_dec(description);
+    }
     return newRV_noinc((SV *)wrap);
   }
 }
@@ -6738,6 +6771,7 @@ gql_parse_arguments_definition(pTHX_ gql_parser_t *p) {
     hv_iterinit(ihv);
     HE *he = hv_iternext(ihv);
     gql_store_sv(args, HeKEY(he), newSVsv(HeVAL(he)));
+    SvREFCNT_dec(item);
   }
   gql_expect(aTHX_ p, TOK_RPAREN, NULL);
   {
@@ -6757,6 +6791,7 @@ gql_parse_field_definition(pTHX_ gql_parser_t *p) {
     HV *ahv = (HV *)SvRV(args);
     SV **svp = hv_fetch(ahv, "args", 4, 0);
     gql_store_sv(def, "args", newSVsv(*svp));
+    SvREFCNT_dec(args);
   }
   gql_expect(aTHX_ p, TOK_COLON, NULL);
   gql_store_sv(def, "type", gql_parse_type_reference(aTHX_ p));
@@ -6771,6 +6806,10 @@ gql_parse_field_definition(pTHX_ gql_parser_t *p) {
   {
     HV *wrap = newHV();
     gql_store_sv(wrap, SvPV_nolen(name), newRV_noinc((SV *)def));
+    SvREFCNT_dec(name);
+    if (SvOK(description)) {
+      SvREFCNT_dec(description);
+    }
     return newRV_noinc((SV *)wrap);
   }
 }
@@ -6872,6 +6911,7 @@ gql_parse_object_type_definition(pTHX_ gql_parser_t *p, const char *kind) {
         hv_iterinit(ihv);
         HE *he = hv_iternext(ihv);
         gql_store_sv(fields, HeKEY(he), newSVsv(HeVAL(he)));
+        SvREFCNT_dec(item);
       }
       gql_expect(aTHX_ p, TOK_RBRACE, NULL);
     }
@@ -6964,6 +7004,10 @@ gql_parse_enum_type_definition(pTHX_ gql_parser_t *p) {
         gql_store_sv(value_hv, "description", newSVsv(*svp));
       }
       gql_store_sv(values, name_str, newRV_noinc((SV *)value_hv));
+      SvREFCNT_dec(name);
+      if (SvOK(description)) {
+        SvREFCNT_dec(description);
+      }
     }
     gql_expect(aTHX_ p, TOK_RBRACE, NULL);
   }
@@ -6989,6 +7033,7 @@ gql_parse_directive_definition(pTHX_ gql_parser_t *p) {
     HV *ahv = (HV *)SvRV(args);
     SV **svp = hv_fetch(ahv, "args", 4, 0);
     gql_store_sv(hv, "args", newSVsv(*svp));
+    SvREFCNT_dec(args);
   }
   if (!gql_peek_name(p, "on")) {
     gql_throw(aTHX_ p, p->tok_start, "Expected \"on\"");
@@ -7046,6 +7091,9 @@ gql_parse_type_system_definition(pTHX_ gql_parser_t *p, SV *description) {
     HV *desc_hv = (HV *)SvRV(description);
     SV **svp = hv_fetch(desc_hv, "description", 11, 0);
     gql_store_sv(node_hv, "description", newSVsv(*svp));
+  }
+  if (SvOK(description)) {
+    SvREFCNT_dec(description);
   }
   return node;
 }

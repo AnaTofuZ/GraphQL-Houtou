@@ -4,6 +4,7 @@
 #include "houtou_xs/graphqljs_convert.h"
 #include "houtou_xs/schema_compiler.h"
 #include "houtou_xs/validation.h"
+#include "houtou_xs/execution.h"
 #include "houtou_xs/ir_engine.h"
 #include "houtou_xs/legacy_compat.h"
 
@@ -218,5 +219,31 @@ validate_xs(schema, document, options = NULL)
     SV *options
   CODE:
     RETVAL = gql_validation_validate(aTHX_ schema, document, options);
+  OUTPUT:
+    RETVAL
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Execution
+
+SV *
+execute_xs(schema, document, root_value = NULL, context_value = NULL, variable_values = NULL, operation_name = NULL, field_resolver = NULL, promise_code = NULL)
+    SV *schema
+    SV *document
+    SV *root_value
+    SV *context_value
+    SV *variable_values
+    SV *operation_name
+    SV *field_resolver
+    SV *promise_code
+  CODE:
+    RETVAL = gql_execution_execute(
+      aTHX_ schema,
+      document,
+      root_value,
+      context_value,
+      variable_values,
+      operation_name,
+      field_resolver,
+      promise_code
+    );
   OUTPUT:
     RETVAL

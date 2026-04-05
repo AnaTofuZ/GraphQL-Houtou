@@ -104,9 +104,9 @@ sub _complete_value {
   my $index = 0;
   my @completed;
 
-  require GraphQL::Execution;
+  require GraphQL::Houtou::Execution::PP;
   @completed = map {
-    GraphQL::Execution::_complete_value_catching_error(
+    GraphQL::Houtou::Execution::PP::_complete_value_catching_error(
       $context,
       $item_type,
       $nodes,

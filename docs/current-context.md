@@ -1,146 +1,122 @@
 # Current Context
 
-Last updated: 2026-04-05
+This note is the compressed handoff for the current `GraphQL::Houtou` worktree.
+It should stay short enough to recover momentum quickly after context resets.
 
-This file is a handoff note for continuing work in `GraphQL-Houtou`.
-It now covers the current parser status, the Houtou-owned schema/type
-migration, the PP/XS facade layout, and the next migration steps before
-moving deeper into XS-backed validation and execution.
+## Snapshot
 
-## Current State
+- Goal has moved beyond parser-only work toward broader `GraphQL` compatibility.
+- Parser / graphql-js compatibility / lazy AST materialization remain in XS and
+  are stable enough for incremental work on schema, validation, introspection,
+  and execution.
+- XS source has been split under `src/houtou_xs/` and `lib/GraphQL/Houtou.xs`
+  is now a thin entrypoint.
+- Houtou now owns its public type / schema / directive / role namespaces
+  instead of only subclassing upstream wrappers.
 
-- `graphql-js` parser runtime is XS-first and keeps `loc` resolution in XS.
-- executable `graphql-js` parsing is `source -> IR -> graphql-js AST`.
-- executable `graphql-js` AST building now lazily materializes:
-  - `arguments`
-  - `directives`
-  - `variableDefinitions`
-  - object fields
-- lazy array materialization has an XS fast path and an explicit Perl/XS
-  contract guarded by tests.
-- parser/lazy-state safety fixes are in place:
-  - source buffer lifetime is retained by lazy state
-  - temporary parser SV leaks identified in review were fixed
-- XS implementation has been split into `src/houtou_xs/*.h` fragments and
-  `minil.toml` now points `c_source` at `src`.
-- schema compilation now has a public facade with:
-  - XS-preferred path
-  - PP fallback path
-- validation now has a public facade with:
-  - XS-preferred path
-  - PP fallback path
-- Houtou-owned public type classes now exist for:
-  - `Type`
-  - `Type::List`
-  - `Type::NonNull`
-  - `Type::Scalar`
-  - `Type::Enum`
-  - `Type::InputObject`
-  - `Type::Object`
-  - `Type::Interface`
-  - `Type::Union`
-- Houtou-owned public schema/directive classes now exist:
-  - `GraphQL::Houtou::Schema`
-  - `GraphQL::Houtou::Directive`
-- `GraphQL::Houtou::Type::Library` is now Houtou-owned instead of wrapping
-  upstream `GraphQL::Type::Library`.
+## Recent Landed Work
 
-## Recent Commits
+- `70b94cb` Move type library into Houtou namespace
+- `791b6c8` Implement Houtou list, non-null, and scalar types
+- `b061db1` Implement Houtou enum and input object types
+- `89547bd` Implement Houtou object, interface, and union types
+- `268ad5b` Migrate Houtou types onto Houtou roles
+- `2da0329` Add initial XS validation entrypoint
+- `db5f559` Move fragment cycle validation into XS
+- `0a75b01` Add validation status note and introspection wrapper
+- `1260ccc` Own introspection types in Houtou
+- `ad99ad2` Move runtime type helpers into Houtou
 
-- `1812f6b` `Split XS sources into src fragments`
-- `02f2b67` `Add initial schema compiler`
-- `d4656f0` `Split schema compiler into XS and PP paths`
-- `d3df5fa` `Add initial validation facade and rules`
-- `1f77e36` `Extend validation for subscriptions and fragments`
-- `b85b776` `Add Houtou-owned GraphQL type wrappers`
-- `70b94cb` `Move type library into Houtou namespace`
-- `791b6c8` `Implement Houtou list, non-null, and scalar types`
-- `b061db1` `Implement Houtou enum and input object types`
-- `89547bd` `Implement Houtou object, interface, and union types`
+## Current Architecture
 
-## Dirty Worktree At Save Time
+### Parser / AST
 
-The following migration work was present but not yet committed when this
-context file was updated:
+- `GraphQL::Houtou::XS::Parser` remains the primary parser backend.
+- graphql-js executable documents use IR-first parsing and XS builders.
+- Lazy materialization exists for expensive graphql-js child arrays.
 
-- `GraphQL::Houtou::Directive` converted from upstream subclass to standalone
-  Houtou implementation
-- `GraphQL::Houtou::Schema` converted from upstream subclass to standalone
-  Houtou implementation
-- PP/XS schema compiler updated to accept both upstream and Houtou schema
-  objects during transition
-- schema compiler tests updated to assert that Houtou schema/directive objects
-  no longer use upstream classes
+### Schema / Types
 
-## Build And Test
+- `GraphQL::Houtou::Schema`
+- `GraphQL::Houtou::Directive`
+- `GraphQL::Houtou::Type::*`
+- `GraphQL::Houtou::Role::*`
 
-Build:
+These are now Houtou-owned public classes and roles.
 
-```sh
-./Build build
-```
+### Schema Compiler
 
-Full test:
+- Public facade: `GraphQL::Houtou::Schema::Compiler`
+- PP reference: `GraphQL::Houtou::Schema::Compiler::PP`
+- XS entrypoint: `GraphQL::Houtou::XS::SchemaCompiler`
 
-```sh
-env PERL5LIB=/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/lib:/Users/anatofuz/src/github.com/graphql-perl/graphql-perl/lib:/Users/anatofuz/src/github.com/graphql-perl/graphql-perl/local/lib/perl5:/Users/anatofuz/src/github.com/graphql-perl/graphql-perl/local/lib/perl5/darwin-2level ./Build test
-```
+The public API prefers XS and falls back to PP.
 
-Current result:
+### Validation
 
-- `9 files / 116 tests / PASS`
+- Public facade: `GraphQL::Houtou::Validation`
+- PP reference: `GraphQL::Houtou::Validation::PP`
+- XS entrypoint: `GraphQL::Houtou::XS::Validation`
 
-## Current Validation Coverage
+Currently migrated to XS:
 
-The PP validator currently checks:
-
+- no operations supplied
 - operation name uniqueness
 - lone anonymous operation
-- root operation type existence
-- variable definitions use input types
-- undefined variable use
-- field existence
-- unknown and missing required arguments
-- fragment target existence
-- fragment cycle detection
-- directive existence, location, and uniqueness
 - subscription single root field
-- fragment spread type compatibility
-- inline fragment type compatibility
+- fragment cycle detection
 
-## Remaining Upstream GraphQL Dependencies
+Further rule-by-rule migration is currently deprioritized; see
+`docs/validation-status.md`.
 
-The largest remaining upstream dependency in Houtou public types is the role
-layer. Houtou classes still consume upstream roles such as:
+### Introspection
 
-- `GraphQL::Role::Input`
-- `GraphQL::Role::Output`
-- `GraphQL::Role::Composite`
-- `GraphQL::Role::Leaf`
-- `GraphQL::Role::Abstract`
-- `GraphQL::Role::Named`
-- `GraphQL::Role::FieldsEither`
-- `GraphQL::Role::FieldsInput`
-- `GraphQL::Role::FieldsOutput`
-- `GraphQL::Role::FieldDeprecation`
-- `GraphQL::Role::HashMappable`
+- `GraphQL::Houtou::Introspection` is now Houtou-owned.
+- Meta types and meta fields no longer depend on the upstream package name.
+- Transition-time compatibility for mixed upstream/Houtou type objects is still
+  intentionally preserved in resolver logic.
 
-Related runtime checks still inspect upstream role names via `DOES(...)` and
-Type::Tiny `ConsumerOf[...]` constraints.
+### Runtime Helpers
+
+Moved into Houtou type/role code as groundwork for execution work:
+
+- `GraphQL::Houtou::Type::Object::_collect_fields`
+- `GraphQL::Houtou::Type::Object::_fragment_condition_match`
+- `GraphQL::Houtou::Type::Object::_should_include_node`
+- `GraphQL::Houtou::Type::Object::_complete_value`
+- `GraphQL::Houtou::Type::List::_complete_value`
+- `GraphQL::Houtou::Role::Abstract::_complete_value`
+
+## Testing Snapshot
+
+Latest local verification after the initial execution scaffold:
+
+- `./Build build`
+- `./Build test`
+- `12 files / 144 tests / PASS`
 
 ## Next Work
 
-Priority order at this point:
+Execution is now the active compatibility surface.
 
-1. migrate `GraphQL::Role::*` usage into `GraphQL::Houtou::Role::*`
-2. update Houtou type/schema/compiler/validator code to depend on Houtou roles
-3. add tests that lock the Houtou role contract in place
-4. only after the role migration stabilizes, begin XS validation work
-5. after validation, move toward execution/subscription compatibility work
+Current shape:
 
-## Notes
+- public facade: `GraphQL::Houtou::Execution`
+- PP reference/oracle: `GraphQL::Houtou::Execution::PP`
+- XS entrypoint: `GraphQL::Houtou::XS::Execution`
 
-- keep parser/runtime verification using `./Build build` and `./Build test`
-- use PP implementations as behavior oracles before moving hot paths to XS
-- preserve compatibility with upstream `GraphQL` inputs during transition,
-  but keep the public Houtou namespace authoritative
+The first stage now exists and prefers XS publicly while delegating to PP
+internally, matching the schema compiler and validation migration pattern.
+
+Key constraint:
+
+- upstream `GraphQL::Execution` cannot be reused directly as the public entry
+  point because it type-checks against upstream `GraphQL::Schema`.
+- Houtou runtime helpers should stop calling upstream execution internals and
+  instead call Houtou-owned execution helpers.
+
+Immediate next step:
+
+- migrate real execution hot paths from `GraphQL::Houtou::Execution::PP`
+  into `src/houtou_xs/execution.h` incrementally, starting with prepared
+  context build and field execution helpers.

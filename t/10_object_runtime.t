@@ -127,7 +127,7 @@ subtest 'list runtime completion merges child values' => sub {
   my $got;
 
   no warnings 'redefine';
-  local *GraphQL::Execution::_complete_value_catching_error = sub {
+  local *GraphQL::Houtou::Execution::PP::_complete_value_catching_error = sub {
     my ($context, $return_type, $nodes, $info, $path, $value) = @_;
     return +{ data => uc($value) };
   };
@@ -148,7 +148,7 @@ subtest 'interface runtime completion resolves to object type' => sub {
   my $got;
 
   no warnings 'redefine';
-  local *GraphQL::Execution::_execute_fields = sub {
+  local *GraphQL::Houtou::Execution::PP::_execute_fields = sub {
     my ($ctx, $type, $result) = @_;
     return +{ data => { runtime_type => $type->name, payload => $result->{name} } };
   };
@@ -178,7 +178,7 @@ subtest 'union runtime completion resolves to object type' => sub {
   my $got;
 
   no warnings 'redefine';
-  local *GraphQL::Execution::_execute_fields = sub {
+  local *GraphQL::Houtou::Execution::PP::_execute_fields = sub {
     my ($ctx, $type, $result) = @_;
     return +{ data => { runtime_type => $type->name, payload => $result->{name} } };
   };

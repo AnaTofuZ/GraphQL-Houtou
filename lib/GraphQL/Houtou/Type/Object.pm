@@ -141,8 +141,8 @@ sub _complete_value {
     );
   }
 
-  require GraphQL::Execution;
-  return GraphQL::Execution::_execute_fields($context, $self, $result, $path, $subfield_nodes);
+  require GraphQL::Houtou::Execution::PP;
+  return GraphQL::Houtou::Execution::PP::_execute_fields($context, $self, $result, $path, $subfield_nodes);
 }
 
 has to_doc => (

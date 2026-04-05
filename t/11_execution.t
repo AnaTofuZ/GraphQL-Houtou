@@ -50,6 +50,10 @@ my $Query = GraphQL::Houtou::Type::Object->new(
         };
       },
     },
+    boom => {
+      type => $String,
+      resolve => sub { die "boom\n" },
+    },
   },
 );
 
@@ -163,6 +167,17 @@ subtest 'xs field loop matches pp field loop' => sub {
   );
 
   is_deeply $xs, $pp, 'xs field loop matches pp field loop';
+};
+
+subtest 'xs execution coerces resolver exceptions into graphql errors' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $result = GraphQL::Houtou::XS::Execution::execute_xs($schema, '{ boom }');
+
+  is $result->{data}{boom}, undef, 'errored field becomes undef';
+  is ref($result->{errors}), 'ARRAY', 'errors array is present';
+  is scalar @{ $result->{errors} }, 1, 'single error is returned';
+  like $result->{errors}[0]{message}, qr/boom/, 'resolver error message is preserved';
 };
 
 done_testing;

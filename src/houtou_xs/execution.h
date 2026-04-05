@@ -10,6 +10,35 @@ gql_execution_require_pp(pTHX) {
 }
 
 static SV *
+gql_execution_call_graphql_error_coerce(pTHX_ SV *error) {
+  dSP;
+  int count;
+  SV *ret;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(error)));
+  PUTBACK;
+
+  count = call_pv("GraphQL::Error::coerce", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("GraphQL::Error::coerce did not return a scalar");
+  }
+
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return ret;
+}
+
+static SV *
 gql_execution_call_pp_variables_apply_defaults(pTHX_ SV *schema, SV *operation_variables, SV *variable_values) {
   dSP;
   int count;
@@ -160,8 +189,15 @@ gql_execution_call_resolver(pTHX_ SV *resolve, SV *root_value, SV *args, SV *con
   XPUSHs(sv_2mortal(newSVsv(info)));
   PUTBACK;
 
-  count = call_sv(resolve, G_SCALAR);
+  count = call_sv(resolve, G_SCALAR | G_EVAL);
   SPAGAIN;
+  if (SvTRUE(ERRSV)) {
+    SV *error = newSVsv(ERRSV);
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return gql_execution_call_graphql_error_coerce(aTHX_ error);
+  }
   if (count != 1) {
     PUTBACK;
     FREETMPS;

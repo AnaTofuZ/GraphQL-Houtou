@@ -63,6 +63,9 @@ typedef struct {
   I32 num_lines;
   struct gqljs_rewrite_index *rewrite_index;
   I32 rewrite_index_count;
+  UV last_original_pos;
+  I32 last_line_index;
+  bool has_last_line_index;
   bool lazy_location;
   bool compact_location;
 } gqljs_loc_context_t;
@@ -1847,7 +1850,17 @@ gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos) {
       : gqljs_new_loc_sv(aTHX_ 1, (IV)(original_pos + 1));
   }
 
-  {
+  if (ctx->has_last_line_index
+      && original_pos >= ctx->line_starts[ctx->last_line_index]
+      && (ctx->last_line_index + 1 >= ctx->num_lines
+          || original_pos < ctx->line_starts[ctx->last_line_index + 1])) {
+    line_index = ctx->last_line_index;
+  } else if (ctx->has_last_line_index && original_pos >= ctx->last_original_pos) {
+    line_index = ctx->last_line_index;
+    while (line_index + 1 < ctx->num_lines && ctx->line_starts[line_index + 1] <= original_pos) {
+      line_index++;
+    }
+  } else {
     I32 low = 0;
     I32 high = ctx->num_lines - 1;
     line_index = 0;
@@ -1862,6 +1875,9 @@ gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos) {
       }
     }
   }
+  ctx->last_original_pos = original_pos;
+  ctx->last_line_index = line_index;
+  ctx->has_last_line_index = 1;
 
   if (ctx->lazy_location) {
     loc_sv = gqljs_new_lazy_loc_sv(aTHX_ original_pos);
@@ -1890,6 +1906,9 @@ gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrit
   ctx->num_lines = 0;
   ctx->rewrite_index = NULL;
   ctx->rewrite_index_count = 0;
+  ctx->last_original_pos = 0;
+  ctx->last_line_index = 0;
+  ctx->has_last_line_index = 0;
   ctx->lazy_location = 0;
   ctx->compact_location = 0;
 
@@ -1979,6 +1998,9 @@ gqljs_loc_context_destroy(gqljs_loc_context_t *ctx) {
   ctx->num_lines = 0;
   ctx->rewrite_index = NULL;
   ctx->rewrite_index_count = 0;
+  ctx->last_original_pos = 0;
+  ctx->last_line_index = 0;
+  ctx->has_last_line_index = 0;
   ctx->lazy_location = 0;
   ctx->compact_location = 0;
 }

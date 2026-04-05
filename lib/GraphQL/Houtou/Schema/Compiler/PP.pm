@@ -85,9 +85,9 @@ sub _compile_named_type {
   } elsif ($type->isa('GraphQL::Type::Union')) {
     $compiled->{types} = [ map $_->name, @{ $type->get_types || [] } ];
     $compiled->{resolve_type} = $type->resolve_type if $type->resolve_type;
-  } elsif ($type->isa('GraphQL::Type::InputObject')) {
+  } elsif ($type->isa('GraphQL::Type::InputObject') || $type->isa('GraphQL::Houtou::Type::InputObject')) {
     $compiled->{fields} = _compile_input_fields($type->fields || {});
-  } elsif ($type->isa('GraphQL::Type::Enum')) {
+  } elsif ($type->isa('GraphQL::Type::Enum') || $type->isa('GraphQL::Houtou::Type::Enum')) {
     $compiled->{values} = _compile_enum_values($type->values || {});
   } elsif ($type->isa('GraphQL::Type::Scalar') || $type->isa('GraphQL::Houtou::Type::Scalar')) {
     $compiled->{serialize} = $type->serialize if $type->serialize;
@@ -232,8 +232,8 @@ sub _named_type_kind {
   return 'OBJECT' if $type->isa('GraphQL::Type::Object');
   return 'INTERFACE' if $type->isa('GraphQL::Type::Interface');
   return 'UNION' if $type->isa('GraphQL::Type::Union');
-  return 'ENUM' if $type->isa('GraphQL::Type::Enum');
-  return 'INPUT_OBJECT' if $type->isa('GraphQL::Type::InputObject');
+  return 'ENUM' if $type->isa('GraphQL::Type::Enum') || $type->isa('GraphQL::Houtou::Type::Enum');
+  return 'INPUT_OBJECT' if $type->isa('GraphQL::Type::InputObject') || $type->isa('GraphQL::Houtou::Type::InputObject');
 
   die "unknown GraphQL named type class @{[ref $type]}\n";
 }

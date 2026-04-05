@@ -158,10 +158,12 @@ gql_schema_named_type_kind(SV *type_sv) {
   if (sv_derived_from(type_sv, "GraphQL::Type::Union")) {
     return "UNION";
   }
-  if (sv_derived_from(type_sv, "GraphQL::Type::Enum")) {
+  if (sv_derived_from(type_sv, "GraphQL::Type::Enum")
+      || sv_derived_from(type_sv, "GraphQL::Houtou::Type::Enum")) {
     return "ENUM";
   }
-  if (sv_derived_from(type_sv, "GraphQL::Type::InputObject")) {
+  if (sv_derived_from(type_sv, "GraphQL::Type::InputObject")
+      || sv_derived_from(type_sv, "GraphQL::Houtou::Type::InputObject")) {
     return "INPUT_OBJECT";
   }
 

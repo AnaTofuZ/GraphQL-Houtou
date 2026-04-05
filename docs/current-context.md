@@ -39,6 +39,12 @@ It should stay short enough to recover momentum quickly after context resets.
 - `4bfe85d` Handle simple object directives in XS
 - `a0b8d35` Handle simple fragments in XS object completion
 - `a75af49` Support object completion fast paths in XS
+- `fdfba8c` Add XS abstract completion fast paths
+- `3dc64b4` Support default abstract completion in XS
+- `5c42d7d` Expand XS list completion coverage
+- `91451a7` Skip irrelevant concrete fragments in XS
+- `171a072` Handle execution callback exceptions in XS
+- `758f0f9` Normalize promise code hooks
 
 ## Current Architecture
 
@@ -124,14 +130,20 @@ Current XS-owned pieces:
   - simple `@include` / `@skip`
   - simple inline fragments
   - simple fragment spreads
-  - `is_type_of` happy path
+  - abstract fragment conditions via `schema->is_possible_type`
+  - `is_type_of` happy path / false / exception paths
+  - abstract type completion happy paths
+    - explicit `resolve_type`
+    - default `get_possible_types` + `is_type_of`
 
 Still delegated to PP helpers:
 
 - full argument coercion fallback
-- abstract type completion
 - complex object/list completion fallback
 - promise-heavy completion paths
+- promise-backed execution now keeps upstream-style `promise_code` and allows
+  optional `then` / `is_promise` hooks so the caller can adapt arbitrary
+  promise libraries without Houtou hardcoding backend names
 
 ## Testing Snapshot
 
@@ -144,7 +156,7 @@ Latest local verification:
 - Latest local verification:
   - `./Build build`
   - `./Build test`
-  - `12 files / 157 tests / PASS`
+  - `13 files / 170 tests / PASS`
 
 ## Next Work
 
@@ -160,5 +172,13 @@ Key constraint:
 
 Immediate next step:
 
-- move abstract type completion happy paths into `src/houtou_xs/execution.h`
-- keep complex union/interface validation and promise-heavy completion in PP
+- benchmark practical execute workloads against upstream `GraphQL`
+- keep promise-heavy execution in PP for now
+- continue shrinking common-case PP fallbacks only where benchmarks justify it
+- benchmark analysis shows `simple_scalar` on prebuilt AST is still limited by
+  fixed overhead rather than deep execution work
+- next execution-focused optimization candidates are:
+  - reduce `ResolveInfo` construction cost
+  - add a thinner no-args leaf-field fast path
+  - move root `_collect_fields()` into XS
+  - trim tiny leaf-only result merge overhead

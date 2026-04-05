@@ -9,6 +9,7 @@ Operational handoff notes, exact commands, and latest local benchmark snapshot a
 kept in `docs/current-context.md`.
 `GraphQL` distribution 互換の達成条件と今後の実装順は
 `docs/compatibility-roadmap.md` を参照。
+execution の実用 benchmark は `docs/execution-benchmark.md` を参照。
 
 この distribution の基本方針は次のとおり。
 

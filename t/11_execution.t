@@ -180,4 +180,16 @@ subtest 'xs execution coerces resolver exceptions into graphql errors' => sub {
   like $result->{errors}[0]{message}, qr/boom/, 'resolver error message is preserved';
 };
 
+subtest 'xs argument helper fast-path matches pp for no-arg field' => sub {
+  require GraphQL::Houtou::XS::Execution;
+  require GraphQL::Houtou::Execution::PP;
+
+  my $field_def = $schema->query->fields->{hello};
+  my $node = { name => 'hello' };
+  my $pp = GraphQL::Houtou::Execution::PP::_get_argument_values_pp($field_def, $node, {});
+  my $xs = GraphQL::Houtou::XS::Execution::_get_argument_values_xs($field_def, $node, {});
+
+  is_deeply $xs, $pp, 'no-arg field is handled identically';
+};
+
 done_testing;

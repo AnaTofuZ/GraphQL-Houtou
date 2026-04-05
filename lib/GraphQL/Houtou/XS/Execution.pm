@@ -10,6 +10,7 @@ our $VERSION = '0.01';
 our @EXPORT_OK = qw(
   execute_xs
   _execute_fields_xs
+  _get_argument_values_xs
 );
 
 require GraphQL::Houtou::XS::Parser;

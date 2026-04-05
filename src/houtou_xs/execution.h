@@ -229,13 +229,13 @@ gql_execution_call_pp_get_argument_values(pTHX_ SV *def, SV *node, SV *variable_
   XPUSHs(sv_2mortal(variable_values ? newSVsv(variable_values) : newSV(0)));
   PUTBACK;
 
-  count = call_pv("GraphQL::Houtou::Execution::PP::_get_argument_values", G_SCALAR);
+  count = call_pv("GraphQL::Houtou::Execution::PP::_get_argument_values_pp", G_SCALAR);
   SPAGAIN;
   if (count != 1) {
     PUTBACK;
     FREETMPS;
     LEAVE;
-    croak("GraphQL::Houtou::Execution::PP::_get_argument_values did not return a scalar");
+    croak("GraphQL::Houtou::Execution::PP::_get_argument_values_pp did not return a scalar");
   }
 
   ret = newSVsv(POPs);
@@ -499,6 +499,94 @@ gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_d
   gql_store_sv(info_hv, "promise_code", (promise_code_svp && SvOK(*promise_code_svp)) ? newSVsv(*promise_code_svp) : newSV(0));
 
   return newRV_noinc((SV *)info_hv);
+}
+
+static SV *
+gql_execution_get_argument_values_xs_impl(pTHX_ SV *def, SV *node, SV *variable_values) {
+  HV *def_hv;
+  HV *node_hv;
+  SV **arg_defs_svp;
+  SV **arg_nodes_svp;
+  HV *arg_defs_hv;
+  HV *arg_nodes_hv = NULL;
+  HV *coerced_hv = newHV();
+  HE *he;
+
+  if (!SvROK(def) || SvTYPE(SvRV(def)) != SVt_PVHV) {
+    SvREFCNT_dec((SV *)coerced_hv);
+    return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+  }
+  if (!SvROK(node) || SvTYPE(SvRV(node)) != SVt_PVHV) {
+    SvREFCNT_dec((SV *)coerced_hv);
+    return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+  }
+
+  def_hv = (HV *)SvRV(def);
+  node_hv = (HV *)SvRV(node);
+  arg_defs_svp = hv_fetch(def_hv, "args", 4, 0);
+  arg_nodes_svp = hv_fetch(node_hv, "arguments", 9, 0);
+
+  if (!arg_defs_svp || !SvOK(*arg_defs_svp)) {
+    return newRV_noinc((SV *)coerced_hv);
+  }
+  if (!SvROK(*arg_defs_svp) || SvTYPE(SvRV(*arg_defs_svp)) != SVt_PVHV) {
+    SvREFCNT_dec((SV *)coerced_hv);
+    return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+  }
+
+  arg_defs_hv = (HV *)SvRV(*arg_defs_svp);
+  if (HvUSEDKEYS(arg_defs_hv) == 0) {
+    return newRV_noinc((SV *)coerced_hv);
+  }
+
+  if (arg_nodes_svp && SvOK(*arg_nodes_svp)) {
+    if (!SvROK(*arg_nodes_svp) || SvTYPE(SvRV(*arg_nodes_svp)) != SVt_PVHV) {
+      SvREFCNT_dec((SV *)coerced_hv);
+      return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+    }
+    arg_nodes_hv = (HV *)SvRV(*arg_nodes_svp);
+  }
+
+  hv_iterinit(arg_defs_hv);
+  while ((he = hv_iternext(arg_defs_hv))) {
+    SV *name_sv = hv_iterkeysv(he);
+    SV *arg_def_sv = hv_iterval(arg_defs_hv, he);
+    HV *arg_def_hv;
+    SV **default_svp;
+    SV **type_svp;
+    HE *arg_node_he = NULL;
+
+    if (!SvROK(arg_def_sv) || SvTYPE(SvRV(arg_def_sv)) != SVt_PVHV) {
+      SvREFCNT_dec((SV *)coerced_hv);
+      return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+    }
+
+    arg_def_hv = (HV *)SvRV(arg_def_sv);
+    default_svp = hv_fetch(arg_def_hv, "default_value", 13, 0);
+    type_svp = hv_fetch(arg_def_hv, "type", 4, 0);
+    if (arg_nodes_hv) {
+      arg_node_he = hv_fetch_ent(arg_nodes_hv, name_sv, 0, 0);
+    }
+
+    if (arg_node_he) {
+      SvREFCNT_dec((SV *)coerced_hv);
+      return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+    }
+
+    if (default_svp && SvOK(*default_svp)) {
+      (void)hv_store_ent(coerced_hv, name_sv, newSVsv(*default_svp), 0);
+      continue;
+    }
+
+    if (type_svp && SvOK(*type_svp)
+        && (sv_derived_from(*type_svp, "GraphQL::Houtou::Type::NonNull")
+            || sv_derived_from(*type_svp, "GraphQL::Type::NonNull"))) {
+      SvREFCNT_dec((SV *)coerced_hv);
+      return gql_execution_call_pp_get_argument_values(aTHX_ def, node, variable_values);
+    }
+  }
+
+  return newRV_noinc((SV *)coerced_hv);
 }
 
 static SV *

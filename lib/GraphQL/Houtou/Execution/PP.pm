@@ -24,6 +24,7 @@ our @EXPORT_OK = qw(
 
 my $JSON = JSON::MaybeXS->new->allow_nonref;
 my $HAS_XS_EXECUTE_FIELDS;
+my $HAS_XS_ARGUMENT_VALUES;
 
 sub execute {
   my (
@@ -381,6 +382,21 @@ sub _located_error {
 }
 
 sub _get_argument_values {
+  if (!defined $HAS_XS_ARGUMENT_VALUES) {
+    $HAS_XS_ARGUMENT_VALUES = eval {
+      require GraphQL::Houtou::XS::Execution;
+      GraphQL::Houtou::XS::Execution->can('_get_argument_values_xs');
+    } ? 1 : 0;
+  }
+
+  if ($HAS_XS_ARGUMENT_VALUES) {
+    return GraphQL::Houtou::XS::Execution::_get_argument_values_xs(@_);
+  }
+
+  return _get_argument_values_pp(@_);
+}
+
+sub _get_argument_values_pp {
   my ($def, $node, $variable_values) = @_;
   my $arg_defs = $def->{args};
   my $arg_nodes = $node->{arguments};

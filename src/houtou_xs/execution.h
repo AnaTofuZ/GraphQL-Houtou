@@ -555,10 +555,11 @@ gql_execution_call_graphql_error_coerce(pTHX_ SV *error) {
   ENTER;
   SAVETMPS;
   PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVpv("GraphQL::Error", 0)));
   XPUSHs(sv_2mortal(newSVsv(error)));
   PUTBACK;
 
-  count = call_pv("GraphQL::Error::coerce", G_SCALAR);
+  count = call_method("coerce", G_SCALAR);
   SPAGAIN;
   if (count != 1) {
     PUTBACK;
@@ -963,6 +964,42 @@ gql_execution_call_pp_type_will_accept(pTHX_ SV *arg_type, SV *var_type) {
 }
 
 static SV *
+gql_execution_call_pp_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value, SV *path, SV *fields) {
+  dSP;
+  int count;
+  SV *ret;
+  static CV *cv = NULL;
+
+  if (!cv) {
+    cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_execute_fields");
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  EXTEND(SP, 5);
+  XPUSHs(gql_execution_mortal_sv_ref(context));
+  XPUSHs(gql_execution_mortal_sv_ref(parent_type));
+  XPUSHs(gql_execution_mortal_sv_ref(root_value));
+  XPUSHs(gql_execution_mortal_sv_ref(path));
+  XPUSHs(gql_execution_mortal_sv_ref(fields));
+  PUTBACK;
+  count = call_sv((SV *)cv, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("_execute_fields did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
 gql_execution_call_xs_then_complete_value(pTHX_ SV *context, SV *return_type, SV *nodes, SV *info, SV *path, SV *promise) {
   dSP;
   int count;
@@ -1036,6 +1073,199 @@ gql_execution_call_xs_then_merge_completed_list(pTHX_ SV *promise_code, SV *prom
   FREETMPS;
   LEAVE;
   return ret;
+}
+
+static SV *
+gql_execution_call_xs_then_resolve_operation_error(pTHX_ SV *promise_code, SV *promise) {
+  dSP;
+  int count;
+  SV *ret;
+  static CV *cv = NULL;
+
+  if (!cv) {
+    cv = get_cv("GraphQL::Houtou::XS::Execution::_then_resolve_operation_error_xs", 0);
+    if (!cv) {
+      croak("unable to resolve GraphQL::Houtou::XS::Execution::_then_resolve_operation_error_xs");
+    }
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  EXTEND(SP, 2);
+  XPUSHs(gql_execution_mortal_sv_ref(promise_code));
+  XPUSHs(gql_execution_mortal_sv_ref(promise));
+  PUTBACK;
+  count = call_sv((SV *)cv, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("_then_resolve_operation_error_xs did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
+gql_execution_default_field_resolver_sv(pTHX) {
+  static CV *cv = NULL;
+
+  gql_execution_require_pp(aTHX);
+  if (!cv) {
+    cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_default_field_resolver");
+  }
+
+  return newRV_inc((SV *)cv);
+}
+
+static SV *
+gql_execution_call_schema_root_type(pTHX_ SV *schema, const char *op_type) {
+  dSP;
+  int count;
+  SV *ret;
+  STRLEN op_type_len = strlen(op_type);
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(gql_execution_mortal_sv_ref(schema));
+  PUTBACK;
+  count = call_method(op_type, G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV)) {
+    SV *error = newSVsv(ERRSV);
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak_sv(error);
+  }
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("schema root type method %s did not return a scalar", op_type);
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  if (op_type_len == 0) {
+    croak("operation type must not be empty");
+  }
+
+  return ret;
+}
+
+static SV *
+gql_execution_execute_prepared_context_xs_impl(pTHX_ SV *context) {
+  HV *context_hv;
+  SV **field_resolver_svp;
+  SV **operation_svp;
+  SV **root_value_svp;
+  SV **schema_svp;
+  SV **promise_code_svp;
+  SV *promise_code_sv = &PL_sv_undef;
+  SV *operation_sv;
+  HV *operation_hv;
+  SV **op_type_svp;
+  const char *op_type = "query";
+  SV *type_sv;
+  SV **selections_svp;
+  SV *fields_sv;
+  SV *path_sv;
+  SV *result_sv;
+
+  if (!context || !SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
+    croak("context must be a hash reference");
+  }
+
+  context_hv = (HV *)SvRV(context);
+  field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
+  if (!field_resolver_svp || !SvOK(*field_resolver_svp)) {
+    gql_store_sv(context_hv, "field_resolver", gql_execution_default_field_resolver_sv(aTHX));
+    field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
+  }
+
+  operation_svp = hv_fetch(context_hv, "operation", 9, 0);
+  root_value_svp = hv_fetch(context_hv, "root_value", 10, 0);
+  schema_svp = hv_fetch(context_hv, "schema", 6, 0);
+  promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  if (!operation_svp || !SvOK(*operation_svp) || !schema_svp || !SvOK(*schema_svp)) {
+    croak("execution context is missing operation or schema");
+  }
+
+  if (promise_code_svp && SvOK(*promise_code_svp)) {
+    promise_code_sv = *promise_code_svp;
+  }
+
+  operation_sv = *operation_svp;
+  if (!SvROK(operation_sv) || SvTYPE(SvRV(operation_sv)) != SVt_PVHV) {
+    croak("operation must be a hash reference");
+  }
+  operation_hv = (HV *)SvRV(operation_sv);
+  op_type_svp = hv_fetch(operation_hv, "operationType", 13, 0);
+  if (op_type_svp && SvOK(*op_type_svp)) {
+    op_type = SvPV_nolen(*op_type_svp);
+  }
+
+  type_sv = gql_execution_call_schema_root_type(aTHX_ *schema_svp, op_type);
+  if (!SvOK(type_sv) || type_sv == &PL_sv_undef) {
+    SV *error_result = gql_execution_wrap_error_xs(aTHX_ newSVpvf("No %s in schema", op_type));
+    if (type_sv != &PL_sv_undef) {
+      SvREFCNT_dec(type_sv);
+    }
+    return error_result;
+  }
+
+  selections_svp = hv_fetch(operation_hv, "selections", 10, 0);
+  if (!selections_svp || !SvOK(*selections_svp)) {
+    SvREFCNT_dec(type_sv);
+    croak("operation has no selections");
+  }
+
+  fields_sv = gql_execution_collect_fields_xs(aTHX_ context, type_sv, *selections_svp);
+  path_sv = newRV_noinc((SV *)newAV());
+  if (SvOK(promise_code_sv)) {
+    result_sv = gql_execution_call_pp_execute_fields(
+      aTHX_ context,
+      type_sv,
+      (root_value_svp && SvOK(*root_value_svp)) ? *root_value_svp : &PL_sv_undef,
+      path_sv,
+      fields_sv
+    );
+  } else {
+    result_sv = gql_execution_execute_fields(
+      aTHX_ context,
+      type_sv,
+      (root_value_svp && SvOK(*root_value_svp)) ? *root_value_svp : &PL_sv_undef,
+      path_sv,
+      fields_sv
+    );
+  }
+
+  SvREFCNT_dec(path_sv);
+  SvREFCNT_dec(fields_sv);
+  SvREFCNT_dec(type_sv);
+
+  if (SvOK(promise_code_sv) && result_sv && SvROK(result_sv)) {
+    SV *is_promise_sv = gql_promise_call_is_promise(aTHX_ promise_code_sv, result_sv);
+    int is_promise = SvTRUE(is_promise_sv);
+
+    SvREFCNT_dec(is_promise_sv);
+    if (is_promise) {
+      SV *wrapped = gql_execution_call_xs_then_resolve_operation_error(aTHX_ promise_code_sv, result_sv);
+      SvREFCNT_dec(result_sv);
+      return wrapped;
+    }
+  }
+
+  return result_sv;
 }
 
 static SV *
@@ -1938,7 +2168,7 @@ gql_execution_execute(pTHX_ SV *schema, SV *document, SV *root_value, SV *contex
     field_resolver,
     promise_code
   );
-  result = gql_execution_call_pp_execute_prepared_context(aTHX_ context);
+  result = gql_execution_execute_prepared_context_xs_impl(aTHX_ context);
   gql_execution_pp_bridge_profile_report(aTHX_ "execute");
 
   /*

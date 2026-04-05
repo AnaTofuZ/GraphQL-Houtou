@@ -135,6 +135,10 @@ subtest 'Houtou wrappers stay in the Houtou namespace' => sub {
   isa_ok $schema->query->fields->{search}{type}->of, 'GraphQL::Houtou::Type::List';
   isa_ok $schema->query->fields->{search}{args}{ids}{type}->of, 'GraphQL::Houtou::Type::NonNull';
   isa_ok $schema->directives->[-1], 'GraphQL::Houtou::Directive';
+  isa_ok $schema->name2type->{String}, 'GraphQL::Houtou::Type::Scalar';
+  ok !$schema->query->fields->{search}{type}->isa('GraphQL::Type::NonNull'), 'non-null wrapper no longer uses upstream class';
+  ok !$schema->query->fields->{search}{type}->of->isa('GraphQL::Type::List'), 'list wrapper no longer uses upstream class';
+  ok !$schema->name2type->{String}->isa('GraphQL::Type::Scalar'), 'scalar no longer uses upstream class';
 };
 
 subtest 'roots are normalized' => sub {

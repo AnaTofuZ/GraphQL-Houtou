@@ -89,7 +89,7 @@ sub _compile_named_type {
     $compiled->{fields} = _compile_input_fields($type->fields || {});
   } elsif ($type->isa('GraphQL::Type::Enum')) {
     $compiled->{values} = _compile_enum_values($type->values || {});
-  } elsif ($type->isa('GraphQL::Type::Scalar')) {
+  } elsif ($type->isa('GraphQL::Type::Scalar') || $type->isa('GraphQL::Houtou::Type::Scalar')) {
     $compiled->{serialize} = $type->serialize if $type->serialize;
     $compiled->{parse_value} = $type->parse_value if $type->parse_value;
   }
@@ -195,7 +195,7 @@ sub _compile_type_ref {
 
   die "cannot compile undefined GraphQL type reference\n" if !$type;
 
-  if ($type->isa('GraphQL::Type::NonNull')) {
+  if ($type->isa('GraphQL::Type::NonNull') || $type->isa('GraphQL::Houtou::Type::NonNull')) {
     return {
       kind => 'NON_NULL',
       of => _compile_type_ref($type->of),
@@ -205,7 +205,7 @@ sub _compile_type_ref {
     };
   }
 
-  if ($type->isa('GraphQL::Type::List')) {
+  if ($type->isa('GraphQL::Type::List') || $type->isa('GraphQL::Houtou::Type::List')) {
     return {
       kind => 'LIST',
       of => _compile_type_ref($type->of),
@@ -228,7 +228,7 @@ sub _compile_type_ref {
 sub _named_type_kind {
   my ($type) = @_;
 
-  return 'SCALAR' if $type->isa('GraphQL::Type::Scalar');
+  return 'SCALAR' if $type->isa('GraphQL::Type::Scalar') || $type->isa('GraphQL::Houtou::Type::Scalar');
   return 'OBJECT' if $type->isa('GraphQL::Type::Object');
   return 'INTERFACE' if $type->isa('GraphQL::Type::Interface');
   return 'UNION' if $type->isa('GraphQL::Type::Union');

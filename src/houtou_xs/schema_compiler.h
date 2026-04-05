@@ -145,7 +145,8 @@ gql_schema_clone_arrayref_shallow(pTHX_ SV *arrayref_sv) {
 
 static const char *
 gql_schema_named_type_kind(SV *type_sv) {
-  if (sv_derived_from(type_sv, "GraphQL::Type::Scalar")) {
+  if (sv_derived_from(type_sv, "GraphQL::Type::Scalar")
+      || sv_derived_from(type_sv, "GraphQL::Houtou::Type::Scalar")) {
     return "SCALAR";
   }
   if (sv_derived_from(type_sv, "GraphQL::Type::Object")) {
@@ -251,7 +252,8 @@ gql_schema_compile_type_ref(pTHX_ SV *type_sv) {
     croak("cannot compile undefined GraphQL type reference");
   }
 
-  if (sv_derived_from(type_sv, "GraphQL::Type::NonNull")) {
+  if (sv_derived_from(type_sv, "GraphQL::Type::NonNull")
+      || sv_derived_from(type_sv, "GraphQL::Houtou::Type::NonNull")) {
     SV *inner_sv = gql_schema_call_method0(aTHX_ type_sv, "of");
     compiled_hv = newHV();
     hv_ksplit(compiled_hv, 5);
@@ -265,7 +267,8 @@ gql_schema_compile_type_ref(pTHX_ SV *type_sv) {
     return newRV_noinc((SV *)compiled_hv);
   }
 
-  if (sv_derived_from(type_sv, "GraphQL::Type::List")) {
+  if (sv_derived_from(type_sv, "GraphQL::Type::List")
+      || sv_derived_from(type_sv, "GraphQL::Houtou::Type::List")) {
     SV *inner_sv = gql_schema_call_method0(aTHX_ type_sv, "of");
     compiled_hv = newHV();
     hv_ksplit(compiled_hv, 5);

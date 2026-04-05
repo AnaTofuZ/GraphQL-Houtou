@@ -76,7 +76,10 @@ sub _expand_type_houtou {
 sub _is_builtin_scalar_pair {
   my ($left, $right) = @_;
   return 0 if !$left || !$right;
-  return 0 if !$left->isa('GraphQL::Type::Scalar') || !$right->isa('GraphQL::Type::Scalar');
+  return 0 if !(
+    ($left->isa('GraphQL::Type::Scalar') || $left->isa('GraphQL::Houtou::Type::Scalar'))
+    && ($right->isa('GraphQL::Type::Scalar') || $right->isa('GraphQL::Houtou::Type::Scalar'))
+  );
   return 0 if !(grep { $_ eq $left->name } qw(Int Float String Boolean ID));
   return $left->name eq $right->name ? 1 : 0;
 }

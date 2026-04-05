@@ -10,9 +10,17 @@ use GraphQL::Houtou::Type::Library -all;
 use JSON::MaybeXS qw(JSON is_bool);
 use Types::Standard -all;
 
-extends 'GraphQL::Type::Scalar';
+extends 'GraphQL::Houtou::Type';
+with qw(
+  GraphQL::Role::Input
+  GraphQL::Role::Output
+  GraphQL::Role::Leaf
+  GraphQL::Role::Named
+  GraphQL::Role::FieldsEither
+);
 
 our @EXPORT_OK = qw($Int $Float $String $Boolean $ID);
+use constant DEBUG => $ENV{GRAPHQL_DEBUG};
 
 sub list {
   require GraphQL::Houtou::Type::List;
@@ -27,6 +35,25 @@ sub non_null {
 sub _leave_undef {
   my ($closure) = @_;
   sub { return undef if !defined $_[0]; goto &$closure; };
+}
+
+has serialize => (is => 'ro', isa => CodeRef, required => 1);
+has parse_value => (is => 'ro', isa => CodeRef);
+
+sub is_valid {
+  my ($self, $item) = @_;
+  return 1 if !defined $item;
+  return eval { $self->serialize->($item); 1 };
+}
+
+sub graphql_to_perl {
+  my ($self, $item) = @_;
+  return $self->parse_value->($item);
+}
+
+sub perl_to_graphql {
+  my ($self, $item) = @_;
+  return $self->serialize->($item);
 }
 
 our $Int = __PACKAGE__->new(

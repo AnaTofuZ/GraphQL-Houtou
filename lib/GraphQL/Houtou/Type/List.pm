@@ -5,8 +5,10 @@ use strict;
 use warnings;
 
 use Moo;
+use Role::Tiny ();
+use Types::Standard qw(Object Any ArrayRef Bool HashRef);
 
-extends 'GraphQL::Type::List';
+extends 'GraphQL::Houtou::Type';
 
 sub list {
   $_[0]->{_houtou_list} ||= __PACKAGE__->new(of => $_[0]);
@@ -15,6 +17,83 @@ sub list {
 sub non_null {
   require GraphQL::Houtou::Type::NonNull;
   $_[0]->{_houtou_non_null} ||= GraphQL::Houtou::Type::NonNull->new(of => $_[0]);
+}
+
+has of => (
+  is => 'ro',
+  isa => Object,
+  required => 1,
+  handles => [ qw(name) ],
+);
+
+sub BUILD {
+  my ($self) = @_;
+  my $of = $self->of;
+  Role::Tiny->apply_roles_to_object($self, grep $of->DOES($_), qw(
+    GraphQL::Role::Input
+    GraphQL::Role::Output
+  ));
+}
+
+has to_string => (
+  is => 'lazy',
+  builder => sub {
+    my ($self) = @_;
+    '[' . $self->of->to_string . ']';
+  },
+);
+
+sub is_valid {
+  my ($self, $item) = @_;
+  my $of = $self->of;
+
+  return 1 if !defined $item;
+  return if grep { !$of->is_valid($_) } @{ $self->uplift($item) };
+  return 1;
+}
+
+sub uplift {
+  my ($self, $item) = @_;
+  return $item if ref($item) eq 'ARRAY' || !defined $item;
+  return [ $item ];
+}
+
+sub graphql_to_perl {
+  my ($self, $item) = @_;
+  my $of = $self->of;
+  my $i = 0;
+  my @errors;
+  my @values;
+
+  return $item if !defined $item;
+  $item = $self->uplift($item);
+  @values = map {
+    my $value = eval { $of->graphql_to_perl($_) };
+    push @errors, qq{In element #$i: $@} if $@;
+    $i++;
+    $value;
+  } @$item;
+  die @errors if @errors;
+  return \@values;
+}
+
+sub perl_to_graphql {
+  my ($self, $item) = @_;
+  my $of = $self->of;
+  my $i = 0;
+  my @errors;
+  my @values;
+
+  return $item if !defined $item;
+  $item = $self->uplift($item);
+  @values = map {
+    my $value = eval { $of->perl_to_graphql($_) };
+    push @errors, qq{In element #$i: $@} if $@;
+    $i++;
+    $value;
+  } @$item;
+  die @errors if @errors;
+  return \@values;
 }
 
 1;

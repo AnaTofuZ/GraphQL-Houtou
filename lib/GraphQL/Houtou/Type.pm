@@ -6,11 +6,13 @@ use warnings;
 
 use Moo;
 
-extends 'GraphQL::Type';
-
 sub list {
   require GraphQL::Houtou::Type::List;
   $_[0]->{_houtou_list} ||= GraphQL::Houtou::Type::List->new(of => $_[0]);
+}
+
+sub uplift {
+  return $_[1];
 }
 
 1;

@@ -6,6 +6,7 @@
 
 static SV *gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value, SV *path, SV *fields);
 static SV *gql_execution_collect_fields_xs(pTHX_ SV *context, SV *object_type, SV *selections);
+static SV *gql_execution_call_graphql_error_but(pTHX_ SV *error, SV *locations, SV *path);
 
 static HV *
 gql_promise_code_hv(SV *promise_code) {
@@ -355,6 +356,91 @@ gql_execution_wrap_error_xs(pTHX_ SV *error) {
   av_push(errors_av, coerced);
   gql_store_sv(ret_hv, "errors", newRV_noinc((SV *)errors_av));
   return newRV_noinc((SV *)ret_hv);
+}
+
+static SV *
+gql_execution_located_error_xs(pTHX_ SV *error, SV *nodes, SV *path) {
+  dSP;
+  int count;
+  SV *coerced;
+  AV *locations_av;
+  AV *nodes_av;
+  I32 len;
+  I32 i;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVpv("GraphQL::Error", 0)));
+  XPUSHs(sv_2mortal(newSVsv(error)));
+  PUTBACK;
+  count = call_method("coerce", G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("GraphQL::Error::coerce did not return a scalar");
+  }
+  coerced = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  if (SvROK(coerced)) {
+    dSP;
+    int has_locations;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(sv_2mortal(newSVsv(coerced)));
+    PUTBACK;
+    has_locations = call_method("locations", G_SCALAR);
+    SPAGAIN;
+    if (has_locations == 1) {
+      SV *locations_sv = newSVsv(POPs);
+      PUTBACK;
+      FREETMPS;
+      LEAVE;
+      if (SvOK(locations_sv)) {
+        SvREFCNT_dec(locations_sv);
+        return coerced;
+      }
+      SvREFCNT_dec(locations_sv);
+    } else {
+      PUTBACK;
+      FREETMPS;
+      LEAVE;
+    }
+  }
+
+  if (!SvROK(nodes) || SvTYPE(SvRV(nodes)) != SVt_PVAV) {
+    return coerced;
+  }
+
+  locations_av = newAV();
+  nodes_av = (AV *)SvRV(nodes);
+  len = av_len(nodes_av);
+  for (i = 0; i <= len; i++) {
+    SV **node_svp = av_fetch(nodes_av, i, 0);
+    if (node_svp && SvROK(*node_svp) && SvTYPE(SvRV(*node_svp)) == SVt_PVHV) {
+      SV **location_svp = hv_fetch((HV *)SvRV(*node_svp), "location", 8, 0);
+      if (location_svp && SvOK(*location_svp)) {
+        av_push(locations_av, newSVsv(*location_svp));
+      }
+    }
+  }
+
+  {
+    SV *located = gql_execution_call_graphql_error_but(
+      aTHX_ coerced,
+      newRV_noinc((SV *)locations_av),
+      path
+    );
+    SvREFCNT_dec(coerced);
+    return located;
+  }
 }
 
 static void

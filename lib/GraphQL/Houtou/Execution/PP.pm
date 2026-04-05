@@ -468,6 +468,13 @@ sub _complete_value {
 
 sub _located_error {
   my ($error, $nodes, $path) = @_;
+  if (eval {
+    require GraphQL::Houtou::XS::Execution;
+    GraphQL::Houtou::XS::Execution->can('_located_error_xs');
+  }) {
+    return GraphQL::Houtou::XS::Execution::_located_error_xs($error, $nodes, $path);
+  }
+
   $error = GraphQL::Error->coerce($error);
   return $error if $error->locations;
 

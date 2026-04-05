@@ -23,6 +23,7 @@ our @EXPORT_OK = qw(
   _merge_hash_xs
   _build_response_xs
   _wrap_error_xs
+  _located_error_xs
 );
 
 require GraphQL::Houtou::XS::Parser;

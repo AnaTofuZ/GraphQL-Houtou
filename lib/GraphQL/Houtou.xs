@@ -396,3 +396,13 @@ _wrap_error_xs(error)
     RETVAL = gql_execution_wrap_error_xs(aTHX_ error);
   OUTPUT:
     RETVAL
+
+SV *
+_located_error_xs(error, nodes, path)
+    SV *error
+    SV *nodes
+    SV *path
+  CODE:
+    RETVAL = gql_execution_located_error_xs(aTHX_ error, nodes, path);
+  OUTPUT:
+    RETVAL

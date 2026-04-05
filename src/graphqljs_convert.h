@@ -313,6 +313,14 @@ gqljs_convert_legacy_selection_set_av(pTHX_ AV *av) {
 }
 
 static SV *
+gqljs_convert_legacy_empty_selection_set(pTHX) {
+  AV *empty_av = newAV();
+  SV *selection_set_sv = gqljs_convert_legacy_selection_set_av(aTHX_ empty_av);
+  SvREFCNT_dec((SV *)empty_av);
+  return selection_set_sv;
+}
+
+static SV *
 gqljs_convert_legacy_selection_sv(pTHX_ SV *selection_sv) {
   HV *src_hv;
   STRLEN kind_len;
@@ -378,7 +386,7 @@ gqljs_convert_legacy_selection_sv(pTHX_ SV *selection_sv) {
     gql_store_sv(dst_hv, "selectionSet",
       (sels_sv && SvROK(sels_sv) && SvTYPE(SvRV(sels_sv)) == SVt_PVAV)
         ? gqljs_convert_legacy_selection_set_av(aTHX_ (AV *)SvRV(sels_sv))
-        : gqljs_convert_legacy_selection_set_av(aTHX_ newAV()));
+        : gqljs_convert_legacy_empty_selection_set(aTHX));
     return newRV_noinc((SV *)dst_hv);
   }
 
@@ -826,7 +834,7 @@ gqljs_convert_legacy_executable_definition_sv(pTHX_ SV *definition_sv) {
     gql_store_sv(dst_hv, "selectionSet",
       (sels_sv && SvROK(sels_sv) && SvTYPE(SvRV(sels_sv)) == SVt_PVAV)
         ? gqljs_convert_legacy_selection_set_av(aTHX_ (AV *)SvRV(sels_sv))
-        : gqljs_convert_legacy_selection_set_av(aTHX_ newAV()));
+        : gqljs_convert_legacy_empty_selection_set(aTHX));
     return newRV_noinc((SV *)dst_hv);
   }
 
@@ -848,7 +856,7 @@ gqljs_convert_legacy_executable_definition_sv(pTHX_ SV *definition_sv) {
     gql_store_sv(dst_hv, "selectionSet",
       (sels_sv && SvROK(sels_sv) && SvTYPE(SvRV(sels_sv)) == SVt_PVAV)
         ? gqljs_convert_legacy_selection_set_av(aTHX_ (AV *)SvRV(sels_sv))
-        : gqljs_convert_legacy_selection_set_av(aTHX_ newAV()));
+        : gqljs_convert_legacy_empty_selection_set(aTHX));
     return newRV_noinc((SV *)dst_hv);
   }
 
@@ -1103,4 +1111,3 @@ gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_l
 
   return gql_graphqljs_apply_executable_loc(aTHX_ doc_sv, source_sv);
 }
-

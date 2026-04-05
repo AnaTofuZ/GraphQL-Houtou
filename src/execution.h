@@ -589,6 +589,17 @@ gql_execution_mortal_sv_ref(SV *value) {
 }
 
 static SV *
+gql_execution_share_or_copy_sv(SV *value) {
+  if (!value || !SvOK(value)) {
+    return newSV(0);
+  }
+  if (SvROK(value)) {
+    return SvREFCNT_inc_simple_NN(value);
+  }
+  return newSVsv(value);
+}
+
+static SV *
 gql_execution_call_graphql_error_but(pTHX_ SV *error, SV *locations, SV *path) {
   dSP;
   int count;
@@ -2173,22 +2184,22 @@ gql_execution_build_context(pTHX_ SV *schema, SV *ast, SV *root_value, SV *conte
     }
   }
 
-  gql_store_sv(context_hv, "schema", newSVsv(schema));
+  gql_store_sv(context_hv, "schema", gql_execution_share_or_copy_sv(schema));
   gql_store_sv(context_hv, "fragments", newRV_noinc((SV *)fragments_hv));
-  gql_store_sv(context_hv, "root_value", root_value && SvOK(root_value) ? newSVsv(root_value) : newSV(0));
-  gql_store_sv(context_hv, "context_value", context_value && SvOK(context_value) ? newSVsv(context_value) : newSV(0));
+  gql_store_sv(context_hv, "root_value", gql_execution_share_or_copy_sv(root_value));
+  gql_store_sv(context_hv, "context_value", gql_execution_share_or_copy_sv(context_value));
   gql_store_sv(context_hv, "operation", operation_sv);
   gql_store_sv(context_hv, "variable_values", applied_variables_sv);
-  gql_store_sv(context_hv, "field_resolver", field_resolver && SvOK(field_resolver) ? newSVsv(field_resolver) : newSV(0));
-  gql_store_sv(context_hv, "promise_code", promise_code && SvOK(promise_code) ? newSVsv(promise_code) : newSV(0));
+  gql_store_sv(context_hv, "field_resolver", gql_execution_share_or_copy_sv(field_resolver));
+  gql_store_sv(context_hv, "promise_code", gql_execution_share_or_copy_sv(promise_code));
   gql_store_sv(context_hv, "empty_args", newRV_noinc((SV *)newHV()));
 
-  gql_store_sv(resolve_info_base_hv, "schema", newSVsv(schema));
+  gql_store_sv(resolve_info_base_hv, "schema", gql_execution_share_or_copy_sv(schema));
   gql_store_sv(resolve_info_base_hv, "fragments", newRV_inc((SV *)fragments_hv));
-  gql_store_sv(resolve_info_base_hv, "root_value", root_value && SvOK(root_value) ? newSVsv(root_value) : newSV(0));
-  gql_store_sv(resolve_info_base_hv, "operation", newSVsv(operation_sv));
-  gql_store_sv(resolve_info_base_hv, "variable_values", newSVsv(applied_variables_sv));
-  gql_store_sv(resolve_info_base_hv, "promise_code", promise_code && SvOK(promise_code) ? newSVsv(promise_code) : newSV(0));
+  gql_store_sv(resolve_info_base_hv, "root_value", gql_execution_share_or_copy_sv(root_value));
+  gql_store_sv(resolve_info_base_hv, "operation", gql_execution_share_or_copy_sv(operation_sv));
+  gql_store_sv(resolve_info_base_hv, "variable_values", gql_execution_share_or_copy_sv(applied_variables_sv));
+  gql_store_sv(resolve_info_base_hv, "promise_code", gql_execution_share_or_copy_sv(promise_code));
   gql_store_sv(context_hv, "resolve_info_base", newRV_noinc((SV *)resolve_info_base_hv));
 
   if (empty_variables_sv) {
@@ -2723,16 +2734,16 @@ gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_d
   variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
   promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
 
-  gql_store_sv(info_hv, "schema", (schema_svp && SvOK(*schema_svp)) ? newSVsv(*schema_svp) : newSV(0));
-  gql_store_sv(info_hv, "fragments", (fragments_svp && SvOK(*fragments_svp)) ? newSVsv(*fragments_svp) : newSV(0));
-  gql_store_sv(info_hv, "root_value", (root_value_svp && SvOK(*root_value_svp)) ? newSVsv(*root_value_svp) : newSV(0));
-  gql_store_sv(info_hv, "operation", (operation_svp && SvOK(*operation_svp)) ? newSVsv(*operation_svp) : newSV(0));
-  gql_store_sv(info_hv, "variable_values", (variable_values_svp && SvOK(*variable_values_svp)) ? newSVsv(*variable_values_svp) : newSV(0));
-  gql_store_sv(info_hv, "promise_code", (promise_code_svp && SvOK(*promise_code_svp)) ? newSVsv(*promise_code_svp) : newSV(0));
+  gql_store_sv(info_hv, "schema", (schema_svp && SvOK(*schema_svp)) ? gql_execution_share_or_copy_sv(*schema_svp) : newSV(0));
+  gql_store_sv(info_hv, "fragments", (fragments_svp && SvOK(*fragments_svp)) ? gql_execution_share_or_copy_sv(*fragments_svp) : newSV(0));
+  gql_store_sv(info_hv, "root_value", (root_value_svp && SvOK(*root_value_svp)) ? gql_execution_share_or_copy_sv(*root_value_svp) : newSV(0));
+  gql_store_sv(info_hv, "operation", (operation_svp && SvOK(*operation_svp)) ? gql_execution_share_or_copy_sv(*operation_svp) : newSV(0));
+  gql_store_sv(info_hv, "variable_values", (variable_values_svp && SvOK(*variable_values_svp)) ? gql_execution_share_or_copy_sv(*variable_values_svp) : newSV(0));
+  gql_store_sv(info_hv, "promise_code", (promise_code_svp && SvOK(*promise_code_svp)) ? gql_execution_share_or_copy_sv(*promise_code_svp) : newSV(0));
   gql_store_sv(info_hv, "field_name", newSVsv(*field_name_svp));
-  gql_store_sv(info_hv, "field_nodes", newSVsv(nodes));
-  gql_store_sv(info_hv, "return_type", newSVsv(*return_type_svp));
-  gql_store_sv(info_hv, "parent_type", newSVsv(parent_type));
+  gql_store_sv(info_hv, "field_nodes", gql_execution_share_or_copy_sv(nodes));
+  gql_store_sv(info_hv, "return_type", gql_execution_share_or_copy_sv(*return_type_svp));
+  gql_store_sv(info_hv, "parent_type", gql_execution_share_or_copy_sv(parent_type));
   gql_store_sv(info_hv, "path", newSVsv(path));
 
   return newRV_noinc((SV *)info_hv);

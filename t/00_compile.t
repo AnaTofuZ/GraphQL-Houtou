@@ -14,6 +14,8 @@ use_ok $_ for qw(
     GraphQL::Houtou::GraphQLJS::Parser
     GraphQL::Houtou::Schema::Compiler
     GraphQL::Houtou::Schema::Compiler::PP
+    GraphQL::Houtou::Validation
+    GraphQL::Houtou::Validation::PP
     GraphQL::Houtou::GraphQLJS::Util
     GraphQL::Houtou::XS::Parser
     GraphQL::Houtou::XS::SchemaCompiler

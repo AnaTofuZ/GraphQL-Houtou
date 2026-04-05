@@ -18,6 +18,7 @@ use GraphQL::Houtou::Introspection qw(
 );
 use GraphQL::Houtou::Promise::Adapter qw(
   all_promise
+  merge_hash_result
   is_promise_value
   normalize_promise_code
   then_promise
@@ -319,18 +320,7 @@ sub _execute_fields_pp {
 }
 
 sub _merge_hash {
-  my ($keys, $values, $errors) = @_;
-  my @all_errors = (@$errors, map @{ $_->{errors} || [] }, @$values);
-  my %name2data;
-
-  for (my $i = @$values - 1; $i >= 0; $i--) {
-    $name2data{$keys->[$i]} = $values->[$i]{data};
-  }
-
-  return {
-    %name2data ? (data => \%name2data) : (),
-    @all_errors ? (errors => \@all_errors) : (),
-  };
+  return merge_hash_result(@_);
 }
 
 sub _execute_fields_serially {

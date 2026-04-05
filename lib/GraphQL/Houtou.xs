@@ -342,3 +342,22 @@ _merge_completed_list_xs(list)
     RETVAL = gql_execution_merge_completed_list(aTHX_ (AV *)SvRV(list));
   OUTPUT:
     RETVAL
+
+SV *
+_merge_hash_xs(keys, values, errors)
+    SV *keys
+    SV *values
+    SV *errors
+  CODE:
+    if (!SvROK(keys) || SvTYPE(SvRV(keys)) != SVt_PVAV) {
+      croak("keys must be an array reference");
+    }
+    if (!SvROK(values) || SvTYPE(SvRV(values)) != SVt_PVAV) {
+      croak("values must be an array reference");
+    }
+    if (!SvROK(errors) || SvTYPE(SvRV(errors)) != SVt_PVAV) {
+      croak("errors must be an array reference");
+    }
+    RETVAL = gql_execution_merge_hash(aTHX_ (AV *)SvRV(keys), (AV *)SvRV(values), (AV *)SvRV(errors));
+  OUTPUT:
+    RETVAL

@@ -12,6 +12,7 @@ our @EXPORT_OK = qw(
   clear_default_promise_code
   normalize_promise_code
   all_promise
+  merge_hash_result
   is_promise_value
   then_promise
 );
@@ -89,6 +90,26 @@ sub all_promise {
   }
 
   return $promise_code->{all}->(@values);
+}
+
+sub merge_hash_result {
+  my ($keys, $values, $errors) = @_;
+
+  if (_load_xs_promise_helpers() && GraphQL::Houtou::XS::Execution->can('_merge_hash_xs')) {
+    return GraphQL::Houtou::XS::Execution::_merge_hash_xs($keys, $values, $errors);
+  }
+
+  my @all_errors = (@$errors, map @{ $_->{errors} || [] }, @$values);
+  my %name2data;
+
+  for (my $i = @$values - 1; $i >= 0; $i--) {
+    $name2data{$keys->[$i]} = $values->[$i]{data};
+  }
+
+  return {
+    %name2data ? (data => \%name2data) : (),
+    @all_errors ? (errors => \@all_errors) : (),
+  };
 }
 
 sub is_promise_value {

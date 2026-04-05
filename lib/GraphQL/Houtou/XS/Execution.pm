@@ -18,6 +18,7 @@ our @EXPORT_OK = qw(
   _promise_all_xs
   _promise_then_xs
   _merge_completed_list_xs
+  _merge_hash_xs
 );
 
 require GraphQL::Houtou::XS::Parser;

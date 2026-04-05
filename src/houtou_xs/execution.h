@@ -1112,6 +1112,44 @@ gql_execution_call_xs_then_resolve_operation_error(pTHX_ SV *promise_code, SV *p
 }
 
 static SV *
+gql_execution_call_xs_then_merge_hash(pTHX_ SV *promise_code, AV *keys_av, SV *promise, AV *errors_av) {
+  dSP;
+  int count;
+  SV *ret;
+  static CV *cv = NULL;
+
+  if (!cv) {
+    cv = get_cv("GraphQL::Houtou::XS::Execution::_then_merge_hash_xs", 0);
+    if (!cv) {
+      croak("unable to resolve GraphQL::Houtou::XS::Execution::_then_merge_hash_xs");
+    }
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  EXTEND(SP, 4);
+  XPUSHs(gql_execution_mortal_sv_ref(promise_code));
+  XPUSHs(sv_2mortal(newRV_inc((SV *)keys_av)));
+  XPUSHs(gql_execution_mortal_sv_ref(promise));
+  XPUSHs(sv_2mortal(newRV_inc((SV *)errors_av)));
+  PUTBACK;
+  count = call_sv((SV *)cv, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("_then_merge_hash_xs did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
 gql_execution_default_field_resolver_sv(pTHX) {
   static CV *cv = NULL;
 
@@ -1231,23 +1269,13 @@ gql_execution_execute_prepared_context_xs_impl(pTHX_ SV *context) {
 
   fields_sv = gql_execution_collect_fields_xs(aTHX_ context, type_sv, *selections_svp);
   path_sv = newRV_noinc((SV *)newAV());
-  if (SvOK(promise_code_sv)) {
-    result_sv = gql_execution_call_pp_execute_fields(
-      aTHX_ context,
-      type_sv,
-      (root_value_svp && SvOK(*root_value_svp)) ? *root_value_svp : &PL_sv_undef,
-      path_sv,
-      fields_sv
-    );
-  } else {
-    result_sv = gql_execution_execute_fields(
-      aTHX_ context,
-      type_sv,
-      (root_value_svp && SvOK(*root_value_svp)) ? *root_value_svp : &PL_sv_undef,
-      path_sv,
-      fields_sv
-    );
-  }
+  result_sv = gql_execution_execute_fields(
+    aTHX_ context,
+    type_sv,
+    (root_value_svp && SvOK(*root_value_svp)) ? *root_value_svp : &PL_sv_undef,
+    path_sv,
+    fields_sv
+  );
 
   SvREFCNT_dec(path_sv);
   SvREFCNT_dec(fields_sv);
@@ -3037,26 +3065,28 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
   SV **variable_values_svp;
   SV **empty_args_svp;
   SV **field_resolver_svp;
+  SV **promise_code_svp;
+  SV *promise_code_sv = &PL_sv_undef;
   AV *field_names_av;
   HV *nodes_defs_hv;
-  HV *result_hv = newHV();
-  HV *data_hv = newHV();
+  AV *result_keys_av = newAV();
+  AV *result_values_av = newAV();
   AV *all_errors_av = newAV();
   AV *fields_av;
   I32 field_len;
   I32 i;
-  int has_data = 0;
+  int promise_present = 0;
 
   if (!SvROK(fields) || SvTYPE(SvRV(fields)) != SVt_PVAV) {
-    SvREFCNT_dec((SV *)result_hv);
-    SvREFCNT_dec((SV *)data_hv);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
     SvREFCNT_dec((SV *)all_errors_av);
     croak("fields must be an array reference");
   }
 
   if (!SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
-    SvREFCNT_dec((SV *)result_hv);
-    SvREFCNT_dec((SV *)data_hv);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
     SvREFCNT_dec((SV *)all_errors_av);
     croak("context must be a hash reference");
   }
@@ -3067,17 +3097,21 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
   variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
   empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
   field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
+  promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  if (promise_code_svp && SvOK(*promise_code_svp)) {
+    promise_code_sv = *promise_code_svp;
+  }
   if (!schema_svp || !SvOK(*schema_svp)) {
-    SvREFCNT_dec((SV *)result_hv);
-    SvREFCNT_dec((SV *)data_hv);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
     SvREFCNT_dec((SV *)all_errors_av);
     croak("execution context has no schema");
   }
 
   fields_av = (AV *)SvRV(fields);
   if (av_len(fields_av) != 1) {
-    SvREFCNT_dec((SV *)result_hv);
-    SvREFCNT_dec((SV *)data_hv);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
     SvREFCNT_dec((SV *)all_errors_av);
     croak("fields must contain names and node definitions");
   }
@@ -3088,8 +3122,8 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
 
     if (!field_names_svp || !SvROK(*field_names_svp) || SvTYPE(SvRV(*field_names_svp)) != SVt_PVAV ||
         !nodes_defs_svp || !SvROK(*nodes_defs_svp) || SvTYPE(SvRV(*nodes_defs_svp)) != SVt_PVHV) {
-      SvREFCNT_dec((SV *)result_hv);
-      SvREFCNT_dec((SV *)data_hv);
+      SvREFCNT_dec((SV *)result_keys_av);
+      SvREFCNT_dec((SV *)result_values_av);
       SvREFCNT_dec((SV *)all_errors_av);
       croak("fields structure is invalid");
     }
@@ -3119,9 +3153,7 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     SV **type_svp;
     SV **field_args_svp;
     SV **node_args_svp;
-    HV *completed_hv;
-    SV **data_svp;
-    SV **child_errors_svp;
+    int is_completed_promise = 0;
 
     if (!result_name_svp || !SvOK(*result_name_svp)) {
       continue;
@@ -3215,29 +3247,20 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
       result_sv
     );
 
-    if (SvROK(completed_sv) && SvTYPE(SvRV(completed_sv)) == SVt_PVHV) {
-      completed_hv = (HV *)SvRV(completed_sv);
-      data_svp = hv_fetch(completed_hv, "data", 4, 0);
-      if (data_svp) {
-        STRLEN key_len;
-        const char *key = SvPV(*result_name_svp, key_len);
-        (void)hv_store(data_hv, key, (I32)key_len, newSVsv(*data_svp), 0);
-        has_data = 1;
-      }
+    if (SvOK(promise_code_sv) && completed_sv && SvROK(completed_sv)) {
+      SV *is_completed_promise_sv = gql_promise_call_is_promise(aTHX_ promise_code_sv, completed_sv);
+      is_completed_promise = SvTRUE(is_completed_promise_sv);
 
-      child_errors_svp = hv_fetch(completed_hv, "errors", 6, 0);
-      if (child_errors_svp && SvROK(*child_errors_svp) && SvTYPE(SvRV(*child_errors_svp)) == SVt_PVAV) {
-        AV *child_errors_av = (AV *)SvRV(*child_errors_svp);
-        I32 child_error_len = av_len(child_errors_av);
-        I32 j;
-
-        for (j = 0; j <= child_error_len; j++) {
-          SV **child_error_svp = av_fetch(child_errors_av, j, 0);
-          if (child_error_svp) {
-            av_push(all_errors_av, newSVsv(*child_error_svp));
-          }
-        }
+      SvREFCNT_dec(is_completed_promise_sv);
+      if (is_completed_promise) {
+        promise_present = 1;
       }
+    }
+
+    if (SvROK(completed_sv) && (SvTYPE(SvRV(completed_sv)) == SVt_PVHV || is_completed_promise)) {
+      av_push(result_keys_av, newSVsv(*result_name_svp));
+      av_push(result_values_av, completed_sv);
+      completed_sv = NULL;
     }
 
     SvREFCNT_dec(info_sv);
@@ -3246,20 +3269,27 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     SvREFCNT_dec(resolve_sv);
     SvREFCNT_dec(path_copy_sv);
     SvREFCNT_dec(field_def_sv);
-    SvREFCNT_dec(completed_sv);
+    if (completed_sv) {
+      SvREFCNT_dec(completed_sv);
+    }
   }
 
-  if (has_data) {
-    gql_store_sv(result_hv, "data", newRV_noinc((SV *)data_hv));
-  } else {
-    SvREFCNT_dec((SV *)data_hv);
-  }
+  if (promise_present) {
+    SV *aggregate = gql_promise_call_all(aTHX_ promise_code_sv, result_values_av);
+    SV *ret = gql_execution_call_xs_then_merge_hash(aTHX_ promise_code_sv, result_keys_av, aggregate, all_errors_av);
 
-  if (av_len(all_errors_av) >= 0) {
-    gql_store_sv(result_hv, "errors", newRV_noinc((SV *)all_errors_av));
-  } else {
+    SvREFCNT_dec(aggregate);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
     SvREFCNT_dec((SV *)all_errors_av);
+    return ret;
   }
 
-  return newRV_noinc((SV *)result_hv);
+  {
+    SV *ret = gql_execution_merge_hash(aTHX_ result_keys_av, result_values_av, all_errors_av);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
+    SvREFCNT_dec((SV *)all_errors_av);
+    return ret;
+  }
 }

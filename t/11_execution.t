@@ -368,4 +368,36 @@ subtest 'execute object field with simple directives through xs path' => sub {
   is_deeply $xs, $public, 'object field with simple directives matches public facade';
 };
 
+subtest 'execute object field with simple inline fragment through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ user(id: "9") { ... on User { id name } } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'object field with simple inline fragment matches public facade';
+};
+
+subtest 'execute object field with simple fragment spread through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = <<'GRAPHQL';
+query {
+  user(id: "9") {
+    ...UserFields
+  }
+}
+
+fragment UserFields on User {
+  id
+  name
+}
+GRAPHQL
+
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'object field with simple fragment spread matches public facade';
+};
+
 done_testing;

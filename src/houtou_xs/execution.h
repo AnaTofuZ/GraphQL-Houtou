@@ -593,8 +593,145 @@ gql_execution_node_should_include_simple(pTHX_ SV *context, SV *node, int *ok) {
   return include_node;
 }
 
+static int
+gql_execution_collect_simple_selections(
+  pTHX_ SV *context,
+  SV *object_type,
+  AV *selections_av,
+  AV *field_names_av,
+  HV *nodes_defs_hv
+) {
+  I32 selection_i;
+  I32 selection_len = av_len(selections_av);
+
+  for (selection_i = 0; selection_i <= selection_len; selection_i++) {
+    SV **selection_svp = av_fetch(selections_av, selection_i, 0);
+    HV *selection_hv;
+    SV **kind_svp;
+    STRLEN kind_len;
+    const char *kind_pv;
+
+    if (!selection_svp || !SvROK(*selection_svp) || SvTYPE(SvRV(*selection_svp)) != SVt_PVHV) {
+      return 0;
+    }
+
+    selection_hv = (HV *)SvRV(*selection_svp);
+    kind_svp = hv_fetch(selection_hv, "kind", 4, 0);
+    if (!kind_svp || !SvOK(*kind_svp)) {
+      return 0;
+    }
+    kind_pv = SvPV(*kind_svp, kind_len);
+
+    {
+      int include_ok = 0;
+      int should_include = gql_execution_node_should_include_simple(aTHX_ context, *selection_svp, &include_ok);
+      if (!include_ok) {
+        return 0;
+      }
+      if (!should_include) {
+        continue;
+      }
+    }
+
+    if (kind_len == 5 && strEQ(kind_pv, "field")) {
+      SV **alias_svp = hv_fetch(selection_hv, "alias", 5, 0);
+      SV **name_svp = hv_fetch(selection_hv, "name", 4, 0);
+      SV *use_name_sv = (alias_svp && SvOK(*alias_svp)) ? *alias_svp : (name_svp ? *name_svp : NULL);
+      HE *bucket_he;
+      SV *bucket_sv;
+      AV *bucket_av;
+
+      if (!use_name_sv || !SvOK(use_name_sv)) {
+        return 0;
+      }
+
+      bucket_he = hv_fetch_ent(nodes_defs_hv, use_name_sv, 0, 0);
+      if (!bucket_he) {
+        bucket_av = newAV();
+        (void)hv_store_ent(nodes_defs_hv, newSVsv(use_name_sv), newRV_noinc((SV *)bucket_av), 0);
+        av_push(field_names_av, newSVsv(use_name_sv));
+      } else if ((bucket_sv = HeVAL(bucket_he)) && SvROK(bucket_sv) && SvTYPE(SvRV(bucket_sv)) == SVt_PVAV) {
+        bucket_av = (AV *)SvRV(bucket_sv);
+      } else {
+        return 0;
+      }
+
+      av_push(bucket_av, newSVsv(*selection_svp));
+      continue;
+    }
+
+    if (kind_len == 15 && strEQ(kind_pv, "inline_fragment")) {
+      SV **on_svp = hv_fetch(selection_hv, "on", 2, 0);
+      SV **selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
+      if (on_svp && SvOK(*on_svp)) {
+        SV *object_name_sv = gql_execution_call_type_to_string(aTHX_ object_type);
+        int same_type = sv_eq(*on_svp, object_name_sv);
+        SvREFCNT_dec(object_name_sv);
+        if (!same_type) {
+          return 0;
+        }
+      }
+      if (!selections_svp || !SvROK(*selections_svp) || SvTYPE(SvRV(*selections_svp)) != SVt_PVAV) {
+        return 0;
+      }
+      if (!gql_execution_collect_simple_selections(aTHX_ context, object_type, (AV *)SvRV(*selections_svp), field_names_av, nodes_defs_hv)) {
+        return 0;
+      }
+      continue;
+    }
+
+    if (kind_len == 15 && strEQ(kind_pv, "fragment_spread")) {
+      HV *context_hv;
+      SV **fragments_svp;
+      SV **name_svp;
+      HE *fragment_he;
+      SV *fragment_sv;
+      HV *fragment_hv;
+      SV **on_svp;
+      SV **selections_svp;
+
+      if (!SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
+        return 0;
+      }
+      context_hv = (HV *)SvRV(context);
+      fragments_svp = hv_fetch(context_hv, "fragments", 9, 0);
+      name_svp = hv_fetch(selection_hv, "name", 4, 0);
+      if (!fragments_svp || !SvROK(*fragments_svp) || SvTYPE(SvRV(*fragments_svp)) != SVt_PVHV || !name_svp || !SvOK(*name_svp)) {
+        return 0;
+      }
+      fragment_he = hv_fetch_ent((HV *)SvRV(*fragments_svp), *name_svp, 0, 0);
+      fragment_sv = fragment_he ? HeVAL(fragment_he) : NULL;
+      if (!fragment_sv || !SvROK(fragment_sv) || SvTYPE(SvRV(fragment_sv)) != SVt_PVHV) {
+        return 0;
+      }
+      fragment_hv = (HV *)SvRV(fragment_sv);
+      on_svp = hv_fetch(fragment_hv, "on", 2, 0);
+      if (on_svp && SvOK(*on_svp)) {
+        SV *object_name_sv = gql_execution_call_type_to_string(aTHX_ object_type);
+        int same_type = sv_eq(*on_svp, object_name_sv);
+        SvREFCNT_dec(object_name_sv);
+        if (!same_type) {
+          return 0;
+        }
+      }
+      selections_svp = hv_fetch(fragment_hv, "selections", 10, 0);
+      if (!selections_svp || !SvROK(*selections_svp) || SvTYPE(SvRV(*selections_svp)) != SVt_PVAV) {
+        return 0;
+      }
+      if (!gql_execution_collect_simple_selections(aTHX_ context, object_type, (AV *)SvRV(*selections_svp), field_names_av, nodes_defs_hv)) {
+        return 0;
+      }
+      continue;
+    }
+
+    return 0;
+  }
+
+  return 1;
+}
+
 static SV *
-gql_execution_collect_simple_object_fields(pTHX_ SV *context, SV *nodes, int *ok) {
+gql_execution_collect_simple_object_fields(pTHX_ SV *context, SV *object_type, SV *nodes, int *ok) {
   AV *field_names_av = NULL;
   HV *nodes_defs_hv = NULL;
   AV *ret_av = NULL;
@@ -614,8 +751,6 @@ gql_execution_collect_simple_object_fields(pTHX_ SV *context, SV *nodes, int *ok
     SV **node_svp = av_fetch((AV *)SvRV(nodes), node_i, 0);
     HV *node_hv;
     SV **selections_svp;
-    I32 selection_i;
-    I32 selection_len;
 
     if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) {
       continue;
@@ -626,59 +761,14 @@ gql_execution_collect_simple_object_fields(pTHX_ SV *context, SV *nodes, int *ok
     if (!selections_svp || !SvROK(*selections_svp) || SvTYPE(SvRV(*selections_svp)) != SVt_PVAV) {
       continue;
     }
-
-    selection_len = av_len((AV *)SvRV(*selections_svp));
-    for (selection_i = 0; selection_i <= selection_len; selection_i++) {
-      SV **selection_svp = av_fetch((AV *)SvRV(*selections_svp), selection_i, 0);
-      HV *selection_hv;
-      SV **kind_svp;
-      SV **alias_svp;
-      SV **name_svp;
-      SV *use_name_sv;
-      HE *bucket_he;
-      SV *bucket_sv;
-      AV *bucket_av;
-
-      if (!selection_svp || !SvROK(*selection_svp) || SvTYPE(SvRV(*selection_svp)) != SVt_PVHV) {
-        goto fallback;
-      }
-
-      selection_hv = (HV *)SvRV(*selection_svp);
-      kind_svp = hv_fetch(selection_hv, "kind", 4, 0);
-      if (!kind_svp || !SvOK(*kind_svp) || !sv_eq(*kind_svp, newSVpvs_flags("field", SVs_TEMP))) {
-        goto fallback;
-      }
-
-      {
-        int include_ok = 0;
-        int should_include = gql_execution_node_should_include_simple(aTHX_ context, *selection_svp, &include_ok);
-        if (!include_ok) {
-          goto fallback;
-        }
-        if (!should_include) {
-          continue;
-        }
-      }
-
-      alias_svp = hv_fetch(selection_hv, "alias", 5, 0);
-      name_svp = hv_fetch(selection_hv, "name", 4, 0);
-      use_name_sv = (alias_svp && SvOK(*alias_svp)) ? *alias_svp : (name_svp ? *name_svp : NULL);
-      if (!use_name_sv || !SvOK(use_name_sv)) {
-        goto fallback;
-      }
-
-      bucket_he = hv_fetch_ent(nodes_defs_hv, use_name_sv, 0, 0);
-      if (!bucket_he) {
-        bucket_av = newAV();
-        (void)hv_store_ent(nodes_defs_hv, newSVsv(use_name_sv), newRV_noinc((SV *)bucket_av), 0);
-        av_push(field_names_av, newSVsv(use_name_sv));
-      } else if ((bucket_sv = HeVAL(bucket_he)) && SvROK(bucket_sv) && SvTYPE(SvRV(bucket_sv)) == SVt_PVAV) {
-        bucket_av = (AV *)SvRV(bucket_sv);
-      } else {
-        goto fallback;
-      }
-
-      av_push(bucket_av, newSVsv(*selection_svp));
+    if (!gql_execution_collect_simple_selections(
+          aTHX_ context,
+          object_type,
+          (AV *)SvRV(*selections_svp),
+          field_names_av,
+          nodes_defs_hv
+        )) {
+      goto fallback;
     }
   }
 
@@ -1014,7 +1104,7 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
 
     if (!SvOK(is_type_of_sv)) {
       int ok = 0;
-      SV *subfields = gql_execution_collect_simple_object_fields(aTHX_ context, nodes, &ok);
+      SV *subfields = gql_execution_collect_simple_object_fields(aTHX_ context, return_type, nodes, &ok);
       SvREFCNT_dec(is_type_of_sv);
       if (ok) {
         SV *ret = gql_execution_execute_fields(aTHX_ context, return_type, result, path, subfields);

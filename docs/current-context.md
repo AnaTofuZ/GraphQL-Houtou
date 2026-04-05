@@ -26,6 +26,9 @@ It should stay short enough to recover momentum quickly after context resets.
 - `0a75b01` Add validation status note and introspection wrapper
 - `1260ccc` Own introspection types in Houtou
 - `ad99ad2` Move runtime type helpers into Houtou
+- `962e411` Add initial Houtou execution facade
+- `d49a2d7` Move execution context setup into XS
+- `64fa2e3` Move execution field loop into XS
 
 ## Current Architecture
 
@@ -87,26 +90,40 @@ Moved into Houtou type/role code as groundwork for execution work:
 - `GraphQL::Houtou::Type::List::_complete_value`
 - `GraphQL::Houtou::Role::Abstract::_complete_value`
 
+### Execution
+
+- Public facade: `GraphQL::Houtou::Execution`
+- PP reference: `GraphQL::Houtou::Execution::PP`
+- XS entrypoint: `GraphQL::Houtou::XS::Execution`
+
+Current XS-owned pieces:
+
+- AST coercion
+- fragment map build
+- operation selection
+- variable default application dispatch
+- field execution loop
+
+Still delegated to PP helpers:
+
+- resolve info construction
+- argument coercion
+- resolver invocation
+- value completion
+- final hash merge
+
 ## Testing Snapshot
 
-Latest local verification after the initial execution scaffold:
+Latest local verification:
 
 - `./Build build`
 - `./Build test`
-- `12 files / 144 tests / PASS`
+- `12 files / 146 tests / PASS`
 
 ## Next Work
 
-Execution is now the active compatibility surface.
-
-Current shape:
-
-- public facade: `GraphQL::Houtou::Execution`
-- PP reference/oracle: `GraphQL::Houtou::Execution::PP`
-- XS entrypoint: `GraphQL::Houtou::XS::Execution`
-
-The first stage now exists and prefers XS publicly while delegating to PP
-internally, matching the schema compiler and validation migration pattern.
+Execution is now the active compatibility surface and the public path already
+prefers XS.
 
 Key constraint:
 
@@ -117,6 +134,7 @@ Key constraint:
 
 Immediate next step:
 
-- migrate real execution hot paths from `GraphQL::Houtou::Execution::PP`
-  into `src/houtou_xs/execution.h` incrementally, starting with prepared
-  context build and field execution helpers.
+- move `_build_resolve_info`, `_resolve_field_value_or_error`, and
+  `_get_argument_values` from `GraphQL::Houtou::Execution::PP` into
+  `src/houtou_xs/execution.h`
+- keep completion in PP until resolver and coercion boundaries are cleaner

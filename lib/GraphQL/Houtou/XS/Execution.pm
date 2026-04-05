@@ -7,11 +7,11 @@ use warnings;
 use Exporter 'import';
 use GraphQL::Houtou::Promise::Adapter qw(
   all_promise
+  normalize_promise_code
   reject_promise
   resolve_promise
   then_promise
 );
-use GraphQL::Houtou::Promise::Adapter qw(normalize_promise_code);
 
 our $VERSION = '0.01';
 our @EXPORT_OK = qw(
@@ -115,7 +115,7 @@ sub _then_complete_value_xs {
 sub _then_build_response_xs {
   my ($promise_code, $promise, $force_data) = @_;
   return then_promise($promise_code, $promise, sub {
-    return _build_response_xs($_[0], $force_data, $promise_code);
+    return _build_response_xs($_[0], $force_data ? 1 : 0);
   });
 }
 

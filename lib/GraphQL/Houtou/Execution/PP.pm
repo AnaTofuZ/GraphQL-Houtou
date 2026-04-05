@@ -36,6 +36,14 @@ my $HAS_XS_EXECUTE_FIELDS;
 my $HAS_XS_ARGUMENT_VALUES;
 my $HAS_XS_COLLECT_FIELDS;
 my %HAS_XS_EXECUTION_HELPER;
+my $HAS_XS_THEN_BUILD_RESPONSE;
+my $HAS_XS_BUILD_RESPONSE;
+my $HAS_XS_THEN_MERGE_HASH;
+my $HAS_XS_THEN_RESOLVE_WRAPPED_ERROR;
+my $HAS_XS_THEN_REJECT_LOCATED_ERROR;
+my $HAS_XS_THEN_COMPLETE_VALUE;
+my $HAS_XS_LOCATED_ERROR;
+my $HAS_XS_THEN_RESOLVE_OPERATION_ERROR;
 
 sub _has_xs_execution_helper {
   my ($name) = @_;
@@ -98,7 +106,8 @@ sub _build_response {
   my ($result, $force_data, $promise_code) = @_;
 
   if (is_promise_value($promise_code, $result)) {
-    if (_has_xs_execution_helper('_then_build_response_xs')) {
+    $HAS_XS_THEN_BUILD_RESPONSE //= _has_xs_execution_helper('_then_build_response_xs');
+    if ($HAS_XS_THEN_BUILD_RESPONSE) {
       return GraphQL::Houtou::XS::Execution::_then_build_response_xs(
         $promise_code,
         $result,
@@ -111,7 +120,8 @@ sub _build_response {
     });
   }
 
-  if (_has_xs_execution_helper('_build_response_xs')) {
+  $HAS_XS_BUILD_RESPONSE //= _has_xs_execution_helper('_build_response_xs');
+  if ($HAS_XS_BUILD_RESPONSE) {
     return GraphQL::Houtou::XS::Execution::_build_response_xs($result, $force_data ? 1 : 0);
   }
 
@@ -268,7 +278,8 @@ sub _execute_operation {
   my $result = eval {
     my $result = $execute->($context, $type, $root_value, [], $fields);
     return $result if !_is_promise($context, $result);
-    if (_has_xs_execution_helper('_then_resolve_operation_error_xs')) {
+    $HAS_XS_THEN_RESOLVE_OPERATION_ERROR //= _has_xs_execution_helper('_then_resolve_operation_error_xs');
+    if ($HAS_XS_THEN_RESOLVE_OPERATION_ERROR) {
       return GraphQL::Houtou::XS::Execution::_then_resolve_operation_error_xs(
         $context->{promise_code},
         $result,
@@ -374,7 +385,8 @@ sub _promise_for_hash {
     if !$promise_code;
 
   my $aggregate = all_promise($promise_code, @$values);
-  if (_has_xs_execution_helper('_then_merge_hash_xs')) {
+  $HAS_XS_THEN_MERGE_HASH //= _has_xs_execution_helper('_then_merge_hash_xs');
+  if ($HAS_XS_THEN_MERGE_HASH) {
     return GraphQL::Houtou::XS::Execution::_then_merge_hash_xs(
       $promise_code,
       $keys,
@@ -463,7 +475,8 @@ sub _complete_value_with_located_error {
 
 sub _then_resolve_wrapped_error {
   my ($context, $promise) = @_;
-  if (_has_xs_execution_helper('_then_resolve_wrapped_error_xs')) {
+  $HAS_XS_THEN_RESOLVE_WRAPPED_ERROR //= _has_xs_execution_helper('_then_resolve_wrapped_error_xs');
+  if ($HAS_XS_THEN_RESOLVE_WRAPPED_ERROR) {
     return GraphQL::Houtou::XS::Execution::_then_resolve_wrapped_error_xs(
       $context->{promise_code},
       $promise,
@@ -477,7 +490,8 @@ sub _then_resolve_wrapped_error {
 
 sub _then_reject_located_error {
   my ($context, $promise, $nodes, $path) = @_;
-  if (_has_xs_execution_helper('_then_reject_located_error_xs')) {
+  $HAS_XS_THEN_REJECT_LOCATED_ERROR //= _has_xs_execution_helper('_then_reject_located_error_xs');
+  if ($HAS_XS_THEN_REJECT_LOCATED_ERROR) {
     return GraphQL::Houtou::XS::Execution::_then_reject_located_error_xs(
       $context->{promise_code},
       $promise,
@@ -497,7 +511,8 @@ sub _complete_value {
   my ($context, $return_type, $nodes, $info, $path, $result) = @_;
 
   if (_is_promise($context, $result)) {
-    if (_has_xs_execution_helper('_then_complete_value_xs')) {
+    $HAS_XS_THEN_COMPLETE_VALUE //= _has_xs_execution_helper('_then_complete_value_xs');
+    if ($HAS_XS_THEN_COMPLETE_VALUE) {
       return GraphQL::Houtou::XS::Execution::_then_complete_value_xs(
         $context,
         $return_type,
@@ -538,7 +553,8 @@ sub _complete_value {
 
 sub _located_error {
   my ($error, $nodes, $path) = @_;
-  if (_has_xs_execution_helper('_located_error_xs')) {
+  $HAS_XS_LOCATED_ERROR //= _has_xs_execution_helper('_located_error_xs');
+  if ($HAS_XS_LOCATED_ERROR) {
     return GraphQL::Houtou::XS::Execution::_located_error_xs($error, $nodes, $path);
   }
 

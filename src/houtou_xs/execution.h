@@ -447,6 +447,10 @@ gql_execution_located_error_xs(pTHX_ SV *error, SV *nodes, SV *path) {
 
 static void
 gql_execution_require_pp(pTHX) {
+  /*
+   * Cached per-process. This optimization assumes a single interpreter
+   * lifetime; it is not intended to survive ithreads interpreter cloning.
+   */
   static int pp_loaded = 0;
 
   if (!pp_loaded) {
@@ -457,6 +461,11 @@ gql_execution_require_pp(pTHX) {
 
 static CV *
 gql_execution_pp_cv(pTHX_ const char *name) {
+  /*
+   * Cached per-process. This assumes the PP symbol table remains stable
+   * for the interpreter lifetime and is not intended to survive ithreads
+   * interpreter cloning or explicit undef of the target subroutine.
+   */
   CV *cv = get_cv(name, 0);
   if (!cv) {
     gql_execution_require_pp(aTHX);
@@ -499,6 +508,10 @@ gql_execution_call_graphql_error_coerce(pTHX_ SV *error) {
 
 static SV *
 gql_execution_mortal_sv_ref(SV *value) {
+  /*
+   * NOTE: this passes the original SV with a temporary refcount bump rather
+   * than copying via newSVsv(). PP bridge functions must not assign to @_.
+   */
   return value ? sv_2mortal(SvREFCNT_inc_simple_NN(value)) : &PL_sv_undef;
 }
 
@@ -2424,6 +2437,11 @@ gql_execution_get_field_def(pTHX_ SV *schema, SV *parent_type, SV *field_name) {
       dSP;
       int count;
       SV *ret;
+      static CV *cv = NULL;
+
+      if (!cv) {
+        cv = gql_execution_pp_cv(aTHX_ "GraphQL::Houtou::Execution::PP::_get_field_def");
+      }
 
       ENTER;
       SAVETMPS;
@@ -2432,7 +2450,7 @@ gql_execution_get_field_def(pTHX_ SV *schema, SV *parent_type, SV *field_name) {
       XPUSHs(sv_2mortal(newSVsv(parent_type)));
       XPUSHs(sv_2mortal(newSVsv(field_name)));
       PUTBACK;
-      count = call_pv("GraphQL::Houtou::Execution::PP::_get_field_def", G_SCALAR);
+      count = call_sv((SV *)cv, G_SCALAR);
       SPAGAIN;
       if (count != 1) {
         PUTBACK;

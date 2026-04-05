@@ -202,4 +202,11 @@ optional hooks, C<then> and C<is_promise>, so callers can adapt promise
 libraries with differing dispatch conventions without Houtou hardcoding
 library-specific adapters.
 
+The C<all> hook is expected to resolve to the collected fulfilled values.
+Houtou accepts either a single array reference of resolved values or a
+multi-value fulfillment. For GraphQL execution, each collected element is
+expected to represent one field/list item result; wrapper implementations
+should avoid adding extra container layers unless they intentionally model
+multi-value fulfillment.
+
 =cut

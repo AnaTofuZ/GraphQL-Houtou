@@ -98,4 +98,52 @@ sub perl_to_graphql {
   return \@values;
 }
 
+sub _complete_value {
+  my ($self, $context, $nodes, $info, $path, $result) = @_;
+  my $item_type = $self->of;
+  my $index = 0;
+  my @completed;
+
+  require GraphQL::Execution;
+  @completed = map {
+    GraphQL::Execution::_complete_value_catching_error(
+      $context,
+      $item_type,
+      $nodes,
+      $info,
+      [ @$path, $index++ ],
+      $_,
+    );
+  } @$result;
+
+  return (grep { _is_promise($_) } @completed)
+    ? _promise_for_list($context, \@completed)
+    : _merge_list(\@completed);
+}
+
+sub _merge_list {
+  my ($list) = @_;
+  my @errors = map @{ $_->{errors} || [] }, @$list;
+  my @data = map $_->{data}, @$list;
+  return +{
+    data => \@data,
+    @errors ? (errors => \@errors) : (),
+  };
+}
+
+sub _promise_for_list {
+  my ($context, $list) = @_;
+  die "Given a promise in list but no PromiseCode given\n"
+    if !$context->{promise_code};
+
+  return $context->{promise_code}{all}->(@$list)->then(sub {
+    return _merge_list([ map $_->[0], @_ ]);
+  });
+}
+
+sub _is_promise {
+  my ($value) = @_;
+  return !!($value && ref($value) && eval { $value->can('then') });
+}
+
 1;

@@ -16,14 +16,21 @@ sub _complete_value {
   my $runtime_type = $resolve_type->(
     $result, $context->{context_value}, $info, $self
   );
-
-  return $self->_ensure_valid_runtime_type(
+  $runtime_type = $self->_ensure_valid_runtime_type(
     $runtime_type,
     $context,
     $nodes,
     $info,
     $result,
-  )->_complete_value(@_);
+  );
+
+  return $runtime_type->_complete_value(
+    $context,
+    $nodes,
+    $info,
+    $path,
+    $result,
+  );
 }
 
 sub _ensure_valid_runtime_type {

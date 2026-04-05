@@ -67,6 +67,7 @@ sub _get_directive_values {
   my ($self, $node, $variables) = @_;
   my ($d) = grep $_->{name} eq $self->name, @{ $node->{directives} || [] };
   return if !$d;
+  require GraphQL::Execution;
   return GraphQL::Execution::_get_argument_values($self, $d, $variables);
 }
 

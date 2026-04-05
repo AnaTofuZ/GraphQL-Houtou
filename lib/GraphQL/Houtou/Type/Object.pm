@@ -5,8 +5,10 @@ use strict;
 use warnings;
 
 use Moo;
+use GraphQL::Houtou::Directive ();
 use GraphQL::Houtou::Type::Library -all;
 use Types::Standard -all;
+use GraphQL::Error;
 
 extends 'GraphQL::Houtou::Type';
 with qw(
@@ -42,6 +44,105 @@ sub graphql_to_perl {
     my ($key, $value) = @_;
     return $fields->{$key}{type}->graphql_to_perl($value // $fields->{$key}{default_value});
   });
+}
+
+sub _collect_fields {
+  my ($self, $context, $selections, $fields_got, $visited_fragments) = @_;
+
+  for my $selection (@$selections) {
+    my $node = $selection;
+    next if !_should_include_node($context->{variable_values}, $node);
+
+    if ($selection->{kind} eq 'field') {
+      my $use_name = $node->{alias} || $node->{name};
+      my ($field_names, $nodes_defs) = @$fields_got;
+      $field_names = [ @$field_names, $use_name ] if !exists $nodes_defs->{$use_name};
+      $nodes_defs = {
+        %$nodes_defs,
+        $use_name => [ @{ $nodes_defs->{$use_name} || [] }, $node ],
+      };
+      $fields_got = [ $field_names, $nodes_defs ];
+      next;
+    }
+
+    if ($selection->{kind} eq 'inline_fragment') {
+      next if !$self->_fragment_condition_match($context, $node);
+      ($fields_got, $visited_fragments) = $self->_collect_fields(
+        $context,
+        $node->{selections},
+        $fields_got,
+        $visited_fragments,
+      );
+      next;
+    }
+
+    if ($selection->{kind} eq 'fragment_spread') {
+      my $frag_name = $node->{name};
+      my $fragment;
+      next if $visited_fragments->{$frag_name};
+      $visited_fragments = { %$visited_fragments, $frag_name => 1 };
+      $fragment = $context->{fragments}{$frag_name};
+      next if !$fragment;
+      next if !$self->_fragment_condition_match($context, $fragment);
+      ($fields_got, $visited_fragments) = $self->_collect_fields(
+        $context,
+        $fragment->{selections},
+        $fields_got,
+        $visited_fragments,
+      );
+    }
+  }
+
+  return ($fields_got, $visited_fragments);
+}
+
+sub _fragment_condition_match {
+  my ($self, $context, $node) = @_;
+  my $condition_type;
+
+  return 1 if !$node->{on};
+  return 1 if $node->{on} eq $self->name;
+  $condition_type = $context->{schema}->name2type->{ $node->{on} }
+    // die GraphQL::Error->new(
+      message => "Unknown type for fragment condition '$node->{on}'."
+    );
+  return '' if !$condition_type->DOES('GraphQL::Houtou::Role::Abstract')
+    && !$condition_type->DOES('GraphQL::Role::Abstract');
+  return $context->{schema}->is_possible_type($condition_type, $self);
+}
+
+sub _should_include_node {
+  my ($variables, $node) = @_;
+  my $skip = $GraphQL::Houtou::Directive::SKIP->_get_directive_values($node, $variables);
+  return '' if $skip && $skip->{if};
+  my $include = $GraphQL::Houtou::Directive::INCLUDE->_get_directive_values($node, $variables);
+  return '' if $include && !$include->{if};
+  return 1;
+}
+
+sub _complete_value {
+  my ($self, $context, $nodes, $info, $path, $result) = @_;
+  my $subfield_nodes = [ [], {} ];
+  my $visited_fragment_names = {};
+
+  if ($self->is_type_of) {
+    my $is_type_of = $self->is_type_of->($result, $context->{context_value}, $info);
+    die GraphQL::Error->new(
+      message => "Expected a value of type '@{[$self->to_string]}' but received: '@{[ref($result) || $result]}'."
+    ) if !$is_type_of;
+  }
+
+  for (grep { $_->{selections} } @$nodes) {
+    ($subfield_nodes, $visited_fragment_names) = $self->_collect_fields(
+      $context,
+      $_->{selections},
+      $subfield_nodes,
+      $visited_fragment_names,
+    );
+  }
+
+  require GraphQL::Execution;
+  return GraphQL::Execution::_execute_fields($context, $self, $result, $path, $subfield_nodes);
 }
 
 has to_doc => (

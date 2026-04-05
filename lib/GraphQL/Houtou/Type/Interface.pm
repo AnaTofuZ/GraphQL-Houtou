@@ -5,6 +5,7 @@ use strict;
 use warnings;
 
 use Moo;
+use GraphQL::Error;
 use GraphQL::Houtou::Type::Library -all;
 use Types::Standard -all;
 

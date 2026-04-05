@@ -110,19 +110,22 @@ sub _complete_value {
   my $item_type = $self->of;
   my $index = 0;
   my @completed;
+  my $promise_present;
 
-  @completed = map {
-    _complete_item_value(
+  for my $value (@$result) {
+    my $completed = _complete_item_value(
       $context,
       $item_type,
       $nodes,
       $info,
       [ @$path, $index++ ],
-      $_,
+      $value,
     );
-  } @$result;
+    push @completed, $completed;
+    $promise_present ||= _is_promise($context, $completed);
+  }
 
-  return (grep { _is_promise($context, $_) } @completed)
+  return $promise_present
     ? _promise_for_list($context, \@completed)
     : _merge_list(\@completed);
 }

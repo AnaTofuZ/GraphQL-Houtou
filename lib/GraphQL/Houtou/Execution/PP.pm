@@ -313,7 +313,8 @@ sub _execute_fields {
 sub _execute_fields_pp {
   my ($context, $parent_type, $root_value, $path, $fields) = @_;
   my ($field_names, $nodes_defs) = @$fields;
-  my %name2executionresult;
+  my @result_names;
+  my @execution_results;
   my @errors;
   my $promise_present;
 
@@ -344,7 +345,7 @@ sub _execute_fields_pp {
       $root_value,
       $info,
     );
-    $name2executionresult{$result_name} = _complete_value_catching_error(
+    my $execution_result = _complete_value_catching_error(
       $context,
       $field_def->{type},
       $nodes,
@@ -352,15 +353,17 @@ sub _execute_fields_pp {
       [ @$path, $result_name ],
       $result,
     );
-    $promise_present ||= _is_promise($context, $name2executionresult{$result_name});
+    push @result_names, $result_name;
+    push @execution_results, $execution_result;
+    $promise_present ||= _is_promise($context, $execution_result);
   }
 
-  return _promise_for_hash($context, \%name2executionresult, \@errors)
+  return _promise_for_hash($context, \@result_names, \@execution_results, \@errors)
     if $promise_present;
 
   return _merge_hash(
-    [ keys %name2executionresult ],
-    [ values %name2executionresult ],
+    \@result_names,
+    \@execution_results,
     \@errors,
   );
 }
@@ -374,9 +377,8 @@ sub _execute_fields_serially {
 }
 
 sub _promise_for_hash {
-  my ($context, $hash, $errors) = @_;
+  my ($context, $keys, $values, $errors) = @_;
   my $promise_code = $context->{promise_code};
-  my ($keys, $values) = ([ keys %$hash ], [ values %$hash ]);
 
   die "Given a promise in object but no PromiseCode given\n"
     if !$promise_code;

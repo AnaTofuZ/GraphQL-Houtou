@@ -7,6 +7,8 @@
 
 Operational handoff notes, exact commands, and latest local benchmark snapshot are
 kept in `docs/current-context.md`.
+`GraphQL` distribution 互換の達成条件と今後の実装順は
+`docs/compatibility-roadmap.md` を参照。
 
 この distribution の基本方針は次のとおり。
 
@@ -141,6 +143,9 @@ runtime の通常経路から外れた。
 - 残る主要差分は `canonical-xs -> graphql-perl` 側の legacy `location` 意味論である。
 
 ## Remaining Work
+
+parser 以外を含む `GraphQL` 互換全体の残件は
+`docs/compatibility-roadmap.md` に整理してある。
 
 ### 1. `canonical-xs` -> graphql-perl parity の拡充
 

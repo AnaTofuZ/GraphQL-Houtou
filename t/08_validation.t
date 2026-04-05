@@ -10,6 +10,7 @@ use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 use GraphQL::Houtou::Schema qw(lookup_type);
 
 use GraphQL::Houtou::Validation qw(validate);
+use GraphQL::Houtou::XS::Validation qw(validate_xs);
 
 my $Node;
 my $User;
@@ -86,6 +87,18 @@ sub messages {
   my ($errors) = @_;
   return [ map $_->{message}, @$errors ];
 }
+
+subtest 'XS validation entrypoint matches facade behavior' => sub {
+  my $source = q|{
+    viewer {
+      id
+      name
+    }
+  }|;
+
+  is_deeply validate_xs($schema, $source), validate($schema, $source),
+    'XS path currently matches the public facade';
+};
 
 subtest 'valid query passes' => sub {
   my $errors = validate($schema, q|{

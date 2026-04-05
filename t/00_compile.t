@@ -39,6 +39,7 @@ use_ok $_ for qw(
     GraphQL::Houtou::Type::Scalar
     GraphQL::Houtou::Validation
     GraphQL::Houtou::Validation::PP
+    GraphQL::Houtou::XS::Validation
     GraphQL::Houtou::GraphQLJS::Util
     GraphQL::Houtou::XS::Parser
     GraphQL::Houtou::XS::SchemaCompiler

@@ -103,7 +103,7 @@ sub perl_to_graphql {
 }
 
 my $HAS_XS_PROMISE_HELPERS;
-my $HAS_XS_COMPLETE_VALUE;
+my $HAS_XS_THEN_COMPLETE_VALUE;
 
 sub _complete_value {
   my ($self, $context, $nodes, $info, $path, $result) = @_;
@@ -130,25 +130,26 @@ sub _complete_value {
 sub _complete_item_value {
   my ($context, $item_type, $nodes, $info, $path, $value) = @_;
 
-  if (!defined $HAS_XS_COMPLETE_VALUE) {
-    $HAS_XS_COMPLETE_VALUE = eval {
-      require GraphQL::Houtou::XS::Execution;
-      GraphQL::Houtou::XS::Execution->can('_complete_value_catching_error_xs');
-    } ? 1 : 0;
+  if (_is_promise($context, $value)) {
+    if (!defined $HAS_XS_THEN_COMPLETE_VALUE) {
+      $HAS_XS_THEN_COMPLETE_VALUE = eval {
+        require GraphQL::Houtou::XS::Execution;
+        GraphQL::Houtou::XS::Execution->can('_then_complete_value_xs');
+      } ? 1 : 0;
+    }
+
+    if ($HAS_XS_THEN_COMPLETE_VALUE) {
+      return GraphQL::Houtou::XS::Execution::_then_complete_value_xs(
+        $context,
+        $item_type,
+        $nodes,
+        $info,
+        $path,
+        $value,
+      );
+    }
   }
 
-  if ($HAS_XS_COMPLETE_VALUE) {
-    return GraphQL::Houtou::XS::Execution::_complete_value_catching_error_xs(
-      $context,
-      $item_type,
-      $nodes,
-      $info,
-      $path,
-      $value,
-    );
-  }
-
-  require GraphQL::Houtou::Execution::PP;
   return GraphQL::Houtou::Execution::PP::_complete_value_catching_error(
     $context,
     $item_type,

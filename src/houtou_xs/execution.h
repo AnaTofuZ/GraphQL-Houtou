@@ -8,6 +8,7 @@ static SV *gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *
 static SV *gql_execution_collect_fields_xs(pTHX_ SV *context, SV *object_type, SV *selections);
 static SV *gql_execution_call_graphql_error_but(pTHX_ SV *error, SV *locations, SV *path);
 
+
 static HV *
 gql_promise_code_hv(SV *promise_code) {
   if (!promise_code || !SvOK(promise_code) || !SvROK(promise_code) || SvTYPE(SvRV(promise_code)) != SVt_PVHV) {
@@ -442,6 +443,7 @@ gql_execution_located_error_xs(pTHX_ SV *error, SV *nodes, SV *path) {
     return located;
   }
 }
+
 
 static void
 gql_execution_require_pp(pTHX) {

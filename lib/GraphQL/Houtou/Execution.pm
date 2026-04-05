@@ -5,7 +5,6 @@ use strict;
 use warnings;
 
 use Exporter 'import';
-use GraphQL::Houtou::Promise::Adapter qw(get_default_promise_code);
 
 our @EXPORT_OK = qw(
   execute
@@ -14,11 +13,6 @@ our @EXPORT_OK = qw(
 my $HAS_XS;
 
 sub execute {
-  if ((@_ >= 8 && defined $_[7]) || get_default_promise_code()) {
-    require GraphQL::Houtou::Execution::PP;
-    return GraphQL::Houtou::Execution::PP::execute(@_);
-  }
-
   if (!defined $HAS_XS) {
     $HAS_XS = eval {
       require GraphQL::Houtou::XS::Execution;

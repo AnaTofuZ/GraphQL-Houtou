@@ -45,6 +45,15 @@ It should stay short enough to recover momentum quickly after context resets.
 - `91451a7` Skip irrelevant concrete fragments in XS
 - `171a072` Handle execution callback exceptions in XS
 - `758f0f9` Normalize promise code hooks
+- `0c0b9f7` Reduce XS execution fixed overhead
+- `a17a659` Add global default promise hooks
+- `7a5d061` Normalize promise hooks for XS execution
+- `ad56343` Move promise adapter dispatch into XS
+- `cabaf0f` Use XS helpers for promise hash merging
+- `71d0bc7` Route promise resolve and reject through adapter hooks
+- `13dcc3d` Move execution response shaping into XS
+- `9050567` Move located execution errors into XS
+- `88266c0` Refactor promise completion continuations
 
 ## Current Architecture
 
@@ -140,10 +149,13 @@ Still delegated to PP helpers:
 
 - full argument coercion fallback
 - complex object/list completion fallback
-- promise-heavy completion paths
-- promise-backed execution now keeps upstream-style `promise_code` and allows
-  optional `then` / `is_promise` hooks so the caller can adapt arbitrary
-  promise libraries without Houtou hardcoding backend names
+- deeper promise completion continuations
+- promise-backed execution now keeps upstream-style `promise_code`, supports a
+  global default hook set, and allows optional `then` / `is_promise` hooks so
+  the caller can adapt arbitrary promise libraries without Houtou hardcoding
+  backend names
+- promise dispatch, list/hash merge, response shaping, and located error
+  decoration are now XS-backed
 
 ## Testing Snapshot
 
@@ -156,7 +168,7 @@ Latest local verification:
 - Latest local verification:
   - `./Build build`
   - `./Build test`
-  - `13 files / 170 tests / PASS`
+  - `13 files / 172 tests / PASS`
 
 ## Next Work
 
@@ -177,8 +189,25 @@ Immediate next step:
 - continue shrinking common-case PP fallbacks only where benchmarks justify it
 - benchmark analysis shows `simple_scalar` on prebuilt AST is still limited by
   fixed overhead rather than deep execution work
-- next execution-focused optimization candidates are:
-  - reduce `ResolveInfo` construction cost
-  - add a thinner no-args leaf-field fast path
-  - move root `_collect_fields()` into XS
-  - trim tiny leaf-only result merge overhead
+- recent benchmark snapshot:
+  - `simple_scalar`
+    - `houtou_xs_ast`: about `40.3k/s`
+    - `upstream_ast`: about `43.0k/s`
+  - `nested_variable_object`
+    - `houtou_xs_ast`: about `27.8k/s`
+    - `upstream_ast`: about `25.5k/s`
+  - `list_of_objects`
+    - `houtou_xs_ast`: about `20.0k/s`
+    - `upstream_ast`: about `18.1k/s`
+  - `abstract_with_fragment`
+    - `houtou_xs_ast`: about `19.1k/s`
+    - `upstream_ast`: about `23.8k/s`
+  - `async_scalar`
+    - `houtou_facade_ast`: about `31.2k/s`
+    - `upstream_ast`: about `42.6k/s`
+- current execution-focused optimization themes are:
+  - keep shrinking fixed overhead for flat AST queries
+  - move abstract fragment / abstract completion deeper into XS
+  - move promise completion continuations deeper into XS
+  - keep adapter flexibility while treating promise hooks as pre-resolved
+    execution hooks

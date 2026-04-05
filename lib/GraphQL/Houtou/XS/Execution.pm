@@ -5,6 +5,12 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use GraphQL::Houtou::Promise::Adapter qw(
+  all_promise
+  reject_promise
+  resolve_promise
+  then_promise
+);
 use GraphQL::Houtou::Promise::Adapter qw(normalize_promise_code);
 
 our $VERSION = '0.01';
@@ -24,6 +30,11 @@ our @EXPORT_OK = qw(
   _build_response_xs
   _wrap_error_xs
   _located_error_xs
+  _then_resolve_wrapped_error_xs
+  _then_reject_located_error_xs
+  _then_complete_value_xs
+  _then_build_response_xs
+  _then_merge_hash_xs
 );
 
 require GraphQL::Houtou::XS::Parser;
@@ -50,6 +61,48 @@ sub execute_xs {
     $field_resolver,
     normalize_promise_code($promise_code),
   );
+}
+
+sub _then_resolve_wrapped_error_xs {
+  my ($promise_code, $promise) = @_;
+  return then_promise($promise_code, $promise, undef, sub {
+    return resolve_promise($promise_code, _wrap_error_xs($_[0]));
+  });
+}
+
+sub _then_reject_located_error_xs {
+  my ($promise_code, $promise, $nodes, $path) = @_;
+  return then_promise($promise_code, $promise, undef, sub {
+    return reject_promise($promise_code, _located_error_xs($_[0], $nodes, $path));
+  });
+}
+
+sub _then_complete_value_xs {
+  my ($context, $return_type, $nodes, $info, $path, $promise) = @_;
+  return then_promise($context->{promise_code}, $promise, sub {
+    return _complete_value_catching_error_xs(
+      $context,
+      $return_type,
+      $nodes,
+      $info,
+      $path,
+      $_[0],
+    );
+  });
+}
+
+sub _then_build_response_xs {
+  my ($promise_code, $promise, $force_data) = @_;
+  return then_promise($promise_code, $promise, sub {
+    return _build_response_xs($_[0], $force_data, $promise_code);
+  });
+}
+
+sub _then_merge_hash_xs {
+  my ($promise_code, $keys, $promise, $errors) = @_;
+  return then_promise($promise_code, $promise, sub {
+    return _merge_hash_xs($keys, $_[0], $errors);
+  });
 }
 
 1;

@@ -86,6 +86,17 @@ sub _build_response {
   my ($result, $force_data, $promise_code) = @_;
 
   if (is_promise_value($promise_code, $result)) {
+    if (eval {
+      require GraphQL::Houtou::XS::Execution;
+      GraphQL::Houtou::XS::Execution->can('_then_build_response_xs');
+    }) {
+      return GraphQL::Houtou::XS::Execution::_then_build_response_xs(
+        $promise_code,
+        $result,
+        $force_data,
+      );
+    }
+
     return then_promise($promise_code, $result, sub {
       return _build_response($_[0], $force_data, $promise_code);
     });
@@ -350,7 +361,20 @@ sub _promise_for_hash {
   die "Given a promise in object but no PromiseCode given\n"
     if !$promise_code;
 
-  return then_promise($promise_code, all_promise($promise_code, @$values), sub {
+  my $aggregate = all_promise($promise_code, @$values);
+  if (eval {
+    require GraphQL::Houtou::XS::Execution;
+    GraphQL::Houtou::XS::Execution->can('_then_merge_hash_xs');
+  }) {
+    return GraphQL::Houtou::XS::Execution::_then_merge_hash_xs(
+      $promise_code,
+      $keys,
+      $aggregate,
+      $errors,
+    );
+  }
+
+  return then_promise($promise_code, $aggregate, sub {
     return _merge_hash($keys, $_[0], $errors);
   });
 }
@@ -430,6 +454,16 @@ sub _complete_value_with_located_error {
 
 sub _then_resolve_wrapped_error {
   my ($context, $promise) = @_;
+  if (eval {
+    require GraphQL::Houtou::XS::Execution;
+    GraphQL::Houtou::XS::Execution->can('_then_resolve_wrapped_error_xs');
+  }) {
+    return GraphQL::Houtou::XS::Execution::_then_resolve_wrapped_error_xs(
+      $context->{promise_code},
+      $promise,
+    );
+  }
+
   return then_promise($context->{promise_code}, $promise, undef, sub {
     return resolve_promise($context->{promise_code}, _wrap_error($_[0]));
   });
@@ -437,6 +471,18 @@ sub _then_resolve_wrapped_error {
 
 sub _then_reject_located_error {
   my ($context, $promise, $nodes, $path) = @_;
+  if (eval {
+    require GraphQL::Houtou::XS::Execution;
+    GraphQL::Houtou::XS::Execution->can('_then_reject_located_error_xs');
+  }) {
+    return GraphQL::Houtou::XS::Execution::_then_reject_located_error_xs(
+      $context->{promise_code},
+      $promise,
+      $nodes,
+      $path,
+    );
+  }
+
   return then_promise($context->{promise_code}, $promise, undef, sub {
     return reject_promise($context->{promise_code},
       _located_error($_[0], $nodes, $path)
@@ -448,6 +494,20 @@ sub _complete_value {
   my ($context, $return_type, $nodes, $info, $path, $result) = @_;
 
   if (_is_promise($context, $result)) {
+    if (eval {
+      require GraphQL::Houtou::XS::Execution;
+      GraphQL::Houtou::XS::Execution->can('_then_complete_value_xs');
+    }) {
+      return GraphQL::Houtou::XS::Execution::_then_complete_value_xs(
+        $context,
+        $return_type,
+        $nodes,
+        $info,
+        $path,
+        $result,
+      );
+    }
+
     my @outer = @_[0..4];
     return then_promise($context->{promise_code}, $result, sub {
       return _complete_value(@outer, $_[0]);

@@ -4001,25 +4001,30 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
       continue;
     }
 
-    if (compiled_root_field_defs_svp
+    {
+      SV **compiled_field_def_svp = hv_fetch(field_node_hv, "compiled_field_def", 18, 0);
+      if (compiled_field_def_svp && SvOK(*compiled_field_def_svp)) {
+        field_def_sv = gql_execution_share_or_copy_sv(*compiled_field_def_svp);
+      } else if (compiled_root_field_defs_svp
         && SvOK(*compiled_root_field_defs_svp)
         && gql_execution_path_is_root(path)
         && SvROK(*compiled_root_field_defs_svp)
         && SvTYPE(SvRV(*compiled_root_field_defs_svp)) == SVt_PVHV) {
-      HE *compiled_field_he = hv_fetch_ent((HV *)SvRV(*compiled_root_field_defs_svp), *result_name_svp, 0, 0);
-      if (compiled_field_he
-          && SvROK(HeVAL(compiled_field_he))
-          && SvTYPE(SvRV(HeVAL(compiled_field_he))) == SVt_PVHV) {
-        HV *compiled_field_hv = (HV *)SvRV(HeVAL(compiled_field_he));
-        SV **compiled_field_def_svp = hv_fetch(compiled_field_hv, "field_def", 9, 0);
-        field_def_sv = (compiled_field_def_svp && SvOK(*compiled_field_def_svp))
-          ? gql_execution_share_or_copy_sv(*compiled_field_def_svp)
-          : &PL_sv_undef;
+        HE *compiled_field_he = hv_fetch_ent((HV *)SvRV(*compiled_root_field_defs_svp), *result_name_svp, 0, 0);
+        if (compiled_field_he
+            && SvROK(HeVAL(compiled_field_he))
+            && SvTYPE(SvRV(HeVAL(compiled_field_he))) == SVt_PVHV) {
+          HV *compiled_field_hv = (HV *)SvRV(HeVAL(compiled_field_he));
+          SV **compiled_root_field_def_svp = hv_fetch(compiled_field_hv, "field_def", 9, 0);
+          field_def_sv = (compiled_root_field_def_svp && SvOK(*compiled_root_field_def_svp))
+            ? gql_execution_share_or_copy_sv(*compiled_root_field_def_svp)
+            : &PL_sv_undef;
+        } else {
+          field_def_sv = gql_execution_get_field_def(aTHX_ *schema_svp, parent_type, *field_name_svp);
+        }
       } else {
         field_def_sv = gql_execution_get_field_def(aTHX_ *schema_svp, parent_type, *field_name_svp);
       }
-    } else {
-      field_def_sv = gql_execution_get_field_def(aTHX_ *schema_svp, parent_type, *field_name_svp);
     }
     if (!SvOK(field_def_sv) || field_def_sv == &PL_sv_undef) {
       if (field_def_sv != &PL_sv_undef) {

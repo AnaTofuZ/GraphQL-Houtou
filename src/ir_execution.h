@@ -44,6 +44,7 @@ static HV *gql_ir_prepare_executable_root_field_plan_hv(pTHX_ SV *schema, gql_ir
 static gql_ir_fragment_definition_t *gql_ir_prepare_find_fragment_by_name(pTHX_ gql_ir_prepared_exec_t *prepared, const char *name, STRLEN name_len);
 static SV *gql_ir_fragment_definitions_to_legacy_map_sv(pTHX_ gql_ir_prepared_exec_t *prepared);
 static SV *gql_ir_operation_to_legacy_sv(pTHX_ gql_ir_prepared_exec_t *prepared, gql_ir_operation_definition_t *operation, SV *operation_name);
+static void gql_ir_attach_compiled_field_defs_to_nodes(pTHX_ SV *schema, SV *parent_type, SV *nodes_sv);
 
 static void
 gql_ir_compiled_exec_destroy(gql_ir_compiled_exec_t *compiled) {
@@ -149,6 +150,7 @@ gql_ir_compile_executable_plan_handle_sv(pTHX_ SV *schema, SV *prepared_handle_s
   ));
   compiled->root_fields_sv = gql_ir_prepare_executable_root_legacy_fields_sv(aTHX_ schema, prepared, operation_name);
   compiled->root_type_sv = gql_execution_call_schema_root_type(aTHX_ schema, operation_type);
+  gql_ir_attach_compiled_field_defs_to_nodes(aTHX_ schema, compiled->root_type_sv, compiled->root_fields_sv);
 
   stash = gv_stashpv("GraphQL::Houtou::XS::CompiledIR", GV_ADD);
   compiled_inner_sv = newSVuv(PTR2UV(compiled));
@@ -923,6 +925,151 @@ static SV *gql_ir_value_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_v
 static SV *gql_ir_directives_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_ptr_array_t *directives);
 static int gql_ir_selection_set_is_plain_fields(gql_ir_selection_set_t *selection_set);
 static SV *gql_ir_selection_set_to_legacy_fields_sv(pTHX_ gql_ir_document_t *document, gql_ir_selection_set_t *selection_set);
+
+static SV *
+gql_ir_compiled_attach_concrete_output_type(pTHX_ SV *field_def_sv) {
+  SV **type_svp;
+  SV *current;
+
+  if (!field_def_sv || !SvROK(field_def_sv) || SvTYPE(SvRV(field_def_sv)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+
+  type_svp = hv_fetch((HV *)SvRV(field_def_sv), "type", 4, 0);
+  if (!type_svp || !SvOK(*type_svp)) {
+    return &PL_sv_undef;
+  }
+
+  current = newSVsv(*type_svp);
+  while (sv_derived_from(current, "GraphQL::Houtou::Type::NonNull")
+      || sv_derived_from(current, "GraphQL::Type::NonNull")
+      || sv_derived_from(current, "GraphQL::Houtou::Type::List")
+      || sv_derived_from(current, "GraphQL::Type::List")) {
+    SV *inner = gql_execution_call_type_of(aTHX_ current);
+    SvREFCNT_dec(current);
+    current = inner;
+  }
+
+  if (sv_derived_from(current, "GraphQL::Houtou::Type::Object")
+      || sv_derived_from(current, "GraphQL::Type::Object")) {
+    return current;
+  }
+
+  SvREFCNT_dec(current);
+  return &PL_sv_undef;
+}
+
+static void
+gql_ir_attach_compiled_field_defs_to_selections(
+  pTHX_ SV *schema,
+  SV *parent_type,
+  AV *selections_av
+) {
+  I32 selection_i;
+  I32 selection_len;
+
+  if (!parent_type || !SvOK(parent_type) || !selections_av) {
+    return;
+  }
+
+  selection_len = av_len(selections_av);
+  for (selection_i = 0; selection_i <= selection_len; selection_i++) {
+    SV **selection_svp = av_fetch(selections_av, selection_i, 0);
+    HV *selection_hv;
+    SV **kind_svp;
+    STRLEN kind_len;
+    const char *kind_pv;
+
+    if (!selection_svp || !SvROK(*selection_svp) || SvTYPE(SvRV(*selection_svp)) != SVt_PVHV) {
+      continue;
+    }
+
+    selection_hv = (HV *)SvRV(*selection_svp);
+    kind_svp = hv_fetch(selection_hv, "kind", 4, 0);
+    if (!kind_svp || !SvOK(*kind_svp)) {
+      continue;
+    }
+    kind_pv = SvPV(*kind_svp, kind_len);
+
+    if (kind_len == 5 && strEQ(kind_pv, "field")) {
+      SV **name_svp = hv_fetch(selection_hv, "name", 4, 0);
+      SV **child_selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
+
+      if (name_svp && SvOK(*name_svp)) {
+        SV *field_def_sv = gql_execution_get_field_def(aTHX_ schema, parent_type, *name_svp);
+        if (field_def_sv && SvOK(field_def_sv) && field_def_sv != &PL_sv_undef) {
+          SV *child_parent_type_sv;
+          gql_store_sv(selection_hv, "compiled_field_def", field_def_sv);
+          child_parent_type_sv = gql_ir_compiled_attach_concrete_output_type(aTHX_ field_def_sv);
+          if (child_parent_type_sv != &PL_sv_undef
+              && child_selections_svp
+              && SvROK(*child_selections_svp)
+              && SvTYPE(SvRV(*child_selections_svp)) == SVt_PVAV) {
+            gql_ir_attach_compiled_field_defs_to_selections(
+              aTHX_
+              schema,
+              child_parent_type_sv,
+              (AV *)SvRV(*child_selections_svp)
+            );
+            SvREFCNT_dec(child_parent_type_sv);
+          }
+        }
+      }
+      continue;
+    }
+
+    if (kind_len == 15 && strEQ(kind_pv, "inline_fragment")) {
+      SV **child_selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
+      if (child_selections_svp
+          && SvROK(*child_selections_svp)
+          && SvTYPE(SvRV(*child_selections_svp)) == SVt_PVAV) {
+        gql_ir_attach_compiled_field_defs_to_selections(
+          aTHX_
+          schema,
+          parent_type,
+          (AV *)SvRV(*child_selections_svp)
+        );
+      }
+    }
+  }
+}
+
+static void
+gql_ir_attach_compiled_field_defs_to_nodes(pTHX_ SV *schema, SV *parent_type, SV *nodes_sv) {
+  AV *nodes_av;
+  I32 node_i;
+  I32 node_len;
+
+  if (!nodes_sv || !SvROK(nodes_sv) || SvTYPE(SvRV(nodes_sv)) != SVt_PVAV) {
+    return;
+  }
+
+  nodes_av = (AV *)SvRV(nodes_sv);
+  node_len = av_len(nodes_av);
+
+  for (node_i = 0; node_i <= node_len; node_i++) {
+    SV **node_svp = av_fetch(nodes_av, node_i, 0);
+    HV *node_hv;
+    SV **selections_svp;
+
+    if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) {
+      continue;
+    }
+
+    node_hv = (HV *)SvRV(*node_svp);
+    selections_svp = hv_fetch(node_hv, "selections", 10, 0);
+    if (selections_svp
+        && SvROK(*selections_svp)
+        && SvTYPE(SvRV(*selections_svp)) == SVt_PVAV) {
+      gql_ir_attach_compiled_field_defs_to_selections(
+        aTHX_
+        schema,
+        parent_type,
+        (AV *)SvRV(*selections_svp)
+      );
+    }
+  }
+}
 
 static int
 gql_ir_selection_set_is_plain_fields(gql_ir_selection_set_t *selection_set) {

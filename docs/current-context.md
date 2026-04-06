@@ -20,6 +20,14 @@ Compressed handoff for the current `GraphQL::Houtou` worktree.
 - `a030daf` Use runtime schema caches in Perl abstract paths
 - `45d816a` Reuse compiled nested field buckets
 - `b2ccbac` Cache schema field maps for execution lookups
+- `b35320d` Fold simple inline fragments into compiled buckets
+- `690ffb8` Reuse compiled fragment buckets in nested selections
+- `42a9d9f` Cache runtime schema lookups in execution contexts
+- `646c10f` Use execution runtime caches in Perl abstract paths
+- `6d7c2af` Attach compiled field defs to nested IR nodes
+- `e7c04b8` Attach compiled field defs to fragment plans
+- `c42263f` Use runtime caches in abstract fragment matching
+- `0685c33` Precompute possible type maps in runtime cache
 
 ## Current Execution State
 
@@ -63,12 +71,17 @@ Current compiled plan caches:
 - root selection plan
 - root field plan
 - nested selection metadata under root plans
+- nested `compiled_fields` for simple reusable buckets
+- nested/root `compiled_field_def`
+- fragment child nodes can also carry `compiled_field_def`
 
 Current compiled-plan execution reuse:
 
 - root-level `field_def` lookup is short-circuited from compiled metadata
 - plain nested field selections can carry `compiled_fields`
 - `collect_simple_object_fields()` now reuses those nested compiled buckets
+- simple inline fragments can be folded into compiled buckets
+- nested fragment buckets can now be reused as well
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -85,6 +98,7 @@ Current runtime cache contents:
 
 - `root_types`
 - `name2type`
+- `interface2types`
 - `possible_type_map`
 - `possible_types`
 - `field_maps`
@@ -94,6 +108,7 @@ Current runtime cache consumers:
 - XS root type lookup
 - XS abstract default path
 - XS `get_field_def`
+- XS execution context runtime cache lookups
 - Perl `Object::_fragment_condition_match`
 - Perl `Interface::_ensure_valid_runtime_type`
 
@@ -105,14 +120,36 @@ AST execution, not only IR execution.
 Known shape of results after latest landed work:
 
 - `compiled_ir` > `prepared_ir`
-- `compiled_ir` >= `houtou_xs_ast` on nested cases
+- `compiled_ir` > `houtou_xs_ast` on nested object cases
+- `compiled_ir` ~= `houtou_xs_ast` on abstract/fragment-heavy cases
 - runtime-cache work targets AST and IR paths simultaneously
 
-Recent sampled wins from the nested compiled bucket change:
+Current sampled numbers (`util/execution-benchmark.pl --count=-3`):
 
-- `nested_variable_object`: `compiled_ir` ~5.8% faster than `houtou_xs_ast`
-- `list_of_objects`: `compiled_ir` ~4.1% faster than `houtou_xs_ast`
-- `abstract_with_fragment`: slight win (~0.6%)
+- `simple_scalar`
+  - `houtou_prepared_ir`: `126079/s`
+  - `houtou_compiled_ir`: `139515/s`
+  - `houtou_xs_ast`: `139565/s`
+- `nested_variable_object`
+  - `houtou_prepared_ir`: `66566/s`
+  - `houtou_compiled_ir`: `79130/s`
+  - `houtou_xs_ast`: `77441/s`
+- `list_of_objects`
+  - `houtou_prepared_ir`: `54287/s`
+  - `houtou_compiled_ir`: `57941/s`
+  - `houtou_xs_ast`: `58659/s`
+- `abstract_with_fragment`
+  - `houtou_prepared_ir`: `40215/s`
+  - `houtou_compiled_ir`: `41647/s`
+  - `houtou_xs_ast`: `41687/s`
+- `async_scalar`
+  - `houtou_prepared_ir`: `74244/s`
+  - `houtou_compiled_ir`: `77535/s`
+  - `houtou_facade_ast`: `78946/s`
+- `async_list`
+  - `houtou_prepared_ir`: `42601/s`
+  - `houtou_compiled_ir`: `43671/s`
+  - `houtou_facade_ast`: `43260/s`
 
 ## Testing Rule
 
@@ -126,7 +163,7 @@ Use `./Build build` only when benchmark / profiling utilities need repo-root
 Latest verification:
 
 - `minil test`
-- `13 files / 187 tests / PASS`
+- `13 files / 189 tests / PASS`
 
 ## Coding Rule
 
@@ -148,6 +185,7 @@ Keep pushing compiled-plan reuse deeper without creating a second executor.
 
 Best next move:
 
-- extend compiled nested buckets to handle fragment / inline-fragment cases
-- continue reusing existing XS executor core instead of duplicating execution
-  logic
+- push compiled-plan reuse deeper into nested execution
+- keep improving runtime schema snapshots so AST and IR paths both benefit
+- focus next on abstract/concrete subtree reuse rather than fragment caching
+  alone

@@ -60,18 +60,22 @@ Query:
 
 Rates:
 
-- `upstream_string`: `4859/s`
-- `upstream_ast`: `42334/s`
-- `houtou_facade_string`: `111655/s`
-- `houtou_xs_string`: `118791/s`
-- `houtou_facade_ast`: `124889/s`
-- `houtou_xs_ast`: `133720/s`
+- `upstream_string`: `4902/s`
+- `upstream_ast`: `41261/s`
+- `houtou_facade_string`: `115904/s`
+- `houtou_xs_string`: `122504/s`
+- `houtou_prepared_ir`: `126079/s`
+- `houtou_facade_ast`: `129465/s`
+- `houtou_compiled_ir`: `139515/s`
+- `houtou_xs_ast`: `139565/s`
 
 Observations:
 
-- Houtou is much faster for both source-string and prebuilt-AST execution.
+- Houtou is much faster for source-string, prepared-IR, compiled-IR, and
+  prebuilt-AST execution.
+- `compiled_ir` is now effectively tied with `houtou_xs_ast` on this flat case.
 - The flat-query fixed overhead work that previously hurt `simple_scalar` is no
-  longer a bottleneck in this benchmark.
+  longer a bottleneck.
 
 ### nested_variable_object
 
@@ -83,17 +87,21 @@ query q($id: ID!) { user(id: $id) { id name } }
 
 Rates:
 
-- `upstream_string`: `3084/s`
-- `upstream_ast`: `25038/s`
-- `houtou_facade_string`: `56170/s`
-- `houtou_xs_string`: `59513/s`
-- `houtou_facade_ast`: `63352/s`
-- `houtou_xs_ast`: `66215/s`
+- `upstream_string`: `3078/s`
+- `upstream_ast`: `25041/s`
+- `houtou_facade_string`: `64804/s`
+- `houtou_xs_string`: `67684/s`
+- `houtou_prepared_ir`: `66566/s`
+- `houtou_facade_ast`: `74011/s`
+- `houtou_xs_ast`: `77441/s`
+- `houtou_compiled_ir`: `79130/s`
 
 Observations:
 
 - Houtou is far ahead on source-string execution.
-- On prebuilt AST, Houtou now clearly beats upstream as well.
+- `compiled_ir` now clearly beats both upstream AST and `houtou_xs_ast`.
+- The win here is the clearest sign that compiled execution-plan reuse is
+  paying off for nested object execution.
 
 ### list_of_objects
 
@@ -105,17 +113,22 @@ Query:
 
 Rates:
 
-- `upstream_string`: `3889/s`
-- `upstream_ast`: `17926/s`
-- `houtou_facade_string`: `44929/s`
-- `houtou_xs_string`: `47184/s`
-- `houtou_facade_ast`: `47900/s`
-- `houtou_xs_ast`: `49028/s`
+- `upstream_string`: `3901/s`
+- `upstream_ast`: `17816/s`
+- `houtou_facade_string`: `53315/s`
+- `houtou_xs_string`: `55083/s`
+- `houtou_prepared_ir`: `54287/s`
+- `houtou_facade_ast`: `57273/s`
+- `houtou_compiled_ir`: `57941/s`
+- `houtou_xs_ast`: `58659/s`
 
 Observations:
 
 - Houtou is again much faster on string execution.
-- On AST execution, Houtou now has a wide margin in this list-of-objects case.
+- `compiled_ir` improves on `prepared_ir`, but `houtou_xs_ast` is still slightly
+  ahead on this case.
+- This suggests that list-heavy execution still leaves some nested front-end
+  work on the compiled path.
 
 ### abstract_with_fragment
 
@@ -127,17 +140,22 @@ Query:
 
 Rates:
 
-- `upstream_string`: `3032/s`
-- `upstream_ast`: `23801/s`
-- `houtou_facade_string`: `34238/s`
-- `houtou_xs_string`: `35318/s`
-- `houtou_facade_ast`: `36559/s`
-- `houtou_xs_ast`: `37449/s`
+- `upstream_string`: `3031/s`
+- `upstream_ast`: `23641/s`
+- `houtou_facade_string`: `37547/s`
+- `houtou_xs_string`: `38397/s`
+- `houtou_prepared_ir`: `40215/s`
+- `houtou_facade_ast`: `40588/s`
+- `houtou_compiled_ir`: `41647/s`
+- `houtou_xs_ast`: `41687/s`
 
 Observations:
 
 - Houtou still dominates source-string execution.
-- The abstract-type / fragment path now also beats upstream on prebuilt AST.
+- `compiled_ir` and `houtou_xs_ast` are now effectively tied here.
+- The remaining cost is no longer basic fragment caching; it is mostly the
+  dynamic runtime-type and abstract-condition work that still has to happen at
+  execution time.
 
 ### async_scalar
 
@@ -149,15 +167,20 @@ Query:
 
 Rates:
 
-- `upstream_string`: `6957/s`
-- `upstream_ast`: `42173/s`
-- `houtou_facade_string`: `71050/s`
-- `houtou_facade_ast`: `74722/s`
+- `upstream_string`: `6776/s`
+- `upstream_ast`: `41389/s`
+- `houtou_facade_string`: `74256/s`
+- `houtou_prepared_ir`: `74244/s`
+- `houtou_compiled_ir`: `77535/s`
+- `houtou_facade_ast`: `78946/s`
 
 Observations:
 
-- Promise-backed execution is now strongly XS-backed through the public facade.
-- Houtou now beats upstream even for AST-only promise-backed scalar execution.
+- Promise-backed execution remains strongly XS-backed through the public facade.
+- `compiled_ir` is ahead of `prepared_ir`, but `houtou_facade_ast` is still
+  slightly ahead here.
+- This points to remaining plan reuse opportunities in promise-aware execution,
+  not to a parser bottleneck.
 
 ### async_list
 
@@ -169,14 +192,18 @@ Query:
 
 Rates:
 
-- `upstream_string`: `6198/s`
-- `upstream_ast`: `26212/s`
-- `houtou_facade_string`: `40163/s`
-- `houtou_facade_ast`: `41505/s`
+- `upstream_string`: `6014/s`
+- `upstream_ast`: `26131/s`
+- `houtou_facade_string`: `42202/s`
+- `houtou_prepared_ir`: `42601/s`
+- `houtou_facade_ast`: `43260/s`
+- `houtou_compiled_ir`: `43671/s`
 
 Observations:
 
-- Promise-backed list execution also now beats upstream on both string and AST paths.
+- Promise-backed list execution also now beats upstream on both string and AST
+  paths.
+- `compiled_ir` is modestly ahead of `prepared_ir` and `houtou_facade_ast`.
 - This case improved materially once prepared execution, field merge, and leaf
   completion stopped crossing the PP bridge.
 
@@ -184,17 +211,20 @@ Observations:
 
 Current takeaways:
 
-- `GraphQL::Houtou` is now strong both for practical source-string execution
-  and for the prebuilt-AST workloads covered by this benchmark.
-- The execution XS work is paying off across flat, nested, list, abstract, and
-  promise-backed cases.
+- `GraphQL::Houtou` is now strong for practical source-string execution,
+  prebuilt-AST execution, and the new prepared/compiled IR execution paths.
+- `compiled_ir` consistently improves on `prepared_ir`.
+- `compiled_ir` is already best on some nested cases, but still only tied with
+  `houtou_xs_ast` on abstract/fragment-heavy execution.
 - Promise-backed execution is no longer just a compatibility path in this
   benchmark set; it is now a performance win area too.
 
 In short:
 
 - parser + execute together: Houtou is much faster
-- execute on prebuilt AST: Houtou now also wins across the benchmarked cases
+- execute on prebuilt AST: Houtou wins across the benchmarked cases here
+- prepared/compiled IR: already worthwhile, with compiled plans giving a clear
+  benefit over prepared IR
 - promise-heavy execution: now XS-backed enough to outperform upstream in the
   benchmarked scalar and list cases
 
@@ -240,24 +270,24 @@ That is why `simple_scalar` now swings heavily in Houtou's favor.
 The next likely wins are no longer the old flat-query basics. The more useful
 remaining directions are:
 
-1. Shrink the remaining complex object/list completion fallbacks.
-2. Push abstract-type and fragment-heavy error paths deeper into XS.
+1. Expand compiled plans deeper into nested selection execution, especially
+   where `compiled_ir` still trails `houtou_xs_ast`.
+2. Push abstract-type and fragment-heavy runtime-type work closer to compiled
+   concrete subtrees.
 3. Continue reducing compatibility-shape allocation in the AST execution path.
-4. Extend benchmark coverage to more schema-heavy and mutation-oriented cases.
-- the fast path is present, but the fallback boundary is still comparatively near
+4. Keep moving schema/runtime lookups out of Moo / Type::Tiny / Exporter::Tiny
+   hot paths by growing runtime schema snapshots.
+5. Extend benchmark coverage to more schema-heavy and mutation-oriented cases.
 
-This is no longer a parser problem; it is execution-front-end overhead around
-abstract selections.
+This is no longer a parser problem. The remaining cost is mostly execution
+front-end overhead around abstract selections and schema/runtime dispatch.
 
-### Promise Paths: Dispatch Is Better, But Continuations Still Cost
+### Promise Paths: Dispatch Is Better, But Plan Reuse Still Matters
 
-Promise-backed execution improved structurally, but prebuilt-AST promise cases
-still do not win because:
-
-- promise continuations are still modeled in Perl-visible callback style
-- completion still performs promise-specific branching late
-- error wrapping and continuation chaining are now more XS-backed, but not yet
-  fully internal to the XS execution core
+Promise-backed execution improved structurally, and the public facade now wins
+clearly over upstream. The remaining promise work is less about PP bridging and
+more about how much plan/runtime reuse can be preserved once promise-aware
+execution branches begin.
 
 The current promise design is compatibility-correct and adapter-friendly, but it
 is not yet a deeply optimized execution model.

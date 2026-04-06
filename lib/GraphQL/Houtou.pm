@@ -264,7 +264,7 @@ Example:
 
 =head1 BENCHMARK SNAPSHOT
 
-As of 2026-04-05, practical execution benchmarks using
+As of 2026-04-06, practical execution benchmarks using
 C<util/execution-benchmark.pl --count=-3> produced the following snapshot:
 
 =over 4
@@ -272,32 +272,38 @@ C<util/execution-benchmark.pl --count=-3> produced the following snapshot:
 =item *
 
 C<simple_scalar> AST execution:
-C<houtou_xs_ast> about 133,720/s, C<upstream_ast> about 42,334/s
+C<houtou_xs_ast> about 139,565/s, C<houtou_compiled_ir> about 139,515/s,
+C<upstream_ast> about 41,261/s
 
 =item *
 
 C<nested_variable_object> AST execution:
-C<houtou_xs_ast> about 66,215/s, C<upstream_ast> about 25,038/s
+C<houtou_compiled_ir> about 79,130/s, C<houtou_xs_ast> about 77,441/s,
+C<upstream_ast> about 25,041/s
 
 =item *
 
 C<list_of_objects> AST execution:
-C<houtou_xs_ast> about 49,028/s, C<upstream_ast> about 17,926/s
+C<houtou_xs_ast> about 58,659/s, C<houtou_compiled_ir> about 57,941/s,
+C<upstream_ast> about 17,816/s
 
 =item *
 
 C<abstract_with_fragment> AST execution:
-C<houtou_xs_ast> about 37,449/s, C<upstream_ast> about 23,801/s
+C<houtou_xs_ast> about 41,687/s, C<houtou_compiled_ir> about 41,647/s,
+C<upstream_ast> about 23,641/s
 
 =item *
 
 C<async_scalar> AST execution:
-C<houtou_facade_ast> about 74,722/s, C<upstream_ast> about 42,173/s
+C<houtou_facade_ast> about 78,946/s, C<houtou_compiled_ir> about 77,535/s,
+C<upstream_ast> about 41,389/s
 
 =item *
 
 C<async_list> AST execution:
-C<houtou_facade_ast> about 41,505/s, C<upstream_ast> about 26,212/s
+C<houtou_compiled_ir> about 43,671/s, C<houtou_facade_ast> about 43,260/s,
+C<upstream_ast> about 26,131/s
 
 =back
 
@@ -309,6 +315,12 @@ This confirms several practical points:
 
 the XS path is now materially faster than upstream execution in the benchmarked
 AST and source-string cases
+
+=item *
+
+compiled IR plans are now a real execution path, not just parser metadata; they
+already improve over prepared IR and are competitive with, or better than, the
+best AST-based Houtou path in several practical cases
 
 =item *
 

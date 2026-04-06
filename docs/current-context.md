@@ -198,6 +198,17 @@ Latest verification:
 When creating a temporary `SV` and passing it into another helper, the caller
 owns that temporary unless ownership transfer is explicitly documented.
 
+Perl API ownership model:
+
+- track ownership, not just raw refcounts
+- a temporary pushed only for stack/lifetime purposes should normally be made
+  mortal with `sv_2mortal(...)`
+- do not mortalize the same owned reference twice
+- when embedding a freshly-created referent into an RV/container, prefer the
+  `_noinc` form if ownership is being transferred rather than shared
+- prefer APIs like `hv_store(...)` when the key is not already an `SV`, because
+  they avoid creating temporary key SVs in the first place
+
 Practical rule:
 
 - `newSVsv(...)`
@@ -210,7 +221,10 @@ to `SvREFCNT_dec(...)` afterward.
 The same applies to temporary key SVs used with hash helpers.
 
 - `hv_store_ent(...)` does not consume the key SV
+- `hv_store_ent(...)` takes ownership of one reference to `val` on success, but
+  not of `key`
 - `hv_fetch_ent(...)` does not transfer ownership of a temporary key SV
+- `hv_iterkeysv(...)` returns a mortal copy; treat it as borrowed temporary data
 
 Practical rule:
 

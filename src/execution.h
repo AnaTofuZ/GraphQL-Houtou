@@ -2624,8 +2624,11 @@ gql_execution_merge_compiled_fields_into(
 
     target_he = hv_fetch_ent(nodes_defs_hv, *name_svp, 0, 0);
     if (!target_he) {
+      SV *name_key_sv;
       target_bucket = newAV();
-      (void)hv_store_ent(nodes_defs_hv, newSVsv(*name_svp), newRV_noinc((SV *)target_bucket), 0);
+      name_key_sv = newSVsv(*name_svp);
+      (void)hv_store_ent(nodes_defs_hv, name_key_sv, newRV_noinc((SV *)target_bucket), 0);
+      SvREFCNT_dec(name_key_sv);
       av_push(field_names_av, newSVsv(*name_svp));
     } else if (SvROK(HeVAL(target_he)) && SvTYPE(SvRV(HeVAL(target_he))) == SVt_PVAV) {
       target_bucket = (AV *)SvRV(HeVAL(target_he));

@@ -20,6 +20,7 @@ our @EXPORT_OK = qw(
   _prepared_executable_ir_stats_xs
   _prepared_executable_ir_plan_xs
   _prepared_executable_ir_frontend_xs
+  _prepared_executable_ir_context_seed_xs
   _collect_fields_xs
   _execute_fields_xs
   _get_argument_values_xs

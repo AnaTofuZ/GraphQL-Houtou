@@ -744,4 +744,25 @@ subtest 'prepare executable ir frontend variable metadata' => sub {
   );
 };
 
+subtest 'prepare executable ir context seed metadata' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID) { hello ...F } fragment F on Query { greet(name: "x") }'
+  );
+  my $seed = GraphQL::Houtou::XS::Execution::_prepared_executable_ir_context_seed_xs(
+    $schema,
+    $prepared,
+    'Q',
+    { id => '42' },
+  );
+
+  is $seed->{operation_type}, 'query', 'context seed exposes selected operation type';
+  isa_ok $seed->{root_type}, 'GraphQL::Houtou::Type::Object';
+  is $seed->{root_type}->name, 'Query', 'context seed resolves schema root type';
+  is_deeply $seed->{variable_values}, { id => '42' }, 'context seed carries runtime variable bag';
+  is $seed->{frontend}{operation}{operation_name}, 'Q', 'context seed reuses lightweight frontend metadata';
+  is $seed->{frontend}{fragments}{F}{type_condition}, 'Query', 'context seed keeps fragment metadata';
+};
+
 done_testing;

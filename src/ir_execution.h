@@ -257,3 +257,34 @@ gql_ir_prepare_executable_frontend_hv(pTHX_ gql_ir_prepared_exec_t *prepared, SV
   hv_stores(frontend_hv, "fragments", newRV_noinc((SV *)fragments_hv));
   return frontend_hv;
 }
+
+static HV *
+gql_ir_prepare_executable_context_seed_hv(
+  pTHX_ SV *schema,
+  gql_ir_prepared_exec_t *prepared,
+  SV *operation_name,
+  SV *variable_values
+) {
+  HV *seed_hv = newHV();
+  HV *frontend_hv;
+  gql_ir_operation_definition_t *selected;
+  const char *operation_type;
+  SV *root_type_sv;
+
+  selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
+  operation_type = gql_ir_operation_kind_name(selected->operation);
+  frontend_hv = gql_ir_prepare_executable_frontend_hv(aTHX_ prepared, operation_name);
+  root_type_sv = gql_execution_call_schema_root_type(aTHX_ schema, operation_type);
+
+  gql_store_sv(seed_hv, "schema", gql_execution_share_or_copy_sv(schema));
+  gql_store_sv(seed_hv, "operation_type", newSVpv(operation_type, 0));
+  gql_store_sv(seed_hv, "root_type", root_type_sv);
+  gql_store_sv(seed_hv, "frontend", newRV_noinc((SV *)frontend_hv));
+  if (variable_values && SvOK(variable_values)) {
+    gql_store_sv(seed_hv, "variable_values", gql_execution_share_or_copy_sv(variable_values));
+  } else {
+    gql_store_sv(seed_hv, "variable_values", newRV_noinc((SV *)newHV()));
+  }
+
+  return seed_hv;
+}

@@ -39,6 +39,9 @@ gql_ir_prepared_exec_destroy(gql_ir_prepared_exec_t *prepared) {
 static const char *gql_ir_operation_kind_name(gql_ir_operation_kind_t kind);
 static gql_ir_operation_definition_t *gql_ir_prepare_select_operation(pTHX_ gql_ir_prepared_exec_t *prepared, SV *operation_name);
 static SV *gql_ir_prepare_executable_root_legacy_fields_sv(pTHX_ SV *schema, gql_ir_prepared_exec_t *prepared, SV *operation_name);
+static AV *gql_ir_prepare_executable_root_selection_plan_av(pTHX_ gql_ir_prepared_exec_t *prepared, SV *operation_name);
+static HV *gql_ir_prepare_executable_root_field_plan_hv(pTHX_ SV *schema, gql_ir_prepared_exec_t *prepared, SV *operation_name);
+static gql_ir_fragment_definition_t *gql_ir_prepare_find_fragment_by_name(pTHX_ gql_ir_prepared_exec_t *prepared, const char *name, STRLEN name_len);
 static SV *gql_ir_fragment_definitions_to_legacy_map_sv(pTHX_ gql_ir_prepared_exec_t *prepared);
 static SV *gql_ir_operation_to_legacy_sv(pTHX_ gql_ir_prepared_exec_t *prepared, gql_ir_operation_definition_t *operation, SV *operation_name);
 
@@ -67,6 +70,14 @@ gql_ir_compiled_exec_destroy(gql_ir_compiled_exec_t *compiled) {
   if (compiled->fragments_sv) {
     SvREFCNT_dec(compiled->fragments_sv);
     compiled->fragments_sv = NULL;
+  }
+  if (compiled->root_selection_plan_sv) {
+    SvREFCNT_dec(compiled->root_selection_plan_sv);
+    compiled->root_selection_plan_sv = NULL;
+  }
+  if (compiled->root_field_plan_sv) {
+    SvREFCNT_dec(compiled->root_field_plan_sv);
+    compiled->root_field_plan_sv = NULL;
   }
   if (compiled->root_fields_sv) {
     SvREFCNT_dec(compiled->root_fields_sv);
@@ -127,6 +138,15 @@ gql_ir_compile_executable_plan_handle_sv(pTHX_ SV *schema, SV *prepared_handle_s
   compiled->operation_name_sv = (operation_name && SvOK(operation_name)) ? newSVsv(operation_name) : newSV(0);
   compiled->operation_sv = gql_ir_operation_to_legacy_sv(aTHX_ prepared, selected, operation_name);
   compiled->fragments_sv = gql_ir_fragment_definitions_to_legacy_map_sv(aTHX_ prepared);
+  compiled->root_selection_plan_sv = newRV_noinc((SV *)gql_ir_prepare_executable_root_selection_plan_av(
+    aTHX_ prepared,
+    operation_name
+  ));
+  compiled->root_field_plan_sv = newRV_noinc((SV *)gql_ir_prepare_executable_root_field_plan_hv(
+    aTHX_ schema,
+    prepared,
+    operation_name
+  ));
   compiled->root_fields_sv = gql_ir_prepare_executable_root_legacy_fields_sv(aTHX_ schema, prepared, operation_name);
   compiled->root_type_sv = gql_execution_call_schema_root_type(aTHX_ schema, operation_type);
 
@@ -427,13 +447,43 @@ gql_ir_prepare_selection_plan_av(pTHX_ gql_ir_prepared_exec_t *prepared, gql_ir_
           "selection_count",
           newSVuv((UV)(field->selection_set ? field->selection_set->selections.count : 0))
         );
+        if (field->selection_set && field->selection_set->selections.count > 0) {
+          hv_stores(
+            item_hv,
+            "selections",
+            newRV_noinc((SV *)gql_ir_prepare_selection_plan_av(aTHX_ prepared, field->selection_set))
+          );
+        }
         break;
       }
       case GQL_IR_SELECTION_FRAGMENT_SPREAD: {
         gql_ir_fragment_spread_t *spread = selection->as.fragment_spread;
+        SV *fragment_name_sv;
+        STRLEN name_len;
+        const char *name;
+        gql_ir_fragment_definition_t *fragment;
         hv_stores(item_hv, "kind", newSVpv("fragment_spread", 0));
-        hv_stores(item_hv, "name", gql_ir_make_sv_from_span(aTHX_ prepared->document, spread->name));
+        fragment_name_sv = gql_ir_make_sv_from_span(aTHX_ prepared->document, spread->name);
+        hv_stores(item_hv, "name", newSVsv(fragment_name_sv));
         hv_stores(item_hv, "directive_count", newSVuv((UV)spread->directives.count));
+        name = SvPV(fragment_name_sv, name_len);
+        fragment = gql_ir_prepare_find_fragment_by_name(aTHX_ prepared, name, name_len);
+        if (fragment) {
+          hv_stores(item_hv, "type_condition", gql_ir_make_sv_from_span(aTHX_ prepared->document, fragment->type_condition));
+          hv_stores(
+            item_hv,
+            "selection_count",
+            newSVuv((UV)(fragment->selection_set ? fragment->selection_set->selections.count : 0))
+          );
+          if (fragment->selection_set && fragment->selection_set->selections.count > 0) {
+            hv_stores(
+              item_hv,
+              "selections",
+              newRV_noinc((SV *)gql_ir_prepare_selection_plan_av(aTHX_ prepared, fragment->selection_set))
+            );
+          }
+        }
+        SvREFCNT_dec(fragment_name_sv);
         break;
       }
       case GQL_IR_SELECTION_INLINE_FRAGMENT: {
@@ -450,6 +500,13 @@ gql_ir_prepare_selection_plan_av(pTHX_ gql_ir_prepared_exec_t *prepared, gql_ir_
           "selection_count",
           newSVuv((UV)(fragment->selection_set ? fragment->selection_set->selections.count : 0))
         );
+        if (fragment->selection_set && fragment->selection_set->selections.count > 0) {
+          hv_stores(
+            item_hv,
+            "selections",
+            newRV_noinc((SV *)gql_ir_prepare_selection_plan_av(aTHX_ prepared, fragment->selection_set))
+          );
+        }
         break;
       }
       default:
@@ -1174,6 +1231,24 @@ gql_ir_operation_to_legacy_sv(
     prepared->cached_operation_legacy_sv = newSVsv(ret);
     return ret;
   }
+}
+
+static SV *
+gql_ir_compiled_plan_to_hv_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
+  HV *hv;
+
+  if (!compiled) {
+    return newRV_noinc((SV *)newHV());
+  }
+
+  hv = newHV();
+  gql_store_sv(hv, "operation", gql_execution_share_or_copy_sv(compiled->operation_sv));
+  gql_store_sv(hv, "fragments", gql_execution_share_or_copy_sv(compiled->fragments_sv));
+  gql_store_sv(hv, "root_type", gql_execution_share_or_copy_sv(compiled->root_type_sv));
+  gql_store_sv(hv, "root_selection_plan", gql_execution_share_or_copy_sv(compiled->root_selection_plan_sv));
+  gql_store_sv(hv, "root_field_plan", gql_execution_share_or_copy_sv(compiled->root_field_plan_sv));
+  gql_store_sv(hv, "root_fields", gql_execution_share_or_copy_sv(compiled->root_fields_sv));
+  return newRV_noinc((SV *)hv);
 }
 
 static SV *

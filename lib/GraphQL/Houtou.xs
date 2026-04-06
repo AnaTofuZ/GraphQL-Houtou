@@ -244,6 +244,27 @@ _compile_executable_ir_plan_xs(schema, handle, operation_name = NULL)
     RETVAL
 
 SV *
+_compiled_executable_ir_plan_xs(handle)
+    SV *handle
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::CompiledIR")) {
+      croak("expected a GraphQL::Houtou::XS::CompiledIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_compiled_exec_t *compiled;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("compiled IR handle is no longer valid");
+      }
+
+      compiled = INT2PTR(gql_ir_compiled_exec_t *, SvUV(inner_sv));
+      RETVAL = gql_ir_compiled_plan_to_hv_sv(aTHX_ compiled);
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 _prepared_executable_ir_stats_xs(handle)
     SV *handle
   CODE:

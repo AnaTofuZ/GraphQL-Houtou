@@ -77,6 +77,8 @@ These commits exist on `ir-direct-execution`, not on `main`:
 - `d2441c6` Add prepared IR root selection plan
 - `48582f7` Add prepared IR root field buckets
 - `656c77a` Add prepared IR legacy field bridge
+- `f950c6d` Add initial prepared IR execution path
+- `e1bcd5f` Add compiled IR execution plans
 
 ## Current Architecture
 
@@ -198,6 +200,7 @@ Internal-only IR helpers now exist for executable documents:
 - `GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_field_plan_xs(...)`
 - `GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_legacy_fields_xs(...)`
 - `GraphQL::Houtou::XS::Execution::execute_prepared_ir_xs(...)`
+- `GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs(...)`
 
 Newest in-progress step:
 
@@ -213,6 +216,17 @@ It avoids full document AST materialization, but still bridges the reachable
 execution subtree into the existing XS engine instead of introducing a second
 executor.
 
+- `GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs(...)`
+  now reuses a compiled plan that caches:
+  - operation metadata
+  - fragment map
+  - root legacy fields
+  - root type
+  - root selection plan metadata
+  - root field plan metadata
+
+This is the first reusable compiled-plan execution path.
+
 ## Testing Snapshot
 
 Latest local verification:
@@ -222,7 +236,7 @@ Latest local verification:
 - Do not use `./Build build` / `./Build test` as the primary workflow anymore.
 - Latest local verification:
   - `minil test`
-  - `13 files / 182 tests / PASS`
+  - `13 files / 184 tests / PASS`
 
 ## XS Memory Rule
 
@@ -298,10 +312,11 @@ Recent PP bridge profile snapshot (`HOUTOU_PROFILE_PP_BRIDGE=1`):
 
 Immediate next step on `ir-direct-execution`:
 
-- benchmark `execute_prepared_ir_xs(...)` against the existing string-query path
-- reduce the remaining front-end bridge cost so root field execution can stay
-  AST-free deeper into nested execution
-- replace wrapper-level fallback shims with cleaner XS-side defaults where safe
+- grow compiled plans from root-only caches into nested selection plans
+- push schema-resolved field definitions into compiled plans where profitable
+- reduce remaining front-end bridge cost below the root selection boundary
+- begin pairing compiled query plans with a runtime schema snapshot so
+  `Exporter::Tiny` / `Type::Tiny` / `Moo` no longer sit on the hot execution path
 
 Immediate next step on `main`:
 

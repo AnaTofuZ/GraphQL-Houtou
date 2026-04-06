@@ -790,17 +790,49 @@ subtest 'prepare executable ir root selection plan' => sub {
         argument_count => 1,
         directive_count => 0,
         selection_count => 1,
+        selections => [
+          {
+            kind => 'field',
+            name => 'id',
+            alias => undef,
+            argument_count => 0,
+            directive_count => 0,
+            selection_count => 0,
+          },
+        ],
       },
       {
         kind => 'fragment_spread',
         name => 'F',
         directive_count => 0,
+        type_condition => 'Query',
+        selection_count => 1,
+        selections => [
+          {
+            kind => 'field',
+            name => 'hello',
+            alias => undef,
+            argument_count => 0,
+            directive_count => 0,
+            selection_count => 0,
+          },
+        ],
       },
       {
         kind => 'inline_fragment',
         type_condition => 'Query',
         directive_count => 0,
         selection_count => 1,
+        selections => [
+          {
+            kind => 'field',
+            name => 'greet',
+            alias => undef,
+            argument_count => 1,
+            directive_count => 0,
+            selection_count => 0,
+          },
+        ],
       },
     ],
     'prepared ir handle exposes root selection plan without AST materialization',
@@ -964,6 +996,86 @@ subtest 'execute compiled ir with variables and fragments' => sub {
       },
     },
     'compiled ir plan executes variables and fragments with cached frontend state',
+  );
+};
+
+subtest 'compiled ir plan caches nested selection metadata' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID!) { user(id: $id) { ...Bits extra: name } } fragment Bits on User { id profile { bio } }'
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $schema,
+    $prepared,
+    'Q',
+  );
+  my $plan = GraphQL::Houtou::XS::Execution::_compiled_executable_ir_plan_xs($compiled);
+
+  is(
+    $plan->{root_field_plan}{fields}{user}{field_name},
+    'user',
+    'compiled plan exposes cached root field metadata',
+  );
+
+  is_deeply(
+    $plan->{root_selection_plan},
+    [
+      {
+        kind => 'field',
+        name => 'user',
+        alias => undef,
+        argument_count => 1,
+        directive_count => 0,
+        selection_count => 2,
+        selections => [
+          {
+            kind => 'fragment_spread',
+            name => 'Bits',
+            directive_count => 0,
+            type_condition => 'User',
+            selection_count => 2,
+            selections => [
+              {
+                kind => 'field',
+                name => 'id',
+                alias => undef,
+                argument_count => 0,
+                directive_count => 0,
+                selection_count => 0,
+              },
+              {
+                kind => 'field',
+                name => 'profile',
+                alias => undef,
+                argument_count => 0,
+                directive_count => 0,
+                selection_count => 1,
+                selections => [
+                  {
+                    kind => 'field',
+                    name => 'bio',
+                    alias => undef,
+                    argument_count => 0,
+                    directive_count => 0,
+                    selection_count => 0,
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            kind => 'field',
+            name => 'name',
+            alias => 'extra',
+            argument_count => 0,
+            directive_count => 0,
+            selection_count => 0,
+          },
+        ],
+      },
+    ],
+    'compiled plan caches nested selection metadata for root fields and fragment expansions',
   );
 };
 

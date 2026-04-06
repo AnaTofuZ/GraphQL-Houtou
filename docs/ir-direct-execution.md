@@ -243,6 +243,41 @@ The plan should be reusable across repeated executions of the same query.
 
 Status: active next step.
 
+Current implementation note:
+
+- compiled plans already cache:
+  - operation metadata
+  - fragment map
+  - root legacy fields
+  - root type
+  - root selection metadata
+  - root field plan metadata
+- the next expansion is to make nested selection metadata and schema-resolved
+  field definitions increasingly authoritative so execution no longer rebuilds
+  front-end state below the root selection boundary
+
+## Runtime Schema Direction
+
+NYTProf snapshots still show cost from Perl meta layers such as:
+
+- `Exporter::Tiny`
+- `Type::Tiny`
+- `Moo`
+
+That cost does not come from query parsing alone. It also comes from reading
+schema/type objects at runtime.
+
+The current conclusion is that query-side compiled plans should eventually be
+paired with a **runtime schema snapshot**:
+
+- public `GraphQL::Houtou::Schema` / `GraphQL::Houtou::Type::*` stay unchanged
+- execution compiles those objects into a smaller runtime schema form
+- compiled plans then target that runtime schema instead of the original Moo /
+  Type::Tiny object graph
+
+This keeps compatibility while removing Perl meta-layer costs from hot
+execution paths.
+
 ### Stage 5
 
 Add an internal string-query fast path that compiles and executes from the

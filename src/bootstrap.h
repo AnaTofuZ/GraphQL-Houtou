@@ -164,6 +164,8 @@ struct gql_ir_compiled_exec {
   SV *operation_name_sv;
   SV *operation_sv;
   SV *fragments_sv;
+  SV *root_selection_plan_sv;
+  SV *root_field_plan_sv;
   SV *root_fields_sv;
   SV *root_type_sv;
 };

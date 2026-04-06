@@ -17,7 +17,9 @@ our $VERSION = '0.01';
 our @EXPORT_OK = qw(
   execute_xs
   execute_prepared_ir_xs
+  execute_compiled_ir_xs
   _prepare_executable_ir_xs
+  _compile_executable_ir_plan_xs
   _prepared_executable_ir_stats_xs
   _prepared_executable_ir_plan_xs
   _prepared_executable_ir_frontend_xs
@@ -29,6 +31,7 @@ our @EXPORT_OK = qw(
   _prepared_executable_ir_root_legacy_fields_xs
   _prepared_executable_ir_execution_context_xs
   _execute_prepared_ir_xs
+  _execute_compiled_ir_xs
   _collect_fields_xs
   _execute_fields_xs
   _get_argument_values_xs
@@ -110,8 +113,7 @@ sub execute_prepared_ir_xs {
     $promise_code,
   ) = @_;
 
-  my $normalized_promise_code = normalize_promise_code($promise_code);
-  my $context = _prepared_executable_ir_execution_context_xs(
+  return _execute_prepared_ir_xs(
     $schema,
     $handle,
     $root_value,
@@ -119,36 +121,28 @@ sub execute_prepared_ir_xs {
     $variable_values,
     $operation_name,
     $field_resolver,
-    $normalized_promise_code,
+    normalize_promise_code($promise_code),
   );
-  my $seed = _prepared_executable_ir_context_seed_xs(
-    $schema,
+}
+
+sub execute_compiled_ir_xs {
+  my (
     $handle,
-    $operation_name,
-    $variable_values,
-  );
-  if (!defined $context->{field_resolver}) {
-    require GraphQL::Houtou::Execution::PP;
-    $context->{field_resolver} = \&GraphQL::Houtou::Execution::PP::_default_field_resolver;
-  }
-  my $fields = _prepared_executable_ir_root_legacy_fields_xs(
-    $schema,
-    $handle,
-    $operation_name,
-  );
-  my $result = _execute_fields_xs(
-    $context,
-    $seed->{root_type},
     $root_value,
-    [],
-    $fields,
+    $context_value,
+    $variable_values,
+    $field_resolver,
+    $promise_code,
+  ) = @_;
+
+  return _execute_compiled_ir_xs(
+    $handle,
+    $root_value,
+    $context_value,
+    $variable_values,
+    $field_resolver,
+    normalize_promise_code($promise_code),
   );
-
-  if ($normalized_promise_code && _promise_is_promise_xs($normalized_promise_code, $result)) {
-    return _then_build_response_xs($normalized_promise_code, $result, 0);
-  }
-
-  return _build_response_xs($result, 0);
 }
 
 sub _then_resolve_wrapped_error_xs {

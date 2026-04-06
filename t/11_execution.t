@@ -915,4 +915,56 @@ subtest 'execute prepared ir with variables and fragments' => sub {
   );
 };
 
+subtest 'execute compiled ir simple query' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ hello user(id: "42") { id name } }'
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $schema,
+    $prepared,
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs($compiled),
+    {
+      data => {
+        hello => 'world',
+        user => {
+          id => '42',
+          name => 'user:42',
+        },
+      },
+    },
+    'compiled ir plan executes through cached frontend artifacts',
+  );
+};
+
+subtest 'execute compiled ir with variables and fragments' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID!) { user(id: $id) { ...Bits } } fragment Bits on User { id name }'
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $schema,
+    $prepared,
+    'Q',
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs($compiled, undef, undef, { id => '51' }),
+    {
+      data => {
+        user => {
+          id => '51',
+          name => 'user:51',
+        },
+      },
+    },
+    'compiled ir plan executes variables and fragments with cached frontend state',
+  );
+};
+
 done_testing;

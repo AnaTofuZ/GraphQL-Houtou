@@ -234,6 +234,16 @@ _prepare_executable_ir_xs(source)
     RETVAL
 
 SV *
+_compile_executable_ir_plan_xs(schema, handle, operation_name = NULL)
+    SV *schema
+    SV *handle
+    SV *operation_name
+  CODE:
+    RETVAL = gql_ir_compile_executable_plan_handle_sv(aTHX_ schema, handle, operation_name);
+  OUTPUT:
+    RETVAL
+
+SV *
 _prepared_executable_ir_stats_xs(handle)
     SV *handle
   CODE:
@@ -346,7 +356,7 @@ _prepared_executable_ir_operation_legacy_xs(handle, operation_name = NULL)
 
       prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
       selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
-      RETVAL = gql_ir_operation_to_legacy_sv(aTHX_ prepared, selected);
+      RETVAL = gql_ir_operation_to_legacy_sv(aTHX_ prepared, selected, operation_name);
     }
   OUTPUT:
     RETVAL
@@ -521,6 +531,27 @@ _execute_prepared_ir_xs(schema, handle, root_value = NULL, context_value = NULL,
     RETVAL
 
 SV *
+_execute_compiled_ir_xs(handle, root_value = NULL, context_value = NULL, variable_values = NULL, field_resolver = NULL, promise_code = NULL)
+    SV *handle
+    SV *root_value
+    SV *context_value
+    SV *variable_values
+    SV *field_resolver
+    SV *promise_code
+  CODE:
+    RETVAL = gql_execution_execute_compiled_ir_xs_impl(
+      aTHX_
+      handle,
+      root_value,
+      context_value,
+      variable_values,
+      field_resolver,
+      promise_code
+    );
+  OUTPUT:
+    RETVAL
+
+SV *
 _execute_xs_raw(schema, document, root_value = NULL, context_value = NULL, variable_values = NULL, operation_name = NULL, field_resolver = NULL, promise_code = NULL)
     SV *schema
     SV *document
@@ -556,6 +587,21 @@ DESTROY(self)
         gql_ir_prepared_exec_t *prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
         sv_setuv(inner_sv, 0);
         gql_ir_prepared_exec_destroy(prepared);
+      }
+    }
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::CompiledIR
+
+void
+DESTROY(self)
+    SV *self
+  CODE:
+    if (self && SvROK(self)) {
+      SV *inner_sv = SvRV(self);
+      if (SvIOK(inner_sv) && SvUV(inner_sv) != 0) {
+        gql_ir_compiled_exec_t *compiled = INT2PTR(gql_ir_compiled_exec_t *, SvUV(inner_sv));
+        sv_setuv(inner_sv, 0);
+        gql_ir_compiled_exec_destroy(compiled);
       }
     }
 

@@ -349,6 +349,12 @@ sub benchmark_case {
   my $promise_code = $spec->{promise} ? promise_code() : undef;
   my $up_ast = parse($query);
   my $houtou_ast = parse_with_options($query, { backend => 'xs' });
+  my $prepared_ir = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs($query);
+  my $compiled_ir = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $houtou_schema,
+    $prepared_ir,
+    $op,
+  );
 
   my $expected = maybe_get(
     execute(
@@ -375,6 +381,32 @@ sub benchmark_case {
     } ],
     [ 'houtou_facade_string', sub {
       return maybe_get(GraphQL::Houtou::Execution::execute($houtou_schema, $query, undef, undef, $vars, $op, undef, $promise_code));
+    } ],
+    [ 'houtou_prepared_ir', sub {
+      return maybe_get(
+        GraphQL::Houtou::XS::Execution::execute_prepared_ir_xs(
+          $houtou_schema,
+          $prepared_ir,
+          undef,
+          undef,
+          $vars,
+          $op,
+          undef,
+          $promise_code,
+        )
+      );
+    } ],
+    [ 'houtou_compiled_ir', sub {
+      return maybe_get(
+        GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs(
+          $compiled_ir,
+          undef,
+          undef,
+          $vars,
+          undef,
+          $promise_code,
+        )
+      );
     } ],
   );
 

@@ -1563,6 +1563,43 @@ gql_execution_call_xs_then_resolve_operation_error(pTHX_ SV *promise_code, SV *p
 }
 
 static SV *
+gql_execution_call_xs_then_build_response(pTHX_ SV *promise_code, SV *promise, int force_data) {
+  dSP;
+  /* Cached per-process for the active interpreter; not safe to share across ithreads interpreters. */
+  static CV *cv = NULL;
+  int count;
+  SV *ret;
+
+  if (!cv) {
+    cv = get_cv("GraphQL::Houtou::XS::Execution::_then_build_response_xs", 0);
+    if (!cv) {
+      croak("unable to resolve GraphQL::Houtou::XS::Execution::_then_build_response_xs");
+    }
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(gql_execution_mortal_sv_ref(promise_code));
+  XPUSHs(gql_execution_mortal_sv_ref(promise));
+  XPUSHs(sv_2mortal(newSViv(force_data ? 1 : 0)));
+  PUTBACK;
+  count = call_sv((SV *)cv, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("_then_build_response_xs did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
 gql_execution_call_xs_then_merge_hash(pTHX_ SV *promise_code, AV *keys_av, SV *promise, AV *errors_av) {
   dSP;
   int count;

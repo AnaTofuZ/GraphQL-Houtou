@@ -21,12 +21,12 @@ $outdir ||= File::Spec->catdir($root, 'profile', 'nytprof', strftime('%Y%m%d-%H%
 make_path($outdir);
 
 my @cases = (
-  [qw(simple_scalar upstream_ast upstream_string houtou_facade_ast houtou_facade_string houtou_xs_ast houtou_xs_string)],
-  [qw(nested_variable_object upstream_ast upstream_string houtou_facade_ast houtou_facade_string houtou_xs_ast houtou_xs_string)],
-  [qw(list_of_objects upstream_ast upstream_string houtou_facade_ast houtou_facade_string houtou_xs_ast houtou_xs_string)],
-  [qw(abstract_with_fragment upstream_ast upstream_string houtou_facade_ast houtou_facade_string houtou_xs_ast houtou_xs_string)],
-  [qw(async_scalar upstream_ast upstream_string houtou_facade_ast houtou_facade_string)],
-  [qw(async_list upstream_ast upstream_string houtou_facade_ast houtou_facade_string)],
+  [qw(simple_scalar upstream_ast upstream_string houtou_facade_ast houtou_facade_string houtou_prepared_ir houtou_compiled_ir houtou_xs_ast houtou_xs_string)],
+  [qw(nested_variable_object upstream_ast upstream_string houtou_facade_ast houtou_facade_string houtou_prepared_ir houtou_compiled_ir houtou_xs_ast houtou_xs_string)],
+  [qw(list_of_objects upstream_ast upstream_string houtou_facade_ast houtou_facade_string houtou_prepared_ir houtou_compiled_ir houtou_xs_ast houtou_xs_string)],
+  [qw(abstract_with_fragment upstream_ast upstream_string houtou_facade_ast houtou_facade_string houtou_prepared_ir houtou_compiled_ir houtou_xs_ast houtou_xs_string)],
+  [qw(async_scalar upstream_ast upstream_string houtou_facade_ast houtou_facade_string houtou_prepared_ir houtou_compiled_ir)],
+  [qw(async_list upstream_ast upstream_string houtou_facade_ast houtou_facade_string houtou_prepared_ir houtou_compiled_ir)],
 );
 
 my @generated;

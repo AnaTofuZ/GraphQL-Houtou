@@ -16,8 +16,68 @@ gql_ir_prepared_exec_destroy(gql_ir_prepared_exec_t *prepared) {
     SvREFCNT_dec(prepared->source_sv);
     prepared->source_sv = NULL;
   }
+  if (prepared->cached_operation_name_sv) {
+    SvREFCNT_dec(prepared->cached_operation_name_sv);
+    prepared->cached_operation_name_sv = NULL;
+  }
+  if (prepared->cached_operation_legacy_sv) {
+    SvREFCNT_dec(prepared->cached_operation_legacy_sv);
+    prepared->cached_operation_legacy_sv = NULL;
+  }
+  if (prepared->cached_fragments_legacy_sv) {
+    SvREFCNT_dec(prepared->cached_fragments_legacy_sv);
+    prepared->cached_fragments_legacy_sv = NULL;
+  }
+  if (prepared->cached_root_legacy_fields_sv) {
+    SvREFCNT_dec(prepared->cached_root_legacy_fields_sv);
+    prepared->cached_root_legacy_fields_sv = NULL;
+  }
 
   Safefree(prepared);
+}
+
+static const char *gql_ir_operation_kind_name(gql_ir_operation_kind_t kind);
+static gql_ir_operation_definition_t *gql_ir_prepare_select_operation(pTHX_ gql_ir_prepared_exec_t *prepared, SV *operation_name);
+static SV *gql_ir_prepare_executable_root_legacy_fields_sv(pTHX_ SV *schema, gql_ir_prepared_exec_t *prepared, SV *operation_name);
+static SV *gql_ir_fragment_definitions_to_legacy_map_sv(pTHX_ gql_ir_prepared_exec_t *prepared);
+static SV *gql_ir_operation_to_legacy_sv(pTHX_ gql_ir_prepared_exec_t *prepared, gql_ir_operation_definition_t *operation, SV *operation_name);
+
+static void
+gql_ir_compiled_exec_destroy(gql_ir_compiled_exec_t *compiled) {
+  if (!compiled) {
+    return;
+  }
+
+  if (compiled->prepared_handle_sv) {
+    SvREFCNT_dec(compiled->prepared_handle_sv);
+    compiled->prepared_handle_sv = NULL;
+  }
+  if (compiled->schema_sv) {
+    SvREFCNT_dec(compiled->schema_sv);
+    compiled->schema_sv = NULL;
+  }
+  if (compiled->operation_name_sv) {
+    SvREFCNT_dec(compiled->operation_name_sv);
+    compiled->operation_name_sv = NULL;
+  }
+  if (compiled->operation_sv) {
+    SvREFCNT_dec(compiled->operation_sv);
+    compiled->operation_sv = NULL;
+  }
+  if (compiled->fragments_sv) {
+    SvREFCNT_dec(compiled->fragments_sv);
+    compiled->fragments_sv = NULL;
+  }
+  if (compiled->root_fields_sv) {
+    SvREFCNT_dec(compiled->root_fields_sv);
+    compiled->root_fields_sv = NULL;
+  }
+  if (compiled->root_type_sv) {
+    SvREFCNT_dec(compiled->root_type_sv);
+    compiled->root_type_sv = NULL;
+  }
+
+  Safefree(compiled);
 }
 
 static SV *
@@ -35,6 +95,45 @@ gql_ir_prepare_executable_handle_sv(pTHX_ SV *source_sv) {
   inner_sv = newSVuv(PTR2UV(prepared));
   handle_sv = newRV_noinc(inner_sv);
   return sv_bless(handle_sv, stash);
+}
+
+static SV *
+gql_ir_compile_executable_plan_handle_sv(pTHX_ SV *schema, SV *prepared_handle_sv, SV *operation_name) {
+  gql_ir_compiled_exec_t *compiled;
+  gql_ir_prepared_exec_t *prepared;
+  gql_ir_operation_definition_t *selected;
+  const char *operation_type;
+  SV *compiled_inner_sv;
+  SV *compiled_handle_sv;
+  HV *stash;
+  SV *prepared_inner_sv;
+
+  if (!prepared_handle_sv || !SvROK(prepared_handle_sv) || !sv_derived_from(prepared_handle_sv, "GraphQL::Houtou::XS::PreparedIR")) {
+    croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+  }
+
+  prepared_inner_sv = SvRV(prepared_handle_sv);
+  if (!SvIOK(prepared_inner_sv) || SvUV(prepared_inner_sv) == 0) {
+    croak("prepared IR handle is no longer valid");
+  }
+
+  prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(prepared_inner_sv));
+  selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
+  operation_type = gql_ir_operation_kind_name(selected->operation);
+
+  Newxz(compiled, 1, gql_ir_compiled_exec_t);
+  compiled->prepared_handle_sv = newSVsv(prepared_handle_sv);
+  compiled->schema_sv = gql_execution_share_or_copy_sv(schema);
+  compiled->operation_name_sv = (operation_name && SvOK(operation_name)) ? newSVsv(operation_name) : newSV(0);
+  compiled->operation_sv = gql_ir_operation_to_legacy_sv(aTHX_ prepared, selected, operation_name);
+  compiled->fragments_sv = gql_ir_fragment_definitions_to_legacy_map_sv(aTHX_ prepared);
+  compiled->root_fields_sv = gql_ir_prepare_executable_root_legacy_fields_sv(aTHX_ schema, prepared, operation_name);
+  compiled->root_type_sv = gql_execution_call_schema_root_type(aTHX_ schema, operation_type);
+
+  stash = gv_stashpv("GraphQL::Houtou::XS::CompiledIR", GV_ADD);
+  compiled_inner_sv = newSVuv(PTR2UV(compiled));
+  compiled_handle_sv = newRV_noinc(compiled_inner_sv);
+  return sv_bless(compiled_handle_sv, stash);
 }
 
 static HV *
@@ -911,6 +1010,17 @@ gql_ir_prepare_executable_root_legacy_fields_sv(
   return newRV_noinc((SV *)ret_av);
 }
 
+static int
+gql_ir_prepare_operation_name_matches(SV *left, SV *right) {
+  if ((!left || !SvOK(left)) && (!right || !SvOK(right))) {
+    return 1;
+  }
+  if (!left || !SvOK(left) || !right || !SvOK(right)) {
+    return 0;
+  }
+  return sv_eq(left, right);
+}
+
 static SV *
 gql_ir_type_to_legacy_typedef_sv(pTHX_ gql_ir_document_t *document, gql_ir_type_t *type) {
   if (!type) {
@@ -982,6 +1092,10 @@ gql_ir_variable_definitions_to_legacy_sv(
 
 static SV *
 gql_ir_fragment_definitions_to_legacy_map_sv(pTHX_ gql_ir_prepared_exec_t *prepared) {
+  if (prepared->cached_fragments_legacy_sv) {
+    return newSVsv(prepared->cached_fragments_legacy_sv);
+  }
+
   HV *hv = newHV();
   UV i;
 
@@ -1011,14 +1125,24 @@ gql_ir_fragment_definitions_to_legacy_map_sv(pTHX_ gql_ir_prepared_exec_t *prepa
     (void)hv_store_ent(hv, name_sv, newRV_noinc((SV *)fragment_hv), 0);
   }
 
-  return newRV_noinc((SV *)hv);
+  {
+    SV *ret = newRV_noinc((SV *)hv);
+    prepared->cached_fragments_legacy_sv = newSVsv(ret);
+    return ret;
+  }
 }
 
 static SV *
 gql_ir_operation_to_legacy_sv(
   pTHX_ gql_ir_prepared_exec_t *prepared,
-  gql_ir_operation_definition_t *operation
+  gql_ir_operation_definition_t *operation,
+  SV *operation_name
 ) {
+  if (prepared->cached_operation_legacy_sv
+      && gql_ir_prepare_operation_name_matches(prepared->cached_operation_name_sv, operation_name)) {
+    return newSVsv(prepared->cached_operation_legacy_sv);
+  }
+
   HV *hv = newHV();
 
   gql_store_sv(hv, "kind", newSVpv("operation", 0));
@@ -1034,7 +1158,22 @@ gql_ir_operation_to_legacy_sv(
   }
   gql_store_sv(hv, "variables", gql_ir_variable_definitions_to_legacy_sv(aTHX_ prepared->document, &operation->variable_definitions));
   gql_store_sv(hv, "selections", newRV_noinc((SV *)gql_ir_selections_to_legacy_av(aTHX_ prepared->document, operation->selection_set)));
-  return newRV_noinc((SV *)hv);
+  {
+    SV *ret = newRV_noinc((SV *)hv);
+    if (prepared->cached_operation_name_sv) {
+      SvREFCNT_dec(prepared->cached_operation_name_sv);
+      prepared->cached_operation_name_sv = NULL;
+    }
+    if (prepared->cached_operation_legacy_sv) {
+      SvREFCNT_dec(prepared->cached_operation_legacy_sv);
+      prepared->cached_operation_legacy_sv = NULL;
+    }
+    prepared->cached_operation_name_sv = (operation_name && SvOK(operation_name))
+      ? newSVsv(operation_name)
+      : newSV(0);
+    prepared->cached_operation_legacy_sv = newSVsv(ret);
+    return ret;
+  }
 }
 
 static SV *
@@ -1057,7 +1196,7 @@ gql_ir_build_execution_context_sv(
   SV *runtime_variables_sv = NULL;
 
   selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
-  operation_sv = gql_ir_operation_to_legacy_sv(aTHX_ prepared, selected);
+  operation_sv = gql_ir_operation_to_legacy_sv(aTHX_ prepared, selected, operation_name);
   fragments_sv = gql_ir_fragment_definitions_to_legacy_map_sv(aTHX_ prepared);
 
   if (!variable_values || !SvOK(variable_values)) {
@@ -1109,6 +1248,75 @@ gql_ir_build_execution_context_sv(
 }
 
 static SV *
+gql_ir_build_execution_context_from_compiled_sv(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  SV *root_value,
+  SV *context_value,
+  SV *variable_values,
+  SV *field_resolver,
+  SV *promise_code
+) {
+  HV *context_hv = newHV();
+  HV *resolve_info_base_hv = newHV();
+  SV *runtime_variables_sv = NULL;
+  SV *applied_variables_sv;
+  HV *operation_hv;
+  SV **operation_variables_svp;
+
+  if (!compiled || !compiled->operation_sv || !SvROK(compiled->operation_sv) || SvTYPE(SvRV(compiled->operation_sv)) != SVt_PVHV) {
+    croak("compiled IR plan is missing operation metadata");
+  }
+
+  operation_hv = (HV *)SvRV(compiled->operation_sv);
+  operation_variables_svp = hv_fetch(operation_hv, "variables", 9, 0);
+
+  if (!variable_values || !SvOK(variable_values)) {
+    runtime_variables_sv = newRV_noinc((SV *)newHV());
+  }
+
+  if (!operation_variables_svp || !SvOK(*operation_variables_svp)) {
+    applied_variables_sv = newRV_noinc((SV *)newHV());
+  } else {
+    applied_variables_sv = gql_execution_call_pp_variables_apply_defaults(
+      aTHX_
+      compiled->schema_sv,
+      *operation_variables_svp,
+      (variable_values && SvOK(variable_values)) ? variable_values : runtime_variables_sv
+    );
+  }
+
+  gql_store_sv(context_hv, "schema", gql_execution_share_or_copy_sv(compiled->schema_sv));
+  gql_store_sv(context_hv, "fragments", gql_execution_share_or_copy_sv(compiled->fragments_sv));
+  gql_store_sv(context_hv, "root_value", gql_execution_share_or_copy_sv(root_value));
+  gql_store_sv(context_hv, "context_value", gql_execution_share_or_copy_sv(context_value));
+  gql_store_sv(context_hv, "operation", gql_execution_share_or_copy_sv(compiled->operation_sv));
+  gql_store_sv(context_hv, "variable_values", applied_variables_sv);
+  gql_store_sv(
+    context_hv,
+    "field_resolver",
+    (field_resolver && SvOK(field_resolver))
+      ? gql_execution_share_or_copy_sv(field_resolver)
+      : gql_execution_default_field_resolver_sv(aTHX)
+  );
+  gql_store_sv(context_hv, "promise_code", gql_execution_share_or_copy_sv(promise_code));
+  gql_store_sv(context_hv, "empty_args", newRV_noinc((SV *)newHV()));
+
+  gql_store_sv(resolve_info_base_hv, "schema", gql_execution_share_or_copy_sv(compiled->schema_sv));
+  gql_store_sv(resolve_info_base_hv, "fragments", gql_execution_share_or_copy_sv(compiled->fragments_sv));
+  gql_store_sv(resolve_info_base_hv, "root_value", gql_execution_share_or_copy_sv(root_value));
+  gql_store_sv(resolve_info_base_hv, "operation", gql_execution_share_or_copy_sv(compiled->operation_sv));
+  gql_store_sv(resolve_info_base_hv, "variable_values", gql_execution_share_or_copy_sv(applied_variables_sv));
+  gql_store_sv(resolve_info_base_hv, "promise_code", gql_execution_share_or_copy_sv(promise_code));
+  gql_store_sv(context_hv, "resolve_info_base", newRV_noinc((SV *)resolve_info_base_hv));
+
+  if (runtime_variables_sv) {
+    SvREFCNT_dec(runtime_variables_sv);
+  }
+
+  return newRV_noinc((SV *)context_hv);
+}
+
+static SV *
 gql_execution_execute_prepared_ir_xs_impl(
   pTHX_ SV *schema,
   SV *handle,
@@ -1130,6 +1338,7 @@ gql_execution_execute_prepared_ir_xs_impl(
   AV *path_av;
   SV *response_sv;
   SV *inner_sv;
+  SV *promise_code_sv;
 
   if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
     croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
@@ -1161,12 +1370,79 @@ gql_execution_execute_prepared_ir_xs_impl(
   path_sv = newRV_noinc((SV *)path_av);
 
   result_sv = gql_execution_execute_fields(aTHX_ context_sv, root_type_sv, root_value, path_sv, fields_sv);
-  response_sv = gql_execution_build_response_xs(aTHX_ result_sv, 0);
+  promise_code_sv = gql_execution_context_promise_code(context_sv);
+  if (promise_code_sv != &PL_sv_undef && SvTRUE(gql_promise_call_is_promise(aTHX_ promise_code_sv, result_sv))) {
+    response_sv = gql_execution_call_xs_then_build_response(aTHX_ promise_code_sv, result_sv, 0);
+  } else {
+    response_sv = gql_execution_build_response_xs(aTHX_ result_sv, 0);
+  }
 
   SvREFCNT_dec(result_sv);
   SvREFCNT_dec(path_sv);
   SvREFCNT_dec(root_type_sv);
   SvREFCNT_dec(fields_sv);
+  SvREFCNT_dec(context_sv);
+
+  return response_sv;
+}
+
+static SV *
+gql_execution_execute_compiled_ir_xs_impl(
+  pTHX_ SV *handle,
+  SV *root_value,
+  SV *context_value,
+  SV *variable_values,
+  SV *field_resolver,
+  SV *promise_code
+) {
+  gql_ir_compiled_exec_t *compiled;
+  SV *inner_sv;
+  SV *context_sv;
+  AV *path_av;
+  SV *path_sv;
+  SV *result_sv;
+  SV *response_sv;
+  SV *promise_code_sv;
+
+  if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::CompiledIR")) {
+    croak("expected a GraphQL::Houtou::XS::CompiledIR handle");
+  }
+
+  inner_sv = SvRV(handle);
+  if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+    croak("compiled IR handle is no longer valid");
+  }
+
+  compiled = INT2PTR(gql_ir_compiled_exec_t *, SvUV(inner_sv));
+  context_sv = gql_ir_build_execution_context_from_compiled_sv(
+    aTHX_
+    compiled,
+    root_value,
+    context_value,
+    variable_values,
+    field_resolver,
+    promise_code
+  );
+  path_av = newAV();
+  path_sv = newRV_noinc((SV *)path_av);
+
+  result_sv = gql_execution_execute_fields(
+    aTHX_
+    context_sv,
+    compiled->root_type_sv,
+    root_value,
+    path_sv,
+    compiled->root_fields_sv
+  );
+  promise_code_sv = gql_execution_context_promise_code(context_sv);
+  if (promise_code_sv != &PL_sv_undef && SvTRUE(gql_promise_call_is_promise(aTHX_ promise_code_sv, result_sv))) {
+    response_sv = gql_execution_call_xs_then_build_response(aTHX_ promise_code_sv, result_sv, 0);
+  } else {
+    response_sv = gql_execution_build_response_xs(aTHX_ result_sv, 0);
+  }
+
+  SvREFCNT_dec(result_sv);
+  SvREFCNT_dec(path_sv);
   SvREFCNT_dec(context_sv);
 
   return response_sv;

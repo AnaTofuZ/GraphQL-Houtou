@@ -361,6 +361,8 @@ my %targets = map { $_ => 1 } qw(
   upstream_string
   houtou_facade_ast
   houtou_facade_string
+  houtou_prepared_ir
+  houtou_compiled_ir
   houtou_xs_ast
   houtou_xs_string
 );
@@ -378,6 +380,12 @@ my $op = $spec->{op};
 my $promise = $spec->{promise} ? promise_code() : undef;
 my $up_ast = parse($query);
 my $houtou_ast = parse_with_options($query, { backend => 'xs' });
+my $prepared_ir = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs($query);
+my $compiled_ir = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+  $houtou_schema,
+  $prepared_ir,
+  $op,
+);
 
 my %dispatch = (
   upstream_ast => sub {
@@ -391,6 +399,32 @@ my %dispatch = (
   },
   houtou_facade_string => sub {
     return maybe_get(GraphQL::Houtou::Execution::execute($houtou_schema, $query, undef, undef, $vars, $op, undef, $promise));
+  },
+  houtou_prepared_ir => sub {
+    return maybe_get(
+      GraphQL::Houtou::XS::Execution::execute_prepared_ir_xs(
+        $houtou_schema,
+        $prepared_ir,
+        undef,
+        undef,
+        $vars,
+        $op,
+        undef,
+        $promise,
+      )
+    );
+  },
+  houtou_compiled_ir => sub {
+    return maybe_get(
+      GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs(
+        $compiled_ir,
+        undef,
+        undef,
+        $vars,
+        undef,
+        $promise,
+      )
+    );
   },
   houtou_xs_ast => sub {
     return GraphQL::Houtou::XS::Execution::execute_xs($houtou_schema, $houtou_ast, undef, undef, $vars, $op);

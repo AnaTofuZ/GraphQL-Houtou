@@ -144,6 +144,7 @@ typedef struct gql_ir_fragment_definition gql_ir_fragment_definition_t;
 typedef struct gql_ir_definition gql_ir_definition_t;
 typedef struct gql_ir_document gql_ir_document_t;
 typedef struct gql_ir_prepared_exec gql_ir_prepared_exec_t;
+typedef struct gql_ir_compiled_exec gql_ir_compiled_exec_t;
 typedef struct {
   gql_ir_document_t *document;
 } gql_ir_document_cleanup_t;
@@ -151,6 +152,20 @@ typedef struct {
 struct gql_ir_prepared_exec {
   gql_ir_document_t *document;
   SV *source_sv;
+  SV *cached_operation_name_sv;
+  SV *cached_operation_legacy_sv;
+  SV *cached_fragments_legacy_sv;
+  SV *cached_root_legacy_fields_sv;
+};
+
+struct gql_ir_compiled_exec {
+  SV *prepared_handle_sv;
+  SV *schema_sv;
+  SV *operation_name_sv;
+  SV *operation_sv;
+  SV *fragments_sv;
+  SV *root_fields_sv;
+  SV *root_type_sv;
 };
 
 typedef enum {

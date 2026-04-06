@@ -829,4 +829,47 @@ subtest 'prepare executable ir root field buckets' => sub {
   );
 };
 
+subtest 'prepare executable ir root field plan' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q { hello user(id: "42") { id } ...F } fragment F on Query { hello }'
+  );
+  my $plan = GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_field_plan_xs(
+    $schema,
+    $prepared,
+    'Q',
+  );
+
+  is $plan->{operation_type}, 'query', 'root field plan keeps operation type';
+  isa_ok $plan->{root_type}, 'GraphQL::Houtou::Type::Object';
+  is_deeply $plan->{field_order}, [ 'hello', 'user' ], 'root field plan preserves result name order';
+  is $plan->{fields}{hello}{field_name}, 'hello', 'root field plan keeps underlying field name';
+  is $plan->{fields}{hello}{node_count}, 2, 'root field plan counts merged root field nodes';
+  is $plan->{fields}{user}{argument_count}, 1, 'root field plan keeps argument count';
+  is $plan->{fields}{user}{selection_count}, 1, 'root field plan keeps child selection count';
+  ok(ref($plan->{fields}{user}{field_def}) eq 'HASH', 'root field plan resolves field definition');
+};
+
+subtest 'prepare executable ir root legacy fields bridge' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID) { hello user(id: $id) { id ... on User { name } } ...F } fragment F on Query { hello }'
+  );
+  my $fields = GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_legacy_fields_xs(
+    $schema,
+    $prepared,
+    'Q',
+  );
+
+  is_deeply $fields->[0], [ 'hello', 'user' ], 'legacy bridge preserves root result name order';
+  is scalar @{ $fields->[1]{hello} }, 2, 'legacy bridge merges duplicate hello root nodes';
+  is $fields->[1]{user}[0]{kind}, 'field', 'legacy bridge materializes field node';
+  is $fields->[1]{user}[0]{name}, 'user', 'legacy bridge keeps field name';
+  is ${ $fields->[1]{user}[0]{arguments}{id} }, 'id', 'legacy bridge keeps variable argument refs';
+  is $fields->[1]{user}[0]{selections}[0]{kind}, 'field', 'legacy bridge materializes nested field selection';
+  is $fields->[1]{user}[0]{selections}[1]{kind}, 'inline_fragment', 'legacy bridge materializes nested inline fragment';
+};
+
 done_testing;

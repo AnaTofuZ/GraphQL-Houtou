@@ -23,6 +23,8 @@ our @EXPORT_OK = qw(
   _prepared_executable_ir_context_seed_xs
   _prepared_executable_ir_root_selection_plan_xs
   _prepared_executable_ir_root_field_buckets_xs
+  _prepared_executable_ir_root_field_plan_xs
+  _prepared_executable_ir_root_legacy_fields_xs
   _collect_fields_xs
   _execute_fields_xs
   _get_argument_values_xs

@@ -1133,4 +1133,61 @@ subtest 'prepared ir legacy field bridge caches plain nested field buckets' => s
   );
 };
 
+subtest 'prepared ir legacy field bridge folds unconditional inline fragments into compiled buckets' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ user(id: "42") { ... { id profile { ... { bio } } } } }'
+  );
+  my $fields = GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_legacy_fields_xs(
+    $schema,
+    $prepared,
+  );
+  my $user_node = $fields->[1]{user}[0];
+
+  is_deeply(
+    $user_node->{compiled_fields},
+    [
+      [ 'id', 'profile' ],
+      {
+        id => [
+          {
+            kind => 'field',
+            name => 'id',
+          },
+        ],
+        profile => [
+          {
+            kind => 'field',
+            name => 'profile',
+            selections => [
+              {
+                kind => 'inline_fragment',
+                selections => [
+                  {
+                    kind => 'field',
+                    name => 'bio',
+                  },
+                ],
+              },
+            ],
+            compiled_fields => [
+              [ 'bio' ],
+              {
+                bio => [
+                  {
+                    kind => 'field',
+                    name => 'bio',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    'compiled field buckets absorb unconditional inline fragments recursively',
+  );
+};
+
 done_testing;

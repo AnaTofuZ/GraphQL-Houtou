@@ -934,15 +934,34 @@ gql_ir_selection_set_is_plain_fields(gql_ir_selection_set_t *selection_set) {
 
   for (i = 0; i < (UV)selection_set->selections.count; i++) {
     gql_ir_selection_t *selection = (gql_ir_selection_t *)selection_set->selections.items[i];
-    gql_ir_field_t *field;
 
-    if (!selection || selection->kind != GQL_IR_SELECTION_FIELD) {
+    if (!selection) {
       return 0;
     }
 
-    field = selection->as.field;
-    if (field->directives.count > 0) {
-      return 0;
+    switch (selection->kind) {
+      case GQL_IR_SELECTION_FIELD: {
+        gql_ir_field_t *field = selection->as.field;
+        if (field->directives.count > 0) {
+          return 0;
+        }
+        break;
+      }
+      case GQL_IR_SELECTION_INLINE_FRAGMENT: {
+        gql_ir_inline_fragment_t *fragment = selection->as.inline_fragment;
+        if (fragment->directives.count > 0) {
+          return 0;
+        }
+        if (fragment->type_condition.start != fragment->type_condition.end) {
+          return 0;
+        }
+        if (!gql_ir_selection_set_is_plain_fields(fragment->selection_set)) {
+          return 0;
+        }
+        break;
+      }
+      default:
+        return 0;
     }
   }
 
@@ -959,36 +978,119 @@ gql_ir_selection_set_to_legacy_fields_sv(pTHX_ gql_ir_document_t *document, gql_
   if (selection_set) {
     for (i = 0; i < (UV)selection_set->selections.count; i++) {
       gql_ir_selection_t *selection = (gql_ir_selection_t *)selection_set->selections.items[i];
-      gql_ir_field_t *field;
-      SV *result_name_sv;
-      HE *bucket_he;
-      AV *bucket_av;
 
-      if (!selection || selection->kind != GQL_IR_SELECTION_FIELD) {
+      if (!selection) {
         continue;
       }
 
-      field = selection->as.field;
-      result_name_sv = (field->alias.start != field->alias.end)
-        ? gql_ir_make_sv_from_span(aTHX_ document, field->alias)
-        : gql_ir_make_sv_from_span(aTHX_ document, field->name);
-      bucket_he = hv_fetch_ent(nodes_defs_hv, result_name_sv, 0, 0);
-      if (!bucket_he) {
-        bucket_av = newAV();
-        (void)hv_store_ent(nodes_defs_hv, newSVsv(result_name_sv), newRV_noinc((SV *)bucket_av), 0);
-        av_push(field_names_av, newSVsv(result_name_sv));
-      } else if (SvROK(HeVAL(bucket_he)) && SvTYPE(SvRV(HeVAL(bucket_he))) == SVt_PVAV) {
-        bucket_av = (AV *)SvRV(HeVAL(bucket_he));
-      } else {
-        SvREFCNT_dec(result_name_sv);
-        SvREFCNT_dec((SV *)field_names_av);
-        SvREFCNT_dec((SV *)nodes_defs_hv);
-        SvREFCNT_dec((SV *)ret_av);
-        croak("compiled legacy field bucket is invalid");
-      }
+      switch (selection->kind) {
+        case GQL_IR_SELECTION_FIELD: {
+          gql_ir_field_t *field = selection->as.field;
+          SV *result_name_sv;
+          HE *bucket_he;
+          AV *bucket_av;
 
-      av_push(bucket_av, gql_ir_selection_to_legacy_sv(aTHX_ document, selection));
-      SvREFCNT_dec(result_name_sv);
+          result_name_sv = (field->alias.start != field->alias.end)
+            ? gql_ir_make_sv_from_span(aTHX_ document, field->alias)
+            : gql_ir_make_sv_from_span(aTHX_ document, field->name);
+          bucket_he = hv_fetch_ent(nodes_defs_hv, result_name_sv, 0, 0);
+          if (!bucket_he) {
+            bucket_av = newAV();
+            (void)hv_store_ent(nodes_defs_hv, newSVsv(result_name_sv), newRV_noinc((SV *)bucket_av), 0);
+            av_push(field_names_av, newSVsv(result_name_sv));
+          } else if (SvROK(HeVAL(bucket_he)) && SvTYPE(SvRV(HeVAL(bucket_he))) == SVt_PVAV) {
+            bucket_av = (AV *)SvRV(HeVAL(bucket_he));
+          } else {
+            SvREFCNT_dec(result_name_sv);
+            SvREFCNT_dec((SV *)field_names_av);
+            SvREFCNT_dec((SV *)nodes_defs_hv);
+            SvREFCNT_dec((SV *)ret_av);
+            croak("compiled legacy field bucket is invalid");
+          }
+
+          av_push(bucket_av, gql_ir_selection_to_legacy_sv(aTHX_ document, selection));
+          SvREFCNT_dec(result_name_sv);
+          break;
+        }
+        case GQL_IR_SELECTION_INLINE_FRAGMENT: {
+          gql_ir_inline_fragment_t *fragment = selection->as.inline_fragment;
+          SV *fragment_fields_sv;
+          AV *fragment_av;
+          SV **fragment_names_svp;
+          SV **fragment_defs_svp;
+          AV *fragment_names_av;
+          HV *fragment_defs_hv;
+          I32 name_i;
+          I32 name_len;
+
+          if (fragment->type_condition.start != fragment->type_condition.end || fragment->directives.count > 0) {
+            SvREFCNT_dec((SV *)field_names_av);
+            SvREFCNT_dec((SV *)nodes_defs_hv);
+            SvREFCNT_dec((SV *)ret_av);
+            croak("compiled legacy inline fragment bucket must be unconditional");
+          }
+
+          fragment_fields_sv = gql_ir_selection_set_to_legacy_fields_sv(aTHX_ document, fragment->selection_set);
+          fragment_av = (AV *)SvRV(fragment_fields_sv);
+          fragment_names_svp = av_fetch(fragment_av, 0, 0);
+          fragment_defs_svp = av_fetch(fragment_av, 1, 0);
+          fragment_names_av = (AV *)SvRV(*fragment_names_svp);
+          fragment_defs_hv = (HV *)SvRV(*fragment_defs_svp);
+          name_len = av_len(fragment_names_av);
+
+          for (name_i = 0; name_i <= name_len; name_i++) {
+            SV **name_svp = av_fetch(fragment_names_av, name_i, 0);
+            HE *source_he;
+            HE *target_he;
+            AV *source_bucket;
+            AV *target_bucket;
+            I32 bucket_i;
+            I32 bucket_len;
+
+            if (!name_svp || !SvOK(*name_svp)) {
+              continue;
+            }
+
+            source_he = hv_fetch_ent(fragment_defs_hv, *name_svp, 0, 0);
+            if (!source_he || !SvROK(HeVAL(source_he)) || SvTYPE(SvRV(HeVAL(source_he))) != SVt_PVAV) {
+              SvREFCNT_dec(fragment_fields_sv);
+              SvREFCNT_dec((SV *)field_names_av);
+              SvREFCNT_dec((SV *)nodes_defs_hv);
+              SvREFCNT_dec((SV *)ret_av);
+              croak("compiled legacy inline fragment bucket is invalid");
+            }
+
+            source_bucket = (AV *)SvRV(HeVAL(source_he));
+            target_he = hv_fetch_ent(nodes_defs_hv, *name_svp, 0, 0);
+            if (!target_he) {
+              target_bucket = newAV();
+              (void)hv_store_ent(nodes_defs_hv, newSVsv(*name_svp), newRV_noinc((SV *)target_bucket), 0);
+              av_push(field_names_av, newSVsv(*name_svp));
+            } else if (SvROK(HeVAL(target_he)) && SvTYPE(SvRV(HeVAL(target_he))) == SVt_PVAV) {
+              target_bucket = (AV *)SvRV(HeVAL(target_he));
+            } else {
+              SvREFCNT_dec(fragment_fields_sv);
+              SvREFCNT_dec((SV *)field_names_av);
+              SvREFCNT_dec((SV *)nodes_defs_hv);
+              SvREFCNT_dec((SV *)ret_av);
+              croak("compiled legacy inline fragment target bucket is invalid");
+            }
+
+            bucket_len = av_len(source_bucket);
+            for (bucket_i = 0; bucket_i <= bucket_len; bucket_i++) {
+              SV **node_svp = av_fetch(source_bucket, bucket_i, 0);
+              if (node_svp && SvOK(*node_svp)) {
+                av_push(target_bucket, newSVsv(*node_svp));
+              }
+            }
+          }
+
+          SvREFCNT_dec(fragment_fields_sv);
+          break;
+        }
+        default:
+          break;
+      }
     }
   }
 

@@ -660,4 +660,571 @@ subtest 'execute abstract fragment condition through xs object completion path' 
   is_deeply $xs, $public, 'abstract fragment condition is handled in xs object completion';
 };
 
+subtest 'prepare executable ir handle' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q { hello } fragment F on Query { hello }'
+  );
+
+  isa_ok $prepared, 'GraphQL::Houtou::XS::PreparedIR';
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::_prepared_executable_ir_stats_xs($prepared),
+    {
+      definitions => 2,
+      operations => 1,
+      fragments => 1,
+    },
+    'prepared ir handle reports executable definition counts',
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::_prepared_executable_ir_plan_xs($prepared, 'Q'),
+    {
+      operation_type => 'query',
+      operation_name => 'Q',
+      selection_count => 1,
+      variable_definition_count => 0,
+      directive_count => 0,
+      fragment_count => 1,
+      fragment_names => ['F'],
+    },
+    'prepared ir handle reports selected operation plan metadata',
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::_prepared_executable_ir_frontend_xs($prepared, 'Q'),
+    {
+      operation => {
+        operation_type => 'query',
+        operation_name => 'Q',
+        selection_count => 1,
+        directive_count => 0,
+        variables => {},
+      },
+      fragments => {
+        F => {
+          type_condition => 'Query',
+          selection_count => 1,
+          directive_count => 0,
+        },
+      },
+    },
+    'prepared ir handle exposes minimal frontend metadata without AST materialization',
+  );
+};
+
+subtest 'prepare executable ir frontend variable metadata' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID = 1, $flag: Boolean = false, $names: [String!]) { hello }'
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::_prepared_executable_ir_frontend_xs($prepared, 'Q')->{operation}{variables},
+    {
+      id => {
+        type => 'ID',
+        has_default => 1,
+        directive_count => 0,
+      },
+      flag => {
+        type => 'Boolean',
+        has_default => 1,
+        directive_count => 0,
+      },
+      names => {
+        type => '[String!]',
+        has_default => 0,
+        directive_count => 0,
+      },
+    },
+    'prepared ir frontend exposes lightweight variable metadata without AST materialization',
+  );
+};
+
+subtest 'prepare executable ir context seed metadata' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID) { hello ...F } fragment F on Query { greet(name: "x") }'
+  );
+  my $seed = GraphQL::Houtou::XS::Execution::_prepared_executable_ir_context_seed_xs(
+    $schema,
+    $prepared,
+    'Q',
+    { id => '42' },
+  );
+
+  is $seed->{operation_type}, 'query', 'context seed exposes selected operation type';
+  isa_ok $seed->{root_type}, 'GraphQL::Houtou::Type::Object';
+  is $seed->{root_type}->name, 'Query', 'context seed resolves schema root type';
+  is_deeply $seed->{variable_values}, { id => '42' }, 'context seed carries runtime variable bag';
+  is $seed->{frontend}{operation}{operation_name}, 'Q', 'context seed reuses lightweight frontend metadata';
+  is $seed->{frontend}{fragments}{F}{type_condition}, 'Query', 'context seed keeps fragment metadata';
+};
+
+subtest 'prepare executable ir root selection plan' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID) { hello user(id: $id) { id } ...F ... on Query { greet(name: "x") } } fragment F on Query { hello }'
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_selection_plan_xs($prepared, 'Q'),
+    [
+      {
+        kind => 'field',
+        name => 'hello',
+        alias => undef,
+        argument_count => 0,
+        directive_count => 0,
+        selection_count => 0,
+      },
+      {
+        kind => 'field',
+        name => 'user',
+        alias => undef,
+        argument_count => 1,
+        directive_count => 0,
+        selection_count => 1,
+        selections => [
+          {
+            kind => 'field',
+            name => 'id',
+            alias => undef,
+            argument_count => 0,
+            directive_count => 0,
+            selection_count => 0,
+          },
+        ],
+      },
+      {
+        kind => 'fragment_spread',
+        name => 'F',
+        directive_count => 0,
+        type_condition => 'Query',
+        selection_count => 1,
+        selections => [
+          {
+            kind => 'field',
+            name => 'hello',
+            alias => undef,
+            argument_count => 0,
+            directive_count => 0,
+            selection_count => 0,
+          },
+        ],
+      },
+      {
+        kind => 'inline_fragment',
+        type_condition => 'Query',
+        directive_count => 0,
+        selection_count => 1,
+        selections => [
+          {
+            kind => 'field',
+            name => 'greet',
+            alias => undef,
+            argument_count => 1,
+            directive_count => 0,
+            selection_count => 0,
+          },
+        ],
+      },
+    ],
+    'prepared ir handle exposes root selection plan without AST materialization',
+  );
+};
+
+subtest 'prepare executable ir root field buckets' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q { hello user(id: "42") { id } ...F ... on Query { hello } } fragment F on Query { hello }'
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_field_buckets_xs($schema, $prepared, 'Q'),
+    {
+      operation_type => 'query',
+      root_type => $Query,
+      field_names => [ 'hello', 'user' ],
+      field_counts => {
+        hello => 3,
+        user => 1,
+      },
+    },
+    'prepared ir handle collects simple root field buckets directly from IR',
+  );
+};
+
+subtest 'prepare executable ir root field plan' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q { hello user(id: "42") { id } ...F } fragment F on Query { hello }'
+  );
+  my $plan = GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_field_plan_xs(
+    $schema,
+    $prepared,
+    'Q',
+  );
+
+  is $plan->{operation_type}, 'query', 'root field plan keeps operation type';
+  isa_ok $plan->{root_type}, 'GraphQL::Houtou::Type::Object';
+  is_deeply $plan->{field_order}, [ 'hello', 'user' ], 'root field plan preserves result name order';
+  is $plan->{fields}{hello}{field_name}, 'hello', 'root field plan keeps underlying field name';
+  is $plan->{fields}{hello}{node_count}, 2, 'root field plan counts merged root field nodes';
+  is $plan->{fields}{user}{argument_count}, 1, 'root field plan keeps argument count';
+  is $plan->{fields}{user}{selection_count}, 1, 'root field plan keeps child selection count';
+  ok(ref($plan->{fields}{user}{field_def}) eq 'HASH', 'root field plan resolves field definition');
+};
+
+subtest 'prepare executable ir root legacy fields bridge' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID) { hello user(id: $id) { id ... on User { name } } ...F } fragment F on Query { hello }'
+  );
+  my $fields = GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_legacy_fields_xs(
+    $schema,
+    $prepared,
+    'Q',
+  );
+
+  is_deeply $fields->[0], [ 'hello', 'user' ], 'legacy bridge preserves root result name order';
+  is scalar @{ $fields->[1]{hello} }, 2, 'legacy bridge merges duplicate hello root nodes';
+  is $fields->[1]{user}[0]{kind}, 'field', 'legacy bridge materializes field node';
+  is $fields->[1]{user}[0]{name}, 'user', 'legacy bridge keeps field name';
+  is ${ $fields->[1]{user}[0]{arguments}{id} }, 'id', 'legacy bridge keeps variable argument refs';
+  is $fields->[1]{user}[0]{selections}[0]{kind}, 'field', 'legacy bridge materializes nested field selection';
+  is $fields->[1]{user}[0]{selections}[1]{kind}, 'inline_fragment', 'legacy bridge materializes nested inline fragment';
+};
+
+subtest 'execute prepared ir simple query' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ hello user(id: "42") { id name } }'
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_prepared_ir_xs($schema, $prepared),
+    {
+      data => {
+        hello => 'world',
+        user => {
+          id => '42',
+          name => 'user:42',
+        },
+      },
+    },
+    'prepared ir executes through existing XS field loop without full AST materialization',
+  );
+};
+
+subtest 'execute prepared ir with variables and fragments' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID!) { user(id: $id) { ...Bits } } fragment Bits on User { id name }'
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_prepared_ir_xs($schema, $prepared, undef, undef, { id => '51' }, 'Q'),
+    {
+      data => {
+        user => {
+          id => '51',
+          name => 'user:51',
+        },
+      },
+    },
+    'prepared ir executes variables and nested fragments via shared execution machinery',
+  );
+};
+
+subtest 'execute compiled ir simple query' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ hello user(id: "42") { id name } }'
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $schema,
+    $prepared,
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs($compiled),
+    {
+      data => {
+        hello => 'world',
+        user => {
+          id => '42',
+          name => 'user:42',
+        },
+      },
+    },
+    'compiled ir plan executes through cached frontend artifacts',
+  );
+};
+
+subtest 'execute compiled ir with variables and fragments' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID!) { user(id: $id) { ...Bits } } fragment Bits on User { id name }'
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $schema,
+    $prepared,
+    'Q',
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs($compiled, undef, undef, { id => '51' }),
+    {
+      data => {
+        user => {
+          id => '51',
+          name => 'user:51',
+        },
+      },
+    },
+    'compiled ir plan executes variables and fragments with cached frontend state',
+  );
+};
+
+subtest 'compiled ir plan caches nested selection metadata' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID!) { user(id: $id) { ...Bits extra: name } } fragment Bits on User { id profile { bio } }'
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $schema,
+    $prepared,
+    'Q',
+  );
+  my $plan = GraphQL::Houtou::XS::Execution::_compiled_executable_ir_plan_xs($compiled);
+
+  is(
+    $plan->{root_field_plan}{fields}{user}{field_name},
+    'user',
+    'compiled plan exposes cached root field metadata',
+  );
+
+  is_deeply(
+    $plan->{root_selection_plan},
+    [
+      {
+        kind => 'field',
+        name => 'user',
+        alias => undef,
+        argument_count => 1,
+        directive_count => 0,
+        selection_count => 2,
+        selections => [
+          {
+            kind => 'fragment_spread',
+            name => 'Bits',
+            directive_count => 0,
+            type_condition => 'User',
+            selection_count => 2,
+            selections => [
+              {
+                kind => 'field',
+                name => 'id',
+                alias => undef,
+                argument_count => 0,
+                directive_count => 0,
+                selection_count => 0,
+              },
+              {
+                kind => 'field',
+                name => 'profile',
+                alias => undef,
+                argument_count => 0,
+                directive_count => 0,
+                selection_count => 1,
+                selections => [
+                  {
+                    kind => 'field',
+                    name => 'bio',
+                    alias => undef,
+                    argument_count => 0,
+                    directive_count => 0,
+                    selection_count => 0,
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            kind => 'field',
+            name => 'name',
+            alias => 'extra',
+            argument_count => 0,
+            directive_count => 0,
+            selection_count => 0,
+          },
+        ],
+      },
+    ],
+    'compiled plan caches nested selection metadata for root fields and fragment expansions',
+  );
+};
+
+subtest 'prepared ir legacy field bridge caches plain nested field buckets' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ user(id: "42") { id profile { bio } } }'
+  );
+  my $fields = GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_legacy_fields_xs(
+    $schema,
+    $prepared,
+  );
+  my $user_nodes = $fields->[1]{user};
+  my $user_node = $user_nodes->[0];
+
+  ok $user_node->{compiled_fields}, 'plain nested selection exposes compiled field buckets';
+  is_deeply(
+    $user_node->{compiled_fields},
+    [
+      [ 'id', 'profile' ],
+      {
+        id => [
+          {
+            kind => 'field',
+            name => 'id',
+          },
+        ],
+        profile => [
+          {
+            kind => 'field',
+            name => 'profile',
+            selections => [
+              {
+                kind => 'field',
+                name => 'bio',
+              },
+            ],
+            compiled_fields => [
+              [ 'bio' ],
+              {
+                bio => [
+                  {
+                    kind => 'field',
+                    name => 'bio',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    'compiled field buckets are attached recursively for plain nested selections',
+  );
+};
+
+subtest 'prepared ir legacy field bridge folds unconditional inline fragments into compiled buckets' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ user(id: "42") { ... { id profile { ... { bio } } } } }'
+  );
+  my $fields = GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_legacy_fields_xs(
+    $schema,
+    $prepared,
+  );
+  my $user_node = $fields->[1]{user}[0];
+
+  is_deeply(
+    $user_node->{compiled_fields},
+    [
+      [ 'id', 'profile' ],
+      {
+        id => [
+          {
+            kind => 'field',
+            name => 'id',
+          },
+        ],
+        profile => [
+          {
+            kind => 'field',
+            name => 'profile',
+            selections => [
+              {
+                kind => 'inline_fragment',
+                compiled_fields => [
+                  [ 'bio' ],
+                  {
+                    bio => [
+                      {
+                        kind => 'field',
+                        name => 'bio',
+                      },
+                    ],
+                  },
+                ],
+                selections => [
+                  {
+                    kind => 'field',
+                    name => 'bio',
+                  },
+                ],
+              },
+            ],
+            compiled_fields => [
+              [ 'bio' ],
+              {
+                bio => [
+                  {
+                    kind => 'field',
+                    name => 'bio',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    'compiled field buckets absorb unconditional inline fragments recursively',
+  );
+};
+
+subtest 'execute compiled ir reuses compiled fragment buckets' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID!) { user(id: $id) { ...Bits ... { name } } } fragment Bits on User { id }'
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $schema,
+    $prepared,
+    'Q',
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs($compiled, undef, undef, { id => '61' }),
+    {
+      data => {
+        user => {
+          id => '61',
+          name => 'user:61',
+        },
+      },
+    },
+    'compiled ir executes nested fragment and inline-fragment buckets correctly',
+  );
+};
+
 done_testing;

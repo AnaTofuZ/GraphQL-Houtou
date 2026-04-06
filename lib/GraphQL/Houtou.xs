@@ -6,6 +6,7 @@
 #include "validation.h"
 #include "execution.h"
 #include "ir_engine.h"
+#include "ir_execution.h"
 #include "legacy_compat.h"
 
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Parser
@@ -225,6 +226,353 @@ validate_xs(schema, document, options = NULL)
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Execution
 
 SV *
+_prepare_executable_ir_xs(source)
+    SV *source
+  CODE:
+    RETVAL = gql_ir_prepare_executable_handle_sv(aTHX_ source);
+  OUTPUT:
+    RETVAL
+
+SV *
+_compile_executable_ir_plan_xs(schema, handle, operation_name = NULL)
+    SV *schema
+    SV *handle
+    SV *operation_name
+  CODE:
+    RETVAL = gql_ir_compile_executable_plan_handle_sv(aTHX_ schema, handle, operation_name);
+  OUTPUT:
+    RETVAL
+
+SV *
+_compiled_executable_ir_plan_xs(handle)
+    SV *handle
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::CompiledIR")) {
+      croak("expected a GraphQL::Houtou::XS::CompiledIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_compiled_exec_t *compiled;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("compiled IR handle is no longer valid");
+      }
+
+      compiled = INT2PTR(gql_ir_compiled_exec_t *, SvUV(inner_sv));
+      RETVAL = gql_ir_compiled_plan_to_hv_sv(aTHX_ compiled);
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_prepared_executable_ir_stats_xs(handle)
+    SV *handle
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      RETVAL = newRV_noinc((SV *)gql_ir_prepare_executable_stats_hv(aTHX_ prepared));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_prepared_executable_ir_plan_xs(handle, operation_name = NULL)
+    SV *handle
+    SV *operation_name
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      RETVAL = newRV_noinc((SV *)gql_ir_prepare_executable_plan_hv(aTHX_ prepared, operation_name));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_prepared_executable_ir_frontend_xs(handle, operation_name = NULL)
+    SV *handle
+    SV *operation_name
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      RETVAL = newRV_noinc((SV *)gql_ir_prepare_executable_frontend_hv(aTHX_ prepared, operation_name));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_prepared_executable_ir_context_seed_xs(schema, handle, operation_name = NULL, variable_values = NULL)
+    SV *schema
+    SV *handle
+    SV *operation_name
+    SV *variable_values
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      RETVAL = newRV_noinc((SV *)gql_ir_prepare_executable_context_seed_hv(
+        aTHX_ schema,
+        prepared,
+        operation_name,
+        variable_values
+      ));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_prepared_executable_ir_operation_legacy_xs(handle, operation_name = NULL)
+    SV *handle
+    SV *operation_name
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+      gql_ir_operation_definition_t *selected;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
+      RETVAL = gql_ir_operation_to_legacy_sv(aTHX_ prepared, selected, operation_name);
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_prepared_executable_ir_root_selection_plan_xs(handle, operation_name = NULL)
+    SV *handle
+    SV *operation_name
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      RETVAL = newRV_noinc((SV *)gql_ir_prepare_executable_root_selection_plan_av(
+        aTHX_ prepared,
+        operation_name
+      ));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_prepared_executable_ir_root_field_buckets_xs(schema, handle, operation_name = NULL)
+    SV *schema
+    SV *handle
+    SV *operation_name
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      RETVAL = newRV_noinc((SV *)gql_ir_prepare_executable_root_field_buckets_hv(
+        aTHX_ schema,
+        prepared,
+        operation_name
+      ));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_prepared_executable_ir_root_field_plan_xs(schema, handle, operation_name = NULL)
+    SV *schema
+    SV *handle
+    SV *operation_name
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      RETVAL = newRV_noinc((SV *)gql_ir_prepare_executable_root_field_plan_hv(
+        aTHX_ schema,
+        prepared,
+        operation_name
+      ));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_prepared_executable_ir_root_legacy_fields_xs(schema, handle, operation_name = NULL)
+    SV *schema
+    SV *handle
+    SV *operation_name
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      RETVAL = gql_ir_prepare_executable_root_legacy_fields_sv(
+        aTHX_ schema,
+        prepared,
+        operation_name
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_prepared_executable_ir_execution_context_xs(schema, handle, root_value = NULL, context_value = NULL, variable_values = NULL, operation_name = NULL, field_resolver = NULL, promise_code = NULL)
+    SV *schema
+    SV *handle
+    SV *root_value
+    SV *context_value
+    SV *variable_values
+    SV *operation_name
+    SV *field_resolver
+    SV *promise_code
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      RETVAL = gql_ir_build_execution_context_sv(
+        aTHX_
+        schema,
+        prepared,
+        root_value,
+        context_value,
+        variable_values,
+        operation_name,
+        field_resolver,
+        promise_code
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_execute_prepared_ir_xs(schema, handle, root_value = NULL, context_value = NULL, variable_values = NULL, operation_name = NULL, field_resolver = NULL, promise_code = NULL)
+    SV *schema
+    SV *handle
+    SV *root_value
+    SV *context_value
+    SV *variable_values
+    SV *operation_name
+    SV *field_resolver
+    SV *promise_code
+  CODE:
+    RETVAL = gql_execution_execute_prepared_ir_xs_impl(
+      aTHX_
+      schema,
+      handle,
+      root_value,
+      context_value,
+      variable_values,
+      operation_name,
+      field_resolver,
+      promise_code
+    );
+  OUTPUT:
+    RETVAL
+
+SV *
+_execute_compiled_ir_xs(handle, root_value = NULL, context_value = NULL, variable_values = NULL, field_resolver = NULL, promise_code = NULL)
+    SV *handle
+    SV *root_value
+    SV *context_value
+    SV *variable_values
+    SV *field_resolver
+    SV *promise_code
+  CODE:
+    RETVAL = gql_execution_execute_compiled_ir_xs_impl(
+      aTHX_
+      handle,
+      root_value,
+      context_value,
+      variable_values,
+      field_resolver,
+      promise_code
+    );
+  OUTPUT:
+    RETVAL
+
+SV *
 _execute_xs_raw(schema, document, root_value = NULL, context_value = NULL, variable_values = NULL, operation_name = NULL, field_resolver = NULL, promise_code = NULL)
     SV *schema
     SV *document
@@ -247,6 +595,38 @@ _execute_xs_raw(schema, document, root_value = NULL, context_value = NULL, varia
     );
   OUTPUT:
     RETVAL
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::PreparedIR
+
+void
+DESTROY(self)
+    SV *self
+  CODE:
+    if (self && SvROK(self)) {
+      SV *inner_sv = SvRV(self);
+      if (SvIOK(inner_sv) && SvUV(inner_sv) != 0) {
+        gql_ir_prepared_exec_t *prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+        sv_setuv(inner_sv, 0);
+        gql_ir_prepared_exec_destroy(prepared);
+      }
+    }
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::CompiledIR
+
+void
+DESTROY(self)
+    SV *self
+  CODE:
+    if (self && SvROK(self)) {
+      SV *inner_sv = SvRV(self);
+      if (SvIOK(inner_sv) && SvUV(inner_sv) != 0) {
+        gql_ir_compiled_exec_t *compiled = INT2PTR(gql_ir_compiled_exec_t *, SvUV(inner_sv));
+        sv_setuv(inner_sv, 0);
+        gql_ir_compiled_exec_destroy(compiled);
+      }
+    }
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Execution
 
 SV *
 _execute_fields_xs(context, parent_type, root_value, path, fields)

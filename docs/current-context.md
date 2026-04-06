@@ -1,256 +1,250 @@
 # Current Context
 
-This note is the compressed handoff for the current `GraphQL::Houtou` worktree.
-It should stay short enough to recover momentum quickly after context resets.
+Compressed handoff for the current `GraphQL::Houtou` worktree.
 
 ## Snapshot
 
-- Goal has moved beyond parser-only work toward broader `GraphQL` compatibility.
-- Parser / graphql-js compatibility / lazy AST materialization remain in XS and
-  are stable enough for incremental work on schema, validation, introspection,
-  and execution.
-- XS source has been split under `src/` and `lib/GraphQL/Houtou.xs`
-  is now a thin entrypoint.
-- Houtou now owns its public type / schema / directive / role namespaces
-  instead of only subclassing upstream wrappers.
+- Main compatibility work stays on `main`.
+- IR-direct execution work stays on `ir-direct-execution` only.
+- Public parser / AST APIs are unchanged.
+- Current strategy has two parallel tracks:
+  - query-side compiled execution plans
+  - schema/runtime caches that also help AST execution
 
-## Recent Landed Work
+## Recent IR Branch Commits
 
-- `70b94cb` Move type library into Houtou namespace
-- `791b6c8` Implement Houtou list, non-null, and scalar types
-- `b061db1` Implement Houtou enum and input object types
-- `89547bd` Implement Houtou object, interface, and union types
-- `268ad5b` Migrate Houtou types onto Houtou roles
-- `2da0329` Add initial XS validation entrypoint
-- `db5f559` Move fragment cycle validation into XS
-- `0a75b01` Add validation status note and introspection wrapper
-- `1260ccc` Own introspection types in Houtou
-- `ad99ad2` Move runtime type helpers into Houtou
-- `962e411` Add initial Houtou execution facade
-- `d49a2d7` Move execution context setup into XS
-- `64fa2e3` Move execution field loop into XS
-- `83f81a3` Move execution info build and merge into XS
-- `93a85b8` Move execution resolver calls into XS
-- `73991f5` Coerce XS resolver failures into GraphQL errors
-- `8ec0444` Add XS fast path for simple argument coercion
-- `cc8642f` Expand XS execution fast paths
-- `da8259d` Add XS list completion fast path
-- `01bd372` Add XS object completion fast path
-- `4bfe85d` Handle simple object directives in XS
-- `a0b8d35` Handle simple fragments in XS object completion
-- `a75af49` Support object completion fast paths in XS
-- `fdfba8c` Add XS abstract completion fast paths
-- `3dc64b4` Support default abstract completion in XS
-- `5c42d7d` Expand XS list completion coverage
-- `91451a7` Skip irrelevant concrete fragments in XS
-- `171a072` Handle execution callback exceptions in XS
-- `758f0f9` Normalize promise code hooks
-- `0c0b9f7` Reduce XS execution fixed overhead
-- `838747b` Reduce promise execution merge overhead
-- `8eb07cc` Profile PP bridges and batch promise list completion
-- `1343219` Move prepared execution entrypoint into XS
-- `41477aa` Make XS field execution promise-aware
-- `095fc8e` Skip PP variable defaults for empty operations
-- `f8d5699` Handle promise leaf completion in XS
-- `a17a659` Add global default promise hooks
-- `7a5d061` Normalize promise hooks for XS execution
-- `ad56343` Move promise adapter dispatch into XS
-- `cabaf0f` Use XS helpers for promise hash merging
-- `71d0bc7` Route promise resolve and reject through adapter hooks
-- `13dcc3d` Move execution response shaping into XS
-- `9050567` Move located execution errors into XS
-- `88266c0` Refactor promise completion continuations
+- `f950c6d` Add initial prepared IR execution path
+- `e1bcd5f` Add compiled IR execution plans
+- `161c828` Cache nested metadata in compiled IR plans
+- `5c9eeb5` Warm schema runtime caches for execution
+- `a030daf` Use runtime schema caches in Perl abstract paths
+- `45d816a` Reuse compiled nested field buckets
+- `b2ccbac` Cache schema field maps for execution lookups
+- `b35320d` Fold simple inline fragments into compiled buckets
+- `690ffb8` Reuse compiled fragment buckets in nested selections
+- `42a9d9f` Cache runtime schema lookups in execution contexts
+- `646c10f` Use execution runtime caches in Perl abstract paths
+- `6d7c2af` Attach compiled field defs to nested IR nodes
+- `e7c04b8` Attach compiled field defs to fragment plans
+- `c42263f` Use runtime caches in abstract fragment matching
+- `0685c33` Precompute possible type maps in runtime cache
 
-## Current Architecture
+## Current Execution State
 
-### Parser / AST
+### Shared XS execution core
 
-- `GraphQL::Houtou::XS::Parser` remains the primary parser backend.
-- graphql-js executable documents use IR-first parsing and XS builders.
-- Lazy materialization exists for expensive graphql-js child arrays.
-
-### Schema / Types
-
-- `GraphQL::Houtou::Schema`
-- `GraphQL::Houtou::Directive`
-- `GraphQL::Houtou::Type::*`
-- `GraphQL::Houtou::Role::*`
-
-These are now Houtou-owned public classes and roles.
-
-### Schema Compiler
-
-- Public facade: `GraphQL::Houtou::Schema::Compiler`
-- PP reference: `GraphQL::Houtou::Schema::Compiler::PP`
-- XS entrypoint: `GraphQL::Houtou::XS::SchemaCompiler`
-
-The public API prefers XS and falls back to PP.
-
-### Validation
-
-- Public facade: `GraphQL::Houtou::Validation`
-- PP reference: `GraphQL::Houtou::Validation::PP`
-- XS entrypoint: `GraphQL::Houtou::XS::Validation`
-
-Currently migrated to XS:
-
-- no operations supplied
-- operation name uniqueness
-- lone anonymous operation
-- subscription single root field
-- fragment cycle detection
-
-Further rule-by-rule migration is currently deprioritized; see
-`docs/validation-status.md`.
-
-### Introspection
-
-- `GraphQL::Houtou::Introspection` is now Houtou-owned.
-- Meta types and meta fields no longer depend on the upstream package name.
-- Transition-time compatibility for mixed upstream/Houtou type objects is still
-  intentionally preserved in resolver logic.
-
-### Runtime Helpers
-
-Moved into Houtou type/role code as groundwork for execution work:
-
-- `GraphQL::Houtou::Type::Object::_collect_fields`
-- `GraphQL::Houtou::Type::Object::_fragment_condition_match`
-- `GraphQL::Houtou::Type::Object::_should_include_node`
-- `GraphQL::Houtou::Type::Object::_complete_value`
-- `GraphQL::Houtou::Type::List::_complete_value`
-- `GraphQL::Houtou::Role::Abstract::_complete_value`
-
-### Execution
-
-- Public facade: `GraphQL::Houtou::Execution`
-- PP reference: `GraphQL::Houtou::Execution::PP`
-- XS entrypoint: `GraphQL::Houtou::XS::Execution`
-
-Current XS-owned pieces:
+Already XS-owned:
 
 - AST coercion
 - fragment map build
 - operation selection
-- variable default application dispatch
 - field execution loop
 - resolve info construction
-- final hash merge
+- final response merge
 - resolver invocation and error coercion
-- simple / variable argument coercion common cases
-- leaf / null / non-null completion common cases
-- leaf list completion common cases
-- object completion common cases
-  - plain nested selections
-  - simple `@include` / `@skip`
-  - simple inline fragments
-  - simple fragment spreads
-  - abstract fragment conditions via `schema->is_possible_type`
-  - `is_type_of` happy path / false / exception paths
-  - abstract type completion happy paths
-    - explicit `resolve_type`
-    - default `get_possible_types` + `is_type_of`
+- simple / variable argument coercion fast paths
+- built-in scalar fast paths
+- enum fast paths
+- common object/list/abstract completion fast paths
+- promise dispatch / merge / response shaping
 
-Still delegated to PP helpers:
+Still PP fallback:
 
 - full argument coercion fallback
 - complex object/list completion fallback
-- promise-backed execution now keeps upstream-style `promise_code`, supports a
-  global default hook set, and allows optional `then` / `is_promise` hooks so
-  the caller can adapt arbitrary promise libraries without Houtou hardcoding
-  backend names
-- promise dispatch, list/hash merge, response shaping, and located error
-  decoration are now XS-backed
-- prepared operation execution now runs in XS
-- promise-aware top-level field execution now runs in XS
-- promise leaf completion now runs in XS
 
-## Testing Snapshot
+### IR direct execution
 
-Latest local verification:
+Available internal APIs:
 
-- Always run sequentially:
-  1. `./Build build`
-  2. `./Build test`
-- Do not run `build` and `test` in parallel.
-- Latest local verification:
-  - `./Build build`
-  - `./Build test`
-  - `13 files / 173 tests / PASS`
+- `_prepare_executable_ir_xs($source)`
+- `_compile_executable_ir_plan_xs($schema, $prepared, $operation_name = undef)`
+- `execute_prepared_ir_xs(...)`
+- `execute_compiled_ir_xs(...)`
 
-## XS Memory Rule
+Current compiled plan caches:
 
-When creating a temporary `SV` and passing it to another helper, the caller
-owns that temporary and must release it unless ownership is explicitly
-transferred.
+- selected operation metadata
+- fragment map
+- root type
+- root legacy fields
+- root selection plan
+- root field plan
+- nested selection metadata under root plans
+- nested `compiled_fields` for simple reusable buckets
+- nested/root `compiled_field_def`
+- fragment child nodes can also carry `compiled_field_def`
+
+Current compiled-plan execution reuse:
+
+- root-level `field_def` lookup is short-circuited from compiled metadata
+- plain nested field selections can carry `compiled_fields`
+- `collect_simple_object_fields()` now reuses those nested compiled buckets
+- simple inline fragments can be folded into compiled buckets
+- nested fragment buckets can now be reused as well
+
+This means compiled IR is already faster than prepared IR and is now beating
+`houtou_xs_ast` in several nested cases.
+
+## Runtime Schema Cache
+
+`GraphQL::Houtou::Schema` now has:
+
+- `prepare_runtime`
+- `runtime_cache`
+- `clear_runtime_cache`
+
+Current runtime cache contents:
+
+- `root_types`
+- `name2type`
+- `interface2types`
+- `possible_type_map`
+- `possible_types`
+- `field_maps`
+
+Current runtime cache consumers:
+
+- XS root type lookup
+- XS abstract default path
+- XS `get_field_def`
+- XS execution context runtime cache lookups
+- Perl `Object::_fragment_condition_match`
+- Perl `Interface::_ensure_valid_runtime_type`
+
+This is the current main path for "global" optimization that also improves
+AST execution, not only IR execution.
+
+## Benchmark Direction
+
+Known shape of results after latest landed work:
+
+- `compiled_ir` > `prepared_ir`
+- `compiled_ir` > `houtou_xs_ast` on nested object cases
+- `compiled_ir` ~= `houtou_xs_ast` on abstract/fragment-heavy cases
+- runtime-cache work targets AST and IR paths simultaneously
+
+Current sampled numbers (`util/execution-benchmark.pl --count=-3`):
+
+- `simple_scalar`
+  - `houtou_prepared_ir`: `126079/s`
+  - `houtou_compiled_ir`: `139515/s`
+  - `houtou_xs_ast`: `139565/s`
+- `nested_variable_object`
+  - `houtou_prepared_ir`: `66566/s`
+  - `houtou_compiled_ir`: `79130/s`
+  - `houtou_xs_ast`: `77441/s`
+- `list_of_objects`
+  - `houtou_prepared_ir`: `54287/s`
+  - `houtou_compiled_ir`: `57941/s`
+  - `houtou_xs_ast`: `58659/s`
+- `abstract_with_fragment`
+  - `houtou_prepared_ir`: `40215/s`
+  - `houtou_compiled_ir`: `41647/s`
+  - `houtou_xs_ast`: `41687/s`
+- `async_scalar`
+  - `houtou_prepared_ir`: `74244/s`
+  - `houtou_compiled_ir`: `77535/s`
+  - `houtou_facade_ast`: `78946/s`
+- `async_list`
+  - `houtou_prepared_ir`: `42601/s`
+  - `houtou_compiled_ir`: `43671/s`
+  - `houtou_facade_ast`: `43260/s`
+
+## Testing Rule
+
+Primary verification workflow:
+
+1. `minil test`
+
+Use `./Build build` only when benchmark / profiling utilities need repo-root
+`blib`.
+
+## Promise::XS Experiment Note
+
+A separate experiment branch (`promise-xs-fastpath`) tested a dedicated
+`Promise::XS` backend.
+
+Conclusion:
+
+- do not merge the dedicated backend as-is
+- real `Promise::XS` with public-API specialization was effectively tied with
+  the existing generic hook path
+- the remaining async overhead is in promise continuation / merge work, not in
+  adapter dispatch alone
+
+Measured with real `Promise::XS` installed locally and repo-root `blib`:
+
+- `async_scalar`
+  - generic hook: `81683/s`
+  - dedicated `promise_xs`: `81704/s`
+- `async_list`
+  - generic hook: `40883/s`
+  - dedicated `promise_xs`: `40758/s`
+
+So the recommended direction remains:
+
+- keep the generic promise-hook contract
+- optimize continuation / merge internals instead of adding a Promise::XS-only
+  execution mode
+
+Latest verification:
+
+- `minil test`
+- `13 files / 189 tests / PASS`
+
+## Coding Rule
+
+When creating a temporary `SV` and passing it into another helper, the caller
+owns that temporary unless ownership transfer is explicitly documented.
+
+Perl API ownership model:
+
+- track ownership, not just raw refcounts
+- a temporary pushed only for stack/lifetime purposes should normally be made
+  mortal with `sv_2mortal(...)`
+- do not mortalize the same owned reference twice
+- when embedding a freshly-created referent into an RV/container, prefer the
+  `_noinc` form if ownership is being transferred rather than shared
+- prefer APIs like `hv_store(...)` when the key is not already an `SV`, because
+  they avoid creating temporary key SVs in the first place
 
 Practical rule:
 
-- if a call site does `newSVsv(...)`, `newSVpvf(...)`, or `newRV_noinc(...)`
-  only to pass the value into another function, the call site is responsible
-  for deciding whether that temporary must be `SvREFCNT_dec(...)`'d after the
-  callee returns
-- do not assume `gql_execution_call_*` helpers consume ownership unless that is
-  documented explicitly
+- `newSVsv(...)`
+- `newSVpvf(...)`
+- `newRV_noinc(...)`
 
-## Memory Leak Check
+If these are created only for a helper call, the call site must decide whether
+to `SvREFCNT_dec(...)` afterward.
 
-- Leak-check harness: `perl util/leak-check.pl`
-- Backend policy:
-  - macOS: `leaks`
-  - other platforms: `asan`
-- Latest run on 2026-04-05:
-  - `parser_graphqljs`: `0 leaks`
-  - `xs_smoke`: `0 leaks`
-  - `execution`: `0 leaks`
-  - `promise`: `0 leaks`
-- Detailed usage and notes: `docs/memory-leak-check.md`
+The same applies to temporary key SVs used with hash helpers.
 
-## Next Work
+- `hv_store_ent(...)` does not consume the key SV
+- `hv_store_ent(...)` takes ownership of one reference to `val` on success, but
+  not of `key`
+- `hv_fetch_ent(...)` does not transfer ownership of a temporary key SV
+- `hv_iterkeysv(...)` returns a mortal copy; treat it as borrowed temporary data
 
-Execution is now the active compatibility surface and the public path already
-prefers XS.
+Practical rule:
 
-Key constraint:
+- if a temporary key SV is created only to call `hv_store_ent(...)`, the call
+  site must `SvREFCNT_dec(...)` it afterward unless the SV was made mortal
+- avoid inline patterns like `hv_store_ent(hv, newSVsv(...), ...)` because they
+  hide ownership and make leaks easy to miss; bind the temporary key SV to a
+  local variable, call `hv_store_ent(...)`, then `SvREFCNT_dec(...)`
+- treat the same ownership rule as applying to all same-shape patterns where a
+  temporary SV is created solely to serve as a lookup/store key
+- use `util/lint-xs-ownership.pl` before landing ownership-related XS changes;
+  it checks for the most common inline temporary-key and nested-mortal patterns
 
-- upstream `GraphQL::Execution` cannot be reused directly as the public entry
-  point because it type-checks against upstream `GraphQL::Schema`.
-- Houtou runtime helpers should stop calling upstream execution internals and
-  instead call Houtou-owned execution helpers.
+## Next Step
 
-Recent benchmark snapshot:
+Keep pushing compiled-plan reuse deeper without creating a second executor.
 
-- `simple_scalar`
-  - `houtou_xs_ast`: about `133.7k/s`
-  - `upstream_ast`: about `42.3k/s`
-- `nested_variable_object`
-  - `houtou_xs_ast`: about `66.2k/s`
-  - `upstream_ast`: about `25.0k/s`
-- `list_of_objects`
-  - `houtou_xs_ast`: about `49.0k/s`
-  - `upstream_ast`: about `17.9k/s`
-- `abstract_with_fragment`
-  - `houtou_xs_ast`: about `37.4k/s`
-  - `upstream_ast`: about `23.8k/s`
-- `async_scalar`
-  - `houtou_facade_ast`: about `74.7k/s`
-  - `upstream_ast`: about `42.2k/s`
-- `async_list`
-  - `houtou_facade_ast`: about `41.5k/s`
-  - `upstream_ast`: about `26.2k/s`
+Best next move:
 
-Recent PP bridge profile snapshot (`HOUTOU_PROFILE_PP_BRIDGE=1`):
-
-- `async_scalar`
-  - `variables_apply_defaults=0`
-  - `execute_prepared_context=0`
-  - `complete_value_catching_error=0`
-- `async_list`
-  - `variables_apply_defaults=0`
-  - `execute_prepared_context=0`
-  - `complete_value_catching_error=0`
-
-Immediate next step:
-
-- continue shrinking complex object/list completion fallbacks
-- keep abstract/object error paths moving deeper into XS
+- push compiled-plan reuse deeper into nested execution
+- keep improving runtime schema snapshots so AST and IR paths both benefit
+- focus next on abstract/concrete subtree reuse rather than fragment caching
+  alone

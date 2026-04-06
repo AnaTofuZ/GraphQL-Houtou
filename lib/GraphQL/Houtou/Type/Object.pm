@@ -98,16 +98,22 @@ sub _collect_fields {
 sub _fragment_condition_match {
   my ($self, $context, $node) = @_;
   my $condition_type;
+  my $schema = $context->{schema};
+  my $runtime_cache = $context->{runtime_cache} || $schema->runtime_cache || $schema->prepare_runtime;
+  my $name2type = $runtime_cache->{name2type} || $schema->name2type;
+  my $possible_type_map = $runtime_cache->{possible_type_map} ||= {};
 
   return 1 if !$node->{on};
   return 1 if $node->{on} eq $self->name;
-  $condition_type = $context->{schema}->name2type->{ $node->{on} }
+  $condition_type = $name2type->{ $node->{on} }
     // die GraphQL::Error->new(
       message => "Unknown type for fragment condition '$node->{on}'."
     );
   return '' if !$condition_type->DOES('GraphQL::Houtou::Role::Abstract')
     && !$condition_type->DOES('GraphQL::Role::Abstract');
-  return $context->{schema}->is_possible_type($condition_type, $self);
+  return $possible_type_map->{ $condition_type->name }{ $self->name }
+    if exists $possible_type_map->{ $condition_type->name };
+  return $schema->is_possible_type($condition_type, $self);
 }
 
 sub _should_include_node {

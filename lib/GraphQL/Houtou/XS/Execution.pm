@@ -16,6 +16,23 @@ use GraphQL::Houtou::Promise::Adapter qw(
 our $VERSION = '0.01';
 our @EXPORT_OK = qw(
   execute_xs
+  execute_prepared_ir_xs
+  execute_compiled_ir_xs
+  _prepare_executable_ir_xs
+  _compile_executable_ir_plan_xs
+  _compiled_executable_ir_plan_xs
+  _prepared_executable_ir_stats_xs
+  _prepared_executable_ir_plan_xs
+  _prepared_executable_ir_frontend_xs
+  _prepared_executable_ir_context_seed_xs
+  _prepared_executable_ir_operation_legacy_xs
+  _prepared_executable_ir_root_selection_plan_xs
+  _prepared_executable_ir_root_field_buckets_xs
+  _prepared_executable_ir_root_field_plan_xs
+  _prepared_executable_ir_root_legacy_fields_xs
+  _prepared_executable_ir_execution_context_xs
+  _execute_prepared_ir_xs
+  _execute_compiled_ir_xs
   _collect_fields_xs
   _execute_fields_xs
   _get_argument_values_xs
@@ -80,6 +97,50 @@ sub execute_xs {
     $context_value,
     $variable_values,
     $operation_name,
+    $field_resolver,
+    normalize_promise_code($promise_code),
+  );
+}
+
+sub execute_prepared_ir_xs {
+  my (
+    $schema,
+    $handle,
+    $root_value,
+    $context_value,
+    $variable_values,
+    $operation_name,
+    $field_resolver,
+    $promise_code,
+  ) = @_;
+
+  return _execute_prepared_ir_xs(
+    $schema,
+    $handle,
+    $root_value,
+    $context_value,
+    $variable_values,
+    $operation_name,
+    $field_resolver,
+    normalize_promise_code($promise_code),
+  );
+}
+
+sub execute_compiled_ir_xs {
+  my (
+    $handle,
+    $root_value,
+    $context_value,
+    $variable_values,
+    $field_resolver,
+    $promise_code,
+  ) = @_;
+
+  return _execute_compiled_ir_xs(
+    $handle,
+    $root_value,
+    $context_value,
+    $variable_values,
     $field_resolver,
     normalize_promise_code($promise_code),
   );

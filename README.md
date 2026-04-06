@@ -191,26 +191,35 @@ Example:
 
 # BENCHMARK SNAPSHOT
 
-As of 2026-04-05, practical execution benchmarks using
+As of 2026-04-06, practical execution benchmarks using
 `util/execution-benchmark.pl --count=-3` produced the following snapshot:
 
 - `simple_scalar` AST execution:
-`houtou_xs_ast` about 133,720/s, `upstream_ast` about 42,334/s
+`houtou_xs_ast` about 139,565/s, `houtou_compiled_ir` about 139,515/s,
+`upstream_ast` about 41,261/s
 - `nested_variable_object` AST execution:
-`houtou_xs_ast` about 66,215/s, `upstream_ast` about 25,038/s
+`houtou_compiled_ir` about 79,130/s, `houtou_xs_ast` about 77,441/s,
+`upstream_ast` about 25,041/s
 - `list_of_objects` AST execution:
-`houtou_xs_ast` about 49,028/s, `upstream_ast` about 17,926/s
+`houtou_xs_ast` about 58,659/s, `houtou_compiled_ir` about 57,941/s,
+`upstream_ast` about 17,816/s
 - `abstract_with_fragment` AST execution:
-`houtou_xs_ast` about 37,449/s, `upstream_ast` about 23,801/s
+`houtou_xs_ast` about 41,687/s, `houtou_compiled_ir` about 41,647/s,
+`upstream_ast` about 23,641/s
 - `async_scalar` AST execution:
-`houtou_facade_ast` about 74,722/s, `upstream_ast` about 42,173/s
+`houtou_facade_ast` about 78,946/s, `houtou_compiled_ir` about 77,535/s,
+`upstream_ast` about 41,389/s
 - `async_list` AST execution:
-`houtou_facade_ast` about 41,505/s, `upstream_ast` about 26,212/s
+`houtou_compiled_ir` about 43,671/s, `houtou_facade_ast` about 43,260/s,
+`upstream_ast` about 26,131/s
 
 This confirms several practical points:
 
 - the XS path is now materially faster than upstream execution in the benchmarked
 AST and source-string cases
+- compiled IR plans are now a real execution path, not just parser metadata; they
+already improve over prepared IR and are competitive with, or better than, the
+best AST-based Houtou path in several practical cases
 - the execution XS work is paying off not only for nested/list/object workloads
 but also for promise-backed scalar and list cases
 - turning off parser location handling still materially improves parse-only

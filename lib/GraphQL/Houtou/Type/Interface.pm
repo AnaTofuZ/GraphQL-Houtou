@@ -50,9 +50,13 @@ has to_doc => (
 
 sub _ensure_valid_runtime_type {
   my ($self, $runtime_type_or_name, $context, $nodes, $info, $result) = @_;
+  my $schema = $context->{schema};
+  my $runtime_cache = $context->{runtime_cache} || $schema->runtime_cache || $schema->prepare_runtime;
+  my $name2type = $runtime_cache->{name2type} || $schema->name2type;
+  my $possible_type_map = $runtime_cache->{possible_type_map} ||= {};
   my $runtime_type = ref($runtime_type_or_name)
     ? $runtime_type_or_name
-    : $context->{schema}->name2type->{$runtime_type_or_name};
+    : $name2type->{$runtime_type_or_name};
 
   die GraphQL::Error->new(
     message => "Abstract type @{[$self->name]} must resolve to an " .
@@ -66,7 +70,11 @@ sub _ensure_valid_runtime_type {
     message => "Runtime Object type '@{[$runtime_type->name]}' is not a possible type for " .
       "'@{[$self->name]}'.",
     nodes => [ $nodes ],
-  ) if !$context->{schema}->is_possible_type($self, $runtime_type);
+  ) if !(
+    (exists $possible_type_map->{ $self->name }
+      ? $possible_type_map->{ $self->name }{ $runtime_type->name }
+      : $schema->is_possible_type($self, $runtime_type))
+  );
 
   return $runtime_type;
 }

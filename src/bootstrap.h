@@ -143,9 +143,32 @@ typedef struct gql_ir_operation_definition gql_ir_operation_definition_t;
 typedef struct gql_ir_fragment_definition gql_ir_fragment_definition_t;
 typedef struct gql_ir_definition gql_ir_definition_t;
 typedef struct gql_ir_document gql_ir_document_t;
+typedef struct gql_ir_prepared_exec gql_ir_prepared_exec_t;
+typedef struct gql_ir_compiled_exec gql_ir_compiled_exec_t;
 typedef struct {
   gql_ir_document_t *document;
 } gql_ir_document_cleanup_t;
+
+struct gql_ir_prepared_exec {
+  gql_ir_document_t *document;
+  SV *source_sv;
+  SV *cached_operation_name_sv;
+  SV *cached_operation_legacy_sv;
+  SV *cached_fragments_legacy_sv;
+  SV *cached_root_legacy_fields_sv;
+};
+
+struct gql_ir_compiled_exec {
+  SV *prepared_handle_sv;
+  SV *schema_sv;
+  SV *operation_name_sv;
+  SV *operation_sv;
+  SV *fragments_sv;
+  SV *root_selection_plan_sv;
+  SV *root_field_plan_sv;
+  SV *root_fields_sv;
+  SV *root_type_sv;
+};
 
 typedef enum {
   GQLJS_LAZY_ARRAY_ARGUMENTS = 1,
@@ -390,6 +413,10 @@ static gql_ir_operation_definition_t *gql_ir_parse_operation_definition(pTHX_ gq
 static gql_ir_fragment_definition_t *gql_ir_parse_fragment_definition(pTHX_ gql_parser_t *p);
 static gql_ir_definition_t *gql_ir_parse_executable_definition(pTHX_ gql_parser_t *p);
 static gql_ir_document_t *gql_ir_parse_executable_document(pTHX_ SV *source_sv);
+static SV *gql_ir_prepare_executable_handle_sv(pTHX_ SV *source_sv);
+static HV *gql_ir_prepare_executable_stats_hv(pTHX_ gql_ir_prepared_exec_t *prepared);
+static HV *gql_ir_prepare_executable_plan_hv(pTHX_ gql_ir_prepared_exec_t *prepared, SV *operation_name);
+static HV *gql_ir_prepare_executable_frontend_hv(pTHX_ gql_ir_prepared_exec_t *prepared, SV *operation_name);
 static void gql_ir_cleanup_document(pTHX_ void *ptr);
 static void gql_ir_free_type(gql_ir_type_t *type);
 static void gql_ir_free_value(gql_ir_value_t *value);
@@ -403,6 +430,7 @@ static void gql_ir_free_operation_definition(gql_ir_operation_definition_t *defi
 static void gql_ir_free_fragment_definition(gql_ir_fragment_definition_t *definition);
 static void gql_ir_free_definition(gql_ir_definition_t *definition);
 static void gql_ir_free_document(gql_ir_document_t *document);
+static void gql_ir_prepared_exec_destroy(gql_ir_prepared_exec_t *prepared);
 static void gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrites);
 static void gqljs_loc_context_destroy(gqljs_loc_context_t *ctx);
 static UV gqljs_original_pos_from_rewritten_pos(gqljs_loc_context_t *ctx, UV rewritten_pos);

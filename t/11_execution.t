@@ -1079,4 +1079,58 @@ subtest 'compiled ir plan caches nested selection metadata' => sub {
   );
 };
 
+subtest 'prepared ir legacy field bridge caches plain nested field buckets' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ user(id: "42") { id profile { bio } } }'
+  );
+  my $fields = GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_legacy_fields_xs(
+    $schema,
+    $prepared,
+  );
+  my $user_nodes = $fields->[1]{user};
+  my $user_node = $user_nodes->[0];
+
+  ok $user_node->{compiled_fields}, 'plain nested selection exposes compiled field buckets';
+  is_deeply(
+    $user_node->{compiled_fields},
+    [
+      [ 'id', 'profile' ],
+      {
+        id => [
+          {
+            kind => 'field',
+            name => 'id',
+          },
+        ],
+        profile => [
+          {
+            kind => 'field',
+            name => 'profile',
+            selections => [
+              {
+                kind => 'field',
+                name => 'bio',
+              },
+            ],
+            compiled_fields => [
+              [ 'bio' ],
+              {
+                bio => [
+                  {
+                    kind => 'field',
+                    name => 'bio',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    'compiled field buckets are attached recursively for plain nested selections',
+  );
+};
+
 done_testing;

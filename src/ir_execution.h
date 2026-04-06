@@ -921,6 +921,81 @@ static SV *gql_ir_selection_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_
 static AV *gql_ir_selections_to_legacy_av(pTHX_ gql_ir_document_t *document, gql_ir_selection_set_t *selection_set);
 static SV *gql_ir_value_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_value_t *value);
 static SV *gql_ir_directives_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_ptr_array_t *directives);
+static int gql_ir_selection_set_is_plain_fields(gql_ir_selection_set_t *selection_set);
+static SV *gql_ir_selection_set_to_legacy_fields_sv(pTHX_ gql_ir_document_t *document, gql_ir_selection_set_t *selection_set);
+
+static int
+gql_ir_selection_set_is_plain_fields(gql_ir_selection_set_t *selection_set) {
+  UV i;
+
+  if (!selection_set) {
+    return 1;
+  }
+
+  for (i = 0; i < (UV)selection_set->selections.count; i++) {
+    gql_ir_selection_t *selection = (gql_ir_selection_t *)selection_set->selections.items[i];
+    gql_ir_field_t *field;
+
+    if (!selection || selection->kind != GQL_IR_SELECTION_FIELD) {
+      return 0;
+    }
+
+    field = selection->as.field;
+    if (field->directives.count > 0) {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+static SV *
+gql_ir_selection_set_to_legacy_fields_sv(pTHX_ gql_ir_document_t *document, gql_ir_selection_set_t *selection_set) {
+  AV *field_names_av = newAV();
+  HV *nodes_defs_hv = newHV();
+  AV *ret_av = newAV();
+  UV i;
+
+  if (selection_set) {
+    for (i = 0; i < (UV)selection_set->selections.count; i++) {
+      gql_ir_selection_t *selection = (gql_ir_selection_t *)selection_set->selections.items[i];
+      gql_ir_field_t *field;
+      SV *result_name_sv;
+      HE *bucket_he;
+      AV *bucket_av;
+
+      if (!selection || selection->kind != GQL_IR_SELECTION_FIELD) {
+        continue;
+      }
+
+      field = selection->as.field;
+      result_name_sv = (field->alias.start != field->alias.end)
+        ? gql_ir_make_sv_from_span(aTHX_ document, field->alias)
+        : gql_ir_make_sv_from_span(aTHX_ document, field->name);
+      bucket_he = hv_fetch_ent(nodes_defs_hv, result_name_sv, 0, 0);
+      if (!bucket_he) {
+        bucket_av = newAV();
+        (void)hv_store_ent(nodes_defs_hv, newSVsv(result_name_sv), newRV_noinc((SV *)bucket_av), 0);
+        av_push(field_names_av, newSVsv(result_name_sv));
+      } else if (SvROK(HeVAL(bucket_he)) && SvTYPE(SvRV(HeVAL(bucket_he))) == SVt_PVAV) {
+        bucket_av = (AV *)SvRV(HeVAL(bucket_he));
+      } else {
+        SvREFCNT_dec(result_name_sv);
+        SvREFCNT_dec((SV *)field_names_av);
+        SvREFCNT_dec((SV *)nodes_defs_hv);
+        SvREFCNT_dec((SV *)ret_av);
+        croak("compiled legacy field bucket is invalid");
+      }
+
+      av_push(bucket_av, gql_ir_selection_to_legacy_sv(aTHX_ document, selection));
+      SvREFCNT_dec(result_name_sv);
+    }
+  }
+
+  av_push(ret_av, newRV_noinc((SV *)field_names_av));
+  av_push(ret_av, newRV_noinc((SV *)nodes_defs_hv));
+  return newRV_noinc((SV *)ret_av);
+}
 
 static int
 gql_ir_prepare_collect_root_legacy_fields_into(
@@ -1692,6 +1767,9 @@ gql_ir_selection_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_selectio
       }
       if (field->selection_set && field->selection_set->selections.count > 0) {
         gql_store_sv(hv, "selections", newRV_noinc((SV *)gql_ir_selections_to_legacy_av(aTHX_ document, field->selection_set)));
+        if (gql_ir_selection_set_is_plain_fields(field->selection_set)) {
+          gql_store_sv(hv, "compiled_fields", gql_ir_selection_set_to_legacy_fields_sv(aTHX_ document, field->selection_set));
+        }
       }
       return newRV_noinc((SV *)hv);
     }

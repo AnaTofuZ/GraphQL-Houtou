@@ -88,9 +88,17 @@ sub _runtime_cache {
   my $interface2types = $self->_interface2types || {};
   my $possible_type_map = $self->_possible_type_map || {};
   my %possible_types;
+  my %field_maps;
 
   for my $type (values %$name2type) {
     next if !$type;
+
+    if (_does_any_role($type, qw(
+      GraphQL::Houtou::Role::FieldsOutput
+      GraphQL::Role::FieldsOutput
+    ))) {
+      $field_maps{ $type->name } = $type->fields || {};
+    }
 
     if ($type->isa('GraphQL::Type::Union') || $type->isa('GraphQL::Houtou::Type::Union')) {
       my $types = $type->{types} || $type->types || [];
@@ -114,6 +122,7 @@ sub _runtime_cache {
     interface2types => $interface2types,
     possible_type_map => $possible_type_map,
     possible_types => \%possible_types,
+    field_maps => \%field_maps,
   };
 }
 

@@ -3678,6 +3678,7 @@ gql_execution_merge_hash(pTHX_ AV *keys_av, AV *values_av, AV *errors_av) {
 static SV *
 gql_execution_get_field_def(pTHX_ SV *schema, SV *parent_type, SV *field_name) {
   HV *schema_hv;
+  HV *runtime_cache_hv;
   SV **query_svp;
   HV *parent_type_hv;
   SV **fields_svp;
@@ -3722,6 +3723,7 @@ gql_execution_get_field_def(pTHX_ SV *schema, SV *parent_type, SV *field_name) {
   }
 
   schema_hv = (HV *)SvRV(schema);
+  runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ schema);
   query_svp = hv_fetch(schema_hv, "query", 5, 0);
   name = SvPV(field_name, name_len);
 
@@ -3781,6 +3783,23 @@ gql_execution_get_field_def(pTHX_ SV *schema, SV *parent_type, SV *field_name) {
   }
 
   parent_type_hv = (HV *)SvRV(parent_type);
+  if (runtime_cache_hv) {
+    SV **field_maps_svp = hv_fetch(runtime_cache_hv, "field_maps", 10, 0);
+    if (field_maps_svp && SvROK(*field_maps_svp) && SvTYPE(SvRV(*field_maps_svp)) == SVt_PVHV) {
+      SV **type_name_svp = hv_fetch(parent_type_hv, "name", 4, 0);
+      if (type_name_svp && SvOK(*type_name_svp)) {
+        HE *type_fields_he = hv_fetch_ent((HV *)SvRV(*field_maps_svp), *type_name_svp, 0, 0);
+        if (type_fields_he && SvROK(HeVAL(type_fields_he)) && SvTYPE(SvRV(HeVAL(type_fields_he))) == SVt_PVHV) {
+          field_he = hv_fetch_ent((HV *)SvRV(HeVAL(type_fields_he)), field_name, 0, 0);
+          if (field_he) {
+            return newSVsv(HeVAL(field_he));
+          }
+          return &PL_sv_undef;
+        }
+      }
+    }
+  }
+
   fields_svp = hv_fetch(parent_type_hv, "fields", 6, 0);
   if (!fields_svp || !SvROK(*fields_svp) || SvTYPE(SvRV(*fields_svp)) != SVt_PVHV) {
     return &PL_sv_undef;

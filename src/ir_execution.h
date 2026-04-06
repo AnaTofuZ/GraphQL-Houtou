@@ -71,3 +71,102 @@ gql_ir_prepare_executable_stats_hv(pTHX_ gql_ir_prepared_exec_t *prepared) {
   hv_stores(stats_hv, "fragments", newSVuv(fragment_count));
   return stats_hv;
 }
+
+static const char *
+gql_ir_operation_kind_name(gql_ir_operation_kind_t kind) {
+  switch (kind) {
+    case GQL_IR_OPERATION_MUTATION:
+      return "mutation";
+    case GQL_IR_OPERATION_SUBSCRIPTION:
+      return "subscription";
+    case GQL_IR_OPERATION_QUERY:
+    default:
+      return "query";
+  }
+}
+
+static gql_ir_operation_definition_t *
+gql_ir_prepare_select_operation(pTHX_ gql_ir_prepared_exec_t *prepared, SV *operation_name) {
+  gql_ir_operation_definition_t *selected = NULL;
+  UV i;
+  UV operation_count = 0;
+
+  if (!prepared || !prepared->document) {
+    croak("prepared IR handle has no document");
+  }
+
+  for (i = 0; i < (UV)prepared->document->definitions.count; i++) {
+    gql_ir_definition_t *definition = (gql_ir_definition_t *)prepared->document->definitions.items[i];
+    if (!definition || definition->kind != GQL_IR_DEFINITION_OPERATION) {
+      continue;
+    }
+
+    operation_count++;
+    if (!operation_name || operation_name == &PL_sv_undef || !SvOK(operation_name)) {
+      if (selected) {
+        croak("Must provide operation name if query contains multiple operations.\n");
+      }
+      selected = definition->as.operation;
+      continue;
+    }
+
+    if (definition->as.operation->name.start != definition->as.operation->name.end) {
+      SV *candidate_sv = gql_ir_make_sv_from_span(aTHX_ prepared->document, definition->as.operation->name);
+      int matches = sv_eq(candidate_sv, operation_name);
+      SvREFCNT_dec(candidate_sv);
+      if (matches) {
+        selected = definition->as.operation;
+      }
+    }
+  }
+
+  if (!selected) {
+    if (operation_count == 0) {
+      croak("No operations supplied.\n");
+    }
+    if (operation_name && operation_name != &PL_sv_undef && SvOK(operation_name)) {
+      croak("No operations matching '%s' found.\n", SvPV_nolen(operation_name));
+    }
+  }
+
+  return selected;
+}
+
+static HV *
+gql_ir_prepare_executable_plan_hv(pTHX_ gql_ir_prepared_exec_t *prepared, SV *operation_name) {
+  HV *plan_hv;
+  AV *fragment_names_av;
+  gql_ir_operation_definition_t *selected;
+  UV fragment_count = 0;
+  UV i;
+
+  selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
+  plan_hv = newHV();
+  fragment_names_av = newAV();
+  hv_ksplit(plan_hv, 8);
+
+  for (i = 0; i < (UV)prepared->document->definitions.count; i++) {
+    gql_ir_definition_t *definition = (gql_ir_definition_t *)prepared->document->definitions.items[i];
+    if (!definition || definition->kind != GQL_IR_DEFINITION_FRAGMENT) {
+      continue;
+    }
+    fragment_count++;
+    av_push(
+      fragment_names_av,
+      gql_ir_make_sv_from_span(aTHX_ prepared->document, definition->as.fragment->name)
+    );
+  }
+
+  hv_stores(plan_hv, "operation_type", newSVpv(gql_ir_operation_kind_name(selected->operation), 0));
+  if (selected->name.start != selected->name.end) {
+    hv_stores(plan_hv, "operation_name", gql_ir_make_sv_from_span(aTHX_ prepared->document, selected->name));
+  } else {
+    hv_stores(plan_hv, "operation_name", newSV(0));
+  }
+  hv_stores(plan_hv, "selection_count", newSVuv((UV)selected->selection_set->selections.count));
+  hv_stores(plan_hv, "variable_definition_count", newSVuv((UV)selected->variable_definitions.count));
+  hv_stores(plan_hv, "directive_count", newSVuv((UV)selected->directives.count));
+  hv_stores(plan_hv, "fragment_count", newSVuv(fragment_count));
+  hv_stores(plan_hv, "fragment_names", newRV_noinc((SV *)fragment_names_av));
+  return plan_hv;
+}

@@ -677,6 +677,20 @@ subtest 'prepare executable ir handle' => sub {
     },
     'prepared ir handle reports executable definition counts',
   );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::_prepared_executable_ir_plan_xs($prepared, 'Q'),
+    {
+      operation_type => 'query',
+      operation_name => 'Q',
+      selection_count => 1,
+      variable_definition_count => 0,
+      directive_count => 0,
+      fragment_count => 1,
+      fragment_names => ['F'],
+    },
+    'prepared ir handle reports selected operation plan metadata',
+  );
 };
 
 done_testing;

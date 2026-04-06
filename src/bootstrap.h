@@ -398,6 +398,7 @@ static gql_ir_definition_t *gql_ir_parse_executable_definition(pTHX_ gql_parser_
 static gql_ir_document_t *gql_ir_parse_executable_document(pTHX_ SV *source_sv);
 static SV *gql_ir_prepare_executable_handle_sv(pTHX_ SV *source_sv);
 static HV *gql_ir_prepare_executable_stats_hv(pTHX_ gql_ir_prepared_exec_t *prepared);
+static HV *gql_ir_prepare_executable_plan_hv(pTHX_ gql_ir_prepared_exec_t *prepared, SV *operation_name);
 static void gql_ir_cleanup_document(pTHX_ void *ptr);
 static void gql_ir_free_type(gql_ir_type_t *type);
 static void gql_ir_free_value(gql_ir_value_t *value);

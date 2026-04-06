@@ -160,6 +160,34 @@ Primary verification workflow:
 Use `./Build build` only when benchmark / profiling utilities need repo-root
 `blib`.
 
+## Promise::XS Experiment Note
+
+A separate experiment branch (`promise-xs-fastpath`) tested a dedicated
+`Promise::XS` backend.
+
+Conclusion:
+
+- do not merge the dedicated backend as-is
+- real `Promise::XS` with public-API specialization was effectively tied with
+  the existing generic hook path
+- the remaining async overhead is in promise continuation / merge work, not in
+  adapter dispatch alone
+
+Measured with real `Promise::XS` installed locally and repo-root `blib`:
+
+- `async_scalar`
+  - generic hook: `81683/s`
+  - dedicated `promise_xs`: `81704/s`
+- `async_list`
+  - generic hook: `40883/s`
+  - dedicated `promise_xs`: `40758/s`
+
+So the recommended direction remains:
+
+- keep the generic promise-hook contract
+- optimize continuation / merge internals instead of adding a Promise::XS-only
+  execution mode
+
 Latest verification:
 
 - `minil test`

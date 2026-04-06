@@ -99,7 +99,7 @@ sub _fragment_condition_match {
   my ($self, $context, $node) = @_;
   my $condition_type;
   my $schema = $context->{schema};
-  my $runtime_cache = $schema->runtime_cache || $schema->prepare_runtime;
+  my $runtime_cache = $context->{runtime_cache} || $schema->runtime_cache || $schema->prepare_runtime;
   my $name2type = $runtime_cache->{name2type} || $schema->name2type;
   my $possible_type_map = $runtime_cache->{possible_type_map} ||= {};
 

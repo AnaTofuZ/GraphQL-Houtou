@@ -216,6 +216,9 @@ Practical rule:
 
 - if a temporary key SV is created only to call `hv_store_ent(...)`, the call
   site must `SvREFCNT_dec(...)` it afterward unless the SV was made mortal
+- avoid inline patterns like `hv_store_ent(hv, newSVsv(...), ...)` because they
+  hide ownership and make leaks easy to miss; bind the temporary key SV to a
+  local variable, call `hv_store_ent(...)`, then `SvREFCNT_dec(...)`
 - treat the same ownership rule as applying to all same-shape patterns where a
   temporary SV is created solely to serve as a lookup/store key
 

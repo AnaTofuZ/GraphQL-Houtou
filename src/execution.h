@@ -2702,8 +2702,11 @@ gql_execution_collect_simple_selections(
 
       bucket_he = hv_fetch_ent(nodes_defs_hv, use_name_sv, 0, 0);
       if (!bucket_he) {
+        SV *name_key_sv;
         bucket_av = newAV();
-        (void)hv_store_ent(nodes_defs_hv, newSVsv(use_name_sv), newRV_noinc((SV *)bucket_av), 0);
+        name_key_sv = newSVsv(use_name_sv);
+        (void)hv_store_ent(nodes_defs_hv, name_key_sv, newRV_noinc((SV *)bucket_av), 0);
+        SvREFCNT_dec(name_key_sv);
         av_push(field_names_av, newSVsv(use_name_sv));
       } else if ((bucket_sv = HeVAL(bucket_he)) && SvROK(bucket_sv) && SvTYPE(SvRV(bucket_sv)) == SVt_PVAV) {
         bucket_av = (AV *)SvRV(bucket_sv);

@@ -221,17 +221,17 @@ Key constraint:
 Recent benchmark snapshot:
 
 - `simple_scalar`
-  - `houtou_xs_ast`: about `133.7k/s`
-  - `upstream_ast`: about `42.3k/s`
+  - `houtou_xs_ast`: about `120k/s` to `126k/s`
+  - `upstream_ast`: about `40k/s` to `44k/s`
 - `nested_variable_object`
-  - `houtou_xs_ast`: about `66.2k/s`
-  - `upstream_ast`: about `25.0k/s`
+  - `houtou_xs_ast`: about `70k/s`
+  - `upstream_ast`: about `25k/s`
 - `list_of_objects`
   - `houtou_xs_ast`: about `49.0k/s`
   - `upstream_ast`: about `17.9k/s`
 - `abstract_with_fragment`
-  - `houtou_xs_ast`: about `37.4k/s`
-  - `upstream_ast`: about `23.8k/s`
+  - `houtou_xs_ast`: about `38.6k/s`
+  - `upstream_ast`: about `24.0k/s`
 - `async_scalar`
   - `houtou_facade_ast`: about `74.7k/s`
   - `upstream_ast`: about `42.2k/s`
@@ -254,3 +254,7 @@ Immediate next step:
 
 - continue shrinking complex object/list completion fallbacks
 - keep abstract/object error paths moving deeper into XS
+- latest execution-focused commits:
+  - `2b3681b` target-specific NYTProf utilities
+  - `84e6322` / `3701691` / `07d78ac` built-in scalar XS fast paths
+  - `c5e3ffe` enum happy-path, input object happy-path, and abstract path overhead reduction

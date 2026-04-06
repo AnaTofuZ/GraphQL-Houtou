@@ -660,4 +660,23 @@ subtest 'execute abstract fragment condition through xs object completion path' 
   is_deeply $xs, $public, 'abstract fragment condition is handled in xs object completion';
 };
 
+subtest 'prepare executable ir handle' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q { hello } fragment F on Query { hello }'
+  );
+
+  isa_ok $prepared, 'GraphQL::Houtou::XS::PreparedIR';
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::_prepared_executable_ir_stats_xs($prepared),
+    {
+      definitions => 2,
+      operations => 1,
+      fragments => 1,
+    },
+    'prepared ir handle reports executable definition counts',
+  );
+};
+
 done_testing;

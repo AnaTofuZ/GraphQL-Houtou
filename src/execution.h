@@ -6,6 +6,7 @@
 
 static SV *gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value, SV *path, SV *fields);
 static SV *gql_execution_collect_fields_xs(pTHX_ SV *context, SV *object_type, SV *selections);
+static SV *gql_execution_try_type_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok);
 static SV *gql_execution_call_graphql_error_but(pTHX_ SV *error, SV *locations, SV *path);
 static SV *gql_execution_call_type_to_string(pTHX_ SV *type);
 
@@ -914,7 +915,7 @@ gql_execution_enum_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok) {
   SV **values_svp;
   HV *values_hv;
   SV *lookup_value = value;
-  SV **entry_svp;
+  HE *entry_he;
   HV *entry_hv;
   SV **mapped_svp;
 
@@ -940,12 +941,12 @@ gql_execution_enum_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok) {
   }
 
   values_hv = (HV *)SvRV(*values_svp);
-  entry_svp = hv_fetch_ent(values_hv, lookup_value, 0, 0);
-  if (!entry_svp || !SvROK(*entry_svp) || SvTYPE(SvRV(*entry_svp)) != SVt_PVHV) {
+  entry_he = hv_fetch_ent(values_hv, lookup_value, 0, 0);
+  if (!entry_he || !SvROK(HeVAL(entry_he)) || SvTYPE(SvRV(HeVAL(entry_he))) != SVt_PVHV) {
     return &PL_sv_undef;
   }
 
-  entry_hv = (HV *)SvRV(*entry_svp);
+  entry_hv = (HV *)SvRV(HeVAL(entry_he));
   mapped_svp = hv_fetch(entry_hv, "value", 5, 0);
   if (!mapped_svp) {
     return &PL_sv_undef;
@@ -978,10 +979,10 @@ gql_execution_enum_perl_to_graphql(pTHX_ SV *type, SV *value, int *ok) {
   type_hv = (HV *)SvRV(type);
   value2name_svp = hv_fetch(type_hv, "_value2name", 11, 0);
   if (value2name_svp && SvROK(*value2name_svp) && SvTYPE(SvRV(*value2name_svp)) == SVt_PVHV) {
-    SV **name_svp = hv_fetch_ent((HV *)SvRV(*value2name_svp), value, 0, 0);
-    if (name_svp) {
+    HE *name_he = hv_fetch_ent((HV *)SvRV(*value2name_svp), value, 0, 0);
+    if (name_he) {
       *ok = 1;
-      return newSVsv(*name_svp);
+      return newSVsv(HeVAL(name_he));
     }
   }
 
@@ -1049,7 +1050,7 @@ gql_execution_input_object_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok) {
   while ((entry = hv_iternext(item_hv))) {
     SV *name_sv = hv_iterkeysv(entry);
     SV *item_value = hv_iterval(item_hv, entry);
-    SV **field_def_svp = hv_fetch_ent(fields_hv, name_sv, 0, 0);
+    HE *field_def_he = hv_fetch_ent(fields_hv, name_sv, 0, 0);
     HV *field_def_hv;
     SV **field_type_svp;
     SV **field_default_svp;
@@ -1057,12 +1058,12 @@ gql_execution_input_object_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok) {
     SV *parsed;
     int field_ok = 0;
 
-    if (!field_def_svp || !SvROK(*field_def_svp) || SvTYPE(SvRV(*field_def_svp)) != SVt_PVHV) {
+    if (!field_def_he || !SvROK(HeVAL(field_def_he)) || SvTYPE(SvRV(HeVAL(field_def_he))) != SVt_PVHV) {
       SvREFCNT_dec((SV *)result_hv);
       return &PL_sv_undef;
     }
 
-    field_def_hv = (HV *)SvRV(*field_def_svp);
+    field_def_hv = (HV *)SvRV(HeVAL(field_def_he));
     field_type_svp = hv_fetch(field_def_hv, "type", 4, 0);
     if (!field_type_svp || !SvOK(*field_type_svp)) {
       SvREFCNT_dec((SV *)result_hv);

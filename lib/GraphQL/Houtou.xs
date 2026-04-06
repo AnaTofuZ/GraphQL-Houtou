@@ -6,6 +6,7 @@
 #include "validation.h"
 #include "execution.h"
 #include "ir_engine.h"
+#include "ir_execution.h"
 #include "legacy_compat.h"
 
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Parser
@@ -225,6 +226,35 @@ validate_xs(schema, document, options = NULL)
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Execution
 
 SV *
+_prepare_executable_ir_xs(source)
+    SV *source
+  CODE:
+    RETVAL = gql_ir_prepare_executable_handle_sv(aTHX_ source);
+  OUTPUT:
+    RETVAL
+
+SV *
+_prepared_executable_ir_stats_xs(handle)
+    SV *handle
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      RETVAL = newRV_noinc((SV *)gql_ir_prepare_executable_stats_hv(aTHX_ prepared));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 _execute_xs_raw(schema, document, root_value = NULL, context_value = NULL, variable_values = NULL, operation_name = NULL, field_resolver = NULL, promise_code = NULL)
     SV *schema
     SV *document
@@ -247,6 +277,23 @@ _execute_xs_raw(schema, document, root_value = NULL, context_value = NULL, varia
     );
   OUTPUT:
     RETVAL
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::PreparedIR
+
+void
+DESTROY(self)
+    SV *self
+  CODE:
+    if (self && SvROK(self)) {
+      SV *inner_sv = SvRV(self);
+      if (SvIOK(inner_sv) && SvUV(inner_sv) != 0) {
+        gql_ir_prepared_exec_t *prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+        sv_setuv(inner_sv, 0);
+        gql_ir_prepared_exec_destroy(prepared);
+      }
+    }
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Execution
 
 SV *
 _execute_fields_xs(context, parent_type, root_value, path, fields)

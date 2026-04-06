@@ -235,6 +235,8 @@ Practical rule:
   local variable, call `hv_store_ent(...)`, then `SvREFCNT_dec(...)`
 - treat the same ownership rule as applying to all same-shape patterns where a
   temporary SV is created solely to serve as a lookup/store key
+- use `util/lint-xs-ownership.pl` before landing ownership-related XS changes;
+  it checks for the most common inline temporary-key and nested-mortal patterns
 
 ## Next Step
 

@@ -1163,6 +1163,17 @@ subtest 'prepared ir legacy field bridge folds unconditional inline fragments in
             selections => [
               {
                 kind => 'inline_fragment',
+                compiled_fields => [
+                  [ 'bio' ],
+                  {
+                    bio => [
+                      {
+                        kind => 'field',
+                        name => 'bio',
+                      },
+                    ],
+                  },
+                ],
                 selections => [
                   {
                     kind => 'field',
@@ -1187,6 +1198,32 @@ subtest 'prepared ir legacy field bridge folds unconditional inline fragments in
       },
     ],
     'compiled field buckets absorb unconditional inline fragments recursively',
+  );
+};
+
+subtest 'execute compiled ir reuses compiled fragment buckets' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID!) { user(id: $id) { ...Bits ... { name } } } fragment Bits on User { id }'
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $schema,
+    $prepared,
+    'Q',
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs($compiled, undef, undef, { id => '61' }),
+    {
+      data => {
+        user => {
+          id => '61',
+          name => 'user:61',
+        },
+      },
+    },
+    'compiled ir executes nested fragment and inline-fragment buckets correctly',
   );
 };
 

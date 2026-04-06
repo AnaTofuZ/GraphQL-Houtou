@@ -2419,6 +2419,83 @@ gql_execution_node_should_include_simple(pTHX_ SV *context, SV *node, int *ok) {
 }
 
 static int
+gql_execution_merge_compiled_fields_into(
+  pTHX_ AV *field_names_av,
+  HV *nodes_defs_hv,
+  SV *compiled_fields_sv
+) {
+  AV *compiled_av;
+  SV **compiled_names_svp;
+  SV **compiled_defs_svp;
+  AV *compiled_names_av;
+  HV *compiled_defs_hv;
+  I32 name_i;
+  I32 name_len;
+
+  if (!compiled_fields_sv || !SvROK(compiled_fields_sv) || SvTYPE(SvRV(compiled_fields_sv)) != SVt_PVAV) {
+    return 0;
+  }
+
+  compiled_av = (AV *)SvRV(compiled_fields_sv);
+  if (av_len(compiled_av) != 1) {
+    return 0;
+  }
+
+  compiled_names_svp = av_fetch(compiled_av, 0, 0);
+  compiled_defs_svp = av_fetch(compiled_av, 1, 0);
+  if (!compiled_names_svp || !compiled_defs_svp
+      || !SvROK(*compiled_names_svp) || SvTYPE(SvRV(*compiled_names_svp)) != SVt_PVAV
+      || !SvROK(*compiled_defs_svp) || SvTYPE(SvRV(*compiled_defs_svp)) != SVt_PVHV) {
+    return 0;
+  }
+
+  compiled_names_av = (AV *)SvRV(*compiled_names_svp);
+  compiled_defs_hv = (HV *)SvRV(*compiled_defs_svp);
+  name_len = av_len(compiled_names_av);
+
+  for (name_i = 0; name_i <= name_len; name_i++) {
+    SV **name_svp = av_fetch(compiled_names_av, name_i, 0);
+    HE *compiled_he;
+    HE *target_he;
+    AV *target_bucket;
+    AV *source_bucket;
+    I32 bucket_i;
+    I32 bucket_len;
+
+    if (!name_svp || !SvOK(*name_svp)) {
+      continue;
+    }
+
+    compiled_he = hv_fetch_ent(compiled_defs_hv, *name_svp, 0, 0);
+    if (!compiled_he || !SvROK(HeVAL(compiled_he)) || SvTYPE(SvRV(HeVAL(compiled_he))) != SVt_PVAV) {
+      return 0;
+    }
+    source_bucket = (AV *)SvRV(HeVAL(compiled_he));
+
+    target_he = hv_fetch_ent(nodes_defs_hv, *name_svp, 0, 0);
+    if (!target_he) {
+      target_bucket = newAV();
+      (void)hv_store_ent(nodes_defs_hv, newSVsv(*name_svp), newRV_noinc((SV *)target_bucket), 0);
+      av_push(field_names_av, newSVsv(*name_svp));
+    } else if (SvROK(HeVAL(target_he)) && SvTYPE(SvRV(HeVAL(target_he))) == SVt_PVAV) {
+      target_bucket = (AV *)SvRV(HeVAL(target_he));
+    } else {
+      return 0;
+    }
+
+    bucket_len = av_len(source_bucket);
+    for (bucket_i = 0; bucket_i <= bucket_len; bucket_i++) {
+      SV **bucket_node_svp = av_fetch(source_bucket, bucket_i, 0);
+      if (bucket_node_svp && SvOK(*bucket_node_svp)) {
+        av_push(target_bucket, newSVsv(*bucket_node_svp));
+      }
+    }
+  }
+
+  return 1;
+}
+
+static int
 gql_execution_collect_simple_selections(
   pTHX_ SV *context,
   SV *object_type,
@@ -2487,6 +2564,7 @@ gql_execution_collect_simple_selections(
 
     if (kind_len == 15 && strEQ(kind_pv, "inline_fragment")) {
       SV **on_svp = hv_fetch(selection_hv, "on", 2, 0);
+      SV **compiled_fields_svp = hv_fetch(selection_hv, "compiled_fields", 15, 0);
       SV **selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
       if (on_svp && SvOK(*on_svp)) {
         int match_ok = 0;
@@ -2500,6 +2578,12 @@ gql_execution_collect_simple_selections(
           continue;
         }
         SvREFCNT_dec(matches);
+      }
+      if (compiled_fields_svp && SvOK(*compiled_fields_svp)) {
+        if (!gql_execution_merge_compiled_fields_into(aTHX_ field_names_av, nodes_defs_hv, *compiled_fields_svp)) {
+          return 0;
+        }
+        continue;
       }
       if (!selections_svp || !SvROK(*selections_svp) || SvTYPE(SvRV(*selections_svp)) != SVt_PVAV) {
         return 0;
@@ -2518,6 +2602,7 @@ gql_execution_collect_simple_selections(
       SV *fragment_sv;
       HV *fragment_hv;
       SV **on_svp;
+      SV **compiled_fields_svp;
       SV **selections_svp;
 
       if (!SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
@@ -2548,6 +2633,13 @@ gql_execution_collect_simple_selections(
           continue;
         }
         SvREFCNT_dec(matches);
+      }
+      compiled_fields_svp = hv_fetch(fragment_hv, "compiled_fields", 15, 0);
+      if (compiled_fields_svp && SvOK(*compiled_fields_svp)) {
+        if (!gql_execution_merge_compiled_fields_into(aTHX_ field_names_av, nodes_defs_hv, *compiled_fields_svp)) {
+          return 0;
+        }
+        continue;
       }
       selections_svp = hv_fetch(fragment_hv, "selections", 10, 0);
       if (!selections_svp || !SvROK(*selections_svp) || SvTYPE(SvRV(*selections_svp)) != SVt_PVAV) {
@@ -2586,78 +2678,17 @@ gql_execution_collect_compiled_object_fields(pTHX_ SV *nodes, int *ok) {
     SV **node_svp = av_fetch((AV *)SvRV(nodes), node_i, 0);
     HV *node_hv;
     SV **compiled_fields_svp;
-    AV *compiled_av;
-    SV **compiled_names_svp;
-    SV **compiled_defs_svp;
-    AV *compiled_names_av;
-    HV *compiled_defs_hv;
-    I32 name_i;
-    I32 name_len;
-
     if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) {
       continue;
     }
 
     node_hv = (HV *)SvRV(*node_svp);
     compiled_fields_svp = hv_fetch(node_hv, "compiled_fields", 15, 0);
-    if (!compiled_fields_svp || !SvROK(*compiled_fields_svp) || SvTYPE(SvRV(*compiled_fields_svp)) != SVt_PVAV) {
+    if (!compiled_fields_svp || !SvOK(*compiled_fields_svp)) {
       goto fallback;
     }
-
-    compiled_av = (AV *)SvRV(*compiled_fields_svp);
-    if (av_len(compiled_av) != 1) {
+    if (!gql_execution_merge_compiled_fields_into(aTHX_ field_names_av, nodes_defs_hv, *compiled_fields_svp)) {
       goto fallback;
-    }
-
-    compiled_names_svp = av_fetch(compiled_av, 0, 0);
-    compiled_defs_svp = av_fetch(compiled_av, 1, 0);
-    if (!compiled_names_svp || !compiled_defs_svp
-        || !SvROK(*compiled_names_svp) || SvTYPE(SvRV(*compiled_names_svp)) != SVt_PVAV
-        || !SvROK(*compiled_defs_svp) || SvTYPE(SvRV(*compiled_defs_svp)) != SVt_PVHV) {
-      goto fallback;
-    }
-
-    compiled_names_av = (AV *)SvRV(*compiled_names_svp);
-    compiled_defs_hv = (HV *)SvRV(*compiled_defs_svp);
-    name_len = av_len(compiled_names_av);
-
-    for (name_i = 0; name_i <= name_len; name_i++) {
-      SV **name_svp = av_fetch(compiled_names_av, name_i, 0);
-      HE *compiled_he;
-      HE *target_he;
-      AV *target_bucket;
-      AV *source_bucket;
-      I32 bucket_i;
-      I32 bucket_len;
-
-      if (!name_svp || !SvOK(*name_svp)) {
-        continue;
-      }
-
-      compiled_he = hv_fetch_ent(compiled_defs_hv, *name_svp, 0, 0);
-      if (!compiled_he || !SvROK(HeVAL(compiled_he)) || SvTYPE(SvRV(HeVAL(compiled_he))) != SVt_PVAV) {
-        goto fallback;
-      }
-      source_bucket = (AV *)SvRV(HeVAL(compiled_he));
-
-      target_he = hv_fetch_ent(nodes_defs_hv, *name_svp, 0, 0);
-      if (!target_he) {
-        target_bucket = newAV();
-        (void)hv_store_ent(nodes_defs_hv, newSVsv(*name_svp), newRV_noinc((SV *)target_bucket), 0);
-        av_push(field_names_av, newSVsv(*name_svp));
-      } else if (SvROK(HeVAL(target_he)) && SvTYPE(SvRV(HeVAL(target_he))) == SVt_PVAV) {
-        target_bucket = (AV *)SvRV(HeVAL(target_he));
-      } else {
-        goto fallback;
-      }
-
-      bucket_len = av_len(source_bucket);
-      for (bucket_i = 0; bucket_i <= bucket_len; bucket_i++) {
-        SV **bucket_node_svp = av_fetch(source_bucket, bucket_i, 0);
-        if (bucket_node_svp && SvOK(*bucket_node_svp)) {
-          av_push(target_bucket, newSVsv(*bucket_node_svp));
-        }
-      }
     }
   }
 

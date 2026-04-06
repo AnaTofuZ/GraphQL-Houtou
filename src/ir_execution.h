@@ -1356,6 +1356,9 @@ gql_ir_fragment_definitions_to_legacy_map_sv(pTHX_ gql_ir_prepared_exec_t *prepa
       }
     }
     gql_store_sv(fragment_hv, "selections", newRV_noinc((SV *)gql_ir_selections_to_legacy_av(aTHX_ prepared->document, fragment->selection_set)));
+    if (gql_ir_selection_set_is_plain_fields(fragment->selection_set)) {
+      gql_store_sv(fragment_hv, "compiled_fields", gql_ir_selection_set_to_legacy_fields_sv(aTHX_ prepared->document, fragment->selection_set));
+    }
     (void)hv_store_ent(hv, name_sv, newRV_noinc((SV *)fragment_hv), 0);
   }
 
@@ -1900,6 +1903,9 @@ gql_ir_selection_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_selectio
         }
       }
       gql_store_sv(hv, "selections", newRV_noinc((SV *)gql_ir_selections_to_legacy_av(aTHX_ document, fragment->selection_set)));
+      if (gql_ir_selection_set_is_plain_fields(fragment->selection_set)) {
+        gql_store_sv(hv, "compiled_fields", gql_ir_selection_set_to_legacy_fields_sv(aTHX_ document, fragment->selection_set));
+      }
       return newRV_noinc((SV *)hv);
     }
     default:

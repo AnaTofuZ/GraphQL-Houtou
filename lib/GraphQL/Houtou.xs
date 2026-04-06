@@ -328,6 +328,30 @@ _prepared_executable_ir_context_seed_xs(schema, handle, operation_name = NULL, v
     RETVAL
 
 SV *
+_prepared_executable_ir_operation_legacy_xs(handle, operation_name = NULL)
+    SV *handle
+    SV *operation_name
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+      gql_ir_operation_definition_t *selected;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
+      RETVAL = gql_ir_operation_to_legacy_sv(aTHX_ prepared, selected);
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 _prepared_executable_ir_root_selection_plan_xs(handle, operation_name = NULL)
     SV *handle
     SV *operation_name
@@ -430,6 +454,69 @@ _prepared_executable_ir_root_legacy_fields_xs(schema, handle, operation_name = N
         operation_name
       );
     }
+  OUTPUT:
+    RETVAL
+
+SV *
+_prepared_executable_ir_execution_context_xs(schema, handle, root_value = NULL, context_value = NULL, variable_values = NULL, operation_name = NULL, field_resolver = NULL, promise_code = NULL)
+    SV *schema
+    SV *handle
+    SV *root_value
+    SV *context_value
+    SV *variable_values
+    SV *operation_name
+    SV *field_resolver
+    SV *promise_code
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      RETVAL = gql_ir_build_execution_context_sv(
+        aTHX_
+        schema,
+        prepared,
+        root_value,
+        context_value,
+        variable_values,
+        operation_name,
+        field_resolver,
+        promise_code
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+_execute_prepared_ir_xs(schema, handle, root_value = NULL, context_value = NULL, variable_values = NULL, operation_name = NULL, field_resolver = NULL, promise_code = NULL)
+    SV *schema
+    SV *handle
+    SV *root_value
+    SV *context_value
+    SV *variable_values
+    SV *operation_name
+    SV *field_resolver
+    SV *promise_code
+  CODE:
+    RETVAL = gql_execution_execute_prepared_ir_xs_impl(
+      aTHX_
+      schema,
+      handle,
+      root_value,
+      context_value,
+      variable_values,
+      operation_name,
+      field_resolver,
+      promise_code
+    );
   OUTPUT:
     RETVAL
 

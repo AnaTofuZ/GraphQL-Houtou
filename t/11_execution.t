@@ -872,4 +872,47 @@ subtest 'prepare executable ir root legacy fields bridge' => sub {
   is $fields->[1]{user}[0]{selections}[1]{kind}, 'inline_fragment', 'legacy bridge materializes nested inline fragment';
 };
 
+subtest 'execute prepared ir simple query' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ hello user(id: "42") { id name } }'
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_prepared_ir_xs($schema, $prepared),
+    {
+      data => {
+        hello => 'world',
+        user => {
+          id => '42',
+          name => 'user:42',
+        },
+      },
+    },
+    'prepared ir executes through existing XS field loop without full AST materialization',
+  );
+};
+
+subtest 'execute prepared ir with variables and fragments' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID!) { user(id: $id) { ...Bits } } fragment Bits on User { id name }'
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_prepared_ir_xs($schema, $prepared, undef, undef, { id => '51' }, 'Q'),
+    {
+      data => {
+        user => {
+          id => '51',
+          name => 'user:51',
+        },
+      },
+    },
+    'prepared ir executes variables and nested fragments via shared execution machinery',
+  );
+};
+
 done_testing;

@@ -763,6 +763,8 @@ gql_ir_prepare_executable_root_field_plan_hv(
 
 static SV *gql_ir_selection_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_selection_t *selection);
 static AV *gql_ir_selections_to_legacy_av(pTHX_ gql_ir_document_t *document, gql_ir_selection_set_t *selection_set);
+static SV *gql_ir_value_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_value_t *value);
+static SV *gql_ir_directives_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_ptr_array_t *directives);
 
 static int
 gql_ir_prepare_collect_root_legacy_fields_into(
@@ -907,6 +909,267 @@ gql_ir_prepare_executable_root_legacy_fields_sv(
   av_push(ret_av, newRV_noinc((SV *)field_names_av));
   av_push(ret_av, newRV_noinc((SV *)nodes_defs_hv));
   return newRV_noinc((SV *)ret_av);
+}
+
+static SV *
+gql_ir_type_to_legacy_typedef_sv(pTHX_ gql_ir_document_t *document, gql_ir_type_t *type) {
+  if (!type) {
+    return newSV(0);
+  }
+
+  switch (type->kind) {
+    case GQL_IR_TYPE_NAMED:
+      return gql_ir_make_sv_from_span(aTHX_ document, type->name);
+    case GQL_IR_TYPE_LIST: {
+      AV *av = newAV();
+      HV *hv = newHV();
+      av_push(av, newSVpv("list", 0));
+      gql_store_sv(hv, "type", gql_ir_type_to_legacy_typedef_sv(aTHX_ document, type->inner));
+      av_push(av, newRV_noinc((SV *)hv));
+      return newRV_noinc((SV *)av);
+    }
+    case GQL_IR_TYPE_NON_NULL: {
+      AV *av = newAV();
+      HV *hv = newHV();
+      av_push(av, newSVpv("non_null", 0));
+      gql_store_sv(hv, "type", gql_ir_type_to_legacy_typedef_sv(aTHX_ document, type->inner));
+      av_push(av, newRV_noinc((SV *)hv));
+      return newRV_noinc((SV *)av);
+    }
+    default:
+      return newSV(0);
+  }
+}
+
+static SV *
+gql_ir_variable_definitions_to_legacy_sv(
+  pTHX_ gql_ir_document_t *document,
+  gql_ir_ptr_array_t *variable_definitions
+) {
+  HV *hv = newHV();
+  UV i;
+
+  if (!variable_definitions || variable_definitions->count == 0) {
+    return newRV_noinc((SV *)hv);
+  }
+
+  for (i = 0; i < (UV)variable_definitions->count; i++) {
+    gql_ir_variable_definition_t *definition = (gql_ir_variable_definition_t *)variable_definitions->items[i];
+    HV *var_hv;
+    SV *name_sv;
+
+    if (!definition) {
+      continue;
+    }
+
+    var_hv = newHV();
+    name_sv = gql_ir_make_sv_from_span(aTHX_ document, definition->name);
+    gql_store_sv(var_hv, "type", gql_ir_type_to_legacy_typedef_sv(aTHX_ document, definition->type));
+    if (definition->default_value) {
+      gql_store_sv(var_hv, "default_value", gql_ir_value_to_legacy_sv(aTHX_ document, definition->default_value));
+    }
+    {
+      SV *directives_sv = gql_ir_directives_to_legacy_sv(aTHX_ document, &definition->directives);
+      if (directives_sv && directives_sv != &PL_sv_undef) {
+        gql_store_sv(var_hv, "directives", directives_sv);
+      }
+    }
+    (void)hv_store_ent(hv, name_sv, newRV_noinc((SV *)var_hv), 0);
+  }
+
+  return newRV_noinc((SV *)hv);
+}
+
+static SV *
+gql_ir_fragment_definitions_to_legacy_map_sv(pTHX_ gql_ir_prepared_exec_t *prepared) {
+  HV *hv = newHV();
+  UV i;
+
+  for (i = 0; i < (UV)prepared->document->definitions.count; i++) {
+    gql_ir_definition_t *definition = (gql_ir_definition_t *)prepared->document->definitions.items[i];
+    gql_ir_fragment_definition_t *fragment;
+    HV *fragment_hv;
+    SV *name_sv;
+
+    if (!definition || definition->kind != GQL_IR_DEFINITION_FRAGMENT) {
+      continue;
+    }
+
+    fragment = definition->as.fragment;
+    fragment_hv = newHV();
+    name_sv = gql_ir_make_sv_from_span(aTHX_ prepared->document, fragment->name);
+    gql_store_sv(fragment_hv, "kind", newSVpv("fragment", 0));
+    gql_store_sv(fragment_hv, "name", newSVsv(name_sv));
+    gql_store_sv(fragment_hv, "on", gql_ir_make_sv_from_span(aTHX_ prepared->document, fragment->type_condition));
+    {
+      SV *directives_sv = gql_ir_directives_to_legacy_sv(aTHX_ prepared->document, &fragment->directives);
+      if (directives_sv && directives_sv != &PL_sv_undef) {
+        gql_store_sv(fragment_hv, "directives", directives_sv);
+      }
+    }
+    gql_store_sv(fragment_hv, "selections", newRV_noinc((SV *)gql_ir_selections_to_legacy_av(aTHX_ prepared->document, fragment->selection_set)));
+    (void)hv_store_ent(hv, name_sv, newRV_noinc((SV *)fragment_hv), 0);
+  }
+
+  return newRV_noinc((SV *)hv);
+}
+
+static SV *
+gql_ir_operation_to_legacy_sv(
+  pTHX_ gql_ir_prepared_exec_t *prepared,
+  gql_ir_operation_definition_t *operation
+) {
+  HV *hv = newHV();
+
+  gql_store_sv(hv, "kind", newSVpv("operation", 0));
+  gql_store_sv(hv, "operationType", newSVpv(gql_ir_operation_kind_name(operation->operation), 0));
+  if (operation->name.start != operation->name.end) {
+    gql_store_sv(hv, "name", gql_ir_make_sv_from_span(aTHX_ prepared->document, operation->name));
+  }
+  {
+    SV *directives_sv = gql_ir_directives_to_legacy_sv(aTHX_ prepared->document, &operation->directives);
+    if (directives_sv && directives_sv != &PL_sv_undef) {
+      gql_store_sv(hv, "directives", directives_sv);
+    }
+  }
+  gql_store_sv(hv, "variables", gql_ir_variable_definitions_to_legacy_sv(aTHX_ prepared->document, &operation->variable_definitions));
+  gql_store_sv(hv, "selections", newRV_noinc((SV *)gql_ir_selections_to_legacy_av(aTHX_ prepared->document, operation->selection_set)));
+  return newRV_noinc((SV *)hv);
+}
+
+static SV *
+gql_ir_build_execution_context_sv(
+  pTHX_ SV *schema,
+  gql_ir_prepared_exec_t *prepared,
+  SV *root_value,
+  SV *context_value,
+  SV *variable_values,
+  SV *operation_name,
+  SV *field_resolver,
+  SV *promise_code
+) {
+  HV *context_hv = newHV();
+  HV *resolve_info_base_hv = newHV();
+  gql_ir_operation_definition_t *selected;
+  SV *operation_sv;
+  SV *fragments_sv;
+  SV *applied_variables_sv;
+  SV *runtime_variables_sv = NULL;
+
+  selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
+  operation_sv = gql_ir_operation_to_legacy_sv(aTHX_ prepared, selected);
+  fragments_sv = gql_ir_fragment_definitions_to_legacy_map_sv(aTHX_ prepared);
+
+  if (!variable_values || !SvOK(variable_values)) {
+    runtime_variables_sv = newRV_noinc((SV *)newHV());
+  }
+
+  if (selected->variable_definitions.count == 0) {
+    applied_variables_sv = newRV_noinc((SV *)newHV());
+  } else {
+    SV *operation_variables_sv = gql_ir_variable_definitions_to_legacy_sv(aTHX_ prepared->document, &selected->variable_definitions);
+    applied_variables_sv = gql_execution_call_pp_variables_apply_defaults(
+      aTHX_
+      schema,
+      operation_variables_sv,
+      (variable_values && SvOK(variable_values)) ? variable_values : runtime_variables_sv
+    );
+    SvREFCNT_dec(operation_variables_sv);
+  }
+
+  gql_store_sv(context_hv, "schema", gql_execution_share_or_copy_sv(schema));
+  gql_store_sv(context_hv, "fragments", fragments_sv);
+  gql_store_sv(context_hv, "root_value", gql_execution_share_or_copy_sv(root_value));
+  gql_store_sv(context_hv, "context_value", gql_execution_share_or_copy_sv(context_value));
+  gql_store_sv(context_hv, "operation", operation_sv);
+  gql_store_sv(context_hv, "variable_values", applied_variables_sv);
+  gql_store_sv(
+    context_hv,
+    "field_resolver",
+    (field_resolver && SvOK(field_resolver))
+      ? gql_execution_share_or_copy_sv(field_resolver)
+      : gql_execution_default_field_resolver_sv(aTHX)
+  );
+  gql_store_sv(context_hv, "promise_code", gql_execution_share_or_copy_sv(promise_code));
+  gql_store_sv(context_hv, "empty_args", newRV_noinc((SV *)newHV()));
+
+  gql_store_sv(resolve_info_base_hv, "schema", gql_execution_share_or_copy_sv(schema));
+  gql_store_sv(resolve_info_base_hv, "fragments", gql_execution_share_or_copy_sv(fragments_sv));
+  gql_store_sv(resolve_info_base_hv, "root_value", gql_execution_share_or_copy_sv(root_value));
+  gql_store_sv(resolve_info_base_hv, "operation", gql_execution_share_or_copy_sv(operation_sv));
+  gql_store_sv(resolve_info_base_hv, "variable_values", gql_execution_share_or_copy_sv(applied_variables_sv));
+  gql_store_sv(resolve_info_base_hv, "promise_code", gql_execution_share_or_copy_sv(promise_code));
+  gql_store_sv(context_hv, "resolve_info_base", newRV_noinc((SV *)resolve_info_base_hv));
+
+  if (runtime_variables_sv) {
+    SvREFCNT_dec(runtime_variables_sv);
+  }
+
+  return newRV_noinc((SV *)context_hv);
+}
+
+static SV *
+gql_execution_execute_prepared_ir_xs_impl(
+  pTHX_ SV *schema,
+  SV *handle,
+  SV *root_value,
+  SV *context_value,
+  SV *variable_values,
+  SV *operation_name,
+  SV *field_resolver,
+  SV *promise_code
+) {
+  gql_ir_prepared_exec_t *prepared;
+  gql_ir_operation_definition_t *selected;
+  const char *operation_type;
+  SV *context_sv;
+  SV *fields_sv;
+  SV *root_type_sv;
+  SV *path_sv;
+  SV *result_sv;
+  AV *path_av;
+  SV *response_sv;
+  SV *inner_sv;
+
+  if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+    croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+  }
+
+  inner_sv = SvRV(handle);
+  if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+    croak("prepared IR handle is no longer valid");
+  }
+
+  prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+  selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
+  operation_type = gql_ir_operation_kind_name(selected->operation);
+
+  context_sv = gql_ir_build_execution_context_sv(
+    aTHX_
+    schema,
+    prepared,
+    root_value,
+    context_value,
+    variable_values,
+    operation_name,
+    field_resolver,
+    promise_code
+  );
+  fields_sv = gql_ir_prepare_executable_root_legacy_fields_sv(aTHX_ schema, prepared, operation_name);
+  root_type_sv = gql_execution_call_schema_root_type(aTHX_ schema, operation_type);
+  path_av = newAV();
+  path_sv = newRV_noinc((SV *)path_av);
+
+  result_sv = gql_execution_execute_fields(aTHX_ context_sv, root_type_sv, root_value, path_sv, fields_sv);
+  response_sv = gql_execution_build_response_xs(aTHX_ result_sv, 0);
+
+  SvREFCNT_dec(result_sv);
+  SvREFCNT_dec(path_sv);
+  SvREFCNT_dec(root_type_sv);
+  SvREFCNT_dec(fields_sv);
+  SvREFCNT_dec(context_sv);
+
+  return response_sv;
 }
 
 static SV *

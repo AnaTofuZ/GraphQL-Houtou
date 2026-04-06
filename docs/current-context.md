@@ -5,14 +5,13 @@ It should stay short enough to recover momentum quickly after context resets.
 
 ## Snapshot
 
-- Goal has moved beyond parser-only work toward broader `GraphQL` compatibility.
-- Parser / graphql-js compatibility / lazy AST materialization remain in XS and
-  are stable enough for incremental work on schema, validation, introspection,
-  and execution.
-- XS source has been split under `src/` and `lib/GraphQL/Houtou.xs`
-  is now a thin entrypoint.
-- Houtou now owns its public type / schema / directive / role namespaces
-  instead of only subclassing upstream wrappers.
+- Main compatibility work remains on `main`.
+- IR-direct execution work now lives on the dedicated
+  `ir-direct-execution` branch only.
+- Public parser / AST APIs remain unchanged.
+- Current IR work is intentionally limited to the execution front-end
+  boundary so resolver / completion / promise logic can keep reusing the
+  existing XS execution core.
 
 ## Recent Landed Work
 
@@ -60,6 +59,24 @@ It should stay short enough to recover momentum quickly after context resets.
 - `13dcc3d` Move execution response shaping into XS
 - `9050567` Move located execution errors into XS
 - `88266c0` Refactor promise completion continuations
+- `2b3681b` Add target-specific NYTProf utilities
+- `84e6322` Add XS fast paths for built-in scalars
+- `3701691` Finish XS fast paths for built-in scalars
+- `07d78ac` Use scalar refs for XS boolean values
+- `c5e3ffe` Reduce enum and abstract execution overhead
+
+### IR Direct Execution Branch
+
+These commits exist on `ir-direct-execution`, not on `main`:
+
+- `8a444ec` Add prepared executable IR groundwork
+- `79d2989` Add prepared IR operation metadata
+- `7572cf7` Expose prepared IR frontend metadata
+- `ce92623` Add prepared IR frontend metadata
+- `fbd786e` Add prepared IR context seed metadata
+- `d2441c6` Add prepared IR root selection plan
+- `48582f7` Add prepared IR root field buckets
+- `656c77a` Add prepared IR legacy field bridge
 
 ## Current Architecture
 
@@ -165,18 +182,47 @@ Still delegated to PP helpers:
 - promise-aware top-level field execution now runs in XS
 - promise leaf completion now runs in XS
 
+### IR Direct Execution Groundwork
+
+Internal-only IR helpers now exist for executable documents:
+
+- `GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs($source)`
+- `GraphQL::Houtou::XS::Execution::_prepared_executable_ir_stats_xs($handle)`
+- `GraphQL::Houtou::XS::Execution::_prepared_executable_ir_plan_xs($handle, $operation_name)`
+- `GraphQL::Houtou::XS::Execution::_prepared_executable_ir_frontend_xs($handle, $operation_name)`
+- `GraphQL::Houtou::XS::Execution::_prepared_executable_ir_operation_legacy_xs(...)`
+- `GraphQL::Houtou::XS::Execution::_prepared_executable_ir_context_seed_xs(...)`
+- `GraphQL::Houtou::XS::Execution::_prepared_executable_ir_execution_context_xs(...)`
+- `GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_selection_plan_xs(...)`
+- `GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_field_buckets_xs(...)`
+- `GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_field_plan_xs(...)`
+- `GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_legacy_fields_xs(...)`
+- `GraphQL::Houtou::XS::Execution::execute_prepared_ir_xs(...)`
+
+Newest in-progress step:
+
+- `GraphQL::Houtou::XS::Execution::execute_prepared_ir_xs(...)`
+  now executes a prepared executable IR handle by:
+  - building a minimal legacy-compatible operation / fragment / variable front-end
+  - building a shared execution context
+  - bridging only the reachable root field subtree
+  - reusing `_execute_fields_xs` and `_build_response_xs`
+
+This is the first end-to-end IR-direct execution path.
+It avoids full document AST materialization, but still bridges the reachable
+execution subtree into the existing XS engine instead of introducing a second
+executor.
+
 ## Testing Snapshot
 
 Latest local verification:
 
 - Always run sequentially:
-  1. `./Build build`
-  2. `./Build test`
-- Do not run `build` and `test` in parallel.
+  1. `minil test`
+- Do not use `./Build build` / `./Build test` as the primary workflow anymore.
 - Latest local verification:
-  - `./Build build`
-  - `./Build test`
-  - `13 files / 173 tests / PASS`
+  - `minil test`
+  - `13 files / 182 tests / PASS`
 
 ## XS Memory Rule
 
@@ -250,11 +296,14 @@ Recent PP bridge profile snapshot (`HOUTOU_PROFILE_PP_BRIDGE=1`):
   - `execute_prepared_context=0`
   - `complete_value_catching_error=0`
 
-Immediate next step:
+Immediate next step on `ir-direct-execution`:
+
+- benchmark `execute_prepared_ir_xs(...)` against the existing string-query path
+- reduce the remaining front-end bridge cost so root field execution can stay
+  AST-free deeper into nested execution
+- replace wrapper-level fallback shims with cleaner XS-side defaults where safe
+
+Immediate next step on `main`:
 
 - continue shrinking complex object/list completion fallbacks
 - keep abstract/object error paths moving deeper into XS
-- latest execution-focused commits:
-  - `2b3681b` target-specific NYTProf utilities
-  - `84e6322` / `3701691` / `07d78ac` built-in scalar XS fast paths
-  - `c5e3ffe` enum happy-path, input object happy-path, and abstract path overhead reduction

@@ -352,6 +352,7 @@ gql_ir_prepare_executable_frontend_hv(pTHX_ gql_ir_prepared_exec_t *prepared, SV
     hv_stores(variable_hv, "has_default", newSViv(definition->default_value ? 1 : 0));
     hv_stores(variable_hv, "directive_count", newSVuv((UV)definition->directives.count));
     (void)hv_store_ent(variables_hv, name_sv, newRV_noinc((SV *)variable_hv), 0);
+    SvREFCNT_dec(name_sv);
   }
   hv_stores(operation_hv, "variables", newRV_noinc((SV *)variables_hv));
 
@@ -374,6 +375,7 @@ gql_ir_prepare_executable_frontend_hv(pTHX_ gql_ir_prepared_exec_t *prepared, SV
     hv_stores(fragment_hv, "directive_count", newSVuv((UV)fragment->directives.count));
 
     (void)hv_store_ent(fragments_hv, fragment_name_sv, newRV_noinc((SV *)fragment_hv), 0);
+    SvREFCNT_dec(fragment_name_sv);
   }
 
   hv_stores(frontend_hv, "operation", newRV_noinc((SV *)operation_hv));
@@ -638,8 +640,10 @@ gql_ir_prepare_collect_root_field_buckets_into(
           : gql_ir_make_sv_from_span(aTHX_ prepared->document, field->name);
         count_he = hv_fetch_ent(counts_hv, result_name_sv, 0, 0);
         if (!count_he) {
+          SV *result_name_key_sv = newSVsv(result_name_sv);
           av_push(field_names_av, newSVsv(result_name_sv));
-          (void)hv_store_ent(counts_hv, newSVsv(result_name_sv), newSVuv(1), 0);
+          (void)hv_store_ent(counts_hv, result_name_key_sv, newSVuv(1), 0);
+          SvREFCNT_dec(result_name_key_sv);
         } else {
           count_sv = HeVAL(count_he);
           sv_setuv(count_sv, SvUV(count_sv) + 1);
@@ -797,7 +801,11 @@ gql_ir_prepare_collect_root_field_plan_into(
           );
 
           av_push(field_order_av, newSVsv(result_name_sv));
-          (void)hv_store_ent(fields_hv, newSVsv(result_name_sv), newRV_noinc((SV *)field_plan_hv), 0);
+          {
+            SV *result_name_key_sv = newSVsv(result_name_sv);
+            (void)hv_store_ent(fields_hv, result_name_key_sv, newRV_noinc((SV *)field_plan_hv), 0);
+            SvREFCNT_dec(result_name_key_sv);
+          }
         } else {
           SV *existing_sv = HeVAL(existing_he);
           HV *field_plan_hv;
@@ -1222,7 +1230,11 @@ gql_ir_selection_set_to_legacy_fields_sv(pTHX_ gql_ir_document_t *document, gql_
           bucket_he = hv_fetch_ent(nodes_defs_hv, result_name_sv, 0, 0);
           if (!bucket_he) {
             bucket_av = newAV();
-            (void)hv_store_ent(nodes_defs_hv, newSVsv(result_name_sv), newRV_noinc((SV *)bucket_av), 0);
+            {
+              SV *result_name_key_sv = newSVsv(result_name_sv);
+              (void)hv_store_ent(nodes_defs_hv, result_name_key_sv, newRV_noinc((SV *)bucket_av), 0);
+              SvREFCNT_dec(result_name_key_sv);
+            }
             av_push(field_names_av, newSVsv(result_name_sv));
           } else if (SvROK(HeVAL(bucket_he)) && SvTYPE(SvRV(HeVAL(bucket_he))) == SVt_PVAV) {
             bucket_av = (AV *)SvRV(HeVAL(bucket_he));
@@ -1290,7 +1302,11 @@ gql_ir_selection_set_to_legacy_fields_sv(pTHX_ gql_ir_document_t *document, gql_
             target_he = hv_fetch_ent(nodes_defs_hv, *name_svp, 0, 0);
             if (!target_he) {
               target_bucket = newAV();
-              (void)hv_store_ent(nodes_defs_hv, newSVsv(*name_svp), newRV_noinc((SV *)target_bucket), 0);
+              {
+                SV *target_name_key_sv = newSVsv(*name_svp);
+                (void)hv_store_ent(nodes_defs_hv, target_name_key_sv, newRV_noinc((SV *)target_bucket), 0);
+                SvREFCNT_dec(target_name_key_sv);
+              }
               av_push(field_names_av, newSVsv(*name_svp));
             } else if (SvROK(HeVAL(target_he)) && SvTYPE(SvRV(HeVAL(target_he))) == SVt_PVAV) {
               target_bucket = (AV *)SvRV(HeVAL(target_he));
@@ -1363,7 +1379,11 @@ gql_ir_prepare_collect_root_legacy_fields_into(
         bucket_he = hv_fetch_ent(nodes_defs_hv, result_name_sv, 0, 0);
         if (!bucket_he) {
           bucket_av = newAV();
-          (void)hv_store_ent(nodes_defs_hv, newSVsv(result_name_sv), newRV_noinc((SV *)bucket_av), 0);
+          {
+            SV *result_name_key_sv = newSVsv(result_name_sv);
+            (void)hv_store_ent(nodes_defs_hv, result_name_key_sv, newRV_noinc((SV *)bucket_av), 0);
+            SvREFCNT_dec(result_name_key_sv);
+          }
           av_push(field_names_av, newSVsv(result_name_sv));
         } else if (SvROK(HeVAL(bucket_he)) && SvTYPE(SvRV(HeVAL(bucket_he))) == SVt_PVAV) {
           bucket_av = (AV *)SvRV(HeVAL(bucket_he));
@@ -1545,6 +1565,7 @@ gql_ir_variable_definitions_to_legacy_sv(
       }
     }
     (void)hv_store_ent(hv, name_sv, newRV_noinc((SV *)var_hv), 0);
+    SvREFCNT_dec(name_sv);
   }
 
   return newRV_noinc((SV *)hv);
@@ -1586,6 +1607,7 @@ gql_ir_fragment_definitions_to_legacy_map_sv(pTHX_ gql_ir_prepared_exec_t *prepa
       gql_store_sv(fragment_hv, "compiled_fields", gql_ir_selection_set_to_legacy_fields_sv(aTHX_ prepared->document, fragment->selection_set));
     }
     (void)hv_store_ent(hv, name_sv, newRV_noinc((SV *)fragment_hv), 0);
+    SvREFCNT_dec(name_sv);
   }
 
   {
@@ -2014,6 +2036,7 @@ gql_ir_value_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_value_t *val
         }
         name_sv = gql_ir_make_sv_from_span(aTHX_ document, field->name);
         (void)hv_store_ent(hv, name_sv, gql_ir_value_to_legacy_sv(aTHX_ document, field->value), 0);
+        SvREFCNT_dec(name_sv);
       }
       return newRV_noinc((SV *)hv);
     }
@@ -2040,6 +2063,7 @@ gql_ir_arguments_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_ptr_arra
     }
     name_sv = gql_ir_make_sv_from_span(aTHX_ document, argument->name);
     (void)hv_store_ent(hv, name_sv, gql_ir_value_to_legacy_sv(aTHX_ document, argument->value), 0);
+    SvREFCNT_dec(name_sv);
   }
 
   return newRV_noinc((SV *)hv);

@@ -207,6 +207,18 @@ Practical rule:
 If these are created only for a helper call, the call site must decide whether
 to `SvREFCNT_dec(...)` afterward.
 
+The same applies to temporary key SVs used with hash helpers.
+
+- `hv_store_ent(...)` does not consume the key SV
+- `hv_fetch_ent(...)` does not transfer ownership of a temporary key SV
+
+Practical rule:
+
+- if a temporary key SV is created only to call `hv_store_ent(...)`, the call
+  site must `SvREFCNT_dec(...)` it afterward unless the SV was made mortal
+- treat the same ownership rule as applying to all same-shape patterns where a
+  temporary SV is created solely to serve as a lookup/store key
+
 ## Next Step
 
 Keep pushing compiled-plan reuse deeper without creating a second executor.

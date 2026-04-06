@@ -2118,13 +2118,18 @@ gql_execution_possible_type_match_simple(
       I32 i;
       I32 len = av_len(possible_av);
       HV *map_hv = newHV();
+      SV *abstract_name_key_sv;
 
       if (possible_type_map_svp && SvROK(*possible_type_map_svp) && SvTYPE(SvRV(*possible_type_map_svp)) == SVt_PVHV) {
-        (void)hv_store_ent((HV *)SvRV(*possible_type_map_svp), newSVsv(abstract_name_sv), newRV_noinc((SV *)map_hv), 0);
+        abstract_name_key_sv = newSVsv(abstract_name_sv);
+        (void)hv_store_ent((HV *)SvRV(*possible_type_map_svp), abstract_name_key_sv, newRV_noinc((SV *)map_hv), 0);
+        SvREFCNT_dec(abstract_name_key_sv);
       } else {
         HV *possible_type_map_hv = newHV();
         (void)hv_store(runtime_cache_hv, "possible_type_map", 17, newRV_noinc((SV *)possible_type_map_hv), 0);
-        (void)hv_store_ent(possible_type_map_hv, newSVsv(abstract_name_sv), newRV_noinc((SV *)map_hv), 0);
+        abstract_name_key_sv = newSVsv(abstract_name_sv);
+        (void)hv_store_ent(possible_type_map_hv, abstract_name_key_sv, newRV_noinc((SV *)map_hv), 0);
+        SvREFCNT_dec(abstract_name_key_sv);
       }
 
       for (i = 0; i <= len; i++) {
@@ -2132,6 +2137,7 @@ gql_execution_possible_type_match_simple(
         if (possible_svp && SvROK(*possible_svp)) {
           SV *candidate_name_sv = gql_execution_type_name_sv(aTHX_ *possible_svp);
           (void)hv_store_ent(map_hv, candidate_name_sv, newSViv(1), 0);
+          SvREFCNT_dec(candidate_name_sv);
         }
       }
 

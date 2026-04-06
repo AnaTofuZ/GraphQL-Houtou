@@ -894,6 +894,201 @@ gql_execution_builtin_scalar_perl_to_graphql(pTHX_ gql_execution_builtin_scalar_
   }
 }
 
+static int
+gql_execution_is_houtou_enum_type(SV *type) {
+  return type
+    && SvROK(type)
+    && sv_derived_from(type, "GraphQL::Houtou::Type::Enum");
+}
+
+static int
+gql_execution_is_houtou_input_object_type(SV *type) {
+  return type
+    && SvROK(type)
+    && sv_derived_from(type, "GraphQL::Houtou::Type::InputObject");
+}
+
+static SV *
+gql_execution_enum_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok) {
+  HV *type_hv;
+  SV **values_svp;
+  HV *values_hv;
+  SV *lookup_value = value;
+  SV **entry_svp;
+  HV *entry_hv;
+  SV **mapped_svp;
+
+  *ok = 0;
+
+  if (!value || !SvOK(value)) {
+    *ok = 1;
+    return newSV(0);
+  }
+
+  if (SvROK(value) && SvTYPE(SvRV(value)) < SVt_PVAV) {
+    lookup_value = SvRV(value);
+  }
+
+  if (!SvROK(type) || SvTYPE(SvRV(type)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+
+  type_hv = (HV *)SvRV(type);
+  values_svp = hv_fetch(type_hv, "values", 6, 0);
+  if (!values_svp || !SvROK(*values_svp) || SvTYPE(SvRV(*values_svp)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+
+  values_hv = (HV *)SvRV(*values_svp);
+  entry_svp = hv_fetch_ent(values_hv, lookup_value, 0, 0);
+  if (!entry_svp || !SvROK(*entry_svp) || SvTYPE(SvRV(*entry_svp)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+
+  entry_hv = (HV *)SvRV(*entry_svp);
+  mapped_svp = hv_fetch(entry_hv, "value", 5, 0);
+  if (!mapped_svp) {
+    return &PL_sv_undef;
+  }
+
+  *ok = 1;
+  return newSVsv(*mapped_svp);
+}
+
+static SV *
+gql_execution_enum_perl_to_graphql(pTHX_ SV *type, SV *value, int *ok) {
+  HV *type_hv;
+  SV **value2name_svp;
+  HV *value2name_hv;
+  HE *entry;
+  SV **values_svp;
+  HV *values_hv;
+
+  *ok = 0;
+
+  if (!value || !SvOK(value)) {
+    *ok = 1;
+    return newSV(0);
+  }
+
+  if (!SvROK(type) || SvTYPE(SvRV(type)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+
+  type_hv = (HV *)SvRV(type);
+  value2name_svp = hv_fetch(type_hv, "_value2name", 11, 0);
+  if (value2name_svp && SvROK(*value2name_svp) && SvTYPE(SvRV(*value2name_svp)) == SVt_PVHV) {
+    SV **name_svp = hv_fetch_ent((HV *)SvRV(*value2name_svp), value, 0, 0);
+    if (name_svp) {
+      *ok = 1;
+      return newSVsv(*name_svp);
+    }
+  }
+
+  values_svp = hv_fetch(type_hv, "values", 6, 0);
+  if (!values_svp || !SvROK(*values_svp) || SvTYPE(SvRV(*values_svp)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+
+  values_hv = (HV *)SvRV(*values_svp);
+  (void)hv_iterinit(values_hv);
+  while ((entry = hv_iternext(values_hv))) {
+    SV *entry_sv = hv_iterval(values_hv, entry);
+    SV *name_sv = hv_iterkeysv(entry);
+    HV *entry_hv;
+    SV **mapped_svp;
+
+    if (!SvROK(entry_sv) || SvTYPE(SvRV(entry_sv)) != SVt_PVHV) {
+      continue;
+    }
+
+    entry_hv = (HV *)SvRV(entry_sv);
+    mapped_svp = hv_fetch(entry_hv, "value", 5, 0);
+    if (mapped_svp && sv_eq(*mapped_svp, value)) {
+      *ok = 1;
+      return newSVsv(name_sv);
+    }
+  }
+
+  return &PL_sv_undef;
+}
+
+static SV *
+gql_execution_input_object_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok) {
+  HV *type_hv;
+  HV *item_hv;
+  SV **fields_svp;
+  HV *fields_hv;
+  HV *result_hv;
+  HE *entry;
+
+  *ok = 0;
+
+  if (!value || !SvOK(value)) {
+    *ok = 1;
+    return newSV(0);
+  }
+
+  if (!SvROK(value) || SvTYPE(SvRV(value)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+  if (!SvROK(type) || SvTYPE(SvRV(type)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+
+  type_hv = (HV *)SvRV(type);
+  item_hv = (HV *)SvRV(value);
+  fields_svp = hv_fetch(type_hv, "fields", 6, 0);
+  if (!fields_svp || !SvROK(*fields_svp) || SvTYPE(SvRV(*fields_svp)) != SVt_PVHV) {
+    return &PL_sv_undef;
+  }
+  fields_hv = (HV *)SvRV(*fields_svp);
+  result_hv = newHV();
+
+  (void)hv_iterinit(item_hv);
+  while ((entry = hv_iternext(item_hv))) {
+    SV *name_sv = hv_iterkeysv(entry);
+    SV *item_value = hv_iterval(item_hv, entry);
+    SV **field_def_svp = hv_fetch_ent(fields_hv, name_sv, 0, 0);
+    HV *field_def_hv;
+    SV **field_type_svp;
+    SV **field_default_svp;
+    SV *coerce_value = item_value;
+    SV *parsed;
+    int field_ok = 0;
+
+    if (!field_def_svp || !SvROK(*field_def_svp) || SvTYPE(SvRV(*field_def_svp)) != SVt_PVHV) {
+      SvREFCNT_dec((SV *)result_hv);
+      return &PL_sv_undef;
+    }
+
+    field_def_hv = (HV *)SvRV(*field_def_svp);
+    field_type_svp = hv_fetch(field_def_hv, "type", 4, 0);
+    if (!field_type_svp || !SvOK(*field_type_svp)) {
+      SvREFCNT_dec((SV *)result_hv);
+      return &PL_sv_undef;
+    }
+
+    field_default_svp = hv_fetch(field_def_hv, "default_value", 13, 0);
+    if ((!coerce_value || !SvOK(coerce_value))
+        && field_default_svp
+        && SvOK(*field_default_svp)) {
+      coerce_value = *field_default_svp;
+    }
+
+    parsed = gql_execution_try_type_graphql_to_perl(aTHX_ *field_type_svp, coerce_value, &field_ok);
+    if (!field_ok) {
+      SvREFCNT_dec((SV *)result_hv);
+      return &PL_sv_undef;
+    }
+
+    (void)hv_store_ent(result_hv, name_sv, parsed, 0);
+  }
+
+  *ok = 1;
+  return newRV_noinc((SV *)result_hv);
+}
+
 static SV *
 gql_execution_try_type_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok) {
   dSP;
@@ -906,6 +1101,12 @@ gql_execution_try_type_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok) {
   builtin_kind = gql_execution_builtin_scalar_kind_from_type(type);
   if (builtin_kind != GQL_EXECUTION_BUILTIN_SCALAR_NONE) {
     return gql_execution_builtin_scalar_graphql_to_perl(aTHX_ builtin_kind, value, ok);
+  }
+  if (gql_execution_is_houtou_enum_type(type)) {
+    return gql_execution_enum_graphql_to_perl(aTHX_ type, value, ok);
+  }
+  if (gql_execution_is_houtou_input_object_type(type)) {
+    return gql_execution_input_object_graphql_to_perl(aTHX_ type, value, ok);
   }
 
   ENTER;
@@ -1563,6 +1764,9 @@ gql_execution_call_type_perl_to_graphql(pTHX_ SV *type, SV *value, int *ok) {
   if (builtin_kind != GQL_EXECUTION_BUILTIN_SCALAR_NONE) {
     return gql_execution_builtin_scalar_perl_to_graphql(aTHX_ builtin_kind, value, ok);
   }
+  if (gql_execution_is_houtou_enum_type(type)) {
+    return gql_execution_enum_perl_to_graphql(aTHX_ type, value, ok);
+  }
 
   ENTER;
   SAVETMPS;
@@ -1623,6 +1827,19 @@ gql_execution_call_type_to_string(pTHX_ SV *type) {
   dSP;
   int count;
   SV *ret;
+  HV *type_hv;
+  SV **name_svp;
+
+  if (SvROK(type)
+      && SvTYPE(SvRV(type)) == SVt_PVHV
+      && (sv_derived_from(type, "GraphQL::Houtou::Type")
+          || sv_derived_from(type, "GraphQL::Houtou::Directive"))) {
+    type_hv = (HV *)SvRV(type);
+    name_svp = hv_fetch(type_hv, "name", 4, 0);
+    if (name_svp && SvOK(*name_svp)) {
+      return newSVsv(*name_svp);
+    }
+  }
 
   ENTER;
   SAVETMPS;

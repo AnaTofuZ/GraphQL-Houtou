@@ -373,3 +373,211 @@ gql_ir_prepare_executable_root_selection_plan_av(
   selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
   return gql_ir_prepare_selection_plan_av(aTHX_ prepared, selected->selection_set);
 }
+
+static gql_ir_fragment_definition_t *
+gql_ir_prepare_find_fragment_by_name(
+  pTHX_
+  gql_ir_prepared_exec_t *prepared,
+  const char *name,
+  STRLEN name_len
+) {
+  UV i;
+
+  if (!prepared || !prepared->document) {
+    return NULL;
+  }
+
+  for (i = 0; i < (UV)prepared->document->definitions.count; i++) {
+    gql_ir_definition_t *definition = (gql_ir_definition_t *)prepared->document->definitions.items[i];
+    gql_ir_fragment_definition_t *fragment;
+    SV *candidate_sv;
+    int matches;
+
+    if (!definition || definition->kind != GQL_IR_DEFINITION_FRAGMENT) {
+      continue;
+    }
+
+    fragment = definition->as.fragment;
+    candidate_sv = gql_ir_make_sv_from_span(aTHX_ prepared->document, fragment->name);
+    matches = (SvCUR(candidate_sv) == name_len && memEQ(SvPV_nolen(candidate_sv), name, name_len));
+    SvREFCNT_dec(candidate_sv);
+    if (matches) {
+      return fragment;
+    }
+  }
+
+  return NULL;
+}
+
+static int
+gql_ir_prepare_type_condition_matches_root(
+  pTHX_ gql_ir_prepared_exec_t *prepared,
+  SV *root_type,
+  gql_ir_span_t type_condition
+) {
+  SV **name_svp;
+  STRLEN root_len = 0;
+  STRLEN cond_len = 0;
+  const char *root_name;
+  SV *cond_sv;
+  const char *cond_name;
+  int matches;
+
+  if (type_condition.start == type_condition.end) {
+    return 1;
+  }
+  if (!root_type || !SvROK(root_type) || SvTYPE(SvRV(root_type)) != SVt_PVHV) {
+    return 0;
+  }
+
+  name_svp = hv_fetch((HV *)SvRV(root_type), "name", 4, 0);
+  if (!name_svp || !SvOK(*name_svp)) {
+    return 0;
+  }
+
+  root_name = SvPV(*name_svp, root_len);
+  cond_sv = gql_ir_make_sv_from_span(aTHX_ prepared->document, type_condition);
+  cond_name = SvPV(cond_sv, cond_len);
+  matches = (root_len == cond_len && memEQ(root_name, cond_name, root_len));
+  SvREFCNT_dec(cond_sv);
+  return matches;
+}
+
+static int
+gql_ir_prepare_collect_root_field_buckets_into(
+  pTHX_ gql_ir_prepared_exec_t *prepared,
+  SV *root_type,
+  gql_ir_selection_set_t *selection_set,
+  AV *field_names_av,
+  HV *counts_hv
+) {
+  UV i;
+
+  if (!selection_set) {
+    return 1;
+  }
+
+  for (i = 0; i < (UV)selection_set->selections.count; i++) {
+    gql_ir_selection_t *selection = (gql_ir_selection_t *)selection_set->selections.items[i];
+
+    if (!selection) {
+      continue;
+    }
+
+    switch (selection->kind) {
+      case GQL_IR_SELECTION_FIELD: {
+        gql_ir_field_t *field = selection->as.field;
+        SV *result_name_sv;
+        HE *count_he;
+        SV *count_sv;
+        if (field->directives.count > 0) {
+          return 0;
+        }
+        result_name_sv = (field->alias.start != field->alias.end)
+          ? gql_ir_make_sv_from_span(aTHX_ prepared->document, field->alias)
+          : gql_ir_make_sv_from_span(aTHX_ prepared->document, field->name);
+        count_he = hv_fetch_ent(counts_hv, result_name_sv, 0, 0);
+        if (!count_he) {
+          av_push(field_names_av, newSVsv(result_name_sv));
+          (void)hv_store_ent(counts_hv, newSVsv(result_name_sv), newSVuv(1), 0);
+        } else {
+          count_sv = HeVAL(count_he);
+          sv_setuv(count_sv, SvUV(count_sv) + 1);
+        }
+        SvREFCNT_dec(result_name_sv);
+        break;
+      }
+      case GQL_IR_SELECTION_FRAGMENT_SPREAD: {
+        gql_ir_fragment_spread_t *spread = selection->as.fragment_spread;
+        SV *fragment_name_sv;
+        STRLEN name_len;
+        const char *name;
+        gql_ir_fragment_definition_t *fragment;
+        if (spread->directives.count > 0) {
+          return 0;
+        }
+        fragment_name_sv = gql_ir_make_sv_from_span(aTHX_ prepared->document, spread->name);
+        name = SvPV(fragment_name_sv, name_len);
+        fragment = gql_ir_prepare_find_fragment_by_name(aTHX_ prepared, name, name_len);
+        SvREFCNT_dec(fragment_name_sv);
+        if (!fragment) {
+          return 0;
+        }
+        if (!gql_ir_prepare_type_condition_matches_root(aTHX_ prepared, root_type, fragment->type_condition)) {
+          continue;
+        }
+        if (!gql_ir_prepare_collect_root_field_buckets_into(
+              aTHX_ prepared,
+              root_type,
+              fragment->selection_set,
+              field_names_av,
+              counts_hv
+            )) {
+          return 0;
+        }
+        break;
+      }
+      case GQL_IR_SELECTION_INLINE_FRAGMENT: {
+        gql_ir_inline_fragment_t *fragment = selection->as.inline_fragment;
+        if (fragment->directives.count > 0) {
+          return 0;
+        }
+        if (!gql_ir_prepare_type_condition_matches_root(aTHX_ prepared, root_type, fragment->type_condition)) {
+          continue;
+        }
+        if (!gql_ir_prepare_collect_root_field_buckets_into(
+              aTHX_ prepared,
+              root_type,
+              fragment->selection_set,
+              field_names_av,
+              counts_hv
+            )) {
+          return 0;
+        }
+        break;
+      }
+      default:
+        return 0;
+    }
+  }
+
+  return 1;
+}
+
+static HV *
+gql_ir_prepare_executable_root_field_buckets_hv(
+  pTHX_ SV *schema,
+  gql_ir_prepared_exec_t *prepared,
+  SV *operation_name
+) {
+  HV *result_hv = newHV();
+  AV *field_names_av = newAV();
+  HV *counts_hv = newHV();
+  gql_ir_operation_definition_t *selected;
+  const char *operation_type;
+  SV *root_type_sv;
+
+  selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
+  operation_type = gql_ir_operation_kind_name(selected->operation);
+  root_type_sv = gql_execution_call_schema_root_type(aTHX_ schema, operation_type);
+
+  if (!gql_ir_prepare_collect_root_field_buckets_into(
+        aTHX_ prepared,
+        root_type_sv,
+        selected->selection_set,
+        field_names_av,
+        counts_hv
+      )) {
+    SvREFCNT_dec(root_type_sv);
+    SvREFCNT_dec((SV *)field_names_av);
+    SvREFCNT_dec((SV *)counts_hv);
+    SvREFCNT_dec((SV *)result_hv);
+    croak("IR root field bucket collection requires simple root selections");
+  }
+
+  gql_store_sv(result_hv, "operation_type", newSVpv(operation_type, 0));
+  gql_store_sv(result_hv, "root_type", root_type_sv);
+  gql_store_sv(result_hv, "field_names", newRV_noinc((SV *)field_names_av));
+  gql_store_sv(result_hv, "field_counts", newRV_noinc((SV *)counts_hv));
+  return result_hv;
+}

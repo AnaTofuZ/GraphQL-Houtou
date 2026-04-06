@@ -807,4 +807,26 @@ subtest 'prepare executable ir root selection plan' => sub {
   );
 };
 
+subtest 'prepare executable ir root field buckets' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q { hello user(id: "42") { id } ...F ... on Query { hello } } fragment F on Query { hello }'
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_field_buckets_xs($schema, $prepared, 'Q'),
+    {
+      operation_type => 'query',
+      root_type => $Query,
+      field_names => [ 'hello', 'user' ],
+      field_counts => {
+        hello => 3,
+        user => 1,
+      },
+    },
+    'prepared ir handle collects simple root field buckets directly from IR',
+  );
+};
+
 done_testing;

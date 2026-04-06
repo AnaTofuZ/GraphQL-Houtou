@@ -225,7 +225,7 @@ gql_ir_prepare_executable_frontend_hv(pTHX_ gql_ir_prepared_exec_t *prepared, SV
     }
     variable_hv = newHV();
     name_sv = gql_ir_make_sv_from_span(aTHX_ prepared->document, definition->name);
-    hv_stores(variable_hv, "type", gql_ir_type_to_string_sv(aTHX_ prepared->document, definition->type));
+    gql_store_sv(variable_hv, "type", gql_ir_type_to_string_sv(aTHX_ prepared->document, definition->type));
     hv_stores(variable_hv, "has_default", newSViv(definition->default_value ? 1 : 0));
     hv_stores(variable_hv, "directive_count", newSVuv((UV)definition->directives.count));
     (void)hv_store_ent(variables_hv, name_sv, newRV_noinc((SV *)variable_hv), 0);

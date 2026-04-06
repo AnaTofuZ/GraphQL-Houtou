@@ -714,4 +714,34 @@ subtest 'prepare executable ir handle' => sub {
   );
 };
 
+subtest 'prepare executable ir frontend variable metadata' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID = 1, $flag: Boolean = false, $names: [String!]) { hello }'
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::_prepared_executable_ir_frontend_xs($prepared, 'Q')->{operation}{variables},
+    {
+      id => {
+        type => 'ID',
+        has_default => 1,
+        directive_count => 0,
+      },
+      flag => {
+        type => 'Boolean',
+        has_default => 1,
+        directive_count => 0,
+      },
+      names => {
+        type => '[String!]',
+        has_default => 0,
+        directive_count => 0,
+      },
+    },
+    'prepared ir frontend exposes lightweight variable metadata without AST materialization',
+  );
+};
+
 done_testing;

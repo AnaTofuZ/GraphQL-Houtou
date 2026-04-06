@@ -79,6 +79,7 @@ These commits exist on `ir-direct-execution`, not on `main`:
 - `656c77a` Add prepared IR legacy field bridge
 - `f950c6d` Add initial prepared IR execution path
 - `e1bcd5f` Add compiled IR execution plans
+- `5c9eeb5` Warm schema runtime caches for execution
 
 ## Current Architecture
 

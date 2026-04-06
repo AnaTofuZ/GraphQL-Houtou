@@ -1472,6 +1472,12 @@ gql_ir_build_execution_context_sv(
   }
 
   gql_store_sv(context_hv, "schema", gql_execution_share_or_copy_sv(schema));
+  {
+    HV *runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ schema);
+    if (runtime_cache_hv) {
+      gql_store_sv(context_hv, "runtime_cache", newRV_inc((SV *)runtime_cache_hv));
+    }
+  }
   gql_store_sv(context_hv, "fragments", fragments_sv);
   gql_store_sv(context_hv, "root_value", gql_execution_share_or_copy_sv(root_value));
   gql_store_sv(context_hv, "context_value", gql_execution_share_or_copy_sv(context_value));
@@ -1547,6 +1553,12 @@ gql_ir_build_execution_context_from_compiled_sv(
   }
 
   gql_store_sv(context_hv, "schema", gql_execution_share_or_copy_sv(compiled->schema_sv));
+  {
+    HV *runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ compiled->schema_sv);
+    if (runtime_cache_hv) {
+      gql_store_sv(context_hv, "runtime_cache", newRV_inc((SV *)runtime_cache_hv));
+    }
+  }
   gql_store_sv(context_hv, "fragments", gql_execution_share_or_copy_sv(compiled->fragments_sv));
   gql_store_sv(context_hv, "root_value", gql_execution_share_or_copy_sv(root_value));
   gql_store_sv(context_hv, "context_value", gql_execution_share_or_copy_sv(context_value));

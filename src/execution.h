@@ -1705,6 +1705,24 @@ gql_execution_schema_runtime_cache_hv(pTHX_ SV *schema) {
   return NULL;
 }
 
+static HV *
+gql_execution_context_runtime_cache_hv(SV *context) {
+  HV *context_hv;
+  SV **runtime_cache_svp;
+
+  if (!context || !SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
+    return NULL;
+  }
+
+  context_hv = (HV *)SvRV(context);
+  runtime_cache_svp = hv_fetch(context_hv, "runtime_cache", 13, 0);
+  if (!runtime_cache_svp || !SvROK(*runtime_cache_svp) || SvTYPE(SvRV(*runtime_cache_svp)) != SVt_PVHV) {
+    return NULL;
+  }
+
+  return (HV *)SvRV(*runtime_cache_svp);
+}
+
 static SV *
 gql_execution_call_schema_root_type(pTHX_ SV *schema, const char *op_type) {
   HV *runtime_cache_hv;
@@ -2054,7 +2072,10 @@ gql_execution_fragment_condition_matches_simple(pTHX_ SV *context, SV *object_ty
   if (!schema_svp || !SvROK(*schema_svp) || SvTYPE(SvRV(*schema_svp)) != SVt_PVHV) {
     return newSViv(0);
   }
-  runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ *schema_svp);
+  runtime_cache_hv = gql_execution_context_runtime_cache_hv(context);
+  if (!runtime_cache_hv) {
+    runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ *schema_svp);
+  }
   name2type_svp = runtime_cache_hv
     ? hv_fetch(runtime_cache_hv, "name2type", 9, 0)
     : hv_fetch((HV *)SvRV(*schema_svp), "name2type", 9, 0);
@@ -2955,6 +2976,12 @@ gql_execution_build_context(pTHX_ SV *schema, SV *ast, SV *root_value, SV *conte
   }
 
   gql_store_sv(context_hv, "schema", gql_execution_share_or_copy_sv(schema));
+  {
+    HV *runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ schema);
+    if (runtime_cache_hv) {
+      gql_store_sv(context_hv, "runtime_cache", newRV_inc((SV *)runtime_cache_hv));
+    }
+  }
   gql_store_sv(context_hv, "fragments", newRV_noinc((SV *)fragments_hv));
   gql_store_sv(context_hv, "root_value", gql_execution_share_or_copy_sv(root_value));
   gql_store_sv(context_hv, "context_value", gql_execution_share_or_copy_sv(context_value));
@@ -3302,7 +3329,10 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
         SV *runtime_type = runtime_type_or_name;
 
         if (!SvROK(runtime_type_or_name) && schema_svp && SvROK(*schema_svp) && SvTYPE(SvRV(*schema_svp)) == SVt_PVHV) {
-          HV *runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ *schema_svp);
+          HV *runtime_cache_hv = gql_execution_context_runtime_cache_hv(context);
+          if (!runtime_cache_hv) {
+            runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ *schema_svp);
+          }
           SV **name2type_svp = runtime_cache_hv
             ? hv_fetch(runtime_cache_hv, "name2type", 9, 0)
             : hv_fetch((HV *)SvRV(*schema_svp), "name2type", 9, 0);

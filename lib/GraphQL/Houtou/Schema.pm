@@ -64,6 +64,59 @@ has _possible_type_map => (
   isa => HashRef,
 );
 
+sub prepare_runtime {
+  my ($self) = @_;
+  return $self->_runtime_cache;
+}
+
+sub runtime_cache {
+  my ($self) = @_;
+  return $self->{_runtime_cache};
+}
+
+sub clear_runtime_cache {
+  my ($self) = @_;
+  delete $self->{_runtime_cache};
+  return $self;
+}
+
+sub _runtime_cache {
+  my ($self) = @_;
+  return $self->{_runtime_cache} if $self->{_runtime_cache};
+
+  my $name2type = $self->name2type || {};
+  my $interface2types = $self->_interface2types || {};
+  my $possible_type_map = $self->_possible_type_map || {};
+  my %possible_types;
+
+  for my $type (values %$name2type) {
+    next if !$type;
+
+    if ($type->isa('GraphQL::Type::Union') || $type->isa('GraphQL::Houtou::Type::Union')) {
+      my $types = $type->{types} || $type->types || [];
+      $possible_types{ $type->name } = [ @$types ];
+      next;
+    }
+
+    if ($type->isa('GraphQL::Type::Interface') || $type->isa('GraphQL::Houtou::Type::Interface')) {
+      $possible_types{ $type->name } = [ @{ $interface2types->{ $type->name } || [] } ];
+      next;
+    }
+  }
+
+  return $self->{_runtime_cache} = {
+    root_types => {
+      query => $self->{query},
+      mutation => $self->{mutation},
+      subscription => $self->{subscription},
+    },
+    name2type => $name2type,
+    interface2types => $interface2types,
+    possible_type_map => $possible_type_map,
+    possible_types => \%possible_types,
+  };
+}
+
 sub _build_name2type {
   my ($self) = @_;
   my @types = grep $_, (map $self->$_, qw(query mutation subscription)), $SCHEMA_META_TYPE;
@@ -121,6 +174,9 @@ all possible types in the schema.
 EOF
   $map->{$abstract_type->name} = { map { ($_->name => 1) } @possibles };
   $self->_possible_type_map($map);
+  if ($self->{_runtime_cache}) {
+    $self->{_runtime_cache}{possible_type_map} = $map;
+  }
   return $map->{$abstract_type->name}{$possible_type->name};
 }
 

@@ -9,6 +9,8 @@ static SV *gql_execution_collect_fields_xs(pTHX_ SV *context, SV *object_type, S
 static SV *gql_execution_try_type_graphql_to_perl(pTHX_ SV *type, SV *value, int *ok);
 static SV *gql_execution_call_graphql_error_but(pTHX_ SV *error, SV *locations, SV *path);
 static SV *gql_execution_call_type_to_string(pTHX_ SV *type);
+static HV *gql_execution_schema_runtime_cache_hv(pTHX_ SV *schema);
+static SV *gql_execution_schema_possible_types_sv(pTHX_ SV *schema, SV *abstract_type);
 
 typedef struct {
   UV variables_apply_defaults_calls;
@@ -1649,12 +1651,80 @@ gql_execution_default_field_resolver_sv(pTHX) {
   return newRV_inc((SV *)cv);
 }
 
+static HV *
+gql_execution_schema_runtime_cache_hv(pTHX_ SV *schema) {
+  HV *schema_hv;
+  SV **cache_svp;
+  dSP;
+  int count;
+  SV *ret;
+
+  if (!schema || !SvROK(schema) || SvTYPE(SvRV(schema)) != SVt_PVHV) {
+    return NULL;
+  }
+
+  schema_hv = (HV *)SvRV(schema);
+  cache_svp = hv_fetch(schema_hv, "_runtime_cache", 14, 0);
+  if (cache_svp && SvROK(*cache_svp) && SvTYPE(SvRV(*cache_svp)) == SVt_PVHV) {
+    return (HV *)SvRV(*cache_svp);
+  }
+
+  if (!(sv_derived_from(schema, "GraphQL::Houtou::Schema") || sv_derived_from(schema, "GraphQL::Schema"))) {
+    return NULL;
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(gql_execution_mortal_sv_ref(schema));
+  PUTBACK;
+  count = call_method("_runtime_cache", G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV) || count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return NULL;
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  if (!SvROK(ret) || SvTYPE(SvRV(ret)) != SVt_PVHV) {
+    SvREFCNT_dec(ret);
+    return NULL;
+  }
+
+  SvREFCNT_dec(ret);
+  cache_svp = hv_fetch(schema_hv, "_runtime_cache", 14, 0);
+  if (cache_svp && SvROK(*cache_svp) && SvTYPE(SvRV(*cache_svp)) == SVt_PVHV) {
+    return (HV *)SvRV(*cache_svp);
+  }
+
+  return NULL;
+}
+
 static SV *
 gql_execution_call_schema_root_type(pTHX_ SV *schema, const char *op_type) {
+  HV *runtime_cache_hv;
+  SV **root_types_svp;
+  SV **root_type_svp;
   dSP;
   int count;
   SV *ret;
   STRLEN op_type_len = strlen(op_type);
+
+  runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ schema);
+  if (runtime_cache_hv) {
+    root_types_svp = hv_fetch(runtime_cache_hv, "root_types", 10, 0);
+    if (root_types_svp && SvROK(*root_types_svp) && SvTYPE(SvRV(*root_types_svp)) == SVt_PVHV) {
+      root_type_svp = hv_fetch((HV *)SvRV(*root_types_svp), op_type, (I32)op_type_len, 0);
+      if (root_type_svp && SvOK(*root_type_svp)) {
+        return gql_execution_share_or_copy_sv(*root_type_svp);
+      }
+    }
+  }
 
   ENTER;
   SAVETMPS;
@@ -1684,6 +1754,56 @@ gql_execution_call_schema_root_type(pTHX_ SV *schema, const char *op_type) {
     croak("operation type must not be empty");
   }
 
+  return ret;
+}
+
+static SV *
+gql_execution_schema_possible_types_sv(pTHX_ SV *schema, SV *abstract_type) {
+  HV *runtime_cache_hv;
+  SV **possible_types_svp;
+  STRLEN type_name_len;
+  SV *type_name_sv;
+  SV *ret = &PL_sv_undef;
+  dSP;
+  int count;
+
+  runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ schema);
+  if (runtime_cache_hv) {
+    possible_types_svp = hv_fetch(runtime_cache_hv, "possible_types", 14, 0);
+    if (possible_types_svp && SvROK(*possible_types_svp) && SvTYPE(SvRV(*possible_types_svp)) == SVt_PVHV) {
+      HE *possible_he;
+
+      type_name_sv = gql_execution_call_type_to_string(aTHX_ abstract_type);
+      (void)SvPV(type_name_sv, type_name_len);
+      possible_he = hv_fetch_ent((HV *)SvRV(*possible_types_svp), type_name_sv, 0, 0);
+      if (possible_he && SvOK(HeVAL(possible_he))) {
+        ret = gql_execution_share_or_copy_sv(HeVAL(possible_he));
+      }
+      SvREFCNT_dec(type_name_sv);
+      if (ret != &PL_sv_undef) {
+        return ret;
+      }
+    }
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(gql_execution_mortal_sv_ref(schema));
+  XPUSHs(gql_execution_mortal_sv_ref(abstract_type));
+  PUTBACK;
+  count = call_method("get_possible_types", G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV) || count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return &PL_sv_undef;
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
   return ret;
 }
 
@@ -1906,6 +2026,7 @@ static SV *
 gql_execution_fragment_condition_matches_simple(pTHX_ SV *context, SV *object_type, SV *condition_name, int *ok) {
   HV *context_hv;
   SV **schema_svp;
+  HV *runtime_cache_hv;
   SV **name2type_svp;
   HE *condition_he;
   SV *condition_type;
@@ -1933,7 +2054,10 @@ gql_execution_fragment_condition_matches_simple(pTHX_ SV *context, SV *object_ty
   if (!schema_svp || !SvROK(*schema_svp) || SvTYPE(SvRV(*schema_svp)) != SVt_PVHV) {
     return newSViv(0);
   }
-  name2type_svp = hv_fetch((HV *)SvRV(*schema_svp), "name2type", 9, 0);
+  runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ *schema_svp);
+  name2type_svp = runtime_cache_hv
+    ? hv_fetch(runtime_cache_hv, "name2type", 9, 0)
+    : hv_fetch((HV *)SvRV(*schema_svp), "name2type", 9, 0);
   if (!name2type_svp || !SvROK(*name2type_svp) || SvTYPE(SvRV(*name2type_svp)) != SVt_PVHV) {
     return newSViv(0);
   }
@@ -2146,6 +2270,15 @@ gql_execution_path_with_key(pTHX_ SV *path, SV *key_sv) {
   av_push(path_copy_av, newSVsv(key_sv));
   ret = newRV_noinc((SV *)path_copy_av);
   return ret;
+}
+
+static int
+gql_execution_path_is_root(SV *path) {
+  if (!path || !SvROK(path) || SvTYPE(SvRV(path)) != SVt_PVAV) {
+    return 0;
+  }
+
+  return av_len((AV *)SvRV(path)) < 0;
 }
 
 static int
@@ -3025,7 +3158,10 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
         SV *runtime_type = runtime_type_or_name;
 
         if (!SvROK(runtime_type_or_name) && schema_svp && SvROK(*schema_svp) && SvTYPE(SvRV(*schema_svp)) == SVt_PVHV) {
-          SV **name2type_svp = hv_fetch((HV *)SvRV(*schema_svp), "name2type", 9, 0);
+          HV *runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ *schema_svp);
+          SV **name2type_svp = runtime_cache_hv
+            ? hv_fetch(runtime_cache_hv, "name2type", 9, 0)
+            : hv_fetch((HV *)SvRV(*schema_svp), "name2type", 9, 0);
           if (name2type_svp && SvROK(*name2type_svp) && SvTYPE(SvRV(*name2type_svp)) == SVt_PVHV) {
             STRLEN name_len;
             const char *name_pv = SvPV(runtime_type_or_name, name_len);
@@ -3043,47 +3179,30 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
             && schema_svp
             && SvROK(*schema_svp)
             && SvTYPE(SvRV(*schema_svp)) == SVt_PVHV) {
-          dSP;
-          int possible_count;
-          SV *possible_sv;
+          int possible_ok = 0;
+          SV *condition_name_sv = gql_execution_call_type_to_string(aTHX_ return_type);
+          SV *possible_sv = gql_execution_fragment_condition_matches_simple(
+            aTHX_ context,
+            runtime_type,
+            condition_name_sv,
+            &possible_ok
+          );
+          SvREFCNT_dec(condition_name_sv);
 
-          ENTER;
-          SAVETMPS;
-          PUSHMARK(SP);
-          XPUSHs(sv_2mortal(newSVsv(*schema_svp)));
-          XPUSHs(sv_2mortal(newSVsv(return_type)));
-          XPUSHs(sv_2mortal(newSVsv(runtime_type)));
-          PUTBACK;
-          possible_count = call_method("is_possible_type", G_SCALAR | G_EVAL);
-          SPAGAIN;
-          if (!SvTRUE(ERRSV) && possible_count == 1) {
-            possible_sv = newSVsv(POPs);
-            PUTBACK;
-            FREETMPS;
-            LEAVE;
-            if (SvTRUE(possible_sv)) {
-              SV *completed = gql_execution_complete_value_catching_error_xs_impl(
-                aTHX_ context,
-                runtime_type,
-                nodes,
-                info,
-                path,
-                result
-              );
-              SvREFCNT_dec(possible_sv);
-              if (runtime_type != runtime_type_or_name) {
-                SvREFCNT_dec(runtime_type_or_name);
-              } else {
-                SvREFCNT_dec(runtime_type_or_name);
-              }
-              return completed;
-            }
+          if (possible_ok && SvTRUE(possible_sv)) {
+            SV *completed = gql_execution_complete_value_catching_error_xs_impl(
+              aTHX_ context,
+              runtime_type,
+              nodes,
+              info,
+              path,
+              result
+            );
             SvREFCNT_dec(possible_sv);
-          } else {
-            PUTBACK;
-            FREETMPS;
-            LEAVE;
+            SvREFCNT_dec(runtime_type_or_name);
+            return completed;
           }
+          SvREFCNT_dec(possible_sv);
         }
 
         SvREFCNT_dec(runtime_type_or_name);
@@ -3098,26 +3217,10 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
       SvREFCNT_dec(resolve_type_sv);
 
       if (schema_svp && SvROK(*schema_svp) && SvTYPE(SvRV(*schema_svp)) == SVt_PVHV) {
-        dSP;
-        int possible_count;
-        SV *possible_types_sv;
-
-        ENTER;
-        SAVETMPS;
-        PUSHMARK(SP);
-        XPUSHs(sv_2mortal(newSVsv(*schema_svp)));
-        XPUSHs(sv_2mortal(newSVsv(return_type)));
-        PUTBACK;
-        possible_count = call_method("get_possible_types", G_SCALAR | G_EVAL);
-        SPAGAIN;
-        if (!SvTRUE(ERRSV) && possible_count == 1) {
+        SV *possible_types_sv = gql_execution_schema_possible_types_sv(aTHX_ *schema_svp, return_type);
+        if (possible_types_sv != &PL_sv_undef) {
           I32 possible_i;
           I32 possible_len;
-
-          possible_types_sv = newSVsv(POPs);
-          PUTBACK;
-          FREETMPS;
-          LEAVE;
 
           if (SvROK(possible_types_sv) && SvTYPE(SvRV(possible_types_sv)) == SVt_PVAV) {
             possible_len = av_len((AV *)SvRV(possible_types_sv));
@@ -3160,10 +3263,6 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
           }
 
           SvREFCNT_dec(possible_types_sv);
-        } else {
-          PUTBACK;
-          FREETMPS;
-          LEAVE;
         }
       }
     }
@@ -3592,6 +3691,7 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
   SV **empty_args_svp;
   SV **field_resolver_svp;
   SV **promise_code_svp;
+  SV **compiled_root_field_defs_svp;
   SV *promise_code_sv = &PL_sv_undef;
   AV *field_names_av;
   HV *nodes_defs_hv;
@@ -3624,6 +3724,7 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
   empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
   field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
   promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  compiled_root_field_defs_svp = hv_fetch(context_hv, "compiled_root_field_defs", 24, 0);
   if (promise_code_svp && SvOK(*promise_code_svp)) {
     promise_code_sv = *promise_code_svp;
   }
@@ -3707,7 +3808,26 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
       continue;
     }
 
-    field_def_sv = gql_execution_get_field_def(aTHX_ *schema_svp, parent_type, *field_name_svp);
+    if (compiled_root_field_defs_svp
+        && SvOK(*compiled_root_field_defs_svp)
+        && gql_execution_path_is_root(path)
+        && SvROK(*compiled_root_field_defs_svp)
+        && SvTYPE(SvRV(*compiled_root_field_defs_svp)) == SVt_PVHV) {
+      HE *compiled_field_he = hv_fetch_ent((HV *)SvRV(*compiled_root_field_defs_svp), *result_name_svp, 0, 0);
+      if (compiled_field_he
+          && SvROK(HeVAL(compiled_field_he))
+          && SvTYPE(SvRV(HeVAL(compiled_field_he))) == SVt_PVHV) {
+        HV *compiled_field_hv = (HV *)SvRV(HeVAL(compiled_field_he));
+        SV **compiled_field_def_svp = hv_fetch(compiled_field_hv, "field_def", 9, 0);
+        field_def_sv = (compiled_field_def_svp && SvOK(*compiled_field_def_svp))
+          ? gql_execution_share_or_copy_sv(*compiled_field_def_svp)
+          : &PL_sv_undef;
+      } else {
+        field_def_sv = gql_execution_get_field_def(aTHX_ *schema_svp, parent_type, *field_name_svp);
+      }
+    } else {
+      field_def_sv = gql_execution_get_field_def(aTHX_ *schema_svp, parent_type, *field_name_svp);
+    }
     if (!SvOK(field_def_sv) || field_def_sv == &PL_sv_undef) {
       if (field_def_sv != &PL_sv_undef) {
         SvREFCNT_dec(field_def_sv);

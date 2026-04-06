@@ -1337,6 +1337,7 @@ gql_ir_build_execution_context_from_compiled_sv(
   SV *applied_variables_sv;
   HV *operation_hv;
   SV **operation_variables_svp;
+  SV **root_fields_svp = NULL;
 
   if (!compiled || !compiled->operation_sv || !SvROK(compiled->operation_sv) || SvTYPE(SvRV(compiled->operation_sv)) != SVt_PVHV) {
     croak("compiled IR plan is missing operation metadata");
@@ -1344,6 +1345,11 @@ gql_ir_build_execution_context_from_compiled_sv(
 
   operation_hv = (HV *)SvRV(compiled->operation_sv);
   operation_variables_svp = hv_fetch(operation_hv, "variables", 9, 0);
+  if (compiled->root_field_plan_sv
+      && SvROK(compiled->root_field_plan_sv)
+      && SvTYPE(SvRV(compiled->root_field_plan_sv)) == SVt_PVHV) {
+    root_fields_svp = hv_fetch((HV *)SvRV(compiled->root_field_plan_sv), "fields", 6, 0);
+  }
 
   if (!variable_values || !SvOK(variable_values)) {
     runtime_variables_sv = newRV_noinc((SV *)newHV());
@@ -1375,6 +1381,9 @@ gql_ir_build_execution_context_from_compiled_sv(
   );
   gql_store_sv(context_hv, "promise_code", gql_execution_share_or_copy_sv(promise_code));
   gql_store_sv(context_hv, "empty_args", newRV_noinc((SV *)newHV()));
+  if (root_fields_svp && SvOK(*root_fields_svp)) {
+    gql_store_sv(context_hv, "compiled_root_field_defs", gql_execution_share_or_copy_sv(*root_fields_svp));
+  }
 
   gql_store_sv(resolve_info_base_hv, "schema", gql_execution_share_or_copy_sv(compiled->schema_sv));
   gql_store_sv(resolve_info_base_hv, "fragments", gql_execution_share_or_copy_sv(compiled->fragments_sv));

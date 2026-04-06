@@ -170,6 +170,25 @@ subtest 'roots are normalized' => sub {
   };
 };
 
+subtest 'runtime schema cache can be warmed explicitly' => sub {
+  is $schema->runtime_cache, undef, 'runtime_cache is undef before explicit warmup';
+
+  my $cache = $schema->prepare_runtime;
+
+  is $cache->{root_types}{query}->name, 'Query', 'prepare_runtime exposes query root';
+  is $cache->{name2type}{User}->name, 'User', 'prepare_runtime exposes named type cache';
+  is_deeply(
+    [ map $_->name, @{ $cache->{interface2types}{Node} || [] } ],
+    ['User'],
+    'prepare_runtime exposes interface implementation cache',
+  );
+
+  is $schema->runtime_cache, $cache, 'runtime_cache returns warmed cache';
+  $schema->clear_runtime_cache;
+  is $schema->runtime_cache, undef, 'clear_runtime_cache clears getter-visible cache';
+  isnt $schema->prepare_runtime, $cache, 'clear_runtime_cache forces rebuild';
+};
+
 subtest 'named types are compiled' => sub {
   is $compiled->{types}{Query}{kind}, 'OBJECT', 'query root kind';
   is $compiled->{types}{Node}{kind}, 'INTERFACE', 'interface kind';

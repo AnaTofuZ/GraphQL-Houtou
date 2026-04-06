@@ -328,6 +328,31 @@ _prepared_executable_ir_context_seed_xs(schema, handle, operation_name = NULL, v
     RETVAL
 
 SV *
+_prepared_executable_ir_root_selection_plan_xs(handle, operation_name = NULL)
+    SV *handle
+    SV *operation_name
+  CODE:
+    if (!handle || !SvROK(handle) || !sv_derived_from(handle, "GraphQL::Houtou::XS::PreparedIR")) {
+      croak("expected a GraphQL::Houtou::XS::PreparedIR handle");
+    }
+    {
+      SV *inner_sv = SvRV(handle);
+      gql_ir_prepared_exec_t *prepared;
+
+      if (!SvIOK(inner_sv) || SvUV(inner_sv) == 0) {
+        croak("prepared IR handle is no longer valid");
+      }
+
+      prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(inner_sv));
+      RETVAL = newRV_noinc((SV *)gql_ir_prepare_executable_root_selection_plan_av(
+        aTHX_ prepared,
+        operation_name
+      ));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 _execute_xs_raw(schema, document, root_value = NULL, context_value = NULL, variable_values = NULL, operation_name = NULL, field_resolver = NULL, promise_code = NULL)
     SV *schema
     SV *document

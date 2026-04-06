@@ -765,4 +765,46 @@ subtest 'prepare executable ir context seed metadata' => sub {
   is $seed->{frontend}{fragments}{F}{type_condition}, 'Query', 'context seed keeps fragment metadata';
 };
 
+subtest 'prepare executable ir root selection plan' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    'query Q($id: ID) { hello user(id: $id) { id } ...F ... on Query { greet(name: "x") } } fragment F on Query { hello }'
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::_prepared_executable_ir_root_selection_plan_xs($prepared, 'Q'),
+    [
+      {
+        kind => 'field',
+        name => 'hello',
+        alias => undef,
+        argument_count => 0,
+        directive_count => 0,
+        selection_count => 0,
+      },
+      {
+        kind => 'field',
+        name => 'user',
+        alias => undef,
+        argument_count => 1,
+        directive_count => 0,
+        selection_count => 1,
+      },
+      {
+        kind => 'fragment_spread',
+        name => 'F',
+        directive_count => 0,
+      },
+      {
+        kind => 'inline_fragment',
+        type_condition => 'Query',
+        directive_count => 0,
+        selection_count => 1,
+      },
+    ],
+    'prepared ir handle exposes root selection plan without AST materialization',
+  );
+};
+
 done_testing;

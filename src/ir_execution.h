@@ -288,3 +288,88 @@ gql_ir_prepare_executable_context_seed_hv(
 
   return seed_hv;
 }
+
+static AV *
+gql_ir_prepare_selection_plan_av(pTHX_ gql_ir_prepared_exec_t *prepared, gql_ir_selection_set_t *selection_set) {
+  AV *plan_av = newAV();
+  UV i;
+
+  if (!selection_set) {
+    return plan_av;
+  }
+
+  if (selection_set->selections.count > 0) {
+    av_extend(plan_av, selection_set->selections.count - 1);
+  }
+
+  for (i = 0; i < (UV)selection_set->selections.count; i++) {
+    gql_ir_selection_t *selection = (gql_ir_selection_t *)selection_set->selections.items[i];
+    HV *item_hv;
+
+    if (!selection) {
+      continue;
+    }
+
+    item_hv = newHV();
+    switch (selection->kind) {
+      case GQL_IR_SELECTION_FIELD: {
+        gql_ir_field_t *field = selection->as.field;
+        hv_stores(item_hv, "kind", newSVpv("field", 0));
+        hv_stores(item_hv, "name", gql_ir_make_sv_from_span(aTHX_ prepared->document, field->name));
+        if (field->alias.start != field->alias.end) {
+          hv_stores(item_hv, "alias", gql_ir_make_sv_from_span(aTHX_ prepared->document, field->alias));
+        } else {
+          hv_stores(item_hv, "alias", newSV(0));
+        }
+        hv_stores(item_hv, "argument_count", newSVuv((UV)field->arguments.count));
+        hv_stores(item_hv, "directive_count", newSVuv((UV)field->directives.count));
+        hv_stores(
+          item_hv,
+          "selection_count",
+          newSVuv((UV)(field->selection_set ? field->selection_set->selections.count : 0))
+        );
+        break;
+      }
+      case GQL_IR_SELECTION_FRAGMENT_SPREAD: {
+        gql_ir_fragment_spread_t *spread = selection->as.fragment_spread;
+        hv_stores(item_hv, "kind", newSVpv("fragment_spread", 0));
+        hv_stores(item_hv, "name", gql_ir_make_sv_from_span(aTHX_ prepared->document, spread->name));
+        hv_stores(item_hv, "directive_count", newSVuv((UV)spread->directives.count));
+        break;
+      }
+      case GQL_IR_SELECTION_INLINE_FRAGMENT: {
+        gql_ir_inline_fragment_t *fragment = selection->as.inline_fragment;
+        hv_stores(item_hv, "kind", newSVpv("inline_fragment", 0));
+        if (fragment->type_condition.start != fragment->type_condition.end) {
+          hv_stores(item_hv, "type_condition", gql_ir_make_sv_from_span(aTHX_ prepared->document, fragment->type_condition));
+        } else {
+          hv_stores(item_hv, "type_condition", newSV(0));
+        }
+        hv_stores(item_hv, "directive_count", newSVuv((UV)fragment->directives.count));
+        hv_stores(
+          item_hv,
+          "selection_count",
+          newSVuv((UV)(fragment->selection_set ? fragment->selection_set->selections.count : 0))
+        );
+        break;
+      }
+      default:
+        hv_stores(item_hv, "kind", newSVpv("unknown", 0));
+        break;
+    }
+
+    av_push(plan_av, newRV_noinc((SV *)item_hv));
+  }
+
+  return plan_av;
+}
+
+static AV *
+gql_ir_prepare_executable_root_selection_plan_av(
+  pTHX_ gql_ir_prepared_exec_t *prepared,
+  SV *operation_name
+) {
+  gql_ir_operation_definition_t *selected;
+  selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
+  return gql_ir_prepare_selection_plan_av(aTHX_ prepared, selected->selection_set);
+}

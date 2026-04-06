@@ -170,3 +170,90 @@ gql_ir_prepare_executable_plan_hv(pTHX_ gql_ir_prepared_exec_t *prepared, SV *op
   hv_stores(plan_hv, "fragment_names", newRV_noinc((SV *)fragment_names_av));
   return plan_hv;
 }
+
+static SV *
+gql_ir_type_to_string_sv(pTHX_ gql_ir_document_t *document, gql_ir_type_t *type) {
+  SV *inner_sv;
+
+  if (!type) {
+    return newSV(0);
+  }
+
+  switch (type->kind) {
+    case GQL_IR_TYPE_NAMED:
+      return gql_ir_make_sv_from_span(aTHX_ document, type->name);
+    case GQL_IR_TYPE_LIST:
+      inner_sv = gql_ir_type_to_string_sv(aTHX_ document, type->inner);
+      sv_insert(inner_sv, 0, 0, "[", 1);
+      sv_catpvn(inner_sv, "]", 1);
+      return inner_sv;
+    case GQL_IR_TYPE_NON_NULL:
+      inner_sv = gql_ir_type_to_string_sv(aTHX_ document, type->inner);
+      sv_catpvn(inner_sv, "!", 1);
+      return inner_sv;
+    default:
+      return newSV(0);
+  }
+}
+
+static HV *
+gql_ir_prepare_executable_frontend_hv(pTHX_ gql_ir_prepared_exec_t *prepared, SV *operation_name) {
+  HV *frontend_hv = newHV();
+  HV *operation_hv = newHV();
+  HV *fragments_hv = newHV();
+  HV *variables_hv = newHV();
+  gql_ir_operation_definition_t *selected;
+  UV i;
+
+  selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
+
+  hv_stores(operation_hv, "operation_type", newSVpv(gql_ir_operation_kind_name(selected->operation), 0));
+  if (selected->name.start != selected->name.end) {
+    hv_stores(operation_hv, "operation_name", gql_ir_make_sv_from_span(aTHX_ prepared->document, selected->name));
+  } else {
+    hv_stores(operation_hv, "operation_name", newSV(0));
+  }
+  hv_stores(operation_hv, "selection_count", newSVuv((UV)selected->selection_set->selections.count));
+  hv_stores(operation_hv, "directive_count", newSVuv((UV)selected->directives.count));
+
+  for (i = 0; i < (UV)selected->variable_definitions.count; i++) {
+    gql_ir_variable_definition_t *definition = (gql_ir_variable_definition_t *)selected->variable_definitions.items[i];
+    HV *variable_hv;
+    SV *name_sv;
+    if (!definition) {
+      continue;
+    }
+    variable_hv = newHV();
+    name_sv = gql_ir_make_sv_from_span(aTHX_ prepared->document, definition->name);
+    hv_stores(variable_hv, "type", gql_ir_type_to_string_sv(aTHX_ prepared->document, definition->type));
+    hv_stores(variable_hv, "has_default", newSViv(definition->default_value ? 1 : 0));
+    hv_stores(variable_hv, "directive_count", newSVuv((UV)definition->directives.count));
+    (void)hv_store_ent(variables_hv, name_sv, newRV_noinc((SV *)variable_hv), 0);
+  }
+  hv_stores(operation_hv, "variables", newRV_noinc((SV *)variables_hv));
+
+  for (i = 0; i < (UV)prepared->document->definitions.count; i++) {
+    gql_ir_definition_t *ir_definition = (gql_ir_definition_t *)prepared->document->definitions.items[i];
+    gql_ir_fragment_definition_t *fragment;
+    HV *fragment_hv;
+    SV *fragment_name_sv;
+
+    if (!ir_definition || ir_definition->kind != GQL_IR_DEFINITION_FRAGMENT) {
+      continue;
+    }
+
+    fragment = ir_definition->as.fragment;
+    fragment_hv = newHV();
+    fragment_name_sv = gql_ir_make_sv_from_span(aTHX_ prepared->document, fragment->name);
+
+    hv_stores(fragment_hv, "type_condition", gql_ir_make_sv_from_span(aTHX_ prepared->document, fragment->type_condition));
+    hv_stores(fragment_hv, "selection_count", newSVuv((UV)fragment->selection_set->selections.count));
+    hv_stores(fragment_hv, "directive_count", newSVuv((UV)fragment->directives.count));
+
+    (void)hv_store_ent(fragments_hv, fragment_name_sv, newRV_noinc((SV *)fragment_hv), 0);
+  }
+
+  hv_stores(frontend_hv, "operation", newRV_noinc((SV *)operation_hv));
+  hv_stores(frontend_hv, "fragments", newRV_noinc((SV *)fragments_hv));
+  return frontend_hv;
+}

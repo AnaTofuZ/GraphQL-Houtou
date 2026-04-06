@@ -691,6 +691,27 @@ subtest 'prepare executable ir handle' => sub {
     },
     'prepared ir handle reports selected operation plan metadata',
   );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::_prepared_executable_ir_frontend_xs($prepared, 'Q'),
+    {
+      operation => {
+        operation_type => 'query',
+        operation_name => 'Q',
+        selection_count => 1,
+        directive_count => 0,
+        variables => {},
+      },
+      fragments => {
+        F => {
+          type_condition => 'Query',
+          selection_count => 1,
+          directive_count => 0,
+        },
+      },
+    },
+    'prepared ir handle exposes minimal frontend metadata without AST materialization',
+  );
 };
 
 done_testing;

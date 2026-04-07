@@ -353,11 +353,23 @@ Interpretation:
 - compiled-IR native executors now also use a borrowed default-field fast path
   before falling back to `share_or_copy_sv()`, which trims another allocation
   out of trivial hash-property reads such as `id` / `name`
+- compiled-IR promise executors now keep already-resolved trivial/native fields
+  in direct `data` accumulation while only promise-bearing fields flow through
+  `Promise::Adapter::all`; the final merge helper recombines the sync head with
+  the async tail instead of forcing everything back through per-field envelopes
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching
 - further wins should come from removing more runtime Perl-object work, not
   from micro-tuning legacy bucket reshaping
+
+Latest promise-path spot checks after preserving sync native head fields during
+compiled-IR promise merges (`--count=-6`):
+
+- `async_scalar`
+  - `houtou_compiled_ir`: `83369/s`
+- `async_list`
+  - `houtou_compiled_ir`: `47305/s`
 
 ## Testing Rule
 

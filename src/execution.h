@@ -1837,6 +1837,51 @@ gql_execution_call_xs_then_merge_hash(pTHX_ SV *promise_code, AV *keys_av, SV *p
 }
 
 static SV *
+gql_execution_call_xs_then_merge_hash_with_head(
+  pTHX_ SV *promise_code,
+  HV *direct_data_hv,
+  AV *keys_av,
+  SV *promise,
+  AV *errors_av
+) {
+  dSP;
+  int count;
+  SV *ret;
+  static CV *cv = NULL;
+
+  if (!cv) {
+    cv = get_cv("GraphQL::Houtou::XS::Execution::_then_merge_hash_with_head_xs", 0);
+    if (!cv) {
+      croak("unable to resolve GraphQL::Houtou::XS::Execution::_then_merge_hash_with_head_xs");
+    }
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  EXTEND(SP, 5);
+  XPUSHs(gql_execution_mortal_sv_ref(promise_code));
+  XPUSHs(sv_2mortal(newRV_inc((SV *)direct_data_hv)));
+  XPUSHs(sv_2mortal(newRV_inc((SV *)keys_av)));
+  XPUSHs(gql_execution_mortal_sv_ref(promise));
+  XPUSHs(sv_2mortal(newRV_inc((SV *)errors_av)));
+  PUTBACK;
+  count = call_sv((SV *)cv, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("_then_merge_hash_with_head_xs did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
 gql_execution_default_field_resolver_sv(pTHX) {
   static CV *cv = NULL;
 

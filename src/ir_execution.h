@@ -3085,6 +3085,9 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
       }
       continue;
     }
+    if (gql_execution_try_typename_meta_field_fast(aTHX_ compiled->root_type_sv, entry->field_name_sv, *type_svp, &completed_sv)) {
+      goto have_completed;
+    }
     resolve_svp = hv_fetch(field_def_hv, "resolve", 7, 0);
     if (resolve_svp && SvOK(*resolve_svp)) {
       resolve_sv = *resolve_svp;

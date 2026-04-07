@@ -26,6 +26,7 @@ static SV *gql_execution_get_object_is_type_of_sv(pTHX_ SV *context, SV *type);
 static SV *gql_execution_call_abstract_resolve_type(pTHX_ SV *type);
 static SV *gql_execution_get_abstract_resolve_type_sv(pTHX_ SV *context, SV *type);
 static gql_execution_context_fast_cache_t *gql_execution_context_fast_cache(pTHX_ SV *context);
+static int gql_execution_try_typename_meta_field_fast(pTHX_ SV *parent_type, SV *field_name_sv, SV *return_type, SV **completed_out);
 static int gql_execution_is_default_field_resolver(pTHX_ SV *resolve);
 static int gql_execution_try_default_field_resolve_fast(pTHX_ SV *root_value, SV *field_name_sv, SV **result_out);
 static int gql_execution_try_complete_trivial_value_fast(pTHX_ SV *return_type, SV *result, SV **completed_out);
@@ -1811,6 +1812,34 @@ gql_execution_default_field_resolver_sv(pTHX) {
   }
 
   return newRV_inc((SV *)cv);
+}
+
+static int
+gql_execution_try_typename_meta_field_fast(pTHX_ SV *parent_type, SV *field_name_sv, SV *return_type, SV **completed_out) {
+  STRLEN field_name_len;
+  const char *field_name_pv;
+  SV *type_name_sv;
+  int ok = 0;
+
+  if (completed_out) {
+    *completed_out = NULL;
+  }
+  if (!completed_out || !field_name_sv || !SvOK(field_name_sv) || !return_type || !SvOK(return_type)) {
+    return 0;
+  }
+
+  field_name_pv = SvPV(field_name_sv, field_name_len);
+  if (!(field_name_len == 10 && memEQ(field_name_pv, "__typename", 10))) {
+    return 0;
+  }
+
+  type_name_sv = gql_execution_type_name_sv(aTHX_ parent_type);
+  if (!gql_execution_try_complete_trivial_value_fast(aTHX_ return_type, type_name_sv, completed_out)) {
+    SvREFCNT_dec(type_name_sv);
+    return 0;
+  }
+  SvREFCNT_dec(type_name_sv);
+  return 1;
 }
 
 static int
@@ -4934,6 +4963,9 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
       }
       continue;
     }
+    if (gql_execution_try_typename_meta_field_fast(aTHX_ parent_type, *field_name_svp, *type_svp, &completed_sv)) {
+      goto have_completed;
+    }
     resolve_svp = hv_fetch(field_def_hv, "resolve", 7, 0);
     if (resolve_svp && SvOK(*resolve_svp)) {
       resolve_sv = *resolve_svp;
@@ -5183,6 +5215,9 @@ gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_va
     type_svp = hv_fetch(field_def_hv, "type", 4, 0);
     if (!type_svp || !SvOK(*type_svp)) {
       goto fallback;
+    }
+    if (gql_execution_try_typename_meta_field_fast(aTHX_ parent_type, *field_name_svp, *type_svp, &completed_sv)) {
+      goto have_completed;
     }
 
     resolve_svp = hv_fetch(field_def_hv, "resolve", 7, 0);

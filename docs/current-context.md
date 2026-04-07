@@ -175,6 +175,9 @@ Known shape of results after latest landed work:
 - `compiled_ir` ~= `houtou_xs_ast` on abstract/fragment-heavy cases
 - `compiled_ir` can now edge past `houtou_xs_ast` on
   `abstract_with_fragment` in favorable runs, but the margin is still small
+- `compiled_ir` now has direct fast paths for trivial default-field resolution
+  and `__typename` meta fields, so more child fields avoid allocating
+  `resolve_info` / `path` objects in the happy path
 - runtime-cache work targets AST and IR paths simultaneously
 - abstract/fragment-heavy tuning on AST paths is now close to a diminishing
   returns region
@@ -184,29 +187,29 @@ Known shape of results after latest landed work:
 Current sampled numbers (`util/execution-benchmark.pl --count=-3`):
 
 - `simple_scalar`
-  - `houtou_prepared_ir`: `126079/s`
-  - `houtou_compiled_ir`: `139515/s`
-  - `houtou_xs_ast`: `139565/s`
+  - `houtou_prepared_ir`: `129787/s`
+  - `houtou_compiled_ir`: `145878/s`
+  - `houtou_xs_ast`: `141723/s`
 - `nested_variable_object`
-  - `houtou_prepared_ir`: `66566/s`
-  - `houtou_compiled_ir`: `79130/s`
-  - `houtou_xs_ast`: `77441/s`
+  - `houtou_prepared_ir`: `68776/s`
+  - `houtou_compiled_ir`: `81177/s`
+  - `houtou_xs_ast`: `79130/s`
 - `list_of_objects`
-  - `houtou_prepared_ir`: `54287/s`
-  - `houtou_compiled_ir`: `57941/s`
-  - `houtou_xs_ast`: `58659/s`
+  - `houtou_prepared_ir`: `54119/s`
+  - `houtou_compiled_ir`: `57982/s`
+  - `houtou_xs_ast`: `58298/s`
 - `abstract_with_fragment`
-  - `houtou_prepared_ir`: `40215/s`
+  - `houtou_prepared_ir`: `38128/s`
   - `houtou_compiled_ir`: `41647/s`
-  - `houtou_xs_ast`: `41687/s`
+  - `houtou_xs_ast`: `42173/s`
 - `async_scalar`
-  - `houtou_prepared_ir`: `74244/s`
-  - `houtou_compiled_ir`: `77535/s`
-  - `houtou_facade_ast`: `78946/s`
+  - `houtou_prepared_ir`: `77551/s`
+  - `houtou_compiled_ir`: `78884/s`
+  - `houtou_facade_ast`: `79696/s`
 - `async_list`
-  - `houtou_prepared_ir`: `42601/s`
-  - `houtou_compiled_ir`: `43671/s`
-  - `houtou_facade_ast`: `43260/s`
+  - `houtou_prepared_ir`: `44283/s`
+  - `houtou_compiled_ir`: `44797/s`
+  - `houtou_facade_ast`: `44655/s`
 
 More recent spot checks after native child-plan/native bucket/context-cache
 work:
@@ -221,9 +224,9 @@ work:
 Interpretation:
 
 - the current compiled-IR direction is still valid
-- `abstract_with_fragment` has moved from "slightly behind" to roughly tie /
-  slight lead territory, but not by enough to justify large AST-compatible
-  complexity
+- `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
+  remaining gap should be attacked by eliminating more Perl-object allocation,
+  not by adding more AST-compatible branching
 - further wins should come from removing more runtime Perl-object work, not
   from micro-tuning legacy bucket reshaping
 

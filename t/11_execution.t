@@ -993,6 +993,58 @@ subtest 'execute compiled ir simple query' => sub {
   );
 };
 
+subtest 'compiled ir fast-path handles __typename in abstract child selections' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $LocalUser = GraphQL::Houtou::Type::Object->new(
+    name => 'TypenameUser',
+    fields => {
+      id => { type => $ID->non_null },
+      name => { type => $String->non_null },
+    },
+  );
+  my $LocalSearchResult = GraphQL::Houtou::Type::Union->new(
+    name => 'TypenameSearchResult',
+    resolve_type => sub { 'TypenameUser' },
+    types => [ $LocalUser ],
+  );
+  my $LocalQuery = GraphQL::Houtou::Type::Object->new(
+    name => 'TypenameQuery',
+    fields => {
+      searchResult => {
+        type => $LocalSearchResult,
+        resolve => sub {
+          return {
+            id => '13',
+            name => 'search:13',
+          };
+        },
+      },
+    },
+  );
+  my $local_schema = GraphQL::Houtou::Schema->new(query => $LocalQuery);
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ searchResult { __typename ... on TypenameUser { id } } }'
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $local_schema,
+    $prepared,
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs($compiled),
+    {
+      data => {
+        searchResult => {
+          __typename => 'TypenameUser',
+          id => '13',
+        },
+      },
+    },
+    'compiled ir returns __typename correctly for abstract child selections',
+  );
+};
+
 subtest 'compiled ir keeps default resolver coderef fallback semantics' => sub {
   require GraphQL::Houtou::XS::Execution;
 

@@ -298,6 +298,13 @@ entries (`--count=-6`):
   - `houtou_compiled_ir`: `45278/s`
   - `houtou_xs_ast`: `44392/s`
 
+Latest spot check after sync native executors flatten completed field envelopes
+directly into result data/errors (`--count=-6`):
+
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `44478/s`
+  - `houtou_xs_ast`: `43694/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
@@ -325,6 +332,9 @@ Interpretation:
 - native field-plan entries now also cache trivial-completion metadata so leaf
   field fast paths do not need to rediscover non-null/leaf structure on every
   execution
+- sync compiled-IR executors now flatten completed field envelopes directly
+  into result `data` / `errors` instead of always retaining per-field response
+  hashes until the final merge step
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

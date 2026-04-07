@@ -44,6 +44,7 @@ our @EXPORT_OK = qw(
   _promise_reject_xs
   _merge_completed_list_xs
   _merge_hash_xs
+  _merge_hash_with_head_xs
   _build_response_xs
   _wrap_error_xs
   _located_error_xs
@@ -199,20 +200,12 @@ sub _then_merge_hash_xs {
 sub _then_merge_hash_with_head_xs {
   my ($promise_code, $direct_data, $keys, $promise, $errors) = @_;
   return then_promise($promise_code, $promise, sub {
-    my $tail = _merge_hash_xs($keys, _promise_all_values_to_arrayref(@_), $errors);
-    my $data = {};
-
-    if (ref($direct_data) eq 'HASH') {
-      %$data = (%$data, %$direct_data);
-    }
-    if (ref($tail) eq 'HASH' && ref($tail->{data}) eq 'HASH') {
-      %$data = (%$data, %{ $tail->{data} });
-    }
-
-    return {
-      (%$tail),
-      (%$data ? (data => $data) : ()),
-    };
+    return _merge_hash_with_head_xs(
+      $direct_data,
+      $keys,
+      _promise_all_values_to_arrayref(@_),
+      $errors,
+    );
   });
 }
 

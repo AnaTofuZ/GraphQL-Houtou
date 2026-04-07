@@ -5099,6 +5099,84 @@ gql_execution_merge_hash(pTHX_ AV *keys_av, AV *values_av, AV *errors_av) {
 }
 
 static SV *
+gql_execution_merge_hash_with_head(pTHX_ HV *head_data_hv, AV *keys_av, AV *values_av, AV *errors_av) {
+  HV *result_hv = newHV();
+  HV *data_hv = newHV();
+  AV *all_errors_av = newAV();
+  I32 value_len = av_len(values_av);
+  I32 error_len = av_len(errors_av);
+  I32 i;
+
+  if (head_data_hv) {
+    HE *entry;
+    (void)hv_iterinit(head_data_hv);
+    while ((entry = hv_iternext(head_data_hv))) {
+      SV *key_sv = hv_iterkeysv(entry);
+      STRLEN key_len;
+      const char *key = SvPV(key_sv, key_len);
+      (void)hv_store(data_hv, key, (I32)key_len, newSVsv(HeVAL(entry)), 0);
+    }
+  }
+
+  for (i = 0; i <= error_len; i++) {
+    SV **error_svp = av_fetch(errors_av, i, 0);
+    if (error_svp) {
+      av_push(all_errors_av, newSVsv(*error_svp));
+    }
+  }
+
+  for (i = value_len; i >= 0; i--) {
+    SV **key_svp = av_fetch(keys_av, i, 0);
+    SV **value_svp = av_fetch(values_av, i, 0);
+    HV *value_hv;
+    SV **data_svp;
+    SV **child_errors_svp;
+    AV *child_errors_av;
+    I32 child_error_len;
+    I32 j;
+    STRLEN key_len;
+    const char *key;
+
+    if (!key_svp || !value_svp || !SvROK(*value_svp) || SvTYPE(SvRV(*value_svp)) != SVt_PVHV) {
+      continue;
+    }
+
+    value_hv = (HV *)SvRV(*value_svp);
+    data_svp = hv_fetch(value_hv, "data", 4, 0);
+    if (key_svp && SvOK(*key_svp) && data_svp) {
+      key = SvPV(*key_svp, key_len);
+      (void)hv_store(data_hv, key, (I32)key_len, newSVsv(*data_svp), 0);
+    }
+
+    child_errors_svp = hv_fetch(value_hv, "errors", 6, 0);
+    if (child_errors_svp && SvROK(*child_errors_svp) && SvTYPE(SvRV(*child_errors_svp)) == SVt_PVAV) {
+      child_errors_av = (AV *)SvRV(*child_errors_svp);
+      child_error_len = av_len(child_errors_av);
+      for (j = 0; j <= child_error_len; j++) {
+        SV **child_error_svp = av_fetch(child_errors_av, j, 0);
+        if (child_error_svp) {
+          av_push(all_errors_av, newSVsv(*child_error_svp));
+        }
+      }
+    }
+  }
+
+  if (HvUSEDKEYS(data_hv) > 0) {
+    gql_store_sv(result_hv, "data", newRV_noinc((SV *)data_hv));
+  } else {
+    SvREFCNT_dec((SV *)data_hv);
+  }
+
+  if (av_len(all_errors_av) >= 0) {
+    gql_store_sv(result_hv, "errors", newRV_noinc((SV *)all_errors_av));
+  } else {
+    SvREFCNT_dec((SV *)all_errors_av);
+  }
+
+  return newRV_noinc((SV *)result_hv);
+}
+
+static SV *
 gql_execution_get_field_def(pTHX_ SV *schema, SV *parent_type, SV *field_name) {
   HV *schema_hv;
   HV *runtime_cache_hv;

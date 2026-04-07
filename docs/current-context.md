@@ -357,6 +357,9 @@ Interpretation:
   in direct `data` accumulation while only promise-bearing fields flow through
   `Promise::Adapter::all`; the final merge helper recombines the sync head with
   the async tail instead of forcing everything back through per-field envelopes
+- the promise-tail recombination step is now also in XS: Perl still owns the
+  `then_promise(...)` control flow, but `_then_merge_hash_with_head_xs` no
+  longer rebuilds hashes in Perl after fulfillment
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching
@@ -367,9 +370,9 @@ Latest promise-path spot checks after preserving sync native head fields during
 compiled-IR promise merges (`--count=-6`):
 
 - `async_scalar`
-  - `houtou_compiled_ir`: `83369/s`
+  - `houtou_compiled_ir`: `81920/s`
 - `async_list`
-  - `houtou_compiled_ir`: `47305/s`
+  - `houtou_compiled_ir`: `46265/s`
 
 ## Testing Rule
 

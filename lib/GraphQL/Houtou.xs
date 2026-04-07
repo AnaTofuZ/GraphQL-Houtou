@@ -761,6 +761,35 @@ _merge_hash_xs(keys, values, errors)
     RETVAL
 
 SV *
+_merge_hash_with_head_xs(head_data, keys, values, errors)
+    SV *head_data
+    SV *keys
+    SV *values
+    SV *errors
+  CODE:
+    if (!SvROK(head_data) || SvTYPE(SvRV(head_data)) != SVt_PVHV) {
+      croak("head_data must be a hash reference");
+    }
+    if (!SvROK(keys) || SvTYPE(SvRV(keys)) != SVt_PVAV) {
+      croak("keys must be an array reference");
+    }
+    if (!SvROK(values) || SvTYPE(SvRV(values)) != SVt_PVAV) {
+      croak("values must be an array reference");
+    }
+    if (!SvROK(errors) || SvTYPE(SvRV(errors)) != SVt_PVAV) {
+      croak("errors must be an array reference");
+    }
+    RETVAL = gql_execution_merge_hash_with_head(
+      aTHX_
+      (HV *)SvRV(head_data),
+      (AV *)SvRV(keys),
+      (AV *)SvRV(values),
+      (AV *)SvRV(errors)
+    );
+  OUTPUT:
+    RETVAL
+
+SV *
 _build_response_xs(result, force_data = 0)
     SV *result
     int force_data

@@ -178,6 +178,10 @@ Known shape of results after latest landed work:
 - `compiled_ir` now has direct fast paths for trivial default-field resolution
   and `__typename` meta fields, so more child fields avoid allocating
   `resolve_info` / `path` objects in the happy path
+- `compiled_ir` now carries lazy per-field resolve-info state through
+  completion, so non-resolver object/list/abstract completion can defer
+  `resolve_info` materialization until a callback or PP fallback actually needs
+  it
 - runtime-cache work targets AST and IR paths simultaneously
 - abstract/fragment-heavy tuning on AST paths is now close to a diminishing
   returns region
@@ -221,9 +225,22 @@ work:
   - `houtou_compiled_ir`: `43320/s`
   - `houtou_xs_ast`: `43114/s`
 
+Latest spot check after lazy `resolve_info` materialization in field
+completion (`--count=-6`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir`: `81662/s`
+  - `houtou_xs_ast`: `78695/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `43114/s`
+  - `houtou_xs_ast`: `42775/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
+- lazy `resolve_info` materialization is a better fit than adding more
+  AST-compatible special cases, because it removes Perl `HV` allocation from
+  both nested-object and abstract completion hot paths
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

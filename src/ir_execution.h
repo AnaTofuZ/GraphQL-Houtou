@@ -2997,6 +2997,7 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
     SV *path_copy_sv = NULL;
     SV *info_sv = NULL;
     SV *args_sv = NULL;
+    gql_execution_lazy_resolve_info_t lazy_info;
     SV **type_svp;
     SV **node_args_svp;
     SV **field_args_svp;
@@ -3085,6 +3086,11 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
       }
       continue;
     }
+    Zero(&lazy_info, 1, gql_execution_lazy_resolve_info_t);
+    lazy_info.context_sv = context_sv;
+    lazy_info.parent_type_sv = compiled->root_type_sv;
+    lazy_info.field_def_sv = field_def_sv;
+    lazy_info.nodes_sv = nodes_sv;
     if (gql_execution_try_typename_meta_field_fast(aTHX_ compiled->root_type_sv, entry->field_name_sv, *type_svp, &completed_sv)) {
       goto have_completed;
     }
@@ -3106,21 +3112,14 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
       }
     }
 
-    if (entry->path_sv && SvOK(entry->path_sv)) {
-      path_copy_sv = entry->path_sv;
-    } else {
-      path_copy_sv = gql_execution_path_with_key(aTHX_ path_sv, entry->result_name_sv);
-    }
-    info_sv = gql_execution_build_resolve_info(
-      aTHX_
-      context_sv,
-      compiled->root_type_sv,
-      field_def_sv,
-      path_copy_sv,
-      nodes_sv
-    );
-
     if (!used_fast_default_resolve) {
+      if (entry->path_sv && SvOK(entry->path_sv)) {
+        path_copy_sv = entry->path_sv;
+      } else {
+        path_copy_sv = gql_execution_path_with_key(aTHX_ path_sv, entry->result_name_sv);
+      }
+      lazy_info.path_sv = path_copy_sv;
+      info_sv = gql_execution_lazy_resolve_info_materialize(aTHX_ &lazy_info);
       field_args_svp = hv_fetch(field_def_hv, "args", 4, 0);
       node_args_svp = hv_fetch(field_node_hv, "arguments", 9, 0);
       if ((!field_args_svp || !SvOK(*field_args_svp)
@@ -3152,13 +3151,22 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
       );
     }
 
-    completed_sv = gql_execution_complete_value_catching_error_xs_impl(
+    if (!path_copy_sv) {
+      if (entry->path_sv && SvOK(entry->path_sv)) {
+        path_copy_sv = entry->path_sv;
+      } else {
+        path_copy_sv = gql_execution_path_with_key(aTHX_ path_sv, entry->result_name_sv);
+      }
+      lazy_info.path_sv = path_copy_sv;
+    }
+    completed_sv = gql_execution_complete_field_value_catching_error_xs_impl(
       aTHX_
       context_sv,
-      *type_svp,
+      compiled->root_type_sv,
+      field_def_sv,
       nodes_sv,
-      info_sv,
       path_copy_sv,
+      &lazy_info,
       result_sv
     );
 
@@ -3181,8 +3189,8 @@ have_completed:
     if (owns_nodes_sv) {
       SvREFCNT_dec(nodes_sv);
     }
-    if (info_sv) {
-      SvREFCNT_dec(info_sv);
+    if (lazy_info.info_sv) {
+      SvREFCNT_dec(lazy_info.info_sv);
     }
     if (owns_args_sv) {
       SvREFCNT_dec(args_sv);

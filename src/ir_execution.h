@@ -44,8 +44,11 @@ static HV *gql_ir_prepare_executable_root_field_plan_hv(pTHX_ SV *schema, gql_ir
 static gql_ir_fragment_definition_t *gql_ir_prepare_find_fragment_by_name(pTHX_ gql_ir_prepared_exec_t *prepared, const char *name, STRLEN name_len);
 static SV *gql_ir_fragment_definitions_to_legacy_map_sv(pTHX_ gql_ir_prepared_exec_t *prepared);
 static SV *gql_ir_operation_to_legacy_sv(pTHX_ gql_ir_prepared_exec_t *prepared, gql_ir_operation_definition_t *operation, SV *operation_name);
-static void gql_ir_attach_compiled_field_defs_to_nodes(pTHX_ SV *schema, SV *parent_type, SV *nodes_sv);
+static void gql_ir_attach_compiled_field_defs_to_selections(pTHX_ SV *schema, SV *parent_type, AV *selections_av, SV *fragments_sv);
+static void gql_ir_attach_compiled_field_defs_to_nodes(pTHX_ SV *schema, SV *parent_type, SV *nodes_sv, SV *fragments_sv);
 static void gql_ir_attach_compiled_field_defs_to_fragments(pTHX_ SV *schema, SV *fragments_sv);
+static void gql_ir_attach_compiled_concrete_subfields_to_node(pTHX_ SV *schema, SV *abstract_type, SV *fragments_sv, SV *selection_sv);
+static void gql_ir_attach_compiled_field_defs_to_selection_sv(pTHX_ SV *schema, SV *parent_type, SV *selection_sv, SV *fragments_sv);
 
 static void
 gql_ir_compiled_exec_destroy(gql_ir_compiled_exec_t *compiled) {
@@ -152,7 +155,7 @@ gql_ir_compile_executable_plan_handle_sv(pTHX_ SV *schema, SV *prepared_handle_s
   ));
   compiled->root_fields_sv = gql_ir_prepare_executable_root_legacy_fields_sv(aTHX_ schema, prepared, operation_name);
   compiled->root_type_sv = gql_execution_call_schema_root_type(aTHX_ schema, operation_type);
-  gql_ir_attach_compiled_field_defs_to_nodes(aTHX_ schema, compiled->root_type_sv, compiled->root_fields_sv);
+  gql_ir_attach_compiled_field_defs_to_nodes(aTHX_ schema, compiled->root_type_sv, compiled->root_fields_sv, compiled->fragments_sv);
 
   stash = gv_stashpv("GraphQL::Houtou::XS::CompiledIR", GV_ADD);
   compiled_inner_sv = newSVuv(PTR2UV(compiled));
@@ -937,7 +940,7 @@ static int gql_ir_selection_set_is_plain_fields(gql_ir_selection_set_t *selectio
 static SV *gql_ir_selection_set_to_legacy_fields_sv(pTHX_ gql_ir_document_t *document, gql_ir_selection_set_t *selection_set);
 
 static SV *
-gql_ir_compiled_attach_concrete_output_type(pTHX_ SV *field_def_sv) {
+gql_ir_compiled_unwrap_output_type(pTHX_ SV *field_def_sv) {
   SV **type_svp;
   SV *current;
 
@@ -960,6 +963,17 @@ gql_ir_compiled_attach_concrete_output_type(pTHX_ SV *field_def_sv) {
     current = inner;
   }
 
+  return current;
+}
+
+static SV *
+gql_ir_compiled_attach_concrete_output_type(pTHX_ SV *field_def_sv) {
+  SV *current = gql_ir_compiled_unwrap_output_type(aTHX_ field_def_sv);
+
+  if (current == &PL_sv_undef) {
+    return &PL_sv_undef;
+  }
+
   if (sv_derived_from(current, "GraphQL::Houtou::Type::Object")
       || sv_derived_from(current, "GraphQL::Type::Object")) {
     return current;
@@ -970,10 +984,208 @@ gql_ir_compiled_attach_concrete_output_type(pTHX_ SV *field_def_sv) {
 }
 
 static void
+gql_ir_attach_compiled_concrete_subfields_to_node(
+  pTHX_ SV *schema,
+  SV *abstract_type,
+  SV *fragments_sv,
+  SV *selection_sv
+) {
+  SV **child_selections_svp;
+  HV *selection_hv;
+  SV *possible_types_sv;
+  HV *compiled_hv;
+  HV *context_hv;
+  SV *context_sv;
+  I32 possible_i;
+  I32 possible_len;
+
+  if (!selection_sv || !SvROK(selection_sv) || SvTYPE(SvRV(selection_sv)) != SVt_PVHV) {
+    return;
+  }
+
+  selection_hv = (HV *)SvRV(selection_sv);
+  child_selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
+  if (!child_selections_svp
+      || !SvROK(*child_selections_svp)
+      || SvTYPE(SvRV(*child_selections_svp)) != SVt_PVAV) {
+    return;
+  }
+
+  possible_types_sv = gql_execution_schema_possible_types_sv(aTHX_ schema, abstract_type);
+  if (possible_types_sv == &PL_sv_undef
+      || !SvROK(possible_types_sv)
+      || SvTYPE(SvRV(possible_types_sv)) != SVt_PVAV) {
+    if (possible_types_sv != &PL_sv_undef) {
+      SvREFCNT_dec(possible_types_sv);
+    }
+    return;
+  }
+
+  compiled_hv = newHV();
+  context_hv = newHV();
+  gql_store_sv(context_hv, "schema", gql_execution_share_or_copy_sv(schema));
+  {
+    HV *runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ schema);
+    if (runtime_cache_hv) {
+      gql_store_sv(context_hv, "runtime_cache", newRV_inc((SV *)runtime_cache_hv));
+    }
+  }
+  gql_store_sv(
+    context_hv,
+    "fragments",
+    (fragments_sv && SvOK(fragments_sv))
+      ? gql_execution_share_or_copy_sv(fragments_sv)
+      : newRV_noinc((SV *)newHV())
+  );
+  gql_store_sv(context_hv, "variable_values", newRV_noinc((SV *)newHV()));
+  context_sv = newRV_noinc((SV *)context_hv);
+
+  possible_len = av_len((AV *)SvRV(possible_types_sv));
+  for (possible_i = 0; possible_i <= possible_len; possible_i++) {
+    SV **possible_svp = av_fetch((AV *)SvRV(possible_types_sv), possible_i, 0);
+    SV *possible_type;
+
+    if (!possible_svp || !SvROK(*possible_svp)) {
+      continue;
+    }
+
+    possible_type = *possible_svp;
+    if (!(sv_derived_from(possible_type, "GraphQL::Houtou::Type::Object")
+          || sv_derived_from(possible_type, "GraphQL::Type::Object"))) {
+      continue;
+    }
+
+    {
+      AV *node_bucket_av = newAV();
+      SV *node_bucket_sv;
+      SV *compiled_fields_sv;
+      SV *type_name_sv;
+      int ok = 0;
+
+      av_push(node_bucket_av, newSVsv(selection_sv));
+      node_bucket_sv = newRV_noinc((SV *)node_bucket_av);
+      compiled_fields_sv = gql_execution_collect_simple_object_fields(
+        aTHX_
+        context_sv,
+        possible_type,
+        node_bucket_sv,
+        &ok
+      );
+      SvREFCNT_dec(node_bucket_sv);
+
+      if (!ok || compiled_fields_sv == &PL_sv_undef || !SvOK(compiled_fields_sv)) {
+        continue;
+      }
+
+      type_name_sv = gql_execution_type_name_sv(aTHX_ possible_type);
+      if (!type_name_sv || !SvOK(type_name_sv)) {
+        SvREFCNT_dec(compiled_fields_sv);
+        continue;
+      }
+
+      (void)hv_store_ent(compiled_hv, type_name_sv, compiled_fields_sv, 0);
+      SvREFCNT_dec(type_name_sv);
+    }
+  }
+
+  if (HvUSEDKEYS(compiled_hv) > 0) {
+    gql_store_sv(selection_hv, "compiled_concrete_subfields", newRV_noinc((SV *)compiled_hv));
+  } else {
+    SvREFCNT_dec((SV *)compiled_hv);
+  }
+
+  SvREFCNT_dec(context_sv);
+  SvREFCNT_dec(possible_types_sv);
+}
+
+static void
+gql_ir_attach_compiled_field_defs_to_selection_sv(
+  pTHX_ SV *schema,
+  SV *parent_type,
+  SV *selection_sv,
+  SV *fragments_sv
+) {
+  HV *selection_hv;
+  SV **kind_svp;
+  STRLEN kind_len;
+  const char *kind_pv;
+
+  if (!parent_type || !SvOK(parent_type) || !selection_sv || !SvROK(selection_sv) || SvTYPE(SvRV(selection_sv)) != SVt_PVHV) {
+    return;
+  }
+
+  selection_hv = (HV *)SvRV(selection_sv);
+  kind_svp = hv_fetch(selection_hv, "kind", 4, 0);
+  if (!kind_svp || !SvOK(*kind_svp)) {
+    return;
+  }
+  kind_pv = SvPV(*kind_svp, kind_len);
+
+  if (kind_len == 5 && strEQ(kind_pv, "field")) {
+    SV **name_svp = hv_fetch(selection_hv, "name", 4, 0);
+    SV **child_selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
+
+    if (name_svp && SvOK(*name_svp)) {
+      SV *field_def_sv = gql_execution_get_field_def(aTHX_ schema, parent_type, *name_svp);
+      if (field_def_sv && SvOK(field_def_sv) && field_def_sv != &PL_sv_undef) {
+        SV *output_type_sv;
+        SV *child_parent_type_sv;
+        gql_store_sv(selection_hv, "compiled_field_def", field_def_sv);
+        output_type_sv = gql_ir_compiled_unwrap_output_type(aTHX_ field_def_sv);
+        child_parent_type_sv = gql_ir_compiled_attach_concrete_output_type(aTHX_ field_def_sv);
+        if (child_parent_type_sv != &PL_sv_undef
+            && child_selections_svp
+            && SvROK(*child_selections_svp)
+            && SvTYPE(SvRV(*child_selections_svp)) == SVt_PVAV) {
+          gql_ir_attach_compiled_field_defs_to_selections(
+            aTHX_
+            schema,
+            child_parent_type_sv,
+            (AV *)SvRV(*child_selections_svp),
+            fragments_sv
+          );
+          SvREFCNT_dec(child_parent_type_sv);
+        } else if (output_type_sv != &PL_sv_undef
+                   && (sv_does(output_type_sv, "GraphQL::Houtou::Role::Abstract")
+                       || sv_does(output_type_sv, "GraphQL::Role::Abstract"))) {
+          gql_ir_attach_compiled_concrete_subfields_to_node(
+            aTHX_
+            schema,
+            output_type_sv,
+            fragments_sv,
+            selection_sv
+          );
+        }
+        if (output_type_sv != &PL_sv_undef) {
+          SvREFCNT_dec(output_type_sv);
+        }
+      }
+    }
+    return;
+  }
+
+  if (kind_len == 15 && strEQ(kind_pv, "inline_fragment")) {
+    SV **child_selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
+    if (child_selections_svp
+        && SvROK(*child_selections_svp)
+        && SvTYPE(SvRV(*child_selections_svp)) == SVt_PVAV) {
+      gql_ir_attach_compiled_field_defs_to_selections(
+        aTHX_
+        schema,
+        parent_type,
+        (AV *)SvRV(*child_selections_svp),
+        fragments_sv
+      );
+    }
+  }
+}
+
+static void
 gql_ir_attach_compiled_field_defs_to_selections(
   pTHX_ SV *schema,
   SV *parent_type,
-  AV *selections_av
+  AV *selections_av,
+  SV *fragments_sv
 ) {
   I32 selection_i;
   I32 selection_len;
@@ -985,67 +1197,23 @@ gql_ir_attach_compiled_field_defs_to_selections(
   selection_len = av_len(selections_av);
   for (selection_i = 0; selection_i <= selection_len; selection_i++) {
     SV **selection_svp = av_fetch(selections_av, selection_i, 0);
-    HV *selection_hv;
-    SV **kind_svp;
-    STRLEN kind_len;
-    const char *kind_pv;
 
-    if (!selection_svp || !SvROK(*selection_svp) || SvTYPE(SvRV(*selection_svp)) != SVt_PVHV) {
+    if (!selection_svp) {
       continue;
     }
 
-    selection_hv = (HV *)SvRV(*selection_svp);
-    kind_svp = hv_fetch(selection_hv, "kind", 4, 0);
-    if (!kind_svp || !SvOK(*kind_svp)) {
-      continue;
-    }
-    kind_pv = SvPV(*kind_svp, kind_len);
-
-    if (kind_len == 5 && strEQ(kind_pv, "field")) {
-      SV **name_svp = hv_fetch(selection_hv, "name", 4, 0);
-      SV **child_selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
-
-      if (name_svp && SvOK(*name_svp)) {
-        SV *field_def_sv = gql_execution_get_field_def(aTHX_ schema, parent_type, *name_svp);
-        if (field_def_sv && SvOK(field_def_sv) && field_def_sv != &PL_sv_undef) {
-          SV *child_parent_type_sv;
-          gql_store_sv(selection_hv, "compiled_field_def", field_def_sv);
-          child_parent_type_sv = gql_ir_compiled_attach_concrete_output_type(aTHX_ field_def_sv);
-          if (child_parent_type_sv != &PL_sv_undef
-              && child_selections_svp
-              && SvROK(*child_selections_svp)
-              && SvTYPE(SvRV(*child_selections_svp)) == SVt_PVAV) {
-            gql_ir_attach_compiled_field_defs_to_selections(
-              aTHX_
-              schema,
-              child_parent_type_sv,
-              (AV *)SvRV(*child_selections_svp)
-            );
-            SvREFCNT_dec(child_parent_type_sv);
-          }
-        }
-      }
-      continue;
-    }
-
-    if (kind_len == 15 && strEQ(kind_pv, "inline_fragment")) {
-      SV **child_selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
-      if (child_selections_svp
-          && SvROK(*child_selections_svp)
-          && SvTYPE(SvRV(*child_selections_svp)) == SVt_PVAV) {
-        gql_ir_attach_compiled_field_defs_to_selections(
-          aTHX_
-          schema,
-          parent_type,
-          (AV *)SvRV(*child_selections_svp)
-        );
-      }
-    }
+    gql_ir_attach_compiled_field_defs_to_selection_sv(
+      aTHX_
+      schema,
+      parent_type,
+      *selection_svp,
+      fragments_sv
+    );
   }
 }
 
 static void
-gql_ir_attach_compiled_field_defs_to_nodes(pTHX_ SV *schema, SV *parent_type, SV *nodes_sv) {
+gql_ir_attach_compiled_field_defs_to_nodes(pTHX_ SV *schema, SV *parent_type, SV *nodes_sv, SV *fragments_sv) {
   AV *nodes_av;
   I32 node_i;
   I32 node_len;
@@ -1059,25 +1227,18 @@ gql_ir_attach_compiled_field_defs_to_nodes(pTHX_ SV *schema, SV *parent_type, SV
 
   for (node_i = 0; node_i <= node_len; node_i++) {
     SV **node_svp = av_fetch(nodes_av, node_i, 0);
-    HV *node_hv;
-    SV **selections_svp;
 
-    if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) {
+    if (!node_svp) {
       continue;
     }
 
-    node_hv = (HV *)SvRV(*node_svp);
-    selections_svp = hv_fetch(node_hv, "selections", 10, 0);
-    if (selections_svp
-        && SvROK(*selections_svp)
-        && SvTYPE(SvRV(*selections_svp)) == SVt_PVAV) {
-      gql_ir_attach_compiled_field_defs_to_selections(
-        aTHX_
-        schema,
-        parent_type,
-        (AV *)SvRV(*selections_svp)
-      );
-    }
+    gql_ir_attach_compiled_field_defs_to_selection_sv(
+      aTHX_
+      schema,
+      parent_type,
+      *node_svp,
+      fragments_sv
+    );
   }
 }
 
@@ -1152,7 +1313,8 @@ gql_ir_attach_compiled_field_defs_to_fragments(pTHX_ SV *schema, SV *fragments_s
       aTHX_
       schema,
       parent_type_sv,
-      (AV *)SvRV(*selections_svp)
+      (AV *)SvRV(*selections_svp),
+      fragments_sv
     );
     SvREFCNT_dec(parent_type_sv);
   }

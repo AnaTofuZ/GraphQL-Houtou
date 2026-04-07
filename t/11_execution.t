@@ -1227,4 +1227,29 @@ subtest 'execute compiled ir reuses compiled fragment buckets' => sub {
   );
 };
 
+subtest 'execute compiled ir reuses concrete subfields for abstract selections' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ auto_search_result { ... on AutoNamedEntity { name } ... on AutoCheckedUser { id } } }'
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $schema,
+    $prepared,
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs($compiled),
+    {
+      data => {
+        auto_search_result => {
+          name => 'auto-search:15',
+          id => '15',
+        },
+      },
+    },
+    'compiled ir executes abstract selections through cached concrete subfield buckets',
+  );
+};
+
 done_testing;

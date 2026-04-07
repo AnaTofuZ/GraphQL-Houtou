@@ -248,3 +248,15 @@ Best next move:
 - keep improving runtime schema snapshots so AST and IR paths both benefit
 - focus next on abstract/concrete subtree reuse rather than fragment caching
   alone
+
+## Breaking-API Speed Notes
+
+If public compatibility constraints were relaxed, the highest-probability extra
+speed wins would likely be:
+
+- execute against a frozen XS/runtime schema snapshot instead of Moo/Type::Tiny
+  objects
+- expose a prepared/compiled query handle whose variable/default coercion is
+  prevalidated against that runtime schema
+- allow an execution-only node/selection shape instead of graphql-perl
+  compatibility hashes for resolve info, field nodes, and fragment maps

@@ -350,6 +350,18 @@ produces one (`--count=-6`):
   - `houtou_compiled_ir`: `79906/s`
   - `houtou_facade_ast`: `79379/s`
 
+Latest spot check after adding a compiled-IR-only sync fast path that consumes
+abstract root-field native child plans directly back into the parent result
+writer instead of round-tripping them through a field-level envelope
+(`--count=-6`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir`: `81660/s`
+  - `houtou_xs_ast`: `77825/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `45366/s`
+  - `houtou_xs_ast`: `43484/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
@@ -405,6 +417,10 @@ Interpretation:
 - native root/child executors now keep `errors` arrays lazy as well; sync and
   promise paths only allocate Perl `AV`s for errors when a child completion
   actually returns them, instead of paying that cost unconditionally
+- compiled-IR sync root execution now also has an abstract-field fast path that
+  recognizes `runtime type -> native child plan` and feeds the child result
+  straight back into the parent writer, which is the first concrete step toward
+  a true native abstract executor instead of a field-level completion envelope
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

@@ -3010,11 +3010,38 @@ gql_execution_collect_concrete_compiled_object_fields(pTHX_ SV *object_type, SV 
   for (node_i = 0; node_i <= node_len; node_i++) {
     SV **node_svp = av_fetch((AV *)SvRV(nodes), node_i, 0);
     HV *node_hv;
+    gql_ir_compiled_concrete_plan_table_t *compiled_plan_table;
     SV **compiled_concrete_svp;
     HE *compiled_he;
+    UV plan_i;
 
     if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) {
       continue;
+    }
+
+    compiled_plan_table = gql_ir_get_concrete_field_plan_table(aTHX_ *node_svp);
+    if (compiled_plan_table) {
+      int found = 0;
+      for (plan_i = 0; plan_i < compiled_plan_table->count; plan_i++) {
+        gql_ir_compiled_concrete_plan_entry_t *entry = &compiled_plan_table->entries[plan_i];
+
+        if (!entry->possible_type_sv || !entry->compiled_fields_sv) {
+          continue;
+        }
+        if (object_type == entry->possible_type_sv
+            || (SvROK(object_type)
+                && SvROK(entry->possible_type_sv)
+                && SvRV(object_type) == SvRV(entry->possible_type_sv))) {
+          if (!gql_execution_merge_compiled_fields_into(aTHX_ field_names_av, nodes_defs_hv, entry->compiled_fields_sv)) {
+            goto fallback;
+          }
+          found = 1;
+          break;
+        }
+      }
+      if (found) {
+        continue;
+      }
     }
 
     node_hv = (HV *)SvRV(*node_svp);

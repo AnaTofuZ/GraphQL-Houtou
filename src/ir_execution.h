@@ -1255,6 +1255,10 @@ gql_ir_compiled_concrete_plan_table_destroy(gql_ir_compiled_concrete_plan_table_
         SvREFCNT_dec(entry->possible_type_sv);
         entry->possible_type_sv = NULL;
       }
+      if (entry->compiled_fields_sv) {
+        SvREFCNT_dec(entry->compiled_fields_sv);
+        entry->compiled_fields_sv = NULL;
+      }
       if (entry->field_plan_sv) {
         SvREFCNT_dec(entry->field_plan_sv);
         entry->field_plan_sv = NULL;
@@ -1609,7 +1613,6 @@ gql_ir_attach_compiled_concrete_subfields_to_node(
   SV **child_selections_svp;
   HV *selection_hv;
   SV *possible_types_sv;
-  HV *compiled_hv;
   HV *context_hv;
   SV *context_sv;
   gql_ir_compiled_concrete_plan_table_t *compiled_plan_table = NULL;
@@ -1639,7 +1642,6 @@ gql_ir_attach_compiled_concrete_subfields_to_node(
     return;
   }
 
-  compiled_hv = newHV();
   context_hv = newHV();
   {
     UV possible_count = possible_types_sv && SvROK(possible_types_sv) && SvTYPE(SvRV(possible_types_sv)) == SVt_PVAV
@@ -1717,24 +1719,22 @@ gql_ir_attach_compiled_concrete_subfields_to_node(
         possible_type,
         compiled_fields_sv
       );
-      (void)hv_store_ent(compiled_hv, type_name_sv, compiled_fields_sv, 0);
       if (compiled_plan_sv != &PL_sv_undef && SvOK(compiled_plan_sv)) {
         if (compiled_plan_table && compiled_plan_table->entries) {
           gql_ir_compiled_concrete_plan_entry_t *entry = &compiled_plan_table->entries[compiled_plan_table_count++];
           entry->possible_type_sv = gql_execution_share_or_copy_sv(possible_type);
+          entry->compiled_fields_sv = gql_execution_share_or_copy_sv(compiled_fields_sv);
           entry->field_plan_sv = gql_execution_share_or_copy_sv(compiled_plan_sv);
         }
         SvREFCNT_dec(compiled_plan_sv);
+      } else if (compiled_plan_sv != &PL_sv_undef) {
+        SvREFCNT_dec(compiled_plan_sv);
       }
+      SvREFCNT_dec(compiled_fields_sv);
       SvREFCNT_dec(type_name_sv);
     }
   }
 
-  if (HvUSEDKEYS(compiled_hv) > 0) {
-    gql_store_sv(selection_hv, "compiled_concrete_subfields", newRV_noinc((SV *)compiled_hv));
-  } else {
-    SvREFCNT_dec((SV *)compiled_hv);
-  }
   if (compiled_plan_table) {
     compiled_plan_table->count = compiled_plan_table_count;
     if (compiled_plan_table_count > 0) {

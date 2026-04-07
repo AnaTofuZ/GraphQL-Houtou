@@ -2693,6 +2693,60 @@ gql_execution_node_should_include_simple(pTHX_ SV *context, SV *node, int *ok) {
 }
 
 static int
+gql_execution_merge_compiled_field_bucket_table_into(
+  pTHX_ AV *field_names_av,
+  HV *nodes_defs_hv,
+  gql_ir_compiled_field_bucket_table_t *bucket_table
+) {
+  UV field_i;
+
+  if (!bucket_table) {
+    return 0;
+  }
+
+  for (field_i = 0; field_i < bucket_table->count; field_i++) {
+    gql_ir_compiled_field_bucket_entry_t *entry = &bucket_table->entries[field_i];
+    HE *target_he;
+    AV *target_bucket;
+    AV *source_bucket;
+    I32 bucket_i;
+    I32 bucket_len;
+
+    if (!entry->result_name_sv || !entry->nodes_sv
+        || !SvOK(entry->result_name_sv)
+        || !SvROK(entry->nodes_sv)
+        || SvTYPE(SvRV(entry->nodes_sv)) != SVt_PVAV) {
+      return 0;
+    }
+
+    source_bucket = (AV *)SvRV(entry->nodes_sv);
+    target_he = hv_fetch_ent(nodes_defs_hv, entry->result_name_sv, 0, 0);
+    if (!target_he) {
+      SV *name_key_sv;
+      target_bucket = newAV();
+      name_key_sv = newSVsv(entry->result_name_sv);
+      (void)hv_store_ent(nodes_defs_hv, name_key_sv, newRV_noinc((SV *)target_bucket), 0);
+      SvREFCNT_dec(name_key_sv);
+      av_push(field_names_av, SvREFCNT_inc_simple_NN(entry->result_name_sv));
+    } else if (SvROK(HeVAL(target_he)) && SvTYPE(SvRV(HeVAL(target_he))) == SVt_PVAV) {
+      target_bucket = (AV *)SvRV(HeVAL(target_he));
+    } else {
+      return 0;
+    }
+
+    bucket_len = av_len(source_bucket);
+    for (bucket_i = 0; bucket_i <= bucket_len; bucket_i++) {
+      SV **bucket_node_svp = av_fetch(source_bucket, bucket_i, 0);
+      if (bucket_node_svp && SvOK(*bucket_node_svp)) {
+        av_push(target_bucket, SvREFCNT_inc_simple_NN(*bucket_node_svp));
+      }
+    }
+  }
+
+  return 1;
+}
+
+static int
 gql_execution_merge_compiled_fields_into(
   pTHX_ AV *field_names_av,
   HV *nodes_defs_hv,
@@ -2705,6 +2759,11 @@ gql_execution_merge_compiled_fields_into(
   HV *compiled_defs_hv;
   I32 name_i;
   I32 name_len;
+
+  gql_ir_compiled_field_bucket_table_t *bucket_table = gql_ir_get_compiled_field_bucket_table(aTHX_ compiled_fields_sv);
+  if (bucket_table) {
+    return gql_execution_merge_compiled_field_bucket_table_into(aTHX_ field_names_av, nodes_defs_hv, bucket_table);
+  }
 
   if (!compiled_fields_sv || !SvROK(compiled_fields_sv) || SvTYPE(SvRV(compiled_fields_sv)) != SVt_PVAV) {
     return 0;
@@ -2859,6 +2918,15 @@ gql_execution_collect_simple_selections(
         }
         SvREFCNT_dec(matches);
       }
+      {
+        gql_ir_compiled_field_bucket_table_t *bucket_table = gql_ir_get_compiled_field_bucket_table(aTHX_ *selection_svp);
+        if (bucket_table) {
+          if (!gql_execution_merge_compiled_field_bucket_table_into(aTHX_ field_names_av, nodes_defs_hv, bucket_table)) {
+            return 0;
+          }
+          continue;
+        }
+      }
       if (compiled_fields_svp && SvOK(*compiled_fields_svp)) {
         if (!gql_execution_merge_compiled_fields_into(aTHX_ field_names_av, nodes_defs_hv, *compiled_fields_svp)) {
           return 0;
@@ -2914,6 +2982,15 @@ gql_execution_collect_simple_selections(
         }
         SvREFCNT_dec(matches);
       }
+      {
+        gql_ir_compiled_field_bucket_table_t *bucket_table = gql_ir_get_compiled_field_bucket_table(aTHX_ fragment_sv);
+        if (bucket_table) {
+          if (!gql_execution_merge_compiled_field_bucket_table_into(aTHX_ field_names_av, nodes_defs_hv, bucket_table)) {
+            return 0;
+          }
+          continue;
+        }
+      }
       compiled_fields_svp = hv_fetch(fragment_hv, "compiled_fields", 15, 0);
       if (compiled_fields_svp && SvOK(*compiled_fields_svp)) {
         if (!gql_execution_merge_compiled_fields_into(aTHX_ field_names_av, nodes_defs_hv, *compiled_fields_svp)) {
@@ -2957,8 +3034,17 @@ gql_execution_collect_compiled_object_fields(pTHX_ SV *nodes, int *ok) {
   for (node_i = 0; node_i <= node_len; node_i++) {
     SV **node_svp = av_fetch((AV *)SvRV(nodes), node_i, 0);
     HV *node_hv;
+    gql_ir_compiled_field_bucket_table_t *bucket_table;
     SV **compiled_fields_svp;
     if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) {
+      continue;
+    }
+
+    bucket_table = gql_ir_get_compiled_field_bucket_table(aTHX_ *node_svp);
+    if (bucket_table) {
+      if (!gql_execution_merge_compiled_field_bucket_table_into(aTHX_ field_names_av, nodes_defs_hv, bucket_table)) {
+        goto fallback;
+      }
       continue;
     }
 

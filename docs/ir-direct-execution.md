@@ -197,6 +197,8 @@ Recent follow-up on that direction:
   single-node concrete cases
 - compiled abstract child direct-plan lookup is also moving away from
   type-name Perl hash lookup toward native node-attached tables
+- plain compiled field buckets on compiled nodes/fragments are likewise moving
+  toward native bucket tables that the merge path can consume directly
 - compiled handles are moving away from retaining eager legacy
   `operation` / `fragments` / `root_fields` state
 - those legacy structures are increasingly treated as lazy compatibility

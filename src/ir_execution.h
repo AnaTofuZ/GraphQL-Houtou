@@ -50,6 +50,9 @@ static gql_ir_compiled_root_field_plan_t *gql_ir_compiled_root_field_plan_from_s
 static void gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan);
 static void gql_ir_compiled_concrete_plan_table_destroy(gql_ir_compiled_concrete_plan_table_t *table);
 static void gql_ir_attach_concrete_field_plan_table(pTHX_ SV *sv, gql_ir_compiled_concrete_plan_table_t *table);
+static gql_ir_compiled_field_bucket_table_t *gql_ir_compiled_field_bucket_table_from_sv(pTHX_ SV *compiled_fields_sv);
+static void gql_ir_compiled_field_bucket_table_destroy(gql_ir_compiled_field_bucket_table_t *table);
+static void gql_ir_attach_compiled_field_bucket_table(pTHX_ SV *sv, gql_ir_compiled_field_bucket_table_t *table);
 static SV *gql_ir_compiled_root_selection_plan_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
 static SV *gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
 static gql_ir_prepared_exec_t *gql_ir_compiled_prepared_exec(gql_ir_compiled_exec_t *compiled);
@@ -1226,12 +1229,38 @@ gql_ir_compiled_concrete_plan_table_magic_free(pTHX_ SV *sv, MAGIC *mg) {
   return 0;
 }
 
+static int
+gql_ir_compiled_field_bucket_table_magic_free(pTHX_ SV *sv, MAGIC *mg) {
+  gql_ir_compiled_field_bucket_table_t *table = (mg && mg->mg_ptr)
+    ? INT2PTR(gql_ir_compiled_field_bucket_table_t *, mg->mg_ptr)
+    : NULL;
+
+  if (table) {
+    gql_ir_compiled_field_bucket_table_destroy(table);
+    mg->mg_ptr = NULL;
+  }
+  return 0;
+}
+
 static MGVTBL gql_ir_compiled_concrete_plan_table_vtbl = {
   NULL,
   NULL,
   NULL,
   NULL,
   gql_ir_compiled_concrete_plan_table_magic_free
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
+
+static MGVTBL gql_ir_compiled_field_bucket_table_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gql_ir_compiled_field_bucket_table_magic_free
 #if PERL_VERSION_GE(5, 15, 0)
   ,NULL
   ,NULL
@@ -1272,6 +1301,34 @@ gql_ir_compiled_concrete_plan_table_destroy(gql_ir_compiled_concrete_plan_table_
 }
 
 static void
+gql_ir_compiled_field_bucket_table_destroy(gql_ir_compiled_field_bucket_table_t *table) {
+  UV i;
+
+  if (!table) {
+    return;
+  }
+
+  if (table->entries) {
+    for (i = 0; i < table->count; i++) {
+      gql_ir_compiled_field_bucket_entry_t *entry = &table->entries[i];
+
+      if (entry->result_name_sv) {
+        SvREFCNT_dec(entry->result_name_sv);
+        entry->result_name_sv = NULL;
+      }
+      if (entry->nodes_sv) {
+        SvREFCNT_dec(entry->nodes_sv);
+        entry->nodes_sv = NULL;
+      }
+    }
+    Safefree(table->entries);
+    table->entries = NULL;
+  }
+
+  Safefree(table);
+}
+
+static void
 gql_ir_attach_concrete_field_plan_table(pTHX_ SV *sv, gql_ir_compiled_concrete_plan_table_t *table) {
   MAGIC *mg;
   SV *target = sv;
@@ -1289,6 +1346,28 @@ gql_ir_attach_concrete_field_plan_table(pTHX_ SV *sv, gql_ir_compiled_concrete_p
   if (!mg) {
     gql_ir_compiled_concrete_plan_table_destroy(table);
     croak("failed to attach compiled concrete field plan table");
+  }
+  mg->mg_ptr = (char *)PTR2IV(table);
+}
+
+static void
+gql_ir_attach_compiled_field_bucket_table(pTHX_ SV *sv, gql_ir_compiled_field_bucket_table_t *table) {
+  MAGIC *mg;
+  SV *target = sv;
+
+  if (!sv || !table) {
+    return;
+  }
+
+  if (SvROK(target)) {
+    target = SvRV(target);
+  }
+
+  sv_magicext(target, NULL, PERL_MAGIC_ext, &gql_ir_compiled_field_bucket_table_vtbl, NULL, 0);
+  mg = mg_findext(target, PERL_MAGIC_ext, &gql_ir_compiled_field_bucket_table_vtbl);
+  if (!mg) {
+    gql_ir_compiled_field_bucket_table_destroy(table);
+    croak("failed to attach compiled field bucket table");
   }
   mg->mg_ptr = (char *)PTR2IV(table);
 }
@@ -1312,6 +1391,92 @@ gql_ir_get_concrete_field_plan_table(pTHX_ SV *sv) {
   }
 
   return INT2PTR(gql_ir_compiled_concrete_plan_table_t *, mg->mg_ptr);
+}
+
+static gql_ir_compiled_field_bucket_table_t *
+gql_ir_get_compiled_field_bucket_table(pTHX_ SV *sv) {
+  MAGIC *mg;
+  SV *target = sv;
+
+  if (!sv) {
+    return NULL;
+  }
+
+  if (SvROK(target)) {
+    target = SvRV(target);
+  }
+
+  mg = mg_findext(target, PERL_MAGIC_ext, &gql_ir_compiled_field_bucket_table_vtbl);
+  if (!mg || !mg->mg_ptr) {
+    return NULL;
+  }
+
+  return INT2PTR(gql_ir_compiled_field_bucket_table_t *, mg->mg_ptr);
+}
+
+static gql_ir_compiled_field_bucket_table_t *
+gql_ir_compiled_field_bucket_table_from_sv(pTHX_ SV *compiled_fields_sv) {
+  AV *compiled_av;
+  SV **compiled_names_svp;
+  SV **compiled_defs_svp;
+  AV *compiled_names_av;
+  HV *compiled_defs_hv;
+  I32 name_len;
+  UV field_count;
+  UV field_i;
+  gql_ir_compiled_field_bucket_table_t *table = NULL;
+
+  if (!compiled_fields_sv || !SvROK(compiled_fields_sv) || SvTYPE(SvRV(compiled_fields_sv)) != SVt_PVAV) {
+    return NULL;
+  }
+
+  compiled_av = (AV *)SvRV(compiled_fields_sv);
+  if (av_len(compiled_av) != 1) {
+    return NULL;
+  }
+
+  compiled_names_svp = av_fetch(compiled_av, 0, 0);
+  compiled_defs_svp = av_fetch(compiled_av, 1, 0);
+  if (!compiled_names_svp || !compiled_defs_svp
+      || !SvROK(*compiled_names_svp) || SvTYPE(SvRV(*compiled_names_svp)) != SVt_PVAV
+      || !SvROK(*compiled_defs_svp) || SvTYPE(SvRV(*compiled_defs_svp)) != SVt_PVHV) {
+    return NULL;
+  }
+
+  compiled_names_av = (AV *)SvRV(*compiled_names_svp);
+  compiled_defs_hv = (HV *)SvRV(*compiled_defs_svp);
+  name_len = av_len(compiled_names_av);
+  field_count = name_len >= 0 ? (UV)(name_len + 1) : 0;
+
+  Newxz(table, 1, gql_ir_compiled_field_bucket_table_t);
+  table->count = field_count;
+  if (field_count > 0) {
+    Newxz(table->entries, field_count, gql_ir_compiled_field_bucket_entry_t);
+  }
+
+  for (field_i = 0; field_i < field_count; field_i++) {
+    SV **result_name_svp = av_fetch(compiled_names_av, (I32)field_i, 0);
+    HE *compiled_he;
+    gql_ir_compiled_field_bucket_entry_t *entry = &table->entries[field_i];
+
+    if (!result_name_svp || !SvOK(*result_name_svp)) {
+      goto fail;
+    }
+
+    compiled_he = hv_fetch_ent(compiled_defs_hv, *result_name_svp, 0, 0);
+    if (!compiled_he || !SvOK(HeVAL(compiled_he))) {
+      goto fail;
+    }
+
+    entry->result_name_sv = gql_execution_share_or_copy_sv(*result_name_svp);
+    entry->nodes_sv = gql_execution_share_or_copy_sv(HeVAL(compiled_he));
+  }
+
+  return table;
+
+fail:
+  gql_ir_compiled_field_bucket_table_destroy(table);
+  return NULL;
 }
 
 static gql_ir_compiled_root_field_plan_t *
@@ -2418,7 +2583,12 @@ gql_ir_fragment_definitions_to_legacy_map_sv(pTHX_ gql_ir_prepared_exec_t *prepa
     }
     gql_store_sv(fragment_hv, "selections", newRV_noinc((SV *)gql_ir_selections_to_legacy_av(aTHX_ prepared->document, fragment->selection_set)));
     if (gql_ir_selection_set_is_plain_fields(fragment->selection_set)) {
-      gql_store_sv(fragment_hv, "compiled_fields", gql_ir_selection_set_to_legacy_fields_sv(aTHX_ prepared->document, fragment->selection_set));
+      SV *compiled_fields_sv = gql_ir_selection_set_to_legacy_fields_sv(aTHX_ prepared->document, fragment->selection_set);
+      gql_ir_compiled_field_bucket_table_t *bucket_table = gql_ir_compiled_field_bucket_table_from_sv(aTHX_ compiled_fields_sv);
+      gql_store_sv(fragment_hv, "compiled_fields", compiled_fields_sv);
+      if (bucket_table) {
+        gql_ir_attach_compiled_field_bucket_table(aTHX_ (SV *)fragment_hv, bucket_table);
+      }
     }
     (void)hv_store_ent(hv, name_sv, newRV_noinc((SV *)fragment_hv), 0);
     SvREFCNT_dec(name_sv);
@@ -3257,7 +3427,12 @@ gql_ir_selection_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_selectio
       if (field->selection_set && field->selection_set->selections.count > 0) {
         gql_store_sv(hv, "selections", newRV_noinc((SV *)gql_ir_selections_to_legacy_av(aTHX_ document, field->selection_set)));
         if (gql_ir_selection_set_is_plain_fields(field->selection_set)) {
-          gql_store_sv(hv, "compiled_fields", gql_ir_selection_set_to_legacy_fields_sv(aTHX_ document, field->selection_set));
+          SV *compiled_fields_sv = gql_ir_selection_set_to_legacy_fields_sv(aTHX_ document, field->selection_set);
+          gql_ir_compiled_field_bucket_table_t *bucket_table = gql_ir_compiled_field_bucket_table_from_sv(aTHX_ compiled_fields_sv);
+          gql_store_sv(hv, "compiled_fields", compiled_fields_sv);
+          if (bucket_table) {
+            gql_ir_attach_compiled_field_bucket_table(aTHX_ (SV *)hv, bucket_table);
+          }
         }
       }
       return newRV_noinc((SV *)hv);
@@ -3288,7 +3463,12 @@ gql_ir_selection_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_selectio
       }
       gql_store_sv(hv, "selections", newRV_noinc((SV *)gql_ir_selections_to_legacy_av(aTHX_ document, fragment->selection_set)));
       if (gql_ir_selection_set_is_plain_fields(fragment->selection_set)) {
-        gql_store_sv(hv, "compiled_fields", gql_ir_selection_set_to_legacy_fields_sv(aTHX_ document, fragment->selection_set));
+        SV *compiled_fields_sv = gql_ir_selection_set_to_legacy_fields_sv(aTHX_ document, fragment->selection_set);
+        gql_ir_compiled_field_bucket_table_t *bucket_table = gql_ir_compiled_field_bucket_table_from_sv(aTHX_ compiled_fields_sv);
+        gql_store_sv(hv, "compiled_fields", compiled_fields_sv);
+        if (bucket_table) {
+          gql_ir_attach_compiled_field_bucket_table(aTHX_ (SV *)hv, bucket_table);
+        }
       }
       return newRV_noinc((SV *)hv);
     }

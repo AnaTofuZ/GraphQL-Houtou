@@ -55,6 +55,7 @@ static void gql_ir_compiled_field_bucket_table_destroy(gql_ir_compiled_field_buc
 static void gql_ir_attach_compiled_field_bucket_table(pTHX_ SV *sv, gql_ir_compiled_field_bucket_table_t *table);
 static void gql_ir_compiled_strip_legacy_buckets_from_nodes(pTHX_ SV *nodes_sv);
 static void gql_ir_compiled_strip_legacy_buckets_from_node(pTHX_ SV *node_sv);
+static void gql_ir_compiled_strip_legacy_buckets_from_fragments(pTHX_ SV *fragments_sv);
 static SV *gql_ir_compiled_root_selection_plan_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
 static SV *gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
 static gql_ir_prepared_exec_t *gql_ir_compiled_prepared_exec(gql_ir_compiled_exec_t *compiled);
@@ -1649,6 +1650,25 @@ gql_ir_compiled_strip_legacy_buckets_from_node(pTHX_ SV *node_sv) {
   }
 }
 
+static void
+gql_ir_compiled_strip_legacy_buckets_from_fragments(pTHX_ SV *fragments_sv) {
+  HV *fragments_hv;
+  HE *he;
+
+  if (!fragments_sv || !SvROK(fragments_sv) || SvTYPE(SvRV(fragments_sv)) != SVt_PVHV) {
+    return;
+  }
+
+  fragments_hv = (HV *)SvRV(fragments_sv);
+  hv_iterinit(fragments_hv);
+  while ((he = hv_iternext(fragments_hv))) {
+    SV *fragment_sv = HeVAL(he);
+    if (fragment_sv && SvOK(fragment_sv)) {
+      gql_ir_compiled_strip_legacy_buckets_from_node(aTHX_ fragment_sv);
+    }
+  }
+}
+
 static SV *
 gql_ir_compiled_root_selection_plan_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
   gql_ir_prepared_exec_t *prepared;
@@ -1764,12 +1784,17 @@ gql_ir_compiled_operation_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
 static SV *
 gql_ir_compiled_fragments_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
   gql_ir_prepared_exec_t *prepared = gql_ir_compiled_prepared_exec(compiled);
+  SV *fragments_sv;
 
   if (!prepared) {
     return &PL_sv_undef;
   }
 
-  return gql_ir_fragment_definitions_to_legacy_map_sv(aTHX_ prepared);
+  fragments_sv = gql_ir_fragment_definitions_to_legacy_map_sv(aTHX_ prepared);
+  if (fragments_sv != &PL_sv_undef) {
+    gql_ir_compiled_strip_legacy_buckets_from_fragments(aTHX_ fragments_sv);
+  }
+  return fragments_sv;
 }
 
 static SV *

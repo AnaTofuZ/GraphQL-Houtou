@@ -53,6 +53,8 @@ static void gql_ir_attach_concrete_field_plan_table(pTHX_ SV *sv, gql_ir_compile
 static gql_ir_compiled_field_bucket_table_t *gql_ir_compiled_field_bucket_table_from_sv(pTHX_ SV *compiled_fields_sv);
 static void gql_ir_compiled_field_bucket_table_destroy(gql_ir_compiled_field_bucket_table_t *table);
 static void gql_ir_attach_compiled_field_bucket_table(pTHX_ SV *sv, gql_ir_compiled_field_bucket_table_t *table);
+static void gql_ir_compiled_strip_legacy_buckets_from_nodes(pTHX_ SV *nodes_sv);
+static void gql_ir_compiled_strip_legacy_buckets_from_node(pTHX_ SV *node_sv);
 static SV *gql_ir_compiled_root_selection_plan_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
 static SV *gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
 static gql_ir_prepared_exec_t *gql_ir_compiled_prepared_exec(gql_ir_compiled_exec_t *compiled);
@@ -175,6 +177,12 @@ gql_ir_compile_executable_plan_handle_sv(pTHX_ SV *schema, SV *prepared_handle_s
     if (!compiled->root_field_plan) {
       compiled->root_field_plan_sv = root_field_plan_sv;
       root_field_plan_sv = NULL;
+    } else {
+      UV field_i;
+      for (field_i = 0; field_i < compiled->root_field_plan->field_count; field_i++) {
+        gql_ir_compiled_root_field_plan_entry_t *entry = &compiled->root_field_plan->entries[field_i];
+        gql_ir_compiled_strip_legacy_buckets_from_nodes(aTHX_ entry->nodes_sv);
+      }
     }
 
     if (root_field_plan_sv) {
@@ -1581,6 +1589,64 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
 fail:
   gql_ir_compiled_root_field_plan_destroy(plan);
   return NULL;
+}
+
+static void
+gql_ir_compiled_strip_legacy_buckets_from_nodes(pTHX_ SV *nodes_sv) {
+  AV *nodes_av;
+  I32 node_len;
+  I32 node_i;
+
+  if (!nodes_sv || !SvROK(nodes_sv) || SvTYPE(SvRV(nodes_sv)) != SVt_PVAV) {
+    return;
+  }
+
+  nodes_av = (AV *)SvRV(nodes_sv);
+  node_len = av_len(nodes_av);
+  for (node_i = 0; node_i <= node_len; node_i++) {
+    SV **node_svp = av_fetch(nodes_av, node_i, 0);
+    if (node_svp && SvOK(*node_svp)) {
+      gql_ir_compiled_strip_legacy_buckets_from_node(aTHX_ *node_svp);
+    }
+  }
+}
+
+static void
+gql_ir_compiled_strip_legacy_buckets_from_node(pTHX_ SV *node_sv) {
+  HV *node_hv;
+  SV **selections_svp;
+  AV *selections_av;
+  I32 selection_len;
+  I32 selection_i;
+
+  if (!node_sv || !SvROK(node_sv) || SvTYPE(SvRV(node_sv)) != SVt_PVHV) {
+    return;
+  }
+
+  node_hv = (HV *)SvRV(node_sv);
+  if (gql_ir_get_compiled_field_bucket_table(aTHX_ node_sv)) {
+    (void)hv_delete(node_hv, "compiled_fields", 15, G_DISCARD);
+  }
+  if (gql_ir_get_concrete_field_plan_table(aTHX_ node_sv)) {
+    (void)hv_delete(node_hv, "compiled_concrete_subfields", 27, G_DISCARD);
+    (void)hv_delete(node_hv, "compiled_concrete_field_plans", 28, G_DISCARD);
+  }
+
+  selections_svp = hv_fetch(node_hv, "selections", 10, 0);
+  if (!selections_svp
+      || !SvROK(*selections_svp)
+      || SvTYPE(SvRV(*selections_svp)) != SVt_PVAV) {
+    return;
+  }
+
+  selections_av = (AV *)SvRV(*selections_svp);
+  selection_len = av_len(selections_av);
+  for (selection_i = 0; selection_i <= selection_len; selection_i++) {
+    SV **selection_svp = av_fetch(selections_av, selection_i, 0);
+    if (selection_svp && SvOK(*selection_svp)) {
+      gql_ir_compiled_strip_legacy_buckets_from_node(aTHX_ *selection_svp);
+    }
+  }
 }
 
 static SV *

@@ -276,6 +276,13 @@ until fallback (`--count=-6`):
   - `houtou_compiled_ir`: `42791/s`
   - `houtou_xs_ast`: `43067/s`
 
+Latest spot check after caching the first field node on native plan entries
+(`--count=-6`):
+
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `44167/s`
+  - `houtou_xs_ast`: `43720/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
@@ -297,6 +304,9 @@ Interpretation:
 - compiled-IR root execution now treats the root path as implicit until a
   fallback path actually needs a Perl array; this is a small simplification and
   allocation reduction, but measurement impact is modest
+- native field-plan entries now also cache the first field node, which trims a
+  small amount of `AV` traversal and node-shape checking on argument-heavy
+  paths without adding much complexity
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

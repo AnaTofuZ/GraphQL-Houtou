@@ -38,6 +38,7 @@ Compressed handoff for the current `GraphQL::Houtou` worktree.
 - `0918e04` Strip legacy buckets from compiled fragments
 - `de6e3da` Cache hot execution context lookups
 - `61eae3c` Lazy-load resolve info in field completion
+- `3e98dc6` Run native abstract child field plans directly
 
 ## Current Execution State
 
@@ -251,6 +252,16 @@ child field-plan execution (`--count=-6`):
   - `houtou_compiled_ir`: `45420/s`
   - `houtou_xs_ast`: `44940/s`
 
+Latest spot check after caching `type` / `resolve` / field-arg metadata on
+native field-plan entries (`--count=-6`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir`: `86706/s`
+  - `houtou_xs_ast`: `83544/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `43626/s`
+  - `houtou_xs_ast`: `43626/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
@@ -263,6 +274,9 @@ Interpretation:
 - direct native abstract child field-plan execution is the first step that
   removes part of the remaining `field_plan_sv` / legacy execution bridge from
   the `abstract_with_fragment` hot path
+- native field-plan entries now cache `type`, `resolve`, and field-argument
+  metadata, which reduces repeated `HV` inspection in both compiled root and
+  abstract-child execution
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

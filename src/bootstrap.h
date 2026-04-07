@@ -169,10 +169,13 @@ struct gql_ir_compiled_root_field_plan_entry {
   SV *result_name_sv;
   SV *field_name_sv;
   SV *field_def_sv;
+  SV *type_sv;
+  SV *resolve_sv;
   SV *nodes_sv;
   SV *path_sv;
   UV node_count;
   UV argument_count;
+  UV field_arg_count;
   UV directive_count;
   UV selection_count;
 };

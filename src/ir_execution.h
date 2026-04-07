@@ -3835,6 +3835,21 @@ gql_ir_execute_native_field_plan(
       );
     }
 
+    if ((!promise_code_svp || !SvOK(*promise_code_svp))
+        && gql_ir_try_complete_abstract_sync_into(
+             aTHX_
+             context_sv,
+             entry->return_type_sv ? entry->return_type_sv : type_sv,
+             nodes_sv,
+             &lazy_info,
+             result_sv,
+             entry->result_name_sv,
+             direct_data_hv,
+             &all_errors_av
+           )) {
+      goto field_done;
+    }
+
     completed_sv = gql_execution_complete_field_value_catching_error_xs_impl(
       aTHX_
       context_sv,

@@ -362,6 +362,18 @@ writer instead of round-tripping them through a field-level envelope
   - `houtou_compiled_ir`: `45366/s`
   - `houtou_xs_ast`: `43484/s`
 
+Latest spot check after extending that same direct-consume abstract fast path
+to compiled native child execution as well, so sync abstract child fields can
+reuse native concrete child plans without building a completed field envelope
+first (`--count=-6`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir`: `84883/s`
+  - `houtou_xs_ast`: `82197/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `45635/s`
+  - `houtou_xs_ast`: `44812/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
@@ -374,6 +386,9 @@ Interpretation:
 - direct native abstract child field-plan execution is the first step that
   removes part of the remaining `field_plan_sv` / legacy execution bridge from
   the `abstract_with_fragment` hot path
+- that direct-consume path now exists for both root and child compiled-native
+  execution, so sync abstract fields can stay inside the native writer path
+  for longer before falling back to legacy completion
 - native field-plan entries now cache `type`, `resolve`, and field-argument
   metadata, which reduces repeated `HV` inspection in both compiled root and
   abstract-child execution
@@ -562,14 +577,17 @@ Practical rule:
 
 ## Next Step
 
-Keep pushing compiled-plan reuse deeper without creating a second executor.
+Keep pushing compiled-native execution toward an envelope-less happy path.
 
 Best next move:
 
-- push compiled-plan reuse deeper into nested execution
-- keep improving runtime schema snapshots so AST and IR paths both benefit
-- focus next on abstract/concrete subtree reuse rather than fragment caching
-  alone
+- let compiled-native child execution write successful object/list completions
+  into parent result state without first materializing `{ data, errors }`
+- keep shrinking `resolve_info`, error, and path materialization in success
+  paths so abstract/native child execution stays out of legacy completion
+  helpers longer
+- continue moving compiled child metadata from Perl `HV` / `AV` state into
+  native plan entries and node-attached tables
 
 ## Breaking-API Speed Notes
 

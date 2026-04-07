@@ -147,6 +147,8 @@ typedef struct gql_ir_prepared_exec gql_ir_prepared_exec_t;
 typedef struct gql_ir_compiled_exec gql_ir_compiled_exec_t;
 typedef struct gql_ir_compiled_root_field_plan_entry gql_ir_compiled_root_field_plan_entry_t;
 typedef struct gql_ir_compiled_root_field_plan gql_ir_compiled_root_field_plan_t;
+typedef struct gql_ir_compiled_concrete_plan_entry gql_ir_compiled_concrete_plan_entry_t;
+typedef struct gql_ir_compiled_concrete_plan_table gql_ir_compiled_concrete_plan_table_t;
 typedef struct {
   gql_ir_document_t *document;
 } gql_ir_document_cleanup_t;
@@ -177,6 +179,16 @@ struct gql_ir_compiled_root_field_plan {
   gql_ir_compiled_root_field_plan_entry_t *entries;
 };
 
+struct gql_ir_compiled_concrete_plan_entry {
+  SV *possible_type_sv;
+  SV *field_plan_sv;
+};
+
+struct gql_ir_compiled_concrete_plan_table {
+  UV count;
+  gql_ir_compiled_concrete_plan_entry_t *entries;
+};
+
 struct gql_ir_compiled_exec {
   SV *prepared_handle_sv;
   SV *schema_sv;
@@ -187,6 +199,8 @@ struct gql_ir_compiled_exec {
   SV *root_field_plan_sv;
   SV *root_type_sv;
 };
+
+static gql_ir_compiled_concrete_plan_table_t *gql_ir_get_concrete_field_plan_table(pTHX_ SV *sv);
 
 typedef enum {
   GQLJS_LAZY_ARRAY_ARGUMENTS = 1,

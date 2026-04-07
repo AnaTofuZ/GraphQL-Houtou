@@ -72,6 +72,8 @@ Current compiled plan caches:
 - nested `compiled_fields` for simple reusable buckets
 - nested/root `compiled_field_def`
 - fragment child nodes can also carry `compiled_field_def`
+- abstract child direct plans can also be retained in native node-attached
+  lookup tables
 
 Legacy compatibility structures still exist, but the current direction is to
 stop treating them as the canonical compiled form:
@@ -97,6 +99,8 @@ Current compiled-plan execution reuse:
 - nested fragment buckets can now be reused as well
 - simple abstract single-node child execution can now use direct compiled field
   plans instead of rebuilding legacy field buckets first
+- compiled abstract child direct-plan lookup now prefers native node-attached
+  tables keyed by runtime object identity
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.

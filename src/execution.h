@@ -3054,9 +3054,11 @@ gql_execution_collect_single_node_concrete_field_plan(pTHX_ SV *object_type, SV 
   AV *nodes_av;
   SV **node_svp;
   HV *node_hv;
+  gql_ir_compiled_concrete_plan_table_t *compiled_plan_table;
   SV **compiled_plans_svp;
   SV *type_name_sv;
   HE *plan_he;
+  UV plan_i;
 
   *ok = 0;
   if (!SvROK(nodes) || SvTYPE(SvRV(nodes)) != SVt_PVAV) {
@@ -3071,6 +3073,24 @@ gql_execution_collect_single_node_concrete_field_plan(pTHX_ SV *object_type, SV 
   node_svp = av_fetch(nodes_av, 0, 0);
   if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) {
     return &PL_sv_undef;
+  }
+
+  compiled_plan_table = gql_ir_get_concrete_field_plan_table(aTHX_ *node_svp);
+  if (compiled_plan_table) {
+    for (plan_i = 0; plan_i < compiled_plan_table->count; plan_i++) {
+      gql_ir_compiled_concrete_plan_entry_t *entry = &compiled_plan_table->entries[plan_i];
+
+      if (!entry->possible_type_sv || !entry->field_plan_sv) {
+        continue;
+      }
+      if (object_type == entry->possible_type_sv
+          || (SvROK(object_type)
+              && SvROK(entry->possible_type_sv)
+              && SvRV(object_type) == SvRV(entry->possible_type_sv))) {
+        *ok = 1;
+        return gql_execution_share_or_copy_sv(entry->field_plan_sv);
+      }
+    }
   }
 
   node_hv = (HV *)SvRV(*node_svp);

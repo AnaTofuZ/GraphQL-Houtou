@@ -48,6 +48,8 @@ static SV *gql_ir_prepare_executable_root_field_nodes_sv(pTHX_ gql_ir_prepared_e
 static void gql_ir_compiled_attach_root_field_runtime_data(pTHX_ SV *root_field_plan_sv, SV *root_fields_sv);
 static gql_ir_compiled_root_field_plan_t *gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv);
 static void gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan);
+static void gql_ir_compiled_concrete_plan_table_destroy(gql_ir_compiled_concrete_plan_table_t *table);
+static void gql_ir_attach_concrete_field_plan_table(pTHX_ SV *sv, gql_ir_compiled_concrete_plan_table_t *table);
 static SV *gql_ir_compiled_root_selection_plan_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
 static SV *gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
 static gql_ir_prepared_exec_t *gql_ir_compiled_prepared_exec(gql_ir_compiled_exec_t *compiled);
@@ -1211,6 +1213,103 @@ gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan)
   Safefree(plan);
 }
 
+static int
+gql_ir_compiled_concrete_plan_table_magic_free(pTHX_ SV *sv, MAGIC *mg) {
+  gql_ir_compiled_concrete_plan_table_t *table = (mg && mg->mg_ptr)
+    ? INT2PTR(gql_ir_compiled_concrete_plan_table_t *, mg->mg_ptr)
+    : NULL;
+
+  if (table) {
+    gql_ir_compiled_concrete_plan_table_destroy(table);
+    mg->mg_ptr = NULL;
+  }
+  return 0;
+}
+
+static MGVTBL gql_ir_compiled_concrete_plan_table_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gql_ir_compiled_concrete_plan_table_magic_free
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
+
+static void
+gql_ir_compiled_concrete_plan_table_destroy(gql_ir_compiled_concrete_plan_table_t *table) {
+  UV i;
+
+  if (!table) {
+    return;
+  }
+
+  if (table->entries) {
+    for (i = 0; i < table->count; i++) {
+      gql_ir_compiled_concrete_plan_entry_t *entry = &table->entries[i];
+
+      if (entry->possible_type_sv) {
+        SvREFCNT_dec(entry->possible_type_sv);
+        entry->possible_type_sv = NULL;
+      }
+      if (entry->field_plan_sv) {
+        SvREFCNT_dec(entry->field_plan_sv);
+        entry->field_plan_sv = NULL;
+      }
+    }
+    Safefree(table->entries);
+    table->entries = NULL;
+  }
+
+  Safefree(table);
+}
+
+static void
+gql_ir_attach_concrete_field_plan_table(pTHX_ SV *sv, gql_ir_compiled_concrete_plan_table_t *table) {
+  MAGIC *mg;
+  SV *target = sv;
+
+  if (!sv || !table) {
+    return;
+  }
+
+  if (SvROK(target)) {
+    target = SvRV(target);
+  }
+
+  sv_magicext(target, NULL, PERL_MAGIC_ext, &gql_ir_compiled_concrete_plan_table_vtbl, NULL, 0);
+  mg = mg_findext(target, PERL_MAGIC_ext, &gql_ir_compiled_concrete_plan_table_vtbl);
+  if (!mg) {
+    gql_ir_compiled_concrete_plan_table_destroy(table);
+    croak("failed to attach compiled concrete field plan table");
+  }
+  mg->mg_ptr = (char *)PTR2IV(table);
+}
+
+static gql_ir_compiled_concrete_plan_table_t *
+gql_ir_get_concrete_field_plan_table(pTHX_ SV *sv) {
+  MAGIC *mg;
+  SV *target = sv;
+
+  if (!sv) {
+    return NULL;
+  }
+
+  if (SvROK(target)) {
+    target = SvRV(target);
+  }
+
+  mg = mg_findext(target, PERL_MAGIC_ext, &gql_ir_compiled_concrete_plan_table_vtbl);
+  if (!mg || !mg->mg_ptr) {
+    return NULL;
+  }
+
+  return INT2PTR(gql_ir_compiled_concrete_plan_table_t *, mg->mg_ptr);
+}
+
 static gql_ir_compiled_root_field_plan_t *
 gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
   HV *root_field_plan_hv;
@@ -1511,9 +1610,10 @@ gql_ir_attach_compiled_concrete_subfields_to_node(
   HV *selection_hv;
   SV *possible_types_sv;
   HV *compiled_hv;
-  HV *compiled_plans_hv;
   HV *context_hv;
   SV *context_sv;
+  gql_ir_compiled_concrete_plan_table_t *compiled_plan_table = NULL;
+  UV compiled_plan_table_count = 0;
   I32 possible_i;
   I32 possible_len;
 
@@ -1540,8 +1640,16 @@ gql_ir_attach_compiled_concrete_subfields_to_node(
   }
 
   compiled_hv = newHV();
-  compiled_plans_hv = newHV();
   context_hv = newHV();
+  {
+    UV possible_count = possible_types_sv && SvROK(possible_types_sv) && SvTYPE(SvRV(possible_types_sv)) == SVt_PVAV
+      ? (UV)(av_len((AV *)SvRV(possible_types_sv)) + 1)
+      : 0;
+    if (possible_count > 0) {
+      Newxz(compiled_plan_table, 1, gql_ir_compiled_concrete_plan_table_t);
+      Newxz(compiled_plan_table->entries, possible_count, gql_ir_compiled_concrete_plan_entry_t);
+    }
+  }
   gql_store_sv(context_hv, "schema", gql_execution_share_or_copy_sv(schema));
   {
     HV *runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ schema);
@@ -1611,7 +1719,12 @@ gql_ir_attach_compiled_concrete_subfields_to_node(
       );
       (void)hv_store_ent(compiled_hv, type_name_sv, compiled_fields_sv, 0);
       if (compiled_plan_sv != &PL_sv_undef && SvOK(compiled_plan_sv)) {
-        (void)hv_store_ent(compiled_plans_hv, newSVsv(type_name_sv), compiled_plan_sv, 0);
+        if (compiled_plan_table && compiled_plan_table->entries) {
+          gql_ir_compiled_concrete_plan_entry_t *entry = &compiled_plan_table->entries[compiled_plan_table_count++];
+          entry->possible_type_sv = gql_execution_share_or_copy_sv(possible_type);
+          entry->field_plan_sv = gql_execution_share_or_copy_sv(compiled_plan_sv);
+        }
+        SvREFCNT_dec(compiled_plan_sv);
       }
       SvREFCNT_dec(type_name_sv);
     }
@@ -1622,14 +1735,19 @@ gql_ir_attach_compiled_concrete_subfields_to_node(
   } else {
     SvREFCNT_dec((SV *)compiled_hv);
   }
-  if (HvUSEDKEYS(compiled_plans_hv) > 0) {
-    gql_store_sv(selection_hv, "compiled_concrete_field_plans", newRV_noinc((SV *)compiled_plans_hv));
-  } else {
-    SvREFCNT_dec((SV *)compiled_plans_hv);
+  if (compiled_plan_table) {
+    compiled_plan_table->count = compiled_plan_table_count;
+    if (compiled_plan_table_count > 0) {
+      gql_ir_attach_concrete_field_plan_table(aTHX_ selection_sv, compiled_plan_table);
+      compiled_plan_table = NULL;
+    }
   }
 
   SvREFCNT_dec(context_sv);
   SvREFCNT_dec(possible_types_sv);
+  if (compiled_plan_table) {
+    gql_ir_compiled_concrete_plan_table_destroy(compiled_plan_table);
+  }
 }
 
 static void

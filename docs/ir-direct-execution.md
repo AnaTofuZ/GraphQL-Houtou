@@ -195,6 +195,8 @@ Recent follow-up on that direction:
   keeping `field_order` / `fields` Perl containers as the primary form
 - compiled abstract child execution can use direct field plans for simple
   single-node concrete cases
+- compiled abstract child direct-plan lookup is also moving away from
+  type-name Perl hash lookup toward native node-attached tables
 - compiled handles are moving away from retaining eager legacy
   `operation` / `fragments` / `root_fields` state
 - those legacy structures are increasingly treated as lazy compatibility

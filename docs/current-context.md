@@ -336,6 +336,20 @@ Latest spot check after lazy `resolve_info` started reusing cached
   - `houtou_compiled_ir`: `45229/s`
   - `houtou_xs_ast`: `43058/s`
 
+Latest spot check after making native executor error arrays lazy so success
+paths do not allocate `errors` storage unless a child completion actually
+produces one (`--count=-6`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir`: `86658/s`
+  - `houtou_xs_ast`: `82311/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `43286/s`
+  - `houtou_xs_ast`: `42112/s`
+- `async_scalar`
+  - `houtou_compiled_ir`: `79906/s`
+  - `houtou_facade_ast`: `79379/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
@@ -388,6 +402,9 @@ Interpretation:
   `return_type` metadata, so building the Perl info hash no longer has to read
   `nodes[0]{name}` and `field_def->{type}` again once the native executor has
   already identified the field
+- native root/child executors now keep `errors` arrays lazy as well; sync and
+  promise paths only allocate Perl `AV`s for errors when a child completion
+  actually returns them, instead of paying that cost unconditionally
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

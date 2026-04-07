@@ -191,6 +191,8 @@ compiled plan that caches reusable front-end state.
 Recent follow-up on that direction:
 
 - compiled root plans now cache runtime `nodes` / `path` data directly
+- compiled root plans are beginning to retain native C entries instead of
+  keeping `field_order` / `fields` Perl containers as the primary form
 - compiled abstract child execution can use direct field plans for simple
   single-node concrete cases
 - compiled handles are moving away from retaining eager legacy

@@ -67,7 +67,7 @@ Current compiled plan caches:
 - selected operation metadata
 - root type
 - root selection plan
-- root field plan
+- native root field plan entries
 - nested selection metadata under root plans
 - nested `compiled_fields` for simple reusable buckets
 - nested/root `compiled_field_def`
@@ -82,6 +82,11 @@ stop treating them as the canonical compiled form:
 
 Those are increasingly being treated as lazy materializations rather than
 retained compiled state.
+
+Additional note:
+
+- root field plans are now retained primarily as native C entries and only
+  materialized back to legacy `HV`/`AV` form on demand
 
 Current compiled-plan execution reuse:
 
@@ -151,6 +156,8 @@ Known shape of results after latest landed work:
 - runtime-cache work targets AST and IR paths simultaneously
 - abstract/fragment-heavy tuning on AST paths is now close to a diminishing
   returns region
+- native root-plan retention does not regress `abstract_with_fragment` and
+  pushes `nested_variable_object` further ahead of `houtou_xs_ast`
 
 Current sampled numbers (`util/execution-benchmark.pl --count=-3`):
 

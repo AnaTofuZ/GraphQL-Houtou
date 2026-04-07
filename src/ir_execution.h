@@ -3119,6 +3119,7 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
     SV *path_copy_sv = NULL;
     SV *info_sv = NULL;
     SV *args_sv = NULL;
+    SV *direct_data_sv = NULL;
     gql_execution_lazy_resolve_info_t lazy_info;
     SV *result_sv = NULL;
     SV *completed_sv = NULL;
@@ -3210,6 +3211,11 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
       lazy_info.base_path_sv = path_sv;
       lazy_info.result_name_sv = entry->result_name_sv;
     }
+    if (!SvOK(promise_code_sv)
+        && gql_execution_try_typename_meta_field_data_fast(aTHX_ compiled->root_type_sv, entry->field_name_sv, type_sv, &direct_data_sv)) {
+      (void)hv_store_ent(direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
+      goto field_done;
+    }
     if (gql_execution_try_typename_meta_field_fast(aTHX_ compiled->root_type_sv, entry->field_name_sv, type_sv, &completed_sv)) {
       goto have_completed;
     }
@@ -3225,6 +3231,17 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
     if (gql_execution_is_default_field_resolver(aTHX_ resolve_sv)
         && gql_execution_try_default_field_resolve_fast(aTHX_ root_value, entry->field_name_sv, &result_sv)) {
       used_fast_default_resolve = 1;
+      if (!SvOK(promise_code_sv)
+          && entry->completion_type_sv
+          && gql_execution_try_complete_trivial_value_with_metadata_data_fast(
+              aTHX_ entry->completion_type_sv,
+              entry->trivial_completion_flags,
+              result_sv,
+              &direct_data_sv
+            )) {
+        (void)hv_store_ent(direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
+        goto field_done;
+      }
       if (entry->completion_type_sv && entry->trivial_completion_flags) {
         if (gql_execution_try_complete_trivial_value_with_metadata_fast(
               aTHX_ entry->completion_type_sv,
@@ -3318,6 +3335,7 @@ have_completed:
       }
     }
 
+field_done:
     if (owns_nodes_sv) {
       SvREFCNT_dec(nodes_sv);
     }
@@ -3443,6 +3461,7 @@ gql_ir_execute_native_field_plan(
     SV *resolve_sv;
     SV *info_sv = NULL;
     SV *args_sv = NULL;
+    SV *direct_data_sv = NULL;
     gql_execution_lazy_resolve_info_t lazy_info;
     SV *result_sv = NULL;
     SV *completed_sv = NULL;
@@ -3487,6 +3506,11 @@ gql_ir_execute_native_field_plan(
       lazy_info.result_name_sv = entry->result_name_sv;
     }
 
+    if (!SvOK(promise_code_sv)
+        && gql_execution_try_typename_meta_field_data_fast(aTHX_ parent_type_sv, entry->field_name_sv, type_sv, &direct_data_sv)) {
+      (void)hv_store_ent(direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
+      goto field_done;
+    }
     if (gql_execution_try_typename_meta_field_fast(aTHX_ parent_type_sv, entry->field_name_sv, type_sv, &completed_sv)) {
       goto have_completed;
     }
@@ -3503,6 +3527,17 @@ gql_ir_execute_native_field_plan(
     if (gql_execution_is_default_field_resolver(aTHX_ resolve_sv)
         && gql_execution_try_default_field_resolve_fast(aTHX_ root_value, entry->field_name_sv, &result_sv)) {
       used_fast_default_resolve = 1;
+      if (!SvOK(promise_code_sv)
+          && entry->completion_type_sv
+          && gql_execution_try_complete_trivial_value_with_metadata_data_fast(
+              aTHX_ entry->completion_type_sv,
+              entry->trivial_completion_flags,
+              result_sv,
+              &direct_data_sv
+            )) {
+        (void)hv_store_ent(direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
+        goto field_done;
+      }
       if (entry->completion_type_sv && entry->trivial_completion_flags) {
         if (gql_execution_try_complete_trivial_value_with_metadata_fast(
               aTHX_ entry->completion_type_sv,
@@ -3589,6 +3624,7 @@ have_completed:
       }
     }
 
+field_done:
     if (lazy_info.info_sv) {
       SvREFCNT_dec(lazy_info.info_sv);
     }

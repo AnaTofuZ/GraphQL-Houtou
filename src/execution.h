@@ -56,10 +56,12 @@ static SV *gql_execution_complete_field_value_catching_error_xs_impl(
   SV *result
 );
 static int gql_execution_try_typename_meta_field_fast(pTHX_ SV *parent_type, SV *field_name_sv, SV *return_type, SV **completed_out);
+static int gql_execution_try_typename_meta_field_data_fast(pTHX_ SV *parent_type, SV *field_name_sv, SV *return_type, SV **data_out);
 static int gql_execution_is_default_field_resolver(pTHX_ SV *resolve);
 static int gql_execution_try_default_field_resolve_fast(pTHX_ SV *root_value, SV *field_name_sv, SV **result_out);
 static int gql_execution_get_trivial_completion_metadata(pTHX_ SV *return_type, SV **completion_type_out, UV *flags_out);
 static int gql_execution_try_complete_trivial_value_with_metadata_fast(pTHX_ SV *completion_type, UV flags, SV *result, SV **completed_out);
+static int gql_execution_try_complete_trivial_value_with_metadata_data_fast(pTHX_ SV *completion_type, UV flags, SV *result, SV **data_out);
 static int gql_execution_try_complete_trivial_value_fast(pTHX_ SV *return_type, SV *result, SV **completed_out);
 static void gql_ir_attach_compiled_field_defs_to_selections(pTHX_ SV *schema, SV *parent_type, AV *selections_av, SV *fragments_sv);
 static void gql_ir_attach_compiled_field_defs_to_fragments(pTHX_ SV *schema, SV *fragments_sv);
@@ -1874,6 +1876,43 @@ gql_execution_try_typename_meta_field_fast(pTHX_ SV *parent_type, SV *field_name
 }
 
 static int
+gql_execution_try_typename_meta_field_data_fast(pTHX_ SV *parent_type, SV *field_name_sv, SV *return_type, SV **data_out) {
+  STRLEN field_name_len;
+  const char *field_name_pv;
+  SV *completion_type = NULL;
+  SV *type_name_sv;
+  UV flags = 0;
+  int ok = 0;
+
+  if (data_out) {
+    *data_out = NULL;
+  }
+  if (!data_out || !field_name_sv || !SvOK(field_name_sv) || !return_type || !SvOK(return_type)) {
+    return 0;
+  }
+
+  field_name_pv = SvPV(field_name_sv, field_name_len);
+  if (!(field_name_len == 10 && memEQ(field_name_pv, "__typename", 10))) {
+    return 0;
+  }
+
+  type_name_sv = gql_execution_type_name_sv(aTHX_ parent_type);
+  if (!gql_execution_get_trivial_completion_metadata(aTHX_ return_type, &completion_type, &flags)) {
+    SvREFCNT_dec(type_name_sv);
+    return 0;
+  }
+  ok = gql_execution_try_complete_trivial_value_with_metadata_data_fast(
+    aTHX_ completion_type,
+    flags,
+    type_name_sv,
+    data_out
+  );
+  SvREFCNT_dec(completion_type);
+  SvREFCNT_dec(type_name_sv);
+  return ok;
+}
+
+static int
 gql_execution_is_default_field_resolver(pTHX_ SV *resolve) {
   static CV *cv = NULL;
 
@@ -2013,6 +2052,40 @@ gql_execution_try_complete_trivial_value_with_metadata_fast(pTHX_ SV *completion
   ret_hv = newHV();
   (void)hv_store(ret_hv, "data", 4, serialized, 0);
   *completed_out = newRV_noinc((SV *)ret_hv);
+  return 1;
+}
+
+static int
+gql_execution_try_complete_trivial_value_with_metadata_data_fast(pTHX_ SV *completion_type, UV flags, SV *result, SV **data_out) {
+  SV *serialized;
+  int ok = 0;
+
+  if (data_out) {
+    *data_out = NULL;
+  }
+  if (!data_out || !completion_type || !SvOK(completion_type)) {
+    return 0;
+  }
+
+  if (!(flags & 0x01)) {
+    if (!result || !SvOK(result)) {
+      return 0;
+    }
+  } else if (!result || !SvOK(result)) {
+    *data_out = newSV(0);
+    return 1;
+  }
+
+  if (!(flags & 0x02)) {
+    return 0;
+  }
+
+  serialized = gql_execution_call_type_perl_to_graphql(aTHX_ completion_type, result, &ok);
+  if (!ok) {
+    return 0;
+  }
+
+  *data_out = serialized;
   return 1;
 }
 

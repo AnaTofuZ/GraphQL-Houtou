@@ -305,6 +305,16 @@ directly into result data/errors (`--count=-6`):
   - `houtou_compiled_ir`: `44478/s`
   - `houtou_xs_ast`: `43694/s`
 
+Latest spot check after native sync executors bypass trivial response-envelope
+allocation for `__typename` and leaf fast paths (`--count=-6`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir`: `87095/s`
+  - `houtou_xs_ast`: `37634/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `47209/s`
+  - `houtou_xs_ast`: `21793/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
@@ -335,6 +345,11 @@ Interpretation:
 - sync compiled-IR executors now flatten completed field envelopes directly
   into result `data` / `errors` instead of always retaining per-field response
   hashes until the final merge step
+- sync compiled-IR executors now also bypass per-field `{ data => ... }`
+  response-envelope allocation for trivial `__typename`, nullable-null, and
+  leaf fast paths; the native executor writes serialized values straight into
+  the final response hash and only falls back to legacy completion when GraphQL
+  semantics actually require it
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

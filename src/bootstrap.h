@@ -162,6 +162,7 @@ struct gql_ir_compiled_exec {
   SV *prepared_handle_sv;
   SV *schema_sv;
   SV *operation_name_sv;
+  gql_ir_operation_definition_t *selected_operation;
   SV *operation_sv;
   SV *fragments_sv;
   SV *root_selection_plan_sv;

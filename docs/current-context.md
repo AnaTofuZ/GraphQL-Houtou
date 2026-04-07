@@ -65,15 +65,23 @@ Available internal APIs:
 Current compiled plan caches:
 
 - selected operation metadata
-- fragment map
 - root type
-- root legacy fields
 - root selection plan
 - root field plan
 - nested selection metadata under root plans
 - nested `compiled_fields` for simple reusable buckets
 - nested/root `compiled_field_def`
 - fragment child nodes can also carry `compiled_field_def`
+
+Legacy compatibility structures still exist, but the current direction is to
+stop treating them as the canonical compiled form:
+
+- `operation`
+- `fragments`
+- `root_fields`
+
+Those are increasingly being treated as lazy materializations rather than
+retained compiled state.
 
 Current compiled-plan execution reuse:
 
@@ -82,6 +90,8 @@ Current compiled-plan execution reuse:
 - `collect_simple_object_fields()` now reuses those nested compiled buckets
 - simple inline fragments can be folded into compiled buckets
 - nested fragment buckets can now be reused as well
+- simple abstract single-node child execution can now use direct compiled field
+  plans instead of rebuilding legacy field buckets first
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -94,6 +104,8 @@ Current strategic conclusion:
   from adding more AST-compatible special cases
 - if AST compatibility is not required, prefer multi-stage IR compilation over
   further incremental AST-path complexity
+- reducing retained Perl-object state in prepared / compiled IR is now a
+  first-class optimization target, not just a cleanup task
 
 ## Runtime Schema Cache
 
@@ -182,10 +194,21 @@ If the next optimization round targets raw performance rather than AST
 compatibility, the preferred order is:
 
 1. make `compiled_ir` execute native field plans instead of `root_fields_sv`
-2. replace hot-path Perl execution-context hashes with IR-native structs where
+2. stop retaining eager legacy `operation` / `fragments` / `root_fields`
+   objects inside compiled plans unless compatibility requires them
+3. replace hot-path Perl execution-context hashes with IR-native structs where
    practical
-3. compile abstract fields into per-concrete-type child execution plans
-4. lower more arguments/directives at compile time
+4. compile abstract fields into per-concrete-type child execution plans
+5. lower more arguments/directives at compile time
+
+Concrete interpretation of the current plan:
+
+- compiled handles should prefer native pointers / spans / plan arrays over
+  retained `SV` graphs
+- plan export / resolve-info compatibility is allowed to materialize legacy
+  `SV` structures lazily
+- VM work should start from native child/root execution plans, not from more
+  `HV`/`AV` reshaping
 
 Practical guidance:
 

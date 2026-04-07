@@ -140,6 +140,26 @@ This avoids both extremes:
 - it does not force public AST changes
 - it does not require maintaining a completely separate executor
 
+## Native-IR Follow-up
+
+The next major bottleneck is no longer only AST compatibility. It is also that
+prepared / compiled IR still retain too many Perl objects (`SV` / `AV` / `HV`)
+as bridge structures.
+
+That means the long-term direction is not just "execute compiled IR faster",
+but also:
+
+1. keep parser IR and compiled plans in native C structures for as long as
+   possible
+2. avoid retaining legacy AST-compatible `SV` graphs inside compiled plans
+3. materialize legacy `operation` / `fragments` / `field` buckets only when a
+   compatibility boundary actually needs them
+4. evolve compiled field plans toward native execution plans that can
+   eventually be executed by a VM-like runner
+
+This is the practical bridge between the current executor work and a future
+compiled-IR VM.
+
 ## Current Groundwork
 
 The codebase now has an internal prepared executable IR handle:
@@ -167,6 +187,16 @@ The current prepared-IR execution path already proves an important point:
 However, the current path still rebuilds bridge structures on every execute.
 That is why the next step is *not* "more ad-hoc prepared IR helpers", but a
 compiled plan that caches reusable front-end state.
+
+Recent follow-up on that direction:
+
+- compiled root plans now cache runtime `nodes` / `path` data directly
+- compiled abstract child execution can use direct field plans for simple
+  single-node concrete cases
+- compiled handles are moving away from retaining eager legacy
+  `operation` / `fragments` / `root_fields` state
+- those legacy structures are increasingly treated as lazy compatibility
+  materializations rather than as the compiled representation itself
 
 ## Reuse Strategy
 
@@ -221,6 +251,36 @@ Status: landed.
 
 ### Stage 3
 
+Reduce retained Perl-object state inside compiled plans.
+
+Target changes:
+
+- stop treating legacy `SV` maps as the canonical compiled representation
+- keep selected operation / fragment / field metadata in native IR-oriented
+  form
+- materialize legacy `operation`, `fragments`, and `root_fields` only on
+  demand
+- continue replacing compiled field buckets with execution-oriented field plans
+
+Status: in progress.
+
+### Stage 4
+
+Native child execution plans and VM-oriented lowering.
+
+Target changes:
+
+- compile object / abstract child selections into native child plans
+- lower more arguments / directives into compile-time data
+- make the hot execution loop consume plan arrays / structs instead of Perl
+  hashes
+- converge on a VM-like executor without prematurely forking GraphQL
+  semantics
+
+Status: planned.
+
+### Execution Rollout 1
+
 Internal prepared-IR execution path:
 
 - build a shared execution context
@@ -229,7 +289,7 @@ Internal prepared-IR execution path:
 
 Status: landed.
 
-### Stage 4
+### Execution Rollout 2
 
 Introduce a compiled execution plan object:
 

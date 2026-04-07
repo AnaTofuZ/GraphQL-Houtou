@@ -22,9 +22,38 @@ public AST contract.
 Principles:
 
 - keep the public parser and AST APIs unchanged
-- keep the existing XS execution hot paths reusable
-- do not fork business logic into a second completely independent executor
+- keep the graphql-perl-compatible AST execution layer available
+- allow compiled-IR-native hot paths to diverge from AST/legacy code when that
+  removes measurable bridge costs
 - introduce IR-oriented execution in small internal stages
+
+## Compatibility Policy
+
+The working policy for the current optimization phase is:
+
+- keep graphql-perl compatibility for user-visible AST execution
+- do not require code-sharing between AST execution and compiled-IR execution
+  if that sharing keeps legacy bridge costs in the hot path
+- allow duplicated compiled-IR-only execution code, as long as comments point
+  to the corresponding legacy / AST-oriented implementation where useful
+- allow breaking changes to internal APIs that are not intended for end users
+- keep user-visible GraphQL object APIs broadly compatible, but allow
+  performance-motivated deviations if they are explicitly reviewed first and
+  documented before landing
+- treat compatibility-affecting shortcuts such as optional info attachment,
+  lighter-weight hashes instead of full objects, or reduced metadata as
+  high-signal design decisions that must be called out explicitly
+- keep memory-leak risk visible whenever native C tables / structs are added
+
+Additional runtime / type-system policy:
+
+- built-in primitive GraphQL types may be specialized in XS and do not need to
+  stay on `Type::Tiny` internally
+- the public API should still keep a `Type::Tiny`-friendly path for typical
+  user-defined custom scalar / coercion flows
+- Moo-based object construction may be replaced or bypassed on internal hot
+  paths when measurement justifies it, but user-visible behavior changes still
+  require explicit review and documentation
 
 ## Why This Work Exists
 

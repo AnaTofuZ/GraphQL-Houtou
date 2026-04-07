@@ -58,6 +58,8 @@ static SV *gql_execution_complete_field_value_catching_error_xs_impl(
 static int gql_execution_try_typename_meta_field_fast(pTHX_ SV *parent_type, SV *field_name_sv, SV *return_type, SV **completed_out);
 static int gql_execution_is_default_field_resolver(pTHX_ SV *resolve);
 static int gql_execution_try_default_field_resolve_fast(pTHX_ SV *root_value, SV *field_name_sv, SV **result_out);
+static int gql_execution_get_trivial_completion_metadata(pTHX_ SV *return_type, SV **completion_type_out, UV *flags_out);
+static int gql_execution_try_complete_trivial_value_with_metadata_fast(pTHX_ SV *completion_type, UV flags, SV *result, SV **completed_out);
 static int gql_execution_try_complete_trivial_value_fast(pTHX_ SV *return_type, SV *result, SV **completed_out);
 static void gql_ir_attach_compiled_field_defs_to_selections(pTHX_ SV *schema, SV *parent_type, AV *selections_av, SV *fragments_sv);
 static void gql_ir_attach_compiled_field_defs_to_fragments(pTHX_ SV *schema, SV *fragments_sv);
@@ -1927,9 +1929,56 @@ gql_execution_try_default_field_resolve_fast(pTHX_ SV *root_value, SV *field_nam
 }
 
 static int
-gql_execution_try_complete_trivial_value_fast(pTHX_ SV *return_type, SV *result, SV **completed_out) {
-  SV *type = return_type;
-  SV *inner_type = NULL;
+gql_execution_get_trivial_completion_metadata(pTHX_ SV *return_type, SV **completion_type_out, UV *flags_out) {
+  SV *type = NULL;
+  UV flags = 0;
+
+  if (completion_type_out) {
+    *completion_type_out = NULL;
+  }
+  if (flags_out) {
+    *flags_out = 0;
+  }
+  if (!return_type || !SvOK(return_type)) {
+    return 0;
+  }
+
+  if (sv_derived_from(return_type, "GraphQL::Houtou::Type::NonNull")
+      || sv_derived_from(return_type, "GraphQL::Type::NonNull")) {
+    type = gql_execution_call_type_of(aTHX_ return_type);
+    if (!type || !SvOK(type)) {
+      if (type && type != &PL_sv_undef) {
+        SvREFCNT_dec(type);
+      }
+      return 0;
+    }
+  } else {
+    type = gql_execution_share_or_copy_sv(return_type);
+    flags |= 0x01;
+  }
+
+  if (sv_does(type, "GraphQL::Houtou::Role::Leaf")
+      || sv_does(type, "GraphQL::Role::Leaf")
+      || sv_derived_from(type, "GraphQL::Houtou::Type::Scalar")
+      || sv_derived_from(type, "GraphQL::Type::Scalar")
+      || sv_derived_from(type, "GraphQL::Houtou::Type::Enum")
+      || sv_derived_from(type, "GraphQL::Type::Enum")) {
+    flags |= 0x02;
+  }
+
+  if (completion_type_out) {
+    *completion_type_out = type;
+  } else if (type) {
+    SvREFCNT_dec(type);
+  }
+  if (flags_out) {
+    *flags_out = flags;
+  }
+  return 1;
+}
+
+static int
+gql_execution_try_complete_trivial_value_with_metadata_fast(pTHX_ SV *completion_type, UV flags, SV *result, SV **completed_out) {
   SV *serialized;
   HV *ret_hv;
   int ok = 0;
@@ -1937,17 +1986,14 @@ gql_execution_try_complete_trivial_value_fast(pTHX_ SV *return_type, SV *result,
   if (completed_out) {
     *completed_out = NULL;
   }
-  if (!completed_out || !return_type || !SvOK(return_type)) {
+  if (!completed_out || !completion_type || !SvOK(completion_type)) {
     return 0;
   }
 
-  if (sv_derived_from(return_type, "GraphQL::Houtou::Type::NonNull")
-      || sv_derived_from(return_type, "GraphQL::Type::NonNull")) {
+  if (!(flags & 0x01)) {
     if (!result || !SvOK(result)) {
       return 0;
     }
-    inner_type = gql_execution_call_type_of(aTHX_ return_type);
-    type = inner_type;
   } else if (!result || !SvOK(result)) {
     ret_hv = newHV();
     (void)hv_store(ret_hv, "data", 4, newSV(0), 0);
@@ -1955,22 +2001,11 @@ gql_execution_try_complete_trivial_value_fast(pTHX_ SV *return_type, SV *result,
     return 1;
   }
 
-  if (!(sv_does(type, "GraphQL::Houtou::Role::Leaf")
-        || sv_does(type, "GraphQL::Role::Leaf")
-        || sv_derived_from(type, "GraphQL::Houtou::Type::Scalar")
-        || sv_derived_from(type, "GraphQL::Type::Scalar")
-        || sv_derived_from(type, "GraphQL::Houtou::Type::Enum")
-        || sv_derived_from(type, "GraphQL::Type::Enum"))) {
-    if (inner_type) {
-      SvREFCNT_dec(inner_type);
-    }
+  if (!(flags & 0x02)) {
     return 0;
   }
 
-  serialized = gql_execution_call_type_perl_to_graphql(aTHX_ type, result, &ok);
-  if (inner_type) {
-    SvREFCNT_dec(inner_type);
-  }
+  serialized = gql_execution_call_type_perl_to_graphql(aTHX_ completion_type, result, &ok);
   if (!ok) {
     return 0;
   }
@@ -1979,6 +2014,33 @@ gql_execution_try_complete_trivial_value_fast(pTHX_ SV *return_type, SV *result,
   (void)hv_store(ret_hv, "data", 4, serialized, 0);
   *completed_out = newRV_noinc((SV *)ret_hv);
   return 1;
+}
+
+static int
+gql_execution_try_complete_trivial_value_fast(pTHX_ SV *return_type, SV *result, SV **completed_out) {
+  SV *completion_type = NULL;
+  UV flags = 0;
+  int ret;
+
+  if (completed_out) {
+    *completed_out = NULL;
+  }
+  if (!completed_out || !return_type || !SvOK(return_type)) {
+    return 0;
+  }
+
+  if (!gql_execution_get_trivial_completion_metadata(aTHX_ return_type, &completion_type, &flags)) {
+    return 0;
+  }
+
+  ret = gql_execution_try_complete_trivial_value_with_metadata_fast(
+    aTHX_ completion_type,
+    flags,
+    result,
+    completed_out
+  );
+  SvREFCNT_dec(completion_type);
+  return ret;
 }
 
 static HV *

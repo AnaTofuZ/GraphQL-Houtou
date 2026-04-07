@@ -170,6 +170,7 @@ struct gql_ir_compiled_root_field_plan_entry {
   SV *field_name_sv;
   SV *field_def_sv;
   SV *type_sv;
+  SV *completion_type_sv;
   SV *resolve_sv;
   SV *nodes_sv;
   SV *first_node_sv;
@@ -179,6 +180,7 @@ struct gql_ir_compiled_root_field_plan_entry {
   UV field_arg_count;
   UV directive_count;
   UV selection_count;
+  UV trivial_completion_flags;
 };
 
 struct gql_ir_compiled_root_field_plan {

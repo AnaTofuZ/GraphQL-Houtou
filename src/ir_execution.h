@@ -1208,6 +1208,10 @@ gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan)
         SvREFCNT_dec(entry->type_sv);
         entry->type_sv = NULL;
       }
+      if (entry->completion_type_sv) {
+        SvREFCNT_dec(entry->completion_type_sv);
+        entry->completion_type_sv = NULL;
+      }
       if (entry->resolve_sv) {
         SvREFCNT_dec(entry->resolve_sv);
         entry->resolve_sv = NULL;
@@ -1551,6 +1555,8 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     SV **type_svp;
     SV **resolve_svp;
     SV **field_args_svp;
+    SV *completion_type_sv = NULL;
+    UV trivial_completion_flags = 0;
     SV **nodes_svp;
     AV *nodes_av;
     SV **first_node_svp;
@@ -1605,6 +1611,11 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     entry->field_def_sv = gql_execution_share_or_copy_sv(*field_def_svp);
     if (type_svp && SvOK(*type_svp)) {
       entry->type_sv = gql_execution_share_or_copy_sv(*type_svp);
+      if (gql_execution_get_trivial_completion_metadata(aTHX_ *type_svp, &completion_type_sv, &trivial_completion_flags)) {
+        entry->completion_type_sv = completion_type_sv;
+        entry->trivial_completion_flags = trivial_completion_flags;
+        completion_type_sv = NULL;
+      }
     }
     if (resolve_svp && SvOK(*resolve_svp)) {
       entry->resolve_sv = gql_execution_share_or_copy_sv(*resolve_svp);
@@ -1621,6 +1632,10 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
         : 0;
     entry->directive_count = (directive_count_svp && SvOK(*directive_count_svp)) ? SvUV(*directive_count_svp) : 0;
     entry->selection_count = (selection_count_svp && SvOK(*selection_count_svp)) ? SvUV(*selection_count_svp) : 0;
+    if (completion_type_sv) {
+      SvREFCNT_dec(completion_type_sv);
+      completion_type_sv = NULL;
+    }
   }
 
   return plan;
@@ -3153,7 +3168,16 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
     if (gql_execution_is_default_field_resolver(aTHX_ resolve_sv)
         && gql_execution_try_default_field_resolve_fast(aTHX_ root_value, entry->field_name_sv, &result_sv)) {
       used_fast_default_resolve = 1;
-      if (gql_execution_try_complete_trivial_value_fast(aTHX_ type_sv, result_sv, &completed_sv)) {
+      if (entry->completion_type_sv && entry->trivial_completion_flags) {
+        if (gql_execution_try_complete_trivial_value_with_metadata_fast(
+              aTHX_ entry->completion_type_sv,
+              entry->trivial_completion_flags,
+              result_sv,
+              &completed_sv
+            )) {
+          goto have_completed;
+        }
+      } else if (gql_execution_try_complete_trivial_value_fast(aTHX_ type_sv, result_sv, &completed_sv)) {
         goto have_completed;
       }
     }
@@ -3294,6 +3318,8 @@ gql_ir_execute_native_field_plan(
   SV *path_sv,
   gql_ir_compiled_root_field_plan_t *field_plan
 ) {
+  /* Mirrors gql_execution_execute_field_plan(), but compiled IR is allowed to
+   * diverge here so native plan metadata can replace legacy bucket lookups. */
   HV *context_hv;
   gql_execution_context_fast_cache_t *context_cache;
   SV **context_value_svp;
@@ -3403,7 +3429,16 @@ gql_ir_execute_native_field_plan(
     if (gql_execution_is_default_field_resolver(aTHX_ resolve_sv)
         && gql_execution_try_default_field_resolve_fast(aTHX_ root_value, entry->field_name_sv, &result_sv)) {
       used_fast_default_resolve = 1;
-      if (gql_execution_try_complete_trivial_value_fast(aTHX_ type_sv, result_sv, &completed_sv)) {
+      if (entry->completion_type_sv && entry->trivial_completion_flags) {
+        if (gql_execution_try_complete_trivial_value_with_metadata_fast(
+              aTHX_ entry->completion_type_sv,
+              entry->trivial_completion_flags,
+              result_sv,
+              &completed_sv
+            )) {
+          goto have_completed;
+        }
+      } else if (gql_execution_try_complete_trivial_value_fast(aTHX_ type_sv, result_sv, &completed_sv)) {
         goto have_completed;
       }
     }

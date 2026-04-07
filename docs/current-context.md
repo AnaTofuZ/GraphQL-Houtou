@@ -7,6 +7,14 @@ Compressed handoff for the current `GraphQL::Houtou` worktree.
 - Main compatibility work stays on `main`.
 - IR-direct execution work stays on `ir-direct-execution` only.
 - Public parser / AST APIs are unchanged.
+- graphql-perl-compatible AST execution remains the compatibility boundary.
+- compiled-IR hot paths may diverge from AST/legacy code if that removes
+  measurable bridge overhead.
+- internal execution APIs may be changed destructively when needed.
+- any user-visible compatibility tradeoff must be reviewed first and then
+  documented before landing.
+- compiled-IR-only code duplication is acceptable when comments identify the
+  corresponding AST/legacy path and measurement shows the bridge cost matters.
 - Current strategy has two parallel tracks:
   - query-side compiled execution plans
   - schema/runtime caches that also help AST execution
@@ -283,6 +291,13 @@ Latest spot check after caching the first field node on native plan entries
   - `houtou_compiled_ir`: `44167/s`
   - `houtou_xs_ast`: `43720/s`
 
+Latest spot check after caching trivial-completion metadata on native plan
+entries (`--count=-6`):
+
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `45278/s`
+  - `houtou_xs_ast`: `44392/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
@@ -307,6 +322,9 @@ Interpretation:
 - native field-plan entries now also cache the first field node, which trims a
   small amount of `AV` traversal and node-shape checking on argument-heavy
   paths without adding much complexity
+- native field-plan entries now also cache trivial-completion metadata so leaf
+  field fast paths do not need to rediscover non-null/leaf structure on every
+  execution
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

@@ -3214,6 +3214,8 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
     lazy_info.context_sv = context_sv;
     lazy_info.parent_type_sv = compiled->root_type_sv;
     lazy_info.field_def_sv = field_def_sv;
+    lazy_info.return_type_sv = entry->return_type_sv ? entry->return_type_sv : type_sv;
+    lazy_info.field_name_sv = entry->field_name_sv;
     lazy_info.nodes_sv = nodes_sv;
     if (entry->path_sv && SvOK(entry->path_sv)) {
       lazy_info.path_sv = entry->path_sv;
@@ -3528,6 +3530,8 @@ gql_ir_execute_native_field_plan(
     lazy_info.context_sv = context_sv;
     lazy_info.parent_type_sv = parent_type_sv;
     lazy_info.field_def_sv = field_def_sv;
+    lazy_info.return_type_sv = entry->return_type_sv ? entry->return_type_sv : type_sv;
+    lazy_info.field_name_sv = entry->field_name_sv;
     lazy_info.nodes_sv = nodes_sv;
     if (entry->path_sv && SvOK(entry->path_sv)) {
       lazy_info.path_sv = entry->path_sv;

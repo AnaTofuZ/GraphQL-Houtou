@@ -8,6 +8,8 @@ typedef struct gql_execution_lazy_resolve_info {
   SV *context_sv;
   SV *parent_type_sv;
   SV *field_def_sv;
+  SV *return_type_sv;
+  SV *field_name_sv;
   SV *nodes_sv;
   SV *base_path_sv;
   SV *result_name_sv;
@@ -4746,17 +4748,11 @@ gql_execution_complete_value_catching_error_xs_impl(pTHX_ SV *context, SV *retur
 }
 
 static SV *
-gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_def, SV *path, SV *nodes) {
+gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_def, SV *return_type, SV *field_name, SV *path, SV *nodes) {
   HV *info_hv = newHV();
   HV *context_hv;
   gql_execution_context_fast_cache_t *context_cache;
   HV *resolve_info_base_hv = NULL;
-  AV *nodes_av;
-  SV **field_node_svp;
-  HV *field_node_hv;
-  SV **field_name_svp;
-  HV *field_def_hv;
-  SV **return_type_svp;
   SV **resolve_info_base_svp;
   SV **schema_svp = NULL;
   SV **fragments_svp = NULL;
@@ -4774,6 +4770,12 @@ gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_d
   if (!SvROK(field_def) || SvTYPE(SvRV(field_def)) != SVt_PVHV) {
     croak("field_def must be a hash reference");
   }
+  if (!field_name || !SvOK(field_name)) {
+    croak("field name is required");
+  }
+  if (!return_type || !SvOK(return_type)) {
+    croak("return type is required");
+  }
 
   context_hv = (HV *)SvRV(context);
   context_cache = gql_execution_context_fast_cache(aTHX_ context);
@@ -4786,23 +4788,6 @@ gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_d
       && SvROK(*resolve_info_base_svp)
       && SvTYPE(SvRV(*resolve_info_base_svp)) == SVt_PVHV) {
     resolve_info_base_hv = (HV *)SvRV(*resolve_info_base_svp);
-  }
-  nodes_av = (AV *)SvRV(nodes);
-  field_node_svp = av_fetch(nodes_av, 0, 0);
-  if (!field_node_svp || !SvROK(*field_node_svp) || SvTYPE(SvRV(*field_node_svp)) != SVt_PVHV) {
-    croak("nodes must contain field hash references");
-  }
-
-  field_node_hv = (HV *)SvRV(*field_node_svp);
-  field_name_svp = hv_fetch(field_node_hv, "name", 4, 0);
-  if (!field_name_svp || !SvOK(*field_name_svp)) {
-    croak("field node has no name");
-  }
-
-  field_def_hv = (HV *)SvRV(field_def);
-  return_type_svp = hv_fetch(field_def_hv, "type", 4, 0);
-  if (!return_type_svp || !SvOK(*return_type_svp)) {
-    croak("field definition has no type");
   }
 
   if (resolve_info_base_hv) {
@@ -4836,9 +4821,9 @@ gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_d
   gql_store_sv(info_hv, "operation", (operation_svp && SvOK(*operation_svp)) ? gql_execution_share_or_copy_sv(*operation_svp) : newSV(0));
   gql_store_sv(info_hv, "variable_values", (variable_values_svp && SvOK(*variable_values_svp)) ? gql_execution_share_or_copy_sv(*variable_values_svp) : newSV(0));
   gql_store_sv(info_hv, "promise_code", (promise_code_svp && SvOK(*promise_code_svp)) ? gql_execution_share_or_copy_sv(*promise_code_svp) : newSV(0));
-  gql_store_sv(info_hv, "field_name", newSVsv(*field_name_svp));
+  gql_store_sv(info_hv, "field_name", newSVsv(field_name));
   gql_store_sv(info_hv, "field_nodes", gql_execution_share_or_copy_sv(nodes));
-  gql_store_sv(info_hv, "return_type", gql_execution_share_or_copy_sv(*return_type_svp));
+  gql_store_sv(info_hv, "return_type", gql_execution_share_or_copy_sv(return_type));
   gql_store_sv(info_hv, "parent_type", gql_execution_share_or_copy_sv(parent_type));
   gql_store_sv(info_hv, "path", gql_execution_share_or_copy_sv(path));
 
@@ -4874,6 +4859,8 @@ gql_execution_lazy_resolve_info_materialize(pTHX_ gql_execution_lazy_resolve_inf
       lazy_info->context_sv,
       lazy_info->parent_type_sv,
       lazy_info->field_def_sv,
+      lazy_info->return_type_sv,
+      lazy_info->field_name_sv,
       path_sv,
       lazy_info->nodes_sv
     );
@@ -4909,7 +4896,6 @@ gql_execution_get_argument_values_xs_impl(pTHX_ SV *def, SV *node, SV *variable_
   }
   arg_defs_svp = hv_fetch(def_hv, "args", 4, 0);
   arg_nodes_svp = hv_fetch(node_hv, "arguments", 9, 0);
-
   if (!arg_defs_svp || !SvOK(*arg_defs_svp)) {
     return newRV_noinc((SV *)coerced_hv);
   }
@@ -5515,6 +5501,8 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     lazy_info.context_sv = context;
     lazy_info.parent_type_sv = parent_type;
     lazy_info.field_def_sv = field_def_sv;
+    lazy_info.return_type_sv = *type_svp;
+    lazy_info.field_name_sv = *field_name_svp;
     lazy_info.nodes_sv = nodes_sv;
     lazy_info.base_path_sv = path;
     lazy_info.result_name_sv = *result_name_svp;
@@ -5780,6 +5768,8 @@ gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_va
     lazy_info.context_sv = context;
     lazy_info.parent_type_sv = parent_type;
     lazy_info.field_def_sv = field_def_sv;
+    lazy_info.return_type_sv = *type_svp;
+    lazy_info.field_name_sv = *field_name_svp;
     lazy_info.nodes_sv = nodes_sv;
     if (gql_execution_try_typename_meta_field_fast(aTHX_ parent_type, *field_name_svp, *type_svp, &completed_sv)) {
       goto have_completed;

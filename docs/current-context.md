@@ -325,6 +325,17 @@ it directly into XS completion (`--count=-6`):
   - `houtou_compiled_ir`: `46116/s`
   - `houtou_xs_ast`: `44237/s`
 
+Latest spot check after lazy `resolve_info` started reusing cached
+`field_name` / `return_type` metadata instead of re-reading them from
+`nodes[0]` and `field_def` (`--count=-6`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir`: `83503/s`
+  - `houtou_xs_ast`: `78825/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `45229/s`
+  - `houtou_xs_ast`: `43058/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
@@ -373,6 +384,10 @@ Interpretation:
 - native field-plan entries now also cache `return_type`, so XS completion no
   longer needs to rediscover `field_def->{type}` on the hot path when compiled
   root/native child executors already know the answer
+- lazy `resolve_info` materialization now also reuses cached `field_name` and
+  `return_type` metadata, so building the Perl info hash no longer has to read
+  `nodes[0]{name}` and `field_def->{type}` again once the native executor has
+  already identified the field
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

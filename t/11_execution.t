@@ -630,6 +630,26 @@ subtest 'execute union field with resolve_type through xs path' => sub {
   is_deeply $xs, $public, 'union field with resolve_type matches public facade';
 };
 
+subtest 'xs path attaches abstract execution metadata to parsed ast' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $ast = parse_with_options('{ search_result { ... on User { id name } } }', { backend => 'xs' });
+  my $result = GraphQL::Houtou::XS::Execution::execute_xs($schema, $ast);
+  my $operation = $ast->[0];
+  my $selection = $operation->{selections}[0];
+
+  is_deeply $result, {
+    data => {
+      search_result => {
+        id => '13',
+        name => 'search:13',
+      },
+    },
+  }, 'xs execution still returns expected data for parsed ast';
+  ok $operation->{_houtou_exec_meta_ready}, 'operation is marked as metadata-ready';
+  ok $selection->{compiled_field_def}, 'abstract field keeps compiled field def on parsed ast';
+};
+
 subtest 'execute interface field with default resolve_type through xs path' => sub {
   require GraphQL::Houtou::XS::Execution;
 

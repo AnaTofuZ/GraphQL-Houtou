@@ -256,6 +256,155 @@ Current implementation note:
   field definitions increasingly authoritative so execution no longer rebuilds
   front-end state below the root selection boundary
 
+## Current Optimization Conclusion
+
+Recent abstract/fragment-heavy tuning work clarified an important boundary.
+
+For `abstract_with_fragment`-shaped workloads:
+
+- runtime cache improvements and small AST-path fast paths help a little
+- callback lookup caching is valid but modest
+- abstract fragment matching can be made cheaper
+- low-risk bucket / refcount micro-optimizations are acceptable
+
+But the measured gains remain small and noisy once the easy cache lookups are
+in place.
+
+That means the next meaningful speedups are unlikely to come from further
+incremental AST-compatible tuning alone.
+
+## Preferred Direction If AST Compatibility Is Not A Goal
+
+If the caller does not need graphql-perl AST compatibility, and limited
+execution-only duplication is acceptable, the preferred direction is now:
+
+1. parse executable source into arena IR
+2. compile IR into an execution-oriented plan
+3. optionally compile that plan again into a schema-specialized runtime plan
+4. execute the runtime plan through an IR-native hot path
+
+This is effectively a multi-stage compilation strategy:
+
+- parser IR
+- execution plan IR
+- runtime-specialized executable plan
+
+The goal is not "duplicate all execution logic", but to stop paying legacy
+bridge costs inside the hot path.
+
+## Highest-Value IR-Native Targets
+
+If optimization work continues on the IR-direct side, these are the most
+promising targets in order:
+
+### 1. Native compiled field execution
+
+Current compiled IR still stores and executes legacy structures such as:
+
+- `operation_sv`
+- `fragments_sv`
+- `root_fields_sv`
+
+and eventually feeds them into the AST/legacy-oriented field executor.
+
+That means compiled IR is still paying for:
+
+- legacy selection/node materialization
+- hash/array bucket merging
+- legacy context shape expectations
+
+The most valuable next step is a compiled-IR-only field executor that consumes
+native field plans directly instead of `root_fields_sv`.
+
+### 2. IR-native execution context
+
+Current compiled execution still builds a Perl `HV` execution context with:
+
+- schema
+- fragments
+- operation
+- variable values
+- field resolver
+- resolve info base
+
+That is convenient for reuse but not ideal for hot execution.
+
+The preferred next step is to keep hot-path data in a C struct and materialize
+Perl hashes only on demand, especially for resolver info.
+
+### 3. Per-concrete-type abstract child plans
+
+Abstract completion is still expensive because even compiled plans eventually
+fall back toward selection/bucket structures.
+
+The preferred compiled representation for abstract fields is:
+
+- one abstract field plan
+- plus one precompiled child plan per concrete runtime object type
+
+Then `resolve_type` can jump directly to a child executable plan instead of
+rebuilding or merging nested selections.
+
+### 4. Compile-time argument and directive lowering
+
+IR execution still keeps legacy conversion helpers for arguments, directives,
+and values.
+
+A stronger compiled plan should lower:
+
+- static argument values
+- include/skip metadata
+- selection flags
+
+so runtime only resolves variables and executes.
+
+### 5. Index-based fragment/type dispatch
+
+Where possible, compiled plans should use IDs / indexes instead of repeated:
+
+- name SV creation
+- fragment-name lookup
+- type-name lookup
+
+This matters most once a native compiled executor exists.
+
+## Acceptable Duplication Boundary
+
+Some duplication is now considered acceptable if it stays inside the
+compiled-IR execution layer.
+
+Reasonable duplication:
+
+- compiled-IR-only execution context structs
+- compiled-IR-only field execution loop
+- compiled abstract child-plan dispatch
+
+Duplication to avoid unless clearly justified by measurement:
+
+- separate GraphQL semantics for directives
+- separate variable coercion semantics
+- separate error/path semantics
+- separate promise semantics
+
+In short:
+
+- duplicate the execution front-end and plan runner if needed
+- do not casually duplicate GraphQL semantics or promise/error behavior
+
+## AST-Path Maintenance Rule
+
+AST-path tuning remains worthwhile only while changes are:
+
+- low risk
+- low complexity
+- shared with IR execution
+
+If an AST-focused optimization requires substantial special cases for
+abstract/fragment-heavy execution and still yields only single-digit or noisy
+gains, prefer not to land it.
+
+At that point effort should move to compiled IR native execution instead.
+
 ## Runtime Schema Direction
 
 NYTProf snapshots still show cost from Perl meta layers such as:

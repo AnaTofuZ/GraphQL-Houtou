@@ -86,6 +86,15 @@ Current compiled-plan execution reuse:
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
 
+Current strategic conclusion:
+
+- low-risk AST-path tuning still has some value
+- abstract/fragment-heavy AST optimization now shows diminishing returns
+- larger wins are more likely to come from compiled-IR-native execution than
+  from adding more AST-compatible special cases
+- if AST compatibility is not required, prefer multi-stage IR compilation over
+  further incremental AST-path complexity
+
 ## Runtime Schema Cache
 
 `GraphQL::Houtou::Schema` now has:
@@ -115,6 +124,11 @@ Current runtime cache consumers:
 This is the current main path for "global" optimization that also improves
 AST execution, not only IR execution.
 
+Additional cached runtime data now also includes:
+
+- `resolve_type_map`
+- `is_type_of_map`
+
 ## Benchmark Direction
 
 Known shape of results after latest landed work:
@@ -123,6 +137,8 @@ Known shape of results after latest landed work:
 - `compiled_ir` > `houtou_xs_ast` on nested object cases
 - `compiled_ir` ~= `houtou_xs_ast` on abstract/fragment-heavy cases
 - runtime-cache work targets AST and IR paths simultaneously
+- abstract/fragment-heavy tuning on AST paths is now close to a diminishing
+  returns region
 
 Current sampled numbers (`util/execution-benchmark.pl --count=-3`):
 
@@ -159,6 +175,23 @@ Primary verification workflow:
 
 Use `./Build build` only when benchmark / profiling utilities need repo-root
 `blib`.
+
+## Next IR Direction
+
+If the next optimization round targets raw performance rather than AST
+compatibility, the preferred order is:
+
+1. make `compiled_ir` execute native field plans instead of `root_fields_sv`
+2. replace hot-path Perl execution-context hashes with IR-native structs where
+   practical
+3. compile abstract fields into per-concrete-type child execution plans
+4. lower more arguments/directives at compile time
+
+Practical guidance:
+
+- duplicating the plan runner for compiled IR is acceptable
+- duplicating GraphQL semantics, error semantics, or promise semantics is not
+  the preferred direction unless measurement forces it
 
 ## Promise::XS Experiment Note
 

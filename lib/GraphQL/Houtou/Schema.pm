@@ -89,6 +89,8 @@ sub _runtime_cache {
   my $possible_type_map = { %{ $self->_possible_type_map || {} } };
   my %possible_types;
   my %field_maps;
+  my %resolve_type_map;
+  my %is_type_of_map;
 
   for my $type (values %$name2type) {
     next if !$type;
@@ -100,8 +102,15 @@ sub _runtime_cache {
       $field_maps{ $type->name } = $type->fields || {};
     }
 
+    if ($type->isa('GraphQL::Type::Object') || $type->isa('GraphQL::Houtou::Type::Object')) {
+      my $is_type_of = $type->is_type_of;
+      $is_type_of_map{ $type->name } = $is_type_of if $is_type_of;
+    }
+
     if ($type->isa('GraphQL::Type::Union') || $type->isa('GraphQL::Houtou::Type::Union')) {
       my $types = $type->{types} || $type->types || [];
+      my $resolve_type = $type->resolve_type;
+      $resolve_type_map{ $type->name } = $resolve_type if $resolve_type;
       $possible_types{ $type->name } = [ @$types ];
       $possible_type_map->{ $type->name } ||= { map { ($_->name => 1) } @$types };
       next;
@@ -109,6 +118,8 @@ sub _runtime_cache {
 
     if ($type->isa('GraphQL::Type::Interface') || $type->isa('GraphQL::Houtou::Type::Interface')) {
       my $types = [ @{ $interface2types->{ $type->name } || [] } ];
+      my $resolve_type = $type->resolve_type;
+      $resolve_type_map{ $type->name } = $resolve_type if $resolve_type;
       $possible_types{ $type->name } = $types;
       $possible_type_map->{ $type->name } ||= { map { ($_->name => 1) } @$types };
       next;
@@ -126,6 +137,8 @@ sub _runtime_cache {
     possible_type_map => $possible_type_map,
     possible_types => \%possible_types,
     field_maps => \%field_maps,
+    resolve_type_map => \%resolve_type_map,
+    is_type_of_map => \%is_type_of_map,
   };
 }
 

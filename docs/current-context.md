@@ -28,6 +28,15 @@ Compressed handoff for the current `GraphQL::Houtou` worktree.
 - `e7c04b8` Attach compiled field defs to fragment plans
 - `c42263f` Use runtime caches in abstract fragment matching
 - `0685c33` Precompute possible type maps in runtime cache
+- `ec98231` Reduce retained legacy state in compiled IR
+- `2bbee63` Store compiled IR root plans natively
+- `c2f8742` Lazy-load compiled IR root selection plans
+- `e817212` Use native tables for abstract child plans
+- `5608d70` Use native tables for concrete subfields
+- `e99c79e` Prefer native tables for compiled field buckets
+- `edf499a` Strip legacy buckets from compiled root nodes
+- `0918e04` Strip legacy buckets from compiled fragments
+- `de6e3da` Cache hot execution context lookups
 
 ## Current Execution State
 
@@ -105,6 +114,9 @@ Current compiled-plan execution reuse:
   tables keyed by runtime object identity
 - compiled field-bucket merges can also prefer native node/fragment-attached
   bucket tables before falling back to legacy `compiled_fields`
+- hot execution-context members are now cached behind a context-attached magic
+  struct so repeated `hv_fetch` calls are reduced in `resolve_info`,
+  `execute_fields`, field-plan execution, and compiled-root execution
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -161,6 +173,8 @@ Known shape of results after latest landed work:
 - `compiled_ir` > `prepared_ir`
 - `compiled_ir` > `houtou_xs_ast` on nested object cases
 - `compiled_ir` ~= `houtou_xs_ast` on abstract/fragment-heavy cases
+- `compiled_ir` can now edge past `houtou_xs_ast` on
+  `abstract_with_fragment` in favorable runs, but the margin is still small
 - runtime-cache work targets AST and IR paths simultaneously
 - abstract/fragment-heavy tuning on AST paths is now close to a diminishing
   returns region
@@ -193,6 +207,25 @@ Current sampled numbers (`util/execution-benchmark.pl --count=-3`):
   - `houtou_prepared_ir`: `42601/s`
   - `houtou_compiled_ir`: `43671/s`
   - `houtou_facade_ast`: `43260/s`
+
+More recent spot checks after native child-plan/native bucket/context-cache
+work:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `83039/s`
+  - `houtou_xs_ast`: `79643/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `43320/s`
+  - `houtou_xs_ast`: `43114/s`
+
+Interpretation:
+
+- the current compiled-IR direction is still valid
+- `abstract_with_fragment` has moved from "slightly behind" to roughly tie /
+  slight lead territory, but not by enough to justify large AST-compatible
+  complexity
+- further wins should come from removing more runtime Perl-object work, not
+  from micro-tuning legacy bucket reshaping
 
 ## Testing Rule
 
@@ -230,6 +263,17 @@ Practical guidance:
 - duplicating the plan runner for compiled IR is acceptable
 - duplicating GraphQL semantics, error semantics, or promise semantics is not
   the preferred direction unless measurement forces it
+
+Immediate next candidates for `abstract_with_fragment`:
+
+1. make `resolve_info` on compiled-IR paths lazier so object fields that do not
+   need `info` do not eagerly allocate a fresh info `HV`
+2. replace more child-execution `HV/AV` plan state with native tables/arrays
+   so abstract child execution no longer needs legacy bucket materialization at
+   all
+3. move path handling for compiled child plans toward native path segments or
+   precompiled path templates instead of allocating Perl path objects on every
+   field
 
 ## Promise::XS Experiment Note
 

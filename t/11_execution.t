@@ -993,6 +993,48 @@ subtest 'execute compiled ir simple query' => sub {
   );
 };
 
+subtest 'compiled ir keeps default resolver coderef fallback semantics' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $Child = GraphQL::Houtou::Type::Object->new(
+    name => 'FastChild',
+    fields => {
+      name => { type => $String->non_null },
+    },
+  );
+  my $LocalQuery = GraphQL::Houtou::Type::Object->new(
+    name => 'FastQuery',
+    fields => {
+      child => {
+        type => $Child->non_null,
+        resolve => sub {
+          return {
+            name => sub {
+              my ($args, $ctx, $info) = @_;
+              return join('.', @{ $info->{path} });
+            },
+          };
+        },
+      },
+    },
+  );
+  my $local_schema = GraphQL::Houtou::Schema->new(query => $LocalQuery);
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs('{ child { name } }');
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs($local_schema, $prepared);
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs($compiled),
+    {
+      data => {
+        child => {
+          name => 'child.name',
+        },
+      },
+    },
+    'compiled ir still falls back to full default resolver call when property is a coderef',
+  );
+};
+
 subtest 'execute compiled ir with variables and fragments' => sub {
   require GraphQL::Houtou::XS::Execution;
 

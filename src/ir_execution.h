@@ -1177,11 +1177,6 @@ gql_ir_compiled_attach_root_field_runtime_data(pTHX_ SV *root_field_plan_sv, SV 
     if (!hv_exists(field_plan_hv, "nodes", 5)) {
       gql_store_sv(field_plan_hv, "nodes", gql_execution_share_or_copy_sv(HeVAL(nodes_he)));
     }
-    if (!hv_exists(field_plan_hv, "path", 4)) {
-      AV *path_av = newAV();
-      av_push(path_av, SvREFCNT_inc_simple_NN(*result_name_svp));
-      gql_store_sv(field_plan_hv, "path", newRV_noinc((SV *)path_av));
-    }
   }
 }
 
@@ -1553,7 +1548,6 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     SV **resolve_svp;
     SV **field_args_svp;
     SV **nodes_svp;
-    SV **path_svp;
     SV **node_count_svp;
     SV **argument_count_svp;
     SV **directive_count_svp;
@@ -1574,7 +1568,6 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     field_name_svp = hv_fetch(field_plan_hv, "field_name", 10, 0);
     field_def_svp = hv_fetch(field_plan_hv, "field_def", 9, 0);
     nodes_svp = hv_fetch(field_plan_hv, "nodes", 5, 0);
-    path_svp = hv_fetch(field_plan_hv, "path", 4, 0);
     node_count_svp = hv_fetch(field_plan_hv, "node_count", 10, 0);
     argument_count_svp = hv_fetch(field_plan_hv, "argument_count", 14, 0);
     directive_count_svp = hv_fetch(field_plan_hv, "directive_count", 15, 0);
@@ -1584,9 +1577,7 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
         || !field_def_svp
         || !SvOK(*field_def_svp)
         || !nodes_svp
-        || !SvOK(*nodes_svp)
-        || !path_svp
-        || !SvOK(*path_svp)) {
+        || !SvOK(*nodes_svp)) {
       goto fail;
     }
 
@@ -1605,7 +1596,6 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
       entry->resolve_sv = gql_execution_share_or_copy_sv(*resolve_svp);
     }
     entry->nodes_sv = gql_execution_share_or_copy_sv(*nodes_svp);
-    entry->path_sv = gql_execution_share_or_copy_sv(*path_svp);
     entry->node_count = (node_count_svp && SvOK(*node_count_svp)) ? SvUV(*node_count_svp) : 0;
     entry->argument_count = (argument_count_svp && SvOK(*argument_count_svp)) ? SvUV(*argument_count_svp) : 0;
     entry->field_arg_count =
@@ -1763,7 +1753,13 @@ gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled
     gql_store_sv(field_plan_hv, "field_name", gql_execution_share_or_copy_sv(entry->field_name_sv));
     gql_store_sv(field_plan_hv, "field_def", gql_execution_share_or_copy_sv(entry->field_def_sv));
     gql_store_sv(field_plan_hv, "nodes", gql_execution_share_or_copy_sv(entry->nodes_sv));
-    gql_store_sv(field_plan_hv, "path", gql_execution_share_or_copy_sv(entry->path_sv));
+    if (entry->path_sv && SvOK(entry->path_sv)) {
+      gql_store_sv(field_plan_hv, "path", gql_execution_share_or_copy_sv(entry->path_sv));
+    } else {
+      AV *path_av = newAV();
+      av_push(path_av, gql_execution_share_or_copy_sv(entry->result_name_sv));
+      gql_store_sv(field_plan_hv, "path", newRV_noinc((SV *)path_av));
+    }
     hv_stores(field_plan_hv, "node_count", newSVuv(entry->node_count));
     hv_stores(field_plan_hv, "argument_count", newSVuv(entry->argument_count));
     hv_stores(field_plan_hv, "directive_count", newSVuv(entry->directive_count));

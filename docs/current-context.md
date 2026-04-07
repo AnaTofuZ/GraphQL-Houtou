@@ -262,6 +262,13 @@ native field-plan entries (`--count=-6`):
   - `houtou_compiled_ir`: `43626/s`
   - `houtou_xs_ast`: `43626/s`
 
+Latest spot check after dropping eager retained root-plan `path` objects
+(`--count=-6`):
+
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `46264/s`
+  - `houtou_xs_ast`: `45096/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
@@ -277,6 +284,9 @@ Interpretation:
 - native field-plan entries now cache `type`, `resolve`, and field-argument
   metadata, which reduces repeated `HV` inspection in both compiled root and
   abstract-child execution
+- native root plans no longer need to retain eager per-field Perl `path`
+  objects; legacy `path` arrays are synthesized only when compatibility code
+  asks for them
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

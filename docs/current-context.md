@@ -309,11 +309,11 @@ Latest spot check after native sync executors bypass trivial response-envelope
 allocation for `__typename` and leaf fast paths (`--count=-6`):
 
 - `nested_variable_object`
-  - `houtou_compiled_ir`: `87095/s`
-  - `houtou_xs_ast`: `37634/s`
+  - `houtou_compiled_ir`: `85615/s`
+  - `houtou_xs_ast`: `83240/s`
 - `abstract_with_fragment`
-  - `houtou_compiled_ir`: `47209/s`
-  - `houtou_xs_ast`: `21793/s`
+  - `houtou_compiled_ir`: `45727/s`
+  - `houtou_xs_ast`: `45420/s`
 
 Interpretation:
 
@@ -350,6 +350,9 @@ Interpretation:
   leaf fast paths; the native executor writes serialized values straight into
   the final response hash and only falls back to legacy completion when GraphQL
   semantics actually require it
+- compiled-IR native executors now also use a borrowed default-field fast path
+  before falling back to `share_or_copy_sv()`, which trims another allocation
+  out of trivial hash-property reads such as `id` / `name`
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

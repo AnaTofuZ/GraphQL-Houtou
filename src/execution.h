@@ -58,6 +58,7 @@ static SV *gql_execution_complete_field_value_catching_error_xs_impl(
 static int gql_execution_try_typename_meta_field_fast(pTHX_ SV *parent_type, SV *field_name_sv, SV *return_type, SV **completed_out);
 static int gql_execution_try_typename_meta_field_data_fast(pTHX_ SV *parent_type, SV *field_name_sv, SV *return_type, SV **data_out);
 static int gql_execution_is_default_field_resolver(pTHX_ SV *resolve);
+static int gql_execution_try_default_field_resolve_borrowed_fast(pTHX_ SV *root_value, SV *field_name_sv, SV **result_out);
 static int gql_execution_try_default_field_resolve_fast(pTHX_ SV *root_value, SV *field_name_sv, SV **result_out);
 static int gql_execution_get_trivial_completion_metadata(pTHX_ SV *return_type, SV **completion_type_out, UV *flags_out);
 static int gql_execution_try_complete_trivial_value_with_metadata_fast(pTHX_ SV *completion_type, UV flags, SV *result, SV **completed_out);
@@ -1964,6 +1965,45 @@ gql_execution_try_default_field_resolve_fast(pTHX_ SV *root_value, SV *field_nam
   }
 
   *result_out = gql_execution_share_or_copy_sv(property_sv);
+  return 1;
+}
+
+static int
+gql_execution_try_default_field_resolve_borrowed_fast(pTHX_ SV *root_value, SV *field_name_sv, SV **result_out) {
+  HE *property_he;
+  SV *property_sv;
+
+  if (result_out) {
+    *result_out = NULL;
+  }
+  if (!result_out || !field_name_sv || !SvOK(field_name_sv)) {
+    return 0;
+  }
+
+  if (!root_value || !SvOK(root_value)) {
+    *result_out = &PL_sv_undef;
+    return 1;
+  }
+
+  if (!SvROK(root_value)) {
+    *result_out = root_value;
+    return 1;
+  }
+
+  if (sv_isobject(root_value) || SvTYPE(SvRV(root_value)) != SVt_PVHV) {
+    return 0;
+  }
+
+  property_he = hv_fetch_ent((HV *)SvRV(root_value), field_name_sv, 0, 0);
+  property_sv = property_he ? HeVAL(property_he) : &PL_sv_undef;
+  if (property_sv
+      && SvOK(property_sv)
+      && SvROK(property_sv)
+      && (SvTYPE(SvRV(property_sv)) == SVt_PVCV || sv_isobject(property_sv))) {
+    return 0;
+  }
+
+  *result_out = property_sv;
   return 1;
 }
 

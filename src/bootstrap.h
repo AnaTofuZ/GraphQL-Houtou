@@ -186,6 +186,7 @@ struct gql_ir_compiled_concrete_plan_entry {
   SV *possible_type_sv;
   SV *compiled_fields_sv;
   SV *field_plan_sv;
+  gql_ir_compiled_root_field_plan_t *native_field_plan;
 };
 
 struct gql_ir_compiled_concrete_plan_table {

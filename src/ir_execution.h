@@ -1301,6 +1301,10 @@ gql_ir_compiled_concrete_plan_table_destroy(gql_ir_compiled_concrete_plan_table_
         SvREFCNT_dec(entry->field_plan_sv);
         entry->field_plan_sv = NULL;
       }
+      if (entry->native_field_plan) {
+        gql_ir_compiled_root_field_plan_destroy(entry->native_field_plan);
+        entry->native_field_plan = NULL;
+      }
     }
     Safefree(table->entries);
     table->entries = NULL;
@@ -1976,11 +1980,21 @@ gql_ir_attach_compiled_concrete_subfields_to_node(
         compiled_fields_sv
       );
       if (compiled_plan_sv != &PL_sv_undef && SvOK(compiled_plan_sv)) {
+        gql_ir_compiled_root_field_plan_t *native_field_plan
+          = gql_ir_compiled_root_field_plan_from_sv(aTHX_ compiled_plan_sv);
         if (compiled_plan_table && compiled_plan_table->entries) {
           gql_ir_compiled_concrete_plan_entry_t *entry = &compiled_plan_table->entries[compiled_plan_table_count++];
           entry->possible_type_sv = gql_execution_share_or_copy_sv(possible_type);
           entry->compiled_fields_sv = gql_execution_share_or_copy_sv(compiled_fields_sv);
-          entry->field_plan_sv = gql_execution_share_or_copy_sv(compiled_plan_sv);
+          if (native_field_plan) {
+            entry->native_field_plan = native_field_plan;
+            native_field_plan = NULL;
+          } else {
+            entry->field_plan_sv = gql_execution_share_or_copy_sv(compiled_plan_sv);
+          }
+        }
+        if (native_field_plan) {
+          gql_ir_compiled_root_field_plan_destroy(native_field_plan);
         }
         SvREFCNT_dec(compiled_plan_sv);
       } else if (compiled_plan_sv != &PL_sv_undef) {
@@ -3091,6 +3105,12 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
     lazy_info.parent_type_sv = compiled->root_type_sv;
     lazy_info.field_def_sv = field_def_sv;
     lazy_info.nodes_sv = nodes_sv;
+    if (entry->path_sv && SvOK(entry->path_sv)) {
+      lazy_info.path_sv = entry->path_sv;
+    } else {
+      lazy_info.base_path_sv = path_sv;
+      lazy_info.result_name_sv = entry->result_name_sv;
+    }
     if (gql_execution_try_typename_meta_field_fast(aTHX_ compiled->root_type_sv, entry->field_name_sv, *type_svp, &completed_sv)) {
       goto have_completed;
     }
@@ -3113,12 +3133,6 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
     }
 
     if (!used_fast_default_resolve) {
-      if (entry->path_sv && SvOK(entry->path_sv)) {
-        path_copy_sv = entry->path_sv;
-      } else {
-        path_copy_sv = gql_execution_path_with_key(aTHX_ path_sv, entry->result_name_sv);
-      }
-      lazy_info.path_sv = path_copy_sv;
       info_sv = gql_execution_lazy_resolve_info_materialize(aTHX_ &lazy_info);
       field_args_svp = hv_fetch(field_def_hv, "args", 4, 0);
       node_args_svp = hv_fetch(field_node_hv, "arguments", 9, 0);
@@ -3151,21 +3165,12 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
       );
     }
 
-    if (!path_copy_sv) {
-      if (entry->path_sv && SvOK(entry->path_sv)) {
-        path_copy_sv = entry->path_sv;
-      } else {
-        path_copy_sv = gql_execution_path_with_key(aTHX_ path_sv, entry->result_name_sv);
-      }
-      lazy_info.path_sv = path_copy_sv;
-    }
     completed_sv = gql_execution_complete_field_value_catching_error_xs_impl(
       aTHX_
       context_sv,
       compiled->root_type_sv,
       field_def_sv,
       nodes_sv,
-      path_copy_sv,
       &lazy_info,
       result_sv
     );
@@ -3201,11 +3206,251 @@ have_completed:
     if (owns_resolve_sv) {
       SvREFCNT_dec(resolve_sv);
     }
+    if (lazy_info.path_sv && (!entry->path_sv || !SvOK(entry->path_sv))) {
+      path_copy_sv = lazy_info.path_sv;
+    }
     if (path_copy_sv && (!entry->path_sv || !SvOK(entry->path_sv))) {
       SvREFCNT_dec(path_copy_sv);
     }
     if (owns_field_def_sv) {
       SvREFCNT_dec(field_def_sv);
+    }
+    if (completed_sv) {
+      SvREFCNT_dec(completed_sv);
+    }
+  }
+
+  if (promise_present) {
+    SV *aggregate = gql_promise_call_all(aTHX_ promise_code_sv, result_values_av);
+    SV *ret = gql_execution_call_xs_then_merge_hash(aTHX_ promise_code_sv, result_keys_av, aggregate, all_errors_av);
+
+    SvREFCNT_dec(aggregate);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
+    SvREFCNT_dec((SV *)all_errors_av);
+    return ret;
+  }
+
+  {
+    SV *ret = gql_execution_merge_hash(aTHX_ result_keys_av, result_values_av, all_errors_av);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
+    SvREFCNT_dec((SV *)all_errors_av);
+    return ret;
+  }
+
+fallback:
+  SvREFCNT_dec((SV *)result_keys_av);
+  SvREFCNT_dec((SV *)result_values_av);
+  SvREFCNT_dec((SV *)all_errors_av);
+  return &PL_sv_undef;
+}
+
+static SV *
+gql_ir_execute_native_field_plan(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_compiled_root_field_plan_t *field_plan
+) {
+  HV *context_hv;
+  gql_execution_context_fast_cache_t *context_cache;
+  SV **context_value_svp;
+  SV **variable_values_svp;
+  SV **empty_args_svp;
+  SV **field_resolver_svp;
+  SV **promise_code_svp;
+  SV *promise_code_sv = &PL_sv_undef;
+  AV *result_keys_av = newAV();
+  AV *result_values_av = newAV();
+  AV *all_errors_av = newAV();
+  UV field_i;
+  int promise_present = 0;
+
+  if (!field_plan
+      || !context_sv
+      || !SvROK(context_sv)
+      || SvTYPE(SvRV(context_sv)) != SVt_PVHV) {
+    goto fallback;
+  }
+
+  context_hv = (HV *)SvRV(context_sv);
+  context_cache = gql_execution_context_fast_cache(aTHX_ context_sv);
+  if (context_cache) {
+    context_value_svp = context_cache->context_value_sv ? &context_cache->context_value_sv : NULL;
+    variable_values_svp = context_cache->variable_values_sv ? &context_cache->variable_values_sv : NULL;
+    empty_args_svp = context_cache->empty_args_sv ? &context_cache->empty_args_sv : NULL;
+    field_resolver_svp = context_cache->field_resolver_sv ? &context_cache->field_resolver_sv : NULL;
+    promise_code_svp = context_cache->promise_code_sv ? &context_cache->promise_code_sv : NULL;
+  } else {
+    context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
+    variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
+    empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
+    field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
+    promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  }
+
+  if (promise_code_svp && SvOK(*promise_code_svp)) {
+    promise_code_sv = *promise_code_svp;
+  }
+
+  for (field_i = 0; field_i < field_plan->field_count; field_i++) {
+    gql_ir_compiled_root_field_plan_entry_t *entry = &field_plan->entries[field_i];
+    SV *field_def_sv;
+    HV *field_def_hv;
+    SV *nodes_sv;
+    AV *nodes_av;
+    SV **field_node_svp;
+    HV *field_node_hv;
+    SV **resolve_svp;
+    SV *resolve_sv;
+    SV *info_sv = NULL;
+    SV *args_sv = NULL;
+    gql_execution_lazy_resolve_info_t lazy_info;
+    SV **type_svp;
+    SV **node_args_svp;
+    SV **field_args_svp;
+    SV *result_sv = NULL;
+    SV *completed_sv = NULL;
+    int used_fast_default_resolve = 0;
+    int is_completed_promise = 0;
+    int owns_resolve_sv = 0;
+    int owns_args_sv = 0;
+
+    if (!entry->result_name_sv || !SvOK(entry->result_name_sv)
+        || !entry->field_name_sv || !SvOK(entry->field_name_sv)
+        || !entry->nodes_sv || !SvOK(entry->nodes_sv)
+        || !entry->field_def_sv || !SvOK(entry->field_def_sv)) {
+      goto fallback;
+    }
+
+    nodes_sv = entry->nodes_sv;
+    field_def_sv = entry->field_def_sv;
+    if (!SvROK(nodes_sv) || SvTYPE(SvRV(nodes_sv)) != SVt_PVAV
+        || !SvROK(field_def_sv) || SvTYPE(SvRV(field_def_sv)) != SVt_PVHV) {
+      goto fallback;
+    }
+
+    nodes_av = (AV *)SvRV(nodes_sv);
+    field_node_svp = av_fetch(nodes_av, 0, 0);
+    if (!field_node_svp || !SvROK(*field_node_svp) || SvTYPE(SvRV(*field_node_svp)) != SVt_PVHV) {
+      goto fallback;
+    }
+    field_node_hv = (HV *)SvRV(*field_node_svp);
+    field_def_hv = (HV *)SvRV(field_def_sv);
+    type_svp = hv_fetch(field_def_hv, "type", 4, 0);
+    if (!type_svp || !SvOK(*type_svp)) {
+      goto fallback;
+    }
+
+    Zero(&lazy_info, 1, gql_execution_lazy_resolve_info_t);
+    lazy_info.context_sv = context_sv;
+    lazy_info.parent_type_sv = parent_type_sv;
+    lazy_info.field_def_sv = field_def_sv;
+    lazy_info.nodes_sv = nodes_sv;
+    if (entry->path_sv && SvOK(entry->path_sv)) {
+      lazy_info.path_sv = entry->path_sv;
+    } else {
+      lazy_info.base_path_sv = path_sv;
+      lazy_info.result_name_sv = entry->result_name_sv;
+    }
+
+    if (gql_execution_try_typename_meta_field_fast(aTHX_ parent_type_sv, entry->field_name_sv, *type_svp, &completed_sv)) {
+      goto have_completed;
+    }
+
+    resolve_svp = hv_fetch(field_def_hv, "resolve", 7, 0);
+    if (resolve_svp && SvOK(*resolve_svp)) {
+      resolve_sv = *resolve_svp;
+    } else {
+      resolve_sv = (field_resolver_svp && SvOK(*field_resolver_svp))
+        ? *field_resolver_svp
+        : newSV(0);
+      owns_resolve_sv = !(field_resolver_svp && SvOK(*field_resolver_svp));
+    }
+
+    if (gql_execution_is_default_field_resolver(aTHX_ resolve_sv)
+        && gql_execution_try_default_field_resolve_fast(aTHX_ root_value, entry->field_name_sv, &result_sv)) {
+      used_fast_default_resolve = 1;
+      if (gql_execution_try_complete_trivial_value_fast(aTHX_ *type_svp, result_sv, &completed_sv)) {
+        goto have_completed;
+      }
+    }
+
+    if (!used_fast_default_resolve) {
+      info_sv = gql_execution_lazy_resolve_info_materialize(aTHX_ &lazy_info);
+      field_args_svp = hv_fetch(field_def_hv, "args", 4, 0);
+      node_args_svp = hv_fetch(field_node_hv, "arguments", 9, 0);
+      if ((!field_args_svp || !SvOK(*field_args_svp)
+           || (SvROK(*field_args_svp) && SvTYPE(SvRV(*field_args_svp)) == SVt_PVHV && HvUSEDKEYS((HV *)SvRV(*field_args_svp)) == 0))
+          && (!node_args_svp || !SvOK(*node_args_svp)
+              || (SvROK(*node_args_svp) && SvTYPE(SvRV(*node_args_svp)) == SVt_PVHV && HvUSEDKEYS((HV *)SvRV(*node_args_svp)) == 0))) {
+        if (empty_args_svp && SvOK(*empty_args_svp)) {
+          args_sv = *empty_args_svp;
+        } else {
+          args_sv = newRV_noinc((SV *)newHV());
+          owns_args_sv = 1;
+        }
+      } else {
+        args_sv = gql_execution_get_argument_values_xs_impl(
+          aTHX_ field_def_sv,
+          *field_node_svp,
+          (variable_values_svp && SvOK(*variable_values_svp)) ? *variable_values_svp : &PL_sv_undef
+        );
+        owns_args_sv = 1;
+      }
+
+      result_sv = gql_execution_call_resolver(
+        aTHX_
+        resolve_sv,
+        root_value,
+        args_sv,
+        (context_value_svp && SvOK(*context_value_svp)) ? *context_value_svp : &PL_sv_undef,
+        info_sv
+      );
+    }
+
+    completed_sv = gql_execution_complete_field_value_catching_error_xs_impl(
+      aTHX_
+      context_sv,
+      parent_type_sv,
+      field_def_sv,
+      nodes_sv,
+      &lazy_info,
+      result_sv
+    );
+
+have_completed:
+    if (SvOK(promise_code_sv) && completed_sv && SvROK(completed_sv)) {
+      SV *is_completed_promise_sv = gql_promise_call_is_promise(aTHX_ promise_code_sv, completed_sv);
+      is_completed_promise = SvTRUE(is_completed_promise_sv);
+      SvREFCNT_dec(is_completed_promise_sv);
+      if (is_completed_promise) {
+        promise_present = 1;
+      }
+    }
+
+    if (SvROK(completed_sv) && (SvTYPE(SvRV(completed_sv)) == SVt_PVHV || is_completed_promise)) {
+      av_push(result_keys_av, SvREFCNT_inc_simple_NN(entry->result_name_sv));
+      av_push(result_values_av, completed_sv);
+      completed_sv = NULL;
+    }
+
+    if (lazy_info.info_sv) {
+      SvREFCNT_dec(lazy_info.info_sv);
+    }
+    if (owns_args_sv) {
+      SvREFCNT_dec(args_sv);
+    }
+    if (result_sv) {
+      SvREFCNT_dec(result_sv);
+    }
+    if (owns_resolve_sv) {
+      SvREFCNT_dec(resolve_sv);
+    }
+    if (lazy_info.path_sv && (!entry->path_sv || !SvOK(entry->path_sv))) {
+      SvREFCNT_dec(lazy_info.path_sv);
     }
     if (completed_sv) {
       SvREFCNT_dec(completed_sv);

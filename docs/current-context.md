@@ -37,6 +37,7 @@ Compressed handoff for the current `GraphQL::Houtou` worktree.
 - `edf499a` Strip legacy buckets from compiled root nodes
 - `0918e04` Strip legacy buckets from compiled fragments
 - `de6e3da` Cache hot execution context lookups
+- `61eae3c` Lazy-load resolve info in field completion
 
 ## Current Execution State
 
@@ -110,6 +111,9 @@ Current compiled-plan execution reuse:
 - nested fragment buckets can now be reused as well
 - simple abstract single-node child execution can now use direct compiled field
   plans instead of rebuilding legacy field buckets first
+- simple abstract single-node child execution can now prefer native compiled
+  field plans and run them directly without going back through legacy
+  `field_plan_sv` execution
 - compiled abstract child direct-plan lookup now prefers native node-attached
   tables keyed by runtime object identity
 - compiled field-bucket merges can also prefer native node/fragment-attached
@@ -117,6 +121,8 @@ Current compiled-plan execution reuse:
 - hot execution-context members are now cached behind a context-attached magic
   struct so repeated `hv_fetch` calls are reduced in `resolve_info`,
   `execute_fields`, field-plan execution, and compiled-root execution
+- per-field `path` materialization is now also deferred so compiled/object field
+  execution does not eagerly allocate Perl path objects on the happy path
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -235,12 +241,28 @@ completion (`--count=-6`):
   - `houtou_compiled_ir`: `43114/s`
   - `houtou_xs_ast`: `42775/s`
 
+Latest spot check after lazy `path` materialization and direct native abstract
+child field-plan execution (`--count=-6`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir`: `85187/s`
+  - `houtou_xs_ast`: `82525/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `45420/s`
+  - `houtou_xs_ast`: `44940/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
 - lazy `resolve_info` materialization is a better fit than adding more
   AST-compatible special cases, because it removes Perl `HV` allocation from
   both nested-object and abstract completion hot paths
+- lazy `path` materialization pairs well with lazy `resolve_info`, because
+  it removes another per-field Perl allocation that used to survive even after
+  resolver fast paths were added
+- direct native abstract child field-plan execution is the first step that
+  removes part of the remaining `field_plan_sv` / legacy execution bridge from
+  the `abstract_with_fragment` hot path
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching
@@ -286,14 +308,13 @@ Practical guidance:
 
 Immediate next candidates for `abstract_with_fragment`:
 
-1. make `resolve_info` on compiled-IR paths lazier so object fields that do not
-   need `info` do not eagerly allocate a fresh info `HV`
-2. replace more child-execution `HV/AV` plan state with native tables/arrays
+1. replace more child-execution `HV/AV` plan state with native tables/arrays
    so abstract child execution no longer needs legacy bucket materialization at
    all
-3. move path handling for compiled child plans toward native path segments or
-   precompiled path templates instead of allocating Perl path objects on every
-   field
+2. move path handling for compiled child plans from lazy Perl materialization
+   toward native path segments or precompiled path templates
+3. replace more compiled-IR execution-context / resolve-info state with native
+   structs so the remaining hot-path `HV` traffic is minimized
 
 ## Promise::XS Experiment Note
 

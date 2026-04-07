@@ -151,6 +151,7 @@ typedef struct gql_ir_compiled_concrete_plan_entry gql_ir_compiled_concrete_plan
 typedef struct gql_ir_compiled_concrete_plan_table gql_ir_compiled_concrete_plan_table_t;
 typedef struct gql_ir_compiled_field_bucket_entry gql_ir_compiled_field_bucket_entry_t;
 typedef struct gql_ir_compiled_field_bucket_table gql_ir_compiled_field_bucket_table_t;
+typedef struct gql_execution_context_fast_cache gql_execution_context_fast_cache_t;
 typedef struct {
   gql_ir_document_t *document;
 } gql_ir_document_cleanup_t;
@@ -211,6 +212,20 @@ struct gql_ir_compiled_exec {
   gql_ir_compiled_root_field_plan_t *root_field_plan;
   SV *root_field_plan_sv;
   SV *root_type_sv;
+};
+
+struct gql_execution_context_fast_cache {
+  SV *schema_sv;
+  SV *fragments_sv;
+  SV *root_value_sv;
+  SV *context_value_sv;
+  SV *operation_sv;
+  SV *variable_values_sv;
+  SV *field_resolver_sv;
+  SV *promise_code_sv;
+  SV *empty_args_sv;
+  SV *compiled_root_field_defs_sv;
+  HV *resolve_info_base_hv;
 };
 
 static gql_ir_compiled_concrete_plan_table_t *gql_ir_get_concrete_field_plan_table(pTHX_ SV *sv);

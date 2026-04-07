@@ -2941,6 +2941,7 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
   gql_ir_prepared_exec_t *prepared;
   SV *prepared_inner_sv;
   HV *context_hv;
+  gql_execution_context_fast_cache_t *context_cache;
   gql_ir_compiled_root_field_plan_t *root_field_plan;
   SV **context_value_svp;
   SV **variable_values_svp;
@@ -2964,11 +2965,20 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
 
   root_field_plan = compiled->root_field_plan;
   context_hv = (HV *)SvRV(context_sv);
-  context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
-  variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
-  empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
-  field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
-  promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  context_cache = gql_execution_context_fast_cache(aTHX_ context_sv);
+  if (context_cache) {
+    context_value_svp = context_cache->context_value_sv ? &context_cache->context_value_sv : NULL;
+    variable_values_svp = context_cache->variable_values_sv ? &context_cache->variable_values_sv : NULL;
+    empty_args_svp = context_cache->empty_args_sv ? &context_cache->empty_args_sv : NULL;
+    field_resolver_svp = context_cache->field_resolver_sv ? &context_cache->field_resolver_sv : NULL;
+    promise_code_svp = context_cache->promise_code_sv ? &context_cache->promise_code_sv : NULL;
+  } else {
+    context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
+    variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
+    empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
+    field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
+    promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  }
 
   if (promise_code_svp && SvOK(*promise_code_svp)) {
     promise_code_sv = *promise_code_svp;

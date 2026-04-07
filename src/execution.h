@@ -23,6 +23,7 @@ static SV *gql_execution_build_field_plan_from_compiled_fields(pTHX_ SV *schema,
 static SV *gql_execution_get_object_is_type_of_sv(pTHX_ SV *context, SV *type);
 static SV *gql_execution_call_abstract_resolve_type(pTHX_ SV *type);
 static SV *gql_execution_get_abstract_resolve_type_sv(pTHX_ SV *context, SV *type);
+static gql_execution_context_fast_cache_t *gql_execution_context_fast_cache(pTHX_ SV *context);
 static void gql_ir_attach_compiled_field_defs_to_selections(pTHX_ SV *schema, SV *parent_type, AV *selections_av, SV *fragments_sv);
 static void gql_ir_attach_compiled_field_defs_to_fragments(pTHX_ SV *schema, SV *fragments_sv);
 static int gql_execution_possible_type_match_simple(
@@ -84,6 +85,85 @@ gql_execution_pp_bridge_profile_report(pTHX_ const char *label) {
     gql_execution_pp_bridge_profile_counts.get_argument_values_calls,
     gql_execution_pp_bridge_profile_counts.type_will_accept_calls
   );
+}
+
+static int
+gql_execution_context_fast_cache_magic_free(pTHX_ SV *sv, MAGIC *mg) {
+  gql_execution_context_fast_cache_t *cache = (mg && mg->mg_ptr)
+    ? INT2PTR(gql_execution_context_fast_cache_t *, mg->mg_ptr)
+    : NULL;
+
+  if (cache) {
+    Safefree(cache);
+    mg->mg_ptr = NULL;
+  }
+  return 0;
+}
+
+static MGVTBL gql_execution_context_fast_cache_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gql_execution_context_fast_cache_magic_free
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
+
+static gql_execution_context_fast_cache_t *
+gql_execution_context_fast_cache(pTHX_ SV *context) {
+  MAGIC *mg;
+  HV *context_hv;
+  gql_execution_context_fast_cache_t *cache;
+  SV **svp;
+
+  if (!context || !SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
+    return NULL;
+  }
+
+  mg = mg_findext(SvRV(context), PERL_MAGIC_ext, &gql_execution_context_fast_cache_vtbl);
+  if (mg && mg->mg_ptr) {
+    return INT2PTR(gql_execution_context_fast_cache_t *, mg->mg_ptr);
+  }
+
+  context_hv = (HV *)SvRV(context);
+  Newxz(cache, 1, gql_execution_context_fast_cache_t);
+  svp = hv_fetch(context_hv, "schema", 6, 0);
+  cache->schema_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+  svp = hv_fetch(context_hv, "fragments", 9, 0);
+  cache->fragments_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+  svp = hv_fetch(context_hv, "root_value", 10, 0);
+  cache->root_value_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+  svp = hv_fetch(context_hv, "context_value", 13, 0);
+  cache->context_value_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+  svp = hv_fetch(context_hv, "operation", 9, 0);
+  cache->operation_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+  svp = hv_fetch(context_hv, "variable_values", 15, 0);
+  cache->variable_values_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+  svp = hv_fetch(context_hv, "field_resolver", 14, 0);
+  cache->field_resolver_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+  svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  cache->promise_code_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+  svp = hv_fetch(context_hv, "empty_args", 10, 0);
+  cache->empty_args_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+  svp = hv_fetch(context_hv, "compiled_root_field_defs", 24, 0);
+  cache->compiled_root_field_defs_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+  svp = hv_fetch(context_hv, "resolve_info_base", 17, 0);
+  cache->resolve_info_base_hv = (svp && SvROK(*svp) && SvTYPE(SvRV(*svp)) == SVt_PVHV)
+    ? (HV *)SvRV(*svp)
+    : NULL;
+
+  sv_magicext(SvRV(context), NULL, PERL_MAGIC_ext, &gql_execution_context_fast_cache_vtbl, NULL, 0);
+  mg = mg_findext(SvRV(context), PERL_MAGIC_ext, &gql_execution_context_fast_cache_vtbl);
+  if (!mg) {
+    Safefree(cache);
+    croak("failed to attach execution context fast cache");
+  }
+  mg->mg_ptr = (char *)PTR2IV(cache);
+  return cache;
 }
 
 static void
@@ -4092,18 +4172,21 @@ static SV *
 gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_def, SV *path, SV *nodes) {
   HV *info_hv = newHV();
   HV *context_hv;
+  gql_execution_context_fast_cache_t *context_cache;
+  HV *resolve_info_base_hv = NULL;
   AV *nodes_av;
   SV **field_node_svp;
   HV *field_node_hv;
   SV **field_name_svp;
   HV *field_def_hv;
   SV **return_type_svp;
-  SV **schema_svp;
-  SV **fragments_svp;
-  SV **root_value_svp;
-  SV **operation_svp;
-  SV **variable_values_svp;
-  SV **promise_code_svp;
+  SV **resolve_info_base_svp;
+  SV **schema_svp = NULL;
+  SV **fragments_svp = NULL;
+  SV **root_value_svp = NULL;
+  SV **operation_svp = NULL;
+  SV **variable_values_svp = NULL;
+  SV **promise_code_svp = NULL;
 
   if (!SvROK(context) || SvTYPE(SvRV(context)) != SVt_PVHV) {
     croak("context must be a hash reference");
@@ -4116,6 +4199,17 @@ gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_d
   }
 
   context_hv = (HV *)SvRV(context);
+  context_cache = gql_execution_context_fast_cache(aTHX_ context);
+  if (context_cache && context_cache->resolve_info_base_hv) {
+    resolve_info_base_hv = context_cache->resolve_info_base_hv;
+  }
+  resolve_info_base_svp = hv_fetch(context_hv, "resolve_info_base", 17, 0);
+  if (!resolve_info_base_hv
+      && resolve_info_base_svp
+      && SvROK(*resolve_info_base_svp)
+      && SvTYPE(SvRV(*resolve_info_base_svp)) == SVt_PVHV) {
+    resolve_info_base_hv = (HV *)SvRV(*resolve_info_base_svp);
+  }
   nodes_av = (AV *)SvRV(nodes);
   field_node_svp = av_fetch(nodes_av, 0, 0);
   if (!field_node_svp || !SvROK(*field_node_svp) || SvTYPE(SvRV(*field_node_svp)) != SVt_PVHV) {
@@ -4134,12 +4228,30 @@ gql_execution_build_resolve_info(pTHX_ SV *context, SV *parent_type, SV *field_d
     croak("field definition has no type");
   }
 
-  schema_svp = hv_fetch(context_hv, "schema", 6, 0);
-  fragments_svp = hv_fetch(context_hv, "fragments", 9, 0);
-  root_value_svp = hv_fetch(context_hv, "root_value", 10, 0);
-  operation_svp = hv_fetch(context_hv, "operation", 9, 0);
-  variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
-  promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  if (resolve_info_base_hv) {
+    schema_svp = hv_fetch(resolve_info_base_hv, "schema", 6, 0);
+    fragments_svp = hv_fetch(resolve_info_base_hv, "fragments", 9, 0);
+    root_value_svp = hv_fetch(resolve_info_base_hv, "root_value", 10, 0);
+    operation_svp = hv_fetch(resolve_info_base_hv, "operation", 9, 0);
+    variable_values_svp = hv_fetch(resolve_info_base_hv, "variable_values", 15, 0);
+    promise_code_svp = hv_fetch(resolve_info_base_hv, "promise_code", 12, 0);
+  } else {
+    if (context_cache) {
+      schema_svp = context_cache->schema_sv ? &context_cache->schema_sv : NULL;
+      fragments_svp = context_cache->fragments_sv ? &context_cache->fragments_sv : NULL;
+      root_value_svp = context_cache->root_value_sv ? &context_cache->root_value_sv : NULL;
+      operation_svp = context_cache->operation_sv ? &context_cache->operation_sv : NULL;
+      variable_values_svp = context_cache->variable_values_sv ? &context_cache->variable_values_sv : NULL;
+      promise_code_svp = context_cache->promise_code_sv ? &context_cache->promise_code_sv : NULL;
+    } else {
+      schema_svp = hv_fetch(context_hv, "schema", 6, 0);
+      fragments_svp = hv_fetch(context_hv, "fragments", 9, 0);
+      root_value_svp = hv_fetch(context_hv, "root_value", 10, 0);
+      operation_svp = hv_fetch(context_hv, "operation", 9, 0);
+      variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
+      promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+    }
+  }
 
   gql_store_sv(info_hv, "schema", (schema_svp && SvOK(*schema_svp)) ? gql_execution_share_or_copy_sv(*schema_svp) : newSV(0));
   gql_store_sv(info_hv, "fragments", (fragments_svp && SvOK(*fragments_svp)) ? gql_execution_share_or_copy_sv(*fragments_svp) : newSV(0));
@@ -4519,6 +4631,7 @@ gql_execution_get_field_def(pTHX_ SV *schema, SV *parent_type, SV *field_name) {
 static SV *
 gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value, SV *path, SV *fields) {
   HV *context_hv;
+  gql_execution_context_fast_cache_t *context_cache;
   SV **schema_svp;
   SV **context_value_svp;
   SV **variable_values_svp;
@@ -4552,13 +4665,24 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
   }
 
   context_hv = (HV *)SvRV(context);
-  schema_svp = hv_fetch(context_hv, "schema", 6, 0);
-  context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
-  variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
-  empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
-  field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
-  promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
-  compiled_root_field_defs_svp = hv_fetch(context_hv, "compiled_root_field_defs", 24, 0);
+  context_cache = gql_execution_context_fast_cache(aTHX_ context);
+  if (context_cache) {
+    schema_svp = context_cache->schema_sv ? &context_cache->schema_sv : NULL;
+    context_value_svp = context_cache->context_value_sv ? &context_cache->context_value_sv : NULL;
+    variable_values_svp = context_cache->variable_values_sv ? &context_cache->variable_values_sv : NULL;
+    empty_args_svp = context_cache->empty_args_sv ? &context_cache->empty_args_sv : NULL;
+    field_resolver_svp = context_cache->field_resolver_sv ? &context_cache->field_resolver_sv : NULL;
+    promise_code_svp = context_cache->promise_code_sv ? &context_cache->promise_code_sv : NULL;
+    compiled_root_field_defs_svp = context_cache->compiled_root_field_defs_sv ? &context_cache->compiled_root_field_defs_sv : NULL;
+  } else {
+    schema_svp = hv_fetch(context_hv, "schema", 6, 0);
+    context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
+    variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
+    empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
+    field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
+    promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+    compiled_root_field_defs_svp = hv_fetch(context_hv, "compiled_root_field_defs", 24, 0);
+  }
   if (promise_code_svp && SvOK(*promise_code_svp)) {
     promise_code_sv = *promise_code_svp;
   }
@@ -4810,6 +4934,7 @@ static SV *
 gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_value, SV *path, SV *field_plan) {
   HV *context_hv;
   HV *field_plan_hv;
+  gql_execution_context_fast_cache_t *context_cache;
   SV **context_value_svp;
   SV **variable_values_svp;
   SV **empty_args_svp;
@@ -4836,11 +4961,20 @@ gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_va
 
   context_hv = (HV *)SvRV(context);
   field_plan_hv = (HV *)SvRV(field_plan);
-  context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
-  variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
-  empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
-  field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
-  promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  context_cache = gql_execution_context_fast_cache(aTHX_ context);
+  if (context_cache) {
+    context_value_svp = context_cache->context_value_sv ? &context_cache->context_value_sv : NULL;
+    variable_values_svp = context_cache->variable_values_sv ? &context_cache->variable_values_sv : NULL;
+    empty_args_svp = context_cache->empty_args_sv ? &context_cache->empty_args_sv : NULL;
+    field_resolver_svp = context_cache->field_resolver_sv ? &context_cache->field_resolver_sv : NULL;
+    promise_code_svp = context_cache->promise_code_sv ? &context_cache->promise_code_sv : NULL;
+  } else {
+    context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
+    variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
+    empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
+    field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
+    promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  }
   field_order_svp = hv_fetch(field_plan_hv, "field_order", 11, 0);
   fields_svp = hv_fetch(field_plan_hv, "fields", 6, 0);
 

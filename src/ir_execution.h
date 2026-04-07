@@ -48,6 +48,7 @@ static SV *gql_ir_prepare_executable_root_field_nodes_sv(pTHX_ gql_ir_prepared_e
 static void gql_ir_compiled_attach_root_field_runtime_data(pTHX_ SV *root_field_plan_sv, SV *root_fields_sv);
 static gql_ir_compiled_root_field_plan_t *gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv);
 static void gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan);
+static SV *gql_ir_compiled_root_selection_plan_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
 static SV *gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
 static gql_ir_prepared_exec_t *gql_ir_compiled_prepared_exec(gql_ir_compiled_exec_t *compiled);
 static SV *gql_ir_compiled_operation_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
@@ -152,10 +153,6 @@ gql_ir_compile_executable_plan_handle_sv(pTHX_ SV *schema, SV *prepared_handle_s
   compiled->schema_sv = gql_execution_share_or_copy_sv(schema);
   compiled->operation_name_sv = (operation_name && SvOK(operation_name)) ? newSVsv(operation_name) : newSV(0);
   compiled->selected_operation = selected;
-  compiled->root_selection_plan_sv = newRV_noinc((SV *)gql_ir_prepare_executable_root_selection_plan_av(
-    aTHX_ prepared,
-    operation_name
-  ));
   compiled->root_type_sv = gql_execution_call_schema_root_type(aTHX_ schema, operation_type);
   {
     SV *root_field_plan_sv = newRV_noinc((SV *)gql_ir_prepare_executable_root_field_plan_hv(
@@ -1319,6 +1316,30 @@ fail:
 }
 
 static SV *
+gql_ir_compiled_root_selection_plan_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
+  gql_ir_prepared_exec_t *prepared;
+
+  if (!compiled) {
+    return &PL_sv_undef;
+  }
+
+  if (compiled->root_selection_plan_sv) {
+    return compiled->root_selection_plan_sv;
+  }
+
+  prepared = gql_ir_compiled_prepared_exec(compiled);
+  if (!prepared || !compiled->selected_operation) {
+    return &PL_sv_undef;
+  }
+
+  compiled->root_selection_plan_sv = newRV_noinc((SV *)gql_ir_prepare_selection_plan_av(
+    aTHX_ prepared,
+    compiled->selected_operation->selection_set
+  ));
+  return compiled->root_selection_plan_sv;
+}
+
+static SV *
 gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
   HV *root_field_plan_hv;
   AV *field_order_av;
@@ -2354,7 +2375,14 @@ gql_ir_compiled_plan_to_hv_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
   gql_store_sv(hv, "operation", operation_sv != &PL_sv_undef ? operation_sv : newSV(0));
   gql_store_sv(hv, "fragments", fragments_sv != &PL_sv_undef ? fragments_sv : newSV(0));
   gql_store_sv(hv, "root_type", gql_execution_share_or_copy_sv(compiled->root_type_sv));
-  gql_store_sv(hv, "root_selection_plan", gql_execution_share_or_copy_sv(compiled->root_selection_plan_sv));
+  {
+    SV *root_selection_plan_sv = gql_ir_compiled_root_selection_plan_sv(aTHX_ compiled);
+    gql_store_sv(
+      hv,
+      "root_selection_plan",
+      root_selection_plan_sv != &PL_sv_undef ? gql_execution_share_or_copy_sv(root_selection_plan_sv) : newSV(0)
+    );
+  }
   {
     SV *root_field_plan_sv = gql_ir_compiled_root_field_plan_legacy_sv(aTHX_ compiled);
     gql_store_sv(hv, "root_field_plan", root_field_plan_sv != &PL_sv_undef ? gql_execution_share_or_copy_sv(root_field_plan_sv) : newSV(0));

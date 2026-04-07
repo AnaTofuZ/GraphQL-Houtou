@@ -315,6 +315,16 @@ allocation for `__typename` and leaf fast paths (`--count=-6`):
   - `houtou_compiled_ir`: `45727/s`
   - `houtou_xs_ast`: `45420/s`
 
+Latest spot check after caching native field `return_type` metadata and passing
+it directly into XS completion (`--count=-6`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir`: `85289/s`
+  - `houtou_xs_ast`: `79906/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `46116/s`
+  - `houtou_xs_ast`: `44237/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
@@ -360,6 +370,9 @@ Interpretation:
 - the promise-tail recombination step is now also in XS: Perl still owns the
   `then_promise(...)` control flow, but `_then_merge_hash_with_head_xs` no
   longer rebuilds hashes in Perl after fulfillment
+- native field-plan entries now also cache `return_type`, so XS completion no
+  longer needs to rediscover `field_def->{type}` on the hot path when compiled
+  root/native child executors already know the answer
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

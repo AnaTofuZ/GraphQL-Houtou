@@ -51,6 +51,7 @@ static SV *gql_execution_complete_field_value_catching_error_xs_impl(
   pTHX_ SV *context,
   SV *parent_type,
   SV *field_def,
+  SV *return_type,
   SV *nodes,
   struct gql_execution_lazy_resolve_info *lazy_info,
   SV *result
@@ -4684,35 +4685,38 @@ gql_execution_complete_field_value_catching_error_xs_impl(
   pTHX_ SV *context,
   SV *parent_type,
   SV *field_def,
+  SV *return_type,
   SV *nodes,
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result
 ) {
   HV *field_def_hv;
   SV **type_svp;
-  SV *return_type;
+  SV *effective_return_type = return_type;
 
-  if (!field_def || !SvROK(field_def) || SvTYPE(SvRV(field_def)) != SVt_PVHV) {
+  if (!effective_return_type && (!field_def || !SvROK(field_def) || SvTYPE(SvRV(field_def)) != SVt_PVHV)) {
     SV *info = gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
     SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
     return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, field_def, nodes, info, path, result);
   }
 
-  field_def_hv = (HV *)SvRV(field_def);
-  type_svp = hv_fetch(field_def_hv, "type", 4, 0);
-  if (!type_svp || !SvOK(*type_svp)) {
-    SV *info = gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
-    SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
-    return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, field_def, nodes, info, path, result);
+  if (!effective_return_type) {
+    field_def_hv = (HV *)SvRV(field_def);
+    type_svp = hv_fetch(field_def_hv, "type", 4, 0);
+    if (!type_svp || !SvOK(*type_svp)) {
+      SV *info = gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
+      SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
+      return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, field_def, nodes, info, path, result);
+    }
+    effective_return_type = *type_svp;
   }
-  return_type = *type_svp;
 
   return gql_execution_complete_value_catching_error_xs_lazy_impl(
     aTHX_
     context,
     parent_type,
     field_def,
-    return_type,
+    effective_return_type,
     nodes,
     lazy_info,
     result
@@ -5573,6 +5577,7 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
       aTHX_ context,
       parent_type,
       field_def_sv,
+      *type_svp,
       nodes_sv,
       &lazy_info,
       result_sv
@@ -5834,6 +5839,7 @@ gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_va
       context,
       parent_type,
       field_def_sv,
+      *type_svp,
       nodes_sv,
       &lazy_info,
       result_sv

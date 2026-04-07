@@ -169,6 +169,7 @@ struct gql_ir_compiled_root_field_plan_entry {
   SV *result_name_sv;
   SV *field_name_sv;
   SV *field_def_sv;
+  SV *return_type_sv;
   SV *type_sv;
   SV *completion_type_sv;
   SV *resolve_sv;

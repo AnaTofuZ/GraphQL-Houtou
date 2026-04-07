@@ -1260,6 +1260,10 @@ gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan)
         SvREFCNT_dec(entry->field_def_sv);
         entry->field_def_sv = NULL;
       }
+      if (entry->return_type_sv) {
+        SvREFCNT_dec(entry->return_type_sv);
+        entry->return_type_sv = NULL;
+      }
       if (entry->type_sv) {
         SvREFCNT_dec(entry->type_sv);
         entry->type_sv = NULL;
@@ -1666,6 +1670,9 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     entry->field_name_sv = gql_execution_share_or_copy_sv(*field_name_svp);
     entry->field_def_sv = gql_execution_share_or_copy_sv(*field_def_svp);
     if (type_svp && SvOK(*type_svp)) {
+      entry->return_type_sv = gql_execution_share_or_copy_sv(*type_svp);
+    }
+    if (type_svp && SvOK(*type_svp)) {
       entry->type_sv = gql_execution_share_or_copy_sv(*type_svp);
       if (gql_execution_get_trivial_completion_metadata(aTHX_ *type_svp, &completion_type_sv, &trivial_completion_flags)) {
         entry->completion_type_sv = completion_type_sv;
@@ -1838,6 +1845,9 @@ gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled
     gql_store_sv(field_plan_hv, "result_name", gql_execution_share_or_copy_sv(entry->result_name_sv));
     gql_store_sv(field_plan_hv, "field_name", gql_execution_share_or_copy_sv(entry->field_name_sv));
     gql_store_sv(field_plan_hv, "field_def", gql_execution_share_or_copy_sv(entry->field_def_sv));
+    if (entry->return_type_sv) {
+      gql_store_sv(field_plan_hv, "return_type", gql_execution_share_or_copy_sv(entry->return_type_sv));
+    }
     gql_store_sv(field_plan_hv, "nodes", gql_execution_share_or_copy_sv(entry->nodes_sv));
     if (entry->path_sv && SvOK(entry->path_sv)) {
       gql_store_sv(field_plan_hv, "path", gql_execution_share_or_copy_sv(entry->path_sv));
@@ -3320,6 +3330,7 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
       context_sv,
       compiled->root_type_sv,
       field_def_sv,
+      entry->return_type_sv,
       nodes_sv,
       &lazy_info,
       result_sv
@@ -3628,6 +3639,7 @@ gql_ir_execute_native_field_plan(
       context_sv,
       parent_type_sv,
       field_def_sv,
+      entry->return_type_sv,
       nodes_sv,
       &lazy_info,
       result_sv

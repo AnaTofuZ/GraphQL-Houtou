@@ -2801,7 +2801,11 @@ gql_execution_path_with_key(pTHX_ SV *path, SV *key_sv) {
 
 static int
 gql_execution_path_is_root(SV *path) {
-  if (!path || !SvROK(path) || SvTYPE(SvRV(path)) != SVt_PVAV) {
+  if (!path || !SvOK(path)) {
+    return 1;
+  }
+
+  if (!SvROK(path) || SvTYPE(SvRV(path)) != SVt_PVAV) {
     return 0;
   }
 

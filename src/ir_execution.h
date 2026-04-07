@@ -3584,8 +3584,7 @@ gql_execution_execute_compiled_ir_xs_impl(
   gql_ir_compiled_exec_t *compiled;
   SV *inner_sv;
   SV *context_sv;
-  AV *path_av;
-  SV *path_sv;
+  SV *path_sv = &PL_sv_undef;
   SV *result_sv;
   SV *response_sv;
   SV *promise_code_sv;
@@ -3609,14 +3608,11 @@ gql_execution_execute_compiled_ir_xs_impl(
     field_resolver,
     promise_code
   );
-  path_av = newAV();
-  path_sv = newRV_noinc((SV *)path_av);
 
   result_sv = gql_ir_execute_compiled_root_field_plan(aTHX_ compiled, context_sv, root_value, path_sv);
   if (result_sv == &PL_sv_undef) {
     SV *root_fields_sv = gql_ir_compiled_root_legacy_fields_sv(aTHX_ compiled);
     if (root_fields_sv == &PL_sv_undef) {
-      SvREFCNT_dec(path_sv);
       SvREFCNT_dec(context_sv);
       croak("compiled IR plan could not materialize root legacy fields");
     }
@@ -3638,7 +3634,6 @@ gql_execution_execute_compiled_ir_xs_impl(
   }
 
   SvREFCNT_dec(result_sv);
-  SvREFCNT_dec(path_sv);
   SvREFCNT_dec(context_sv);
 
   return response_sv;

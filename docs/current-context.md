@@ -269,6 +269,13 @@ Latest spot check after dropping eager retained root-plan `path` objects
   - `houtou_compiled_ir`: `46264/s`
   - `houtou_xs_ast`: `45096/s`
 
+Latest spot check after treating compiled-IR root `path` as implicit `undef`
+until fallback (`--count=-6`):
+
+- `abstract_with_fragment`
+  - `houtou_compiled_ir`: `42791/s`
+  - `houtou_xs_ast`: `43067/s`
+
 Interpretation:
 
 - the current compiled-IR direction is still valid
@@ -287,6 +294,9 @@ Interpretation:
 - native root plans no longer need to retain eager per-field Perl `path`
   objects; legacy `path` arrays are synthesized only when compatibility code
   asks for them
+- compiled-IR root execution now treats the root path as implicit until a
+  fallback path actually needs a Perl array; this is a small simplification and
+  allocation reduction, but measurement impact is modest
 - `abstract_with_fragment` is still close enough to `houtou_xs_ast` that the
   remaining gap should be attacked by eliminating more Perl-object allocation,
   not by adding more AST-compatible branching

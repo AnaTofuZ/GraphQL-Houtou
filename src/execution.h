@@ -5607,6 +5607,7 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     SV *path_copy_sv = NULL;
     SV *info_sv = NULL;
     SV *borrowed_result_sv = NULL;
+    SV *direct_data_sv = NULL;
     SV *result_sv = NULL;
     SV *completed_sv = NULL;
     SV *args_sv = NULL;
@@ -5706,6 +5707,9 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     lazy_info.result_name_sv = *result_name_svp;
     lazy_info.base_path_sv = path;
     lazy_info.result_name_sv = *result_name_svp;
+    if (gql_execution_try_typename_meta_field_data_fast(aTHX_ parent_type, *field_name_svp, *type_svp, &direct_data_sv)) {
+      goto have_completed;
+    }
     if (gql_execution_try_typename_meta_field_fast(aTHX_ parent_type, *field_name_svp, *type_svp, &completed_sv)) {
       goto have_completed;
     }
@@ -5771,6 +5775,12 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     );
 
 have_completed:
+    if (direct_data_sv) {
+      (void)hv_store_ent(direct_data_hv, *result_name_svp, direct_data_sv, 0);
+      direct_data_sv = NULL;
+      goto field_cleanup;
+    }
+
     if (SvOK(promise_code_sv) && completed_sv && SvROK(completed_sv)) {
       SV *is_completed_promise_sv = gql_promise_call_is_promise(aTHX_ promise_code_sv, completed_sv);
       is_completed_promise = SvTRUE(is_completed_promise_sv);
@@ -5799,6 +5809,7 @@ have_completed:
       }
     }
 
+field_cleanup:
     if (lazy_info.info_sv) {
       SvREFCNT_dec(lazy_info.info_sv);
     }
@@ -5822,6 +5833,9 @@ have_completed:
     }
     if (completed_sv) {
       SvREFCNT_dec(completed_sv);
+    }
+    if (direct_data_sv) {
+      SvREFCNT_dec(direct_data_sv);
     }
   }
 
@@ -5941,6 +5955,7 @@ gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_va
     SV **node_args_svp;
     SV **field_args_svp;
     SV *borrowed_result_sv = NULL;
+    SV *direct_data_sv = NULL;
     SV *result_sv = NULL;
     SV *completed_sv = NULL;
     int used_fast_default_resolve = 0;
@@ -5992,6 +6007,9 @@ gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_va
     lazy_info.return_type_sv = *type_svp;
     lazy_info.field_name_sv = *field_name_svp;
     lazy_info.nodes_sv = nodes_sv;
+    if (gql_execution_try_typename_meta_field_data_fast(aTHX_ parent_type, *field_name_svp, *type_svp, &direct_data_sv)) {
+      goto have_completed;
+    }
     if (gql_execution_try_typename_meta_field_fast(aTHX_ parent_type, *field_name_svp, *type_svp, &completed_sv)) {
       goto have_completed;
     }
@@ -6058,6 +6076,12 @@ gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_va
     );
 
 have_completed:
+    if (direct_data_sv) {
+      (void)hv_store_ent(direct_data_hv, *result_name_svp, direct_data_sv, 0);
+      direct_data_sv = NULL;
+      goto field_cleanup;
+    }
+
     if (SvOK(promise_code_sv) && completed_sv && SvROK(completed_sv)) {
       SV *is_completed_promise_sv = gql_promise_call_is_promise(aTHX_ promise_code_sv, completed_sv);
       is_completed_promise = SvTRUE(is_completed_promise_sv);
@@ -6085,6 +6109,7 @@ have_completed:
       }
     }
 
+field_cleanup:
     if (lazy_info.info_sv) {
       SvREFCNT_dec(lazy_info.info_sv);
     }
@@ -6105,6 +6130,9 @@ have_completed:
     }
     if (completed_sv) {
       SvREFCNT_dec(completed_sv);
+    }
+    if (direct_data_sv) {
+      SvREFCNT_dec(direct_data_sv);
     }
   }
 

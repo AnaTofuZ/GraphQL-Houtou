@@ -976,6 +976,51 @@ Interpretation:
   a major abstract-path win by itself, but it keeps the field loops closer to
   the compiled-IR "borrow first, materialize later" strategy
 
+Latest spot verification after re-trying the previously crashed direct-data
+idea in a narrower, ownership-safe form:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir 77882/s`
+  - `houtou_xs_ast 75568/s`
+- `async_list` (`--count=-4`)
+  - `houtou_compiled_ir 42729/s`
+  - `houtou_facade_ast 43300/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 41421/s`
+  - `houtou_xs_ast 42708/s`
+
+Interpretation:
+
+- the crashed experiment was reintroduced only for the `__typename` trivial
+  path in `gql_execution_execute_fields(...)` and
+  `gql_execution_execute_field_plan(...)`
+- instead of building a temporary completed `{ data => ... }` hash for that
+  case, the loop now materializes the scalar directly into the top-level
+  `direct_data_hv`
+- the broader "borrowed default resolver -> direct data" retry was measured and
+  dropped again because it duplicated trivial-completion metadata work and
+  regressed `abstract_with_fragment`
+- keep the narrow `__typename` direct-data path; it is ownership-safe, test
+  clean, and directionally aligned with removing completed-hash allocation from
+  success paths
+
+Planned medium-term compiler direction:
+
+- introduce multiple lowering/optimization stages between parsed IR and final
+  execution instead of relying on ad hoc runtime fast paths
+- a plausible pipeline is:
+  - normalized IR
+  - typed/specialized IR
+  - execution-lowered IR with native field operands and child-plan tables
+  - late specialization / fusion passes
+  - final threaded-op / VM emission
+- this fits the current strategy better than piling on more local runtime
+  shortcuts, because it moves branching, specialization, and ownership
+  decisions into compile time where they are easier to reason about and less
+  likely to regress hot-path stability
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

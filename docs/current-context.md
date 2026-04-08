@@ -146,6 +146,12 @@ Current compiled-plan execution reuse:
 - native field plan entries now also carry completion dispatch kind, so
   trivial completion and generic completion are explicit operands on the plan
   rather than implicit branches rediscovered inside the field executor
+- the field-entry executor now uses that completion dispatch kind through a
+  dedicated trivial-completion helper, which further separates "resolve" from
+  "complete" work in a VM-friendly way
+- field execution is now also explicitly split into `complete` and `consume`
+  helper phases after resolution, so the current native executor already
+  resembles a fixed `resolve -> complete -> consume` pipeline
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -288,6 +294,24 @@ Most recent completion-dispatch shaping checks:
 - `abstract_with_fragment` (`--count=-4`)
   - `houtou_compiled_ir`: `41518/s`
   - `houtou_xs_ast`: `40766/s`
+
+Most recent completion-op shaping checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `78245/s`
+  - `houtou_xs_ast`: `74854/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `41518/s`
+  - `houtou_xs_ast`: `40766/s`
+
+Most recent complete/consume shaping checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `80397/s`
+  - `houtou_xs_ast`: `76095/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `42809/s`
+  - `houtou_xs_ast`: `41565/s`
   - `houtou_xs_ast`: `43114/s`
 
 Latest spot check after lazy `resolve_info` materialization in field

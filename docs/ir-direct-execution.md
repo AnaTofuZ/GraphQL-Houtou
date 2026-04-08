@@ -204,6 +204,12 @@ Recent executor shaping follows that same path:
 - completion behavior is also being lifted into explicit plan metadata, so
   future opcode lowering can treat trivial leaf completion as a separate op
   family instead of inferring it ad hoc from resolver results
+- that completion metadata is now already consumed through a dedicated helper,
+  which means the current executor boundary is closer to an explicit
+  `resolve -> complete -> consume` pipeline than to one large field routine
+- the post-resolve side is also now separated into explicit completion and
+  consume helpers, which should make future opcode lowering a matter of
+  replacing helper calls with op dispatch instead of rediscovering boundaries
 - the aim is for compiled IR execution to look like dispatch over a sequence of
   field ops, while still reusing existing completion / promise helpers where
   that does not dominate cost

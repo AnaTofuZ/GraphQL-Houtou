@@ -563,6 +563,105 @@ gql_ir_native_field_try_trivial_completion(
 }
 
 static int
+gql_ir_native_field_complete_result(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  SV *field_def_sv,
+  SV *nodes_sv,
+  SV *type_sv,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result_sv,
+  SV **completed_out
+) {
+  if (completed_out) {
+    *completed_out = NULL;
+  }
+  if (!env
+      || !accum
+      || !entry
+      || !field_def_sv
+      || !nodes_sv
+      || !type_sv
+      || !lazy_info
+      || !completed_out) {
+    return 0;
+  }
+
+  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
+      && gql_ir_try_complete_abstract_sync_into(
+           aTHX_
+           env->context_sv,
+           entry->return_type_sv ? entry->return_type_sv : type_sv,
+           nodes_sv,
+           lazy_info,
+           result_sv,
+           entry->result_name_sv,
+           accum->direct_data_hv,
+           &accum->all_errors_av
+         )) {
+    return 1;
+  }
+
+  *completed_out = gql_execution_complete_field_value_catching_error_xs_impl(
+    aTHX_
+    env->context_sv,
+    env->parent_type_sv,
+    field_def_sv,
+    entry->return_type_sv,
+    nodes_sv,
+    lazy_info,
+    result_sv
+  );
+  return 1;
+}
+
+static int
+gql_ir_native_field_consume_completed(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  SV **completed_io
+) {
+  SV *completed_sv = completed_io ? *completed_io : NULL;
+  int is_completed_promise = 0;
+
+  if (!env || !accum || !entry || !completed_io || !completed_sv) {
+    return 0;
+  }
+
+  if (env->promise_code_sv && SvOK(env->promise_code_sv) && SvROK(completed_sv)) {
+    SV *is_completed_promise_sv = gql_promise_call_is_promise(aTHX_ env->promise_code_sv, completed_sv);
+    is_completed_promise = SvTRUE(is_completed_promise_sv);
+    SvREFCNT_dec(is_completed_promise_sv);
+    if (is_completed_promise) {
+      accum->promise_present = 1;
+    }
+  }
+
+  if (SvROK(completed_sv) && (SvTYPE(SvRV(completed_sv)) == SVt_PVHV || is_completed_promise)) {
+    if (!is_completed_promise && SvTYPE(SvRV(completed_sv)) == SVt_PVHV) {
+      gql_ir_accumulate_completed_result(
+        aTHX_
+        accum->direct_data_hv,
+        &accum->all_errors_av,
+        entry->result_name_sv,
+        completed_sv
+      );
+      SvREFCNT_dec(completed_sv);
+      *completed_io = NULL;
+      return 1;
+    }
+    av_push(accum->result_keys_av, SvREFCNT_inc_simple_NN(entry->result_name_sv));
+    av_push(accum->result_values_av, completed_sv);
+    *completed_io = NULL;
+    return 1;
+  }
+
+  return 0;
+}
+
+static int
 gql_ir_execute_native_field_entry_into(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_exec_accum_t *accum,
@@ -577,7 +676,6 @@ gql_ir_execute_native_field_entry_into(
   SV *result_sv = NULL;
   SV *completed_sv = NULL;
   int used_fast_default_resolve = 0;
-  int is_completed_promise = 0;
   int owns_resolve_sv = 0;
   int owns_args_sv = 0;
   int resolve_is_default = 0;
@@ -687,58 +785,33 @@ gql_ir_execute_native_field_entry_into(
     }
   }
 
-  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
-      && gql_ir_try_complete_abstract_sync_into(
-           aTHX_
-           env->context_sv,
-           entry->return_type_sv ? entry->return_type_sv : type_sv,
-           nodes_sv,
-           &lazy_info,
-           result_sv,
-           entry->result_name_sv,
-           accum->direct_data_hv,
-           &accum->all_errors_av
-         )) {
+  if (!gql_ir_native_field_complete_result(
+        aTHX_
+        env,
+        accum,
+        entry,
+        field_def_sv,
+        nodes_sv,
+        type_sv,
+        &lazy_info,
+        result_sv,
+        &completed_sv
+      )) {
+    goto fail;
+  }
+  if (!completed_sv) {
     goto field_done;
   }
 
-  completed_sv = gql_execution_complete_field_value_catching_error_xs_impl(
-    aTHX_
-    env->context_sv,
-    env->parent_type_sv,
-    field_def_sv,
-    entry->return_type_sv,
-    nodes_sv,
-    &lazy_info,
-    result_sv
-  );
-
 have_completed:
-  if (env->promise_code_sv && SvOK(env->promise_code_sv) && completed_sv && SvROK(completed_sv)) {
-    SV *is_completed_promise_sv = gql_promise_call_is_promise(aTHX_ env->promise_code_sv, completed_sv);
-    is_completed_promise = SvTRUE(is_completed_promise_sv);
-    SvREFCNT_dec(is_completed_promise_sv);
-    if (is_completed_promise) {
-      accum->promise_present = 1;
-    }
-  }
-
-  if (SvROK(completed_sv) && (SvTYPE(SvRV(completed_sv)) == SVt_PVHV || is_completed_promise)) {
-    if (!is_completed_promise && SvTYPE(SvRV(completed_sv)) == SVt_PVHV) {
-      gql_ir_accumulate_completed_result(
+  if (!gql_ir_native_field_consume_completed(
         aTHX_
-        accum->direct_data_hv,
-        &accum->all_errors_av,
-        entry->result_name_sv,
-        completed_sv
-      );
-      SvREFCNT_dec(completed_sv);
-      completed_sv = NULL;
-    } else {
-      av_push(accum->result_keys_av, SvREFCNT_inc_simple_NN(entry->result_name_sv));
-      av_push(accum->result_values_av, completed_sv);
-      completed_sv = NULL;
-    }
+        env,
+        accum,
+        entry,
+        &completed_sv
+      )) {
+    goto fail;
   }
 
 field_done:

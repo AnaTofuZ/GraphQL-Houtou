@@ -1047,6 +1047,31 @@ Interpretation:
   layer directly instead of bolting more specialization logic onto
   `compiled_exec` or the runtime field loop
 
+Latest structural progress on abstract-specialized lowering:
+
+- lowered native field-plan entries now carry a borrowed pointer to the
+  single-node abstract child concrete-plan table when one is available
+- sync abstract completion on the compiled-IR path now consults that lowered
+  table first, instead of rediscovering the concrete native child plan by
+  rewalking `nodes` through the legacy helper path
+
+Latest spot verification after wiring that lowered abstract child lookup:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 41917/s`
+  - `houtou_xs_ast 42729/s`
+
+Interpretation:
+
+- the change is mostly a lowering/ownership step rather than a throughput win
+- it removes one more runtime dependency on "look back into legacy node state
+  to rediscover the concrete child native plan"
+- this is the right insertion point for the next real optimization pass:
+  lowering abstract child execution into a more self-contained specialized plan
+  instead of a borrowed pointer back into node-attached tables
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

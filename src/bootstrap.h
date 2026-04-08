@@ -237,6 +237,7 @@ struct gql_ir_compiled_root_field_plan_entry {
   gql_ir_native_resolve_dispatch_kind_t resolve_dispatch_kind;
   gql_ir_native_args_dispatch_kind_t args_dispatch_kind;
   gql_ir_native_completion_dispatch_kind_t completion_dispatch_kind;
+  gql_ir_compiled_concrete_plan_table_t *abstract_child_plan_table;
 };
 
 struct gql_ir_compiled_root_field_plan {

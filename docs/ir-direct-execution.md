@@ -676,3 +676,13 @@ That sequence fits the current architecture better than adding more one-off
 branches to `execution.h`, because it keeps specialization decisions inside the
 compiler pipeline and leaves runtime mostly responsible for executing already
 chosen native shapes.
+
+Current abstract-lowering note:
+
+- lowered native field-plan entries can now carry a borrowed pointer to the
+  single-node abstract child concrete-plan table that was already attached to
+  the node during compilation
+- this is intentionally not the end state; it still borrows from node-attached
+  compiled metadata
+- the next pass should replace that borrowed lookup with a truly self-contained
+  lowered abstract child plan owned by the lowered execution plan itself

@@ -30,6 +30,17 @@ Recent conclusions that matter more than older commit-by-commit history:
   split from mutable field execution state, with the native field frame
   carrying a metadata pointer instead of rediscovering every stable operand
   directly from the entry
+- the next code step after that is now landed as well: the native result
+  writer has been split out of the execution accumulator so field execution
+  can target a writer-owned boundary instead of reaching directly into
+  accumulator state
+- latest writer-boundary spot measurements remain in-range:
+  - `nested_variable_object --count=-3`
+    - `houtou_compiled_ir 80926/s`
+    - `houtou_xs_ast 79626/s`
+  - `abstract_with_fragment --count=-3`
+    - `houtou_compiled_ir 43264/s`
+    - `houtou_xs_ast 42897/s`
 
 ## Ecosystem Gap Guardrail
 

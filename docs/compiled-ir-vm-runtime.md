@@ -234,6 +234,13 @@ The writer should become the only place that knows how to materialize Perl
 response hashes or arrays. Field execution itself should only produce native
 outcomes for the writer to consume.
 
+This boundary is now partially landed in the current branch: the execution
+accumulator no longer directly owns result slots as its primary interface.
+Instead, it owns a dedicated native result-writer struct, and field execution
+talks to writer helpers first. The next step is to let the writer become the
+primary runtime sink for native outcomes and make the accumulator mostly about
+execution-level state such as promise presence / finalization policy.
+
 ### 5. Fallback Boundary
 
 The first VM/runtime slice should still allow explicit fallback to the current

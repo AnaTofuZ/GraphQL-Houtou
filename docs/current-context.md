@@ -2,6 +2,45 @@
 
 Compressed handoff for the current `GraphQL::Houtou` worktree.
 
+## April 2026 VM Reset
+
+The active branch for the next phase is `proj/compiled-ir-vm-runtime`.
+
+Recent conclusions that matter more than older commit-by-commit history:
+
+- `compiled_ir` micro-optimizations around `resolve_type` are no longer the
+  main focus
+- `omit_resolve_type_info` did not produce a meaningful stable win on
+  `abstract_with_fragment`
+- `sv_does` / `sv_derived_from` / possible-type fast-path experiments also did
+  not produce a clean strategic win
+- the next profitable direction is a separate execution-lowered runtime for
+  `compiled_ir`, not more mixed-mode shortcuts inside the current executor
+- `docs/ecosystem-feature-gap.md` is now tracked and must be treated as a
+  design constraint for that runtime
+
+## Ecosystem Gap Guardrail
+
+`docs/ecosystem-feature-gap.md` is now a tracked planning document and should
+be treated as a guardrail for optimization work, not only as a feature-gap
+inventory.
+
+Implications for optimization planning:
+
+- compiled-IR / VM work may freely discard internal AST / legacy execution
+  shapes, but must not accidentally make high-priority missing features harder
+  to add later
+- in particular, runtime work should keep a clean insertion point for:
+  - mutation serial execution
+  - modern introspection data
+  - execution `extensions` hooks / middleware-like interception
+  - future incremental-delivery / subscription transport boundaries
+- performance work that only wins by hard-coding away those insertion points
+  is not strategic progress
+- when choosing between two similar optimizations, prefer the one that leaves
+  room for high-priority ecosystem gaps listed in
+  `docs/ecosystem-feature-gap.md`
+
 ## Snapshot
 
 - Main compatibility work stays on `main`.

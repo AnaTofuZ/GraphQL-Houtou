@@ -26,6 +26,8 @@ Principles:
 - allow compiled-IR-native hot paths to diverge from AST/legacy code when that
   removes measurable bridge costs
 - introduce IR-oriented execution in small internal stages
+- use `docs/ecosystem-feature-gap.md` as a planning constraint so runtime
+  specialization does not block high-priority ecosystem work
 
 ## Compatibility Policy
 

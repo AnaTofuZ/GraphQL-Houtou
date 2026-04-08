@@ -23,6 +23,13 @@ Do not preserve internally:
 - shared executor helpers when they force Perl object bridges
 - current `compiled_ir` internal plan layout, if a better lowered form exists
 
+The feature-gap inventory in `docs/ecosystem-feature-gap.md` is an explicit
+design input for this runtime project. The VM/runtime may ignore internal
+legacy shapes, but it should still preserve clean extension points for
+high-priority missing features such as mutation serial execution, modern
+introspection support, execution hooks / extensions, and future async
+transport or incremental-delivery work.
+
 ## Why A New Runtime
 
 Recent experiments showed:
@@ -107,12 +114,45 @@ This is intentionally more specialized than the current generic executor.
 5. Extend the same runtime to promise-aware execution after sync semantics are
    stable.
 
+## First Concrete Slice
+
+The first implementation slice should stay intentionally narrow:
+
+1. define a new lowered sync plan that only targets root/object/abstract
+   execution
+2. let that lowered plan own native field-op records directly, instead of
+   borrowing node-attached legacy metadata
+3. introduce a native result writer that can accept:
+   - scalar/null direct values
+   - object child-plan results
+   - error payloads
+   without immediately materializing `{ data, errors }`
+4. keep promise handling outside this first slice; a miss may fall back to the
+   existing compiled-IR executor
+
+That gives a minimal correctness boundary for a new runtime while preserving a
+safe fallback path.
+
+## Early Design Constraints
+
+The first lowered runtime should deliberately leave room for:
+
+- serial mutation execution by keeping field-loop ordering explicit
+- execution hooks / `extensions` by keeping a boundary around final response
+  materialization
+- future modern introspection additions by not baking old introspection layout
+  assumptions into the lowered plan
+- future async transport / incremental delivery by not assuming that the only
+  terminal output is one eagerly completed Perl response hash
+
 ## Constraints
 
 - memory ownership must stay explicit; lowered plans own lowered data
 - no new hidden reliance on node-attached legacy metadata
 - if a compatibility shortcut is introduced, it must be opt-in and documented
 - async/promise support is required, but after the sync VM core is stable
+- optimizations must not paint the runtime into a corner for the
+  high-priority gaps tracked in `docs/ecosystem-feature-gap.md`
 
 ## Success Criteria
 

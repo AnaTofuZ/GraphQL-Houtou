@@ -23,6 +23,9 @@ Recent conclusions that matter more than older commit-by-commit history:
   - immutable field metadata
   - mutable execution frames
   - a dedicated native result writer
+- the first code step in that split is now landed: `lowered_plan` no longer
+  conceptually owns only a root field plan, and instead routes through an
+  owned `program -> root_block -> field_plan` boundary
 
 ## Ecosystem Gap Guardrail
 

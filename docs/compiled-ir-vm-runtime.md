@@ -133,6 +133,15 @@ The first implementation slice should stay intentionally narrow:
 That gives a minimal correctness boundary for a new runtime while preserving a
 safe fallback path.
 
+Current status:
+
+- the first ownership split has landed in code as a narrow, behavior-preserving
+  step: lowered compiled-IR execution now routes through an owned
+  `program -> root_block -> field_plan` boundary
+- this is still backed by the existing native field-plan executor, but it
+  establishes the control-flow owner that later VM blocks and op arrays should
+  hang from
+
 ## Early Design Constraints
 
 The first lowered runtime should deliberately leave room for:

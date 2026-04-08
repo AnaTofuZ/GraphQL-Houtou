@@ -148,6 +148,8 @@ typedef struct gql_ir_compiled_exec gql_ir_compiled_exec_t;
 typedef struct gql_ir_compiled_root_field_plan_entry gql_ir_compiled_root_field_plan_entry_t;
 typedef struct gql_ir_compiled_root_field_plan gql_ir_compiled_root_field_plan_t;
 typedef struct gql_ir_execution_lowered_plan gql_ir_execution_lowered_plan_t;
+typedef struct gql_ir_vm_block gql_ir_vm_block_t;
+typedef struct gql_ir_vm_program gql_ir_vm_program_t;
 typedef struct gql_ir_lowered_abstract_child_entry gql_ir_lowered_abstract_child_entry_t;
 typedef struct gql_ir_lowered_abstract_child_plan_table gql_ir_lowered_abstract_child_plan_table_t;
 typedef struct gql_ir_compiled_concrete_plan_entry gql_ir_compiled_concrete_plan_entry_t;
@@ -248,9 +250,17 @@ struct gql_ir_compiled_root_field_plan {
   gql_ir_compiled_root_field_plan_entry_t *entries;
 };
 
-struct gql_ir_execution_lowered_plan {
+struct gql_ir_vm_block {
+  gql_ir_compiled_root_field_plan_t *field_plan;
+};
+
+struct gql_ir_vm_program {
   gql_ir_compilation_stage_t stage;
-  gql_ir_compiled_root_field_plan_t *root_field_plan;
+  gql_ir_vm_block_t *root_block;
+};
+
+struct gql_ir_execution_lowered_plan {
+  gql_ir_vm_program_t *program;
 };
 
 struct gql_ir_lowered_abstract_child_entry {

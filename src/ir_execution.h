@@ -385,6 +385,7 @@ gql_ir_execute_native_field_entry_into(
   int is_completed_promise = 0;
   int owns_resolve_sv = 0;
   int owns_args_sv = 0;
+  int resolve_is_default = 0;
 
   /* Mirrors one field iteration of gql_execution_execute_field_plan(), but the
    * compiled-IR executor treats this as the VM-ready "execute one field op"
@@ -419,25 +420,45 @@ gql_ir_execute_native_field_entry_into(
     lazy_info.result_name_sv = entry->result_name_sv;
   }
 
-  if (gql_execution_try_typename_meta_field_data_fast(aTHX_ env->parent_type_sv, entry->field_name_sv, type_sv, &direct_data_sv)) {
-    (void)hv_store_ent(accum->direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
-    goto field_done;
+  switch (entry->dispatch_kind) {
+    case GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME:
+      if (gql_execution_try_typename_meta_field_data_fast(aTHX_ env->parent_type_sv, entry->field_name_sv, type_sv, &direct_data_sv)) {
+        (void)hv_store_ent(accum->direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
+        goto field_done;
+      }
+      if (gql_execution_try_typename_meta_field_fast(aTHX_ env->parent_type_sv, entry->field_name_sv, type_sv, &completed_sv)) {
+        goto have_completed;
+      }
+      resolve_sv = (env->field_resolver_sv && SvOK(env->field_resolver_sv))
+        ? env->field_resolver_sv
+        : newSV(0);
+      owns_resolve_sv = !(env->field_resolver_sv && SvOK(env->field_resolver_sv));
+      break;
+    case GQL_IR_NATIVE_FIELD_DISPATCH_EXPLICIT_RESOLVE:
+      resolve_sv = entry->resolve_sv;
+      break;
+    case GQL_IR_NATIVE_FIELD_DISPATCH_INHERITED_RESOLVE:
+      resolve_sv = (env->field_resolver_sv && SvOK(env->field_resolver_sv))
+        ? env->field_resolver_sv
+        : newSV(0);
+      owns_resolve_sv = !(env->field_resolver_sv && SvOK(env->field_resolver_sv));
+      break;
+    case GQL_IR_NATIVE_FIELD_DISPATCH_GENERIC:
+    default:
+      if (entry->resolve_sv && SvOK(entry->resolve_sv)) {
+        resolve_sv = entry->resolve_sv;
+      } else {
+        resolve_sv = (env->field_resolver_sv && SvOK(env->field_resolver_sv))
+          ? env->field_resolver_sv
+          : newSV(0);
+        owns_resolve_sv = !(env->field_resolver_sv && SvOK(env->field_resolver_sv));
+      }
+      break;
   }
-  if (gql_execution_try_typename_meta_field_fast(aTHX_ env->parent_type_sv, entry->field_name_sv, type_sv, &completed_sv)) {
-    goto have_completed;
-  }
-
-  if (entry->resolve_sv && SvOK(entry->resolve_sv)) {
-    resolve_sv = entry->resolve_sv;
-  } else {
-    resolve_sv = (env->field_resolver_sv && SvOK(env->field_resolver_sv))
-      ? env->field_resolver_sv
-      : newSV(0);
-    owns_resolve_sv = !(env->field_resolver_sv && SvOK(env->field_resolver_sv));
-  }
+  resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
 
   if (entry->completion_type_sv
-      && gql_execution_is_default_field_resolver(aTHX_ resolve_sv)
+      && resolve_is_default
       && gql_execution_try_default_field_resolve_borrowed_fast(aTHX_ env->root_value_sv, entry->field_name_sv, &result_sv)
       && gql_execution_try_complete_trivial_value_with_metadata_data_fast(
           aTHX_ entry->completion_type_sv,
@@ -450,7 +471,7 @@ gql_ir_execute_native_field_entry_into(
     goto field_done;
   }
 
-  if (gql_execution_is_default_field_resolver(aTHX_ resolve_sv)
+  if (resolve_is_default
       && gql_execution_try_default_field_resolve_fast(aTHX_ env->root_value_sv, entry->field_name_sv, &result_sv)) {
     used_fast_default_resolve = 1;
     if (entry->completion_type_sv
@@ -2046,6 +2067,8 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     SV **argument_count_svp;
     SV **directive_count_svp;
     SV **selection_count_svp;
+    const char *field_name_pv;
+    STRLEN field_name_len;
 
     if (!result_name_svp || !SvOK(*result_name_svp)) {
       goto fail;
@@ -2090,6 +2113,10 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
 
     entry->result_name_sv = gql_execution_share_or_copy_sv(*result_name_svp);
     entry->field_name_sv = gql_execution_share_or_copy_sv(*field_name_svp);
+    field_name_pv = SvPV(*field_name_svp, field_name_len);
+    if (field_name_len == 10 && memEQ(field_name_pv, "__typename", 10)) {
+      entry->dispatch_kind = GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME;
+    }
     entry->field_def_sv = gql_execution_share_or_copy_sv(*field_def_svp);
     if (type_svp && SvOK(*type_svp)) {
       entry->return_type_sv = gql_execution_share_or_copy_sv(*type_svp);
@@ -2104,6 +2131,11 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     }
     if (resolve_svp && SvOK(*resolve_svp)) {
       entry->resolve_sv = gql_execution_share_or_copy_sv(*resolve_svp);
+      if (entry->dispatch_kind != GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME) {
+        entry->dispatch_kind = GQL_IR_NATIVE_FIELD_DISPATCH_EXPLICIT_RESOLVE;
+      }
+    } else if (entry->dispatch_kind != GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME) {
+      entry->dispatch_kind = GQL_IR_NATIVE_FIELD_DISPATCH_INHERITED_RESOLVE;
     }
     entry->nodes_sv = gql_execution_share_or_copy_sv(*nodes_svp);
     entry->first_node_sv = gql_execution_share_or_copy_sv(*first_node_svp);

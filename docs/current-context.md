@@ -136,6 +136,10 @@ Current compiled-plan execution reuse:
   helper plus explicit native execution env/accumulator structs, so the hot
   loop is closer to a VM-style dispatch over field ops than to duplicated
   root/child Perl-bridge code
+- native field plan entries now also carry an explicit dispatch kind
+  (`typename` / explicit resolver / inherited resolver / generic), so a future
+  opcode executor can map field-plan entries to a smaller dispatch table
+  without first re-deriving resolver shape from legacy Perl objects
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -251,6 +255,15 @@ Most recent VM-shaping refactor checks:
 - `abstract_with_fragment` (`--count=-4`)
   - `houtou_compiled_ir`: `41351/s`
   - `houtou_xs_ast`: `39919/s`
+
+Most recent dispatch-kind shaping checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `77825/s`
+  - `houtou_xs_ast`: `74591/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `42308/s`
+  - `houtou_xs_ast`: `41714/s`
   - `houtou_xs_ast`: `43114/s`
 
 Latest spot check after lazy `resolve_info` materialization in field

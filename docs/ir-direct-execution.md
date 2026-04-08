@@ -195,6 +195,9 @@ Recent executor shaping follows that same path:
   entry" helper
 - runtime state needed for that helper is being gathered into explicit native
   execution env / accumulator structs
+- native field-plan entries are starting to carry explicit dispatch metadata so
+  future opcode lowering can distinguish meta fields, inherited resolver calls,
+  and explicit resolver calls without rediscovering that shape at runtime
 - the aim is for compiled IR execution to look like dispatch over a sequence of
   field ops, while still reusing existing completion / promise helpers where
   that does not dominate cost

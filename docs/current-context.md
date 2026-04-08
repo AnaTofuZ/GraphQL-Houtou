@@ -715,6 +715,8 @@ Best next move:
   helpers longer
 - continue moving compiled child metadata from Perl `HV` / `AV` state into
   native plan entries and node-attached tables
+- keep the native executor's terminal materialization in one shared helper so
+  root/native-child execution already has a stable post-VM boundary
 
 Latest spot verification after specializing native field call ops:
 

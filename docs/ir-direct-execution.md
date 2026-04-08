@@ -621,3 +621,5 @@ Near-term implication:
 - avoid introducing new Perl object bridges on the compiled path
 - treat further dispatcher tuning as secondary until more completion/path/info
   work moves behind native operands
+- keep a single native "finish execution" boundary so root/native-child loops
+  share one result materialization / promise-merge terminal step

@@ -89,6 +89,10 @@ static int gql_ir_try_complete_abstract_sync_into(
   AV **parent_errors_avp
 );
 static SV *gql_ir_build_native_result(pTHX_ HV *data_hv, AV *all_errors_av);
+static SV *gql_ir_finish_native_exec_result(
+  pTHX_ SV *promise_code_sv,
+  gql_ir_native_exec_accum_t *accum
+);
 
 static void
 gql_ir_compiled_exec_destroy(gql_ir_compiled_exec_t *compiled) {
@@ -364,6 +368,63 @@ gql_ir_build_native_result(pTHX_ HV *data_hv, AV *all_errors_av) {
   }
 
   return newRV_noinc((SV *)result_hv);
+}
+
+static SV *
+gql_ir_finish_native_exec_result(
+  pTHX_ SV *promise_code_sv,
+  gql_ir_native_exec_accum_t *accum
+) {
+  HV *direct_data_hv;
+  AV *result_keys_av;
+  AV *result_values_av;
+  AV *all_errors_av;
+
+  if (!accum || !accum->direct_data_hv || !accum->result_keys_av || !accum->result_values_av) {
+    return &PL_sv_undef;
+  }
+
+  direct_data_hv = accum->direct_data_hv;
+  result_keys_av = accum->result_keys_av;
+  result_values_av = accum->result_values_av;
+  all_errors_av = accum->all_errors_av;
+
+  if (accum->promise_present) {
+    SV *aggregate = gql_promise_call_all(aTHX_ promise_code_sv, result_values_av);
+    AV *merge_errors_av = all_errors_av ? all_errors_av : newAV();
+    SV *ret = gql_execution_call_xs_then_merge_hash_with_head(
+      aTHX_
+      promise_code_sv,
+      direct_data_hv,
+      result_keys_av,
+      aggregate,
+      merge_errors_av
+    );
+
+    SvREFCNT_dec(aggregate);
+    SvREFCNT_dec((SV *)direct_data_hv);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
+    SvREFCNT_dec((SV *)merge_errors_av);
+    return ret;
+  }
+
+  if (!SvOK(promise_code_sv) || av_len(result_values_av) < 0) {
+    SV *ret = gql_ir_build_native_result(aTHX_ direct_data_hv, all_errors_av);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
+    return ret;
+  }
+
+  {
+    AV *merge_errors_av = all_errors_av ? all_errors_av : newAV();
+    SV *ret = gql_execution_merge_hash(aTHX_ result_keys_av, result_values_av, merge_errors_av);
+    SvREFCNT_dec((SV *)direct_data_hv);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
+    SvREFCNT_dec((SV *)merge_errors_av);
+    return ret;
+  }
 }
 
 static int
@@ -4162,43 +4223,7 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
   }
 
   all_errors_av = exec_accum.all_errors_av;
-
-  if (exec_accum.promise_present) {
-    SV *aggregate = gql_promise_call_all(aTHX_ promise_code_sv, result_values_av);
-    AV *merge_errors_av = all_errors_av ? all_errors_av : newAV();
-    SV *ret = gql_execution_call_xs_then_merge_hash_with_head(
-      aTHX_
-      promise_code_sv,
-      direct_data_hv,
-      result_keys_av,
-      aggregate,
-      merge_errors_av
-    );
-
-    SvREFCNT_dec(aggregate);
-    SvREFCNT_dec((SV *)direct_data_hv);
-    SvREFCNT_dec((SV *)result_keys_av);
-    SvREFCNT_dec((SV *)result_values_av);
-    SvREFCNT_dec((SV *)merge_errors_av);
-    return ret;
-  }
-
-  if (!SvOK(promise_code_sv) || av_len(result_values_av) < 0) {
-    SV *ret = gql_ir_build_native_result(aTHX_ direct_data_hv, all_errors_av);
-    SvREFCNT_dec((SV *)result_keys_av);
-    SvREFCNT_dec((SV *)result_values_av);
-    return ret;
-  }
-
-  {
-    AV *merge_errors_av = all_errors_av ? all_errors_av : newAV();
-    SV *ret = gql_execution_merge_hash(aTHX_ result_keys_av, result_values_av, merge_errors_av);
-    SvREFCNT_dec((SV *)direct_data_hv);
-    SvREFCNT_dec((SV *)result_keys_av);
-    SvREFCNT_dec((SV *)result_values_av);
-    SvREFCNT_dec((SV *)merge_errors_av);
-    return ret;
-  }
+  return gql_ir_finish_native_exec_result(aTHX_ promise_code_sv, &exec_accum);
 
 fallback:
   SvREFCNT_dec((SV *)direct_data_hv);
@@ -4308,43 +4333,7 @@ gql_ir_execute_native_field_plan(
   }
 
   all_errors_av = exec_accum.all_errors_av;
-
-  if (exec_accum.promise_present) {
-    SV *aggregate = gql_promise_call_all(aTHX_ promise_code_sv, result_values_av);
-    AV *merge_errors_av = all_errors_av ? all_errors_av : newAV();
-    SV *ret = gql_execution_call_xs_then_merge_hash_with_head(
-      aTHX_
-      promise_code_sv,
-      direct_data_hv,
-      result_keys_av,
-      aggregate,
-      merge_errors_av
-    );
-
-    SvREFCNT_dec(aggregate);
-    SvREFCNT_dec((SV *)direct_data_hv);
-    SvREFCNT_dec((SV *)result_keys_av);
-    SvREFCNT_dec((SV *)result_values_av);
-    SvREFCNT_dec((SV *)merge_errors_av);
-    return ret;
-  }
-
-  if (!SvOK(promise_code_sv) || av_len(result_values_av) < 0) {
-    SV *ret = gql_ir_build_native_result(aTHX_ direct_data_hv, all_errors_av);
-    SvREFCNT_dec((SV *)result_keys_av);
-    SvREFCNT_dec((SV *)result_values_av);
-    return ret;
-  }
-
-  {
-    AV *merge_errors_av = all_errors_av ? all_errors_av : newAV();
-    SV *ret = gql_execution_merge_hash(aTHX_ result_keys_av, result_values_av, merge_errors_av);
-    SvREFCNT_dec((SV *)direct_data_hv);
-    SvREFCNT_dec((SV *)result_keys_av);
-    SvREFCNT_dec((SV *)result_values_av);
-    SvREFCNT_dec((SV *)merge_errors_av);
-    return ret;
-  }
+  return gql_ir_finish_native_exec_result(aTHX_ promise_code_sv, &exec_accum);
 
 fallback:
   SvREFCNT_dec((SV *)direct_data_hv);

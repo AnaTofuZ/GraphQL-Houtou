@@ -363,6 +363,24 @@ Most recent fixed-op-array shaping checks:
   - `houtou_compiled_ir`: `42629/s`
   - `houtou_xs_ast`: `42430/s`
 
+Most recent shared native field-loop checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `76463/s`
+  - `houtou_xs_ast`: `76023/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `41248/s`
+  - `houtou_xs_ast`: `42313/s`
+
+Interpretation:
+
+- this change is VM-readiness work, not a direct throughput play
+- root compiled plans and native child plans now share the same field-plan loop
+- the main remaining difference is whether root execution must lazily fill
+  runtime operands (`nodes` / `field_def` / `type`) before dispatch
+- the next structural step should keep shrinking that distinction so field
+  execution can be treated as one native op runner regardless of root vs child
+
 Latest spot check after lazy `resolve_info` materialization in field
 completion (`--count=-6`):
 

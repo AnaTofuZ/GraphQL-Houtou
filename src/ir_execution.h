@@ -93,6 +93,22 @@ static SV *gql_ir_finish_native_exec_result(
   pTHX_ SV *promise_code_sv,
   gql_ir_native_exec_accum_t *accum
 );
+static int gql_ir_run_native_field_plan_loop(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  int require_runtime_operand_fill
+);
+static int gql_ir_ensure_native_field_entry_operands(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+);
+static int gql_ir_execute_native_field_entry_into(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+);
 static int gql_ir_native_exec_accum_push_pending(
   pTHX_ gql_ir_native_exec_accum_t *accum,
   SV *key_sv,
@@ -455,6 +471,56 @@ gql_ir_finish_native_exec_result(
     SvREFCNT_dec((SV *)merge_errors_av);
     return ret;
   }
+}
+
+static int
+gql_ir_run_native_field_plan_loop(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  int require_runtime_operand_fill
+) {
+  UV field_i;
+
+  if (!field_plan || !env || !accum) {
+    return 0;
+  }
+
+  for (field_i = 0; field_i < field_plan->field_count; field_i++) {
+    gql_ir_compiled_root_field_plan_entry_t *entry = &field_plan->entries[field_i];
+
+    if (!entry->result_name_sv || !SvOK(entry->result_name_sv)) {
+      continue;
+    }
+
+    if (!entry->field_name_sv || !SvOK(entry->field_name_sv)) {
+      return 0;
+    }
+
+    if (require_runtime_operand_fill) {
+      if (!compiled || !gql_ir_ensure_native_field_entry_operands(aTHX_ compiled, entry)) {
+        continue;
+      }
+    } else if (!entry->nodes_sv || !SvOK(entry->nodes_sv)
+               || !entry->field_def_sv || !SvOK(entry->field_def_sv)
+               || !entry->type_sv || !SvOK(entry->type_sv)
+               || !SvROK(entry->nodes_sv) || SvTYPE(SvRV(entry->nodes_sv)) != SVt_PVAV
+               || !SvROK(entry->field_def_sv) || SvTYPE(SvRV(entry->field_def_sv)) != SVt_PVHV) {
+      return 0;
+    }
+
+    if (!gql_ir_execute_native_field_entry_into(
+          aTHX_
+          env,
+          accum,
+          entry
+        )) {
+      return 0;
+    }
+  }
+
+  return 1;
 }
 
 static int
@@ -4342,7 +4408,6 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
   SV *promise_code_sv = &PL_sv_undef;
   gql_ir_native_exec_env_t exec_env;
   gql_ir_native_exec_accum_t exec_accum;
-  UV field_i;
 
   Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
 
@@ -4367,29 +4432,15 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
     goto fallback;
   }
   gql_ir_init_native_exec_accum(&exec_accum);
-
-  for (field_i = 0; field_i < root_field_plan->field_count; field_i++) {
-    gql_ir_compiled_root_field_plan_entry_t *entry = &root_field_plan->entries[field_i];
-
-    if (!entry->result_name_sv || !SvOK(entry->result_name_sv)) {
-      continue;
-    }
-
-    if (!entry->field_name_sv || !SvOK(entry->field_name_sv)) {
-      goto fallback;
-    }
-
-    if (!gql_ir_ensure_native_field_entry_operands(aTHX_ compiled, entry)) {
-      continue;
-    }
-    if (!gql_ir_execute_native_field_entry_into(
-          aTHX_
-          &exec_env,
-          &exec_accum,
-          entry
-        )) {
-      goto fallback;
-    }
+  if (!gql_ir_run_native_field_plan_loop(
+        aTHX_
+        compiled,
+        root_field_plan,
+        &exec_env,
+        &exec_accum,
+        1
+      )) {
+    goto fallback;
   }
 
   return gql_ir_finish_native_exec_result(aTHX_ promise_code_sv, &exec_accum);
@@ -4412,7 +4463,6 @@ gql_ir_execute_native_field_plan(
   SV *promise_code_sv = &PL_sv_undef;
   gql_ir_native_exec_env_t exec_env;
   gql_ir_native_exec_accum_t exec_accum;
-  UV field_i;
 
   Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
 
@@ -4435,31 +4485,15 @@ gql_ir_execute_native_field_plan(
     goto fallback;
   }
   gql_ir_init_native_exec_accum(&exec_accum);
-
-  for (field_i = 0; field_i < field_plan->field_count; field_i++) {
-    gql_ir_compiled_root_field_plan_entry_t *entry = &field_plan->entries[field_i];
-
-    if (!entry->result_name_sv || !SvOK(entry->result_name_sv)
-        || !entry->field_name_sv || !SvOK(entry->field_name_sv)
-        || !entry->nodes_sv || !SvOK(entry->nodes_sv)
-        || !entry->field_def_sv || !SvOK(entry->field_def_sv)) {
-      goto fallback;
-    }
-
-    if (!SvROK(entry->nodes_sv) || SvTYPE(SvRV(entry->nodes_sv)) != SVt_PVAV
-        || !SvROK(entry->field_def_sv) || SvTYPE(SvRV(entry->field_def_sv)) != SVt_PVHV
-        || !entry->type_sv || !SvOK(entry->type_sv)) {
-      goto fallback;
-    }
-
-    if (!gql_ir_execute_native_field_entry_into(
-          aTHX_
-          &exec_env,
-          &exec_accum,
-          entry
-        )) {
-      goto fallback;
-    }
+  if (!gql_ir_run_native_field_plan_loop(
+        aTHX_
+        NULL,
+        field_plan,
+        &exec_env,
+        &exec_accum,
+        0
+      )) {
+    goto fallback;
   }
 
   return gql_ir_finish_native_exec_result(aTHX_ promise_code_sv, &exec_accum);

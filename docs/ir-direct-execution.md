@@ -625,5 +625,7 @@ Near-term implication:
   share one result materialization / promise-merge terminal step
 - keep native execution-frame initialization shared too, so a future VM can
   enter with one stable env/accumulator shape regardless of root vs child plan
+- keep the field-plan loop itself shared too, so root/native-child execution
+  diverges only where root plans still need lazy runtime operand fill
 - keep pending async field results in native arrays and materialize Perl AVs
   only at the final promise-merge boundary

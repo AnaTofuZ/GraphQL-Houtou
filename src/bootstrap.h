@@ -154,6 +154,7 @@ typedef struct gql_ir_compiled_field_bucket_table gql_ir_compiled_field_bucket_t
 typedef struct gql_execution_context_fast_cache gql_execution_context_fast_cache_t;
 typedef struct gql_ir_native_exec_env gql_ir_native_exec_env_t;
 typedef struct gql_ir_native_exec_accum gql_ir_native_exec_accum_t;
+typedef struct gql_ir_native_pending_entry gql_ir_native_pending_entry_t;
 typedef enum gql_ir_native_field_op gql_ir_native_field_op_t;
 typedef enum gql_ir_native_meta_dispatch_kind gql_ir_native_meta_dispatch_kind_t;
 typedef enum gql_ir_native_resolve_dispatch_kind gql_ir_native_resolve_dispatch_kind_t;
@@ -294,11 +295,17 @@ struct gql_ir_native_exec_env {
   SV *promise_code_sv;
 };
 
+struct gql_ir_native_pending_entry {
+  SV *key_sv;
+  SV *value_sv;
+};
+
 struct gql_ir_native_exec_accum {
   HV *direct_data_hv;
-  AV *result_keys_av;
-  AV *result_values_av;
   AV *all_errors_av;
+  gql_ir_native_pending_entry_t *pending_entries;
+  UV pending_count;
+  UV pending_capacity;
   int promise_present;
 };
 

@@ -93,6 +93,16 @@ static SV *gql_ir_finish_native_exec_result(
   pTHX_ SV *promise_code_sv,
   gql_ir_native_exec_accum_t *accum
 );
+static int gql_ir_native_exec_accum_push_pending(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  SV *key_sv,
+  SV *value_sv
+);
+static void gql_ir_native_exec_accum_materialize_pending_avs(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  AV **keys_out,
+  AV **values_out
+);
 static int gql_ir_init_native_exec_env(
   pTHX_ SV *context_sv,
   SV *parent_type_sv,
@@ -386,20 +396,25 @@ gql_ir_finish_native_exec_result(
   gql_ir_native_exec_accum_t *accum
 ) {
   HV *direct_data_hv;
-  AV *result_keys_av;
-  AV *result_values_av;
+  AV *result_keys_av = NULL;
+  AV *result_values_av = NULL;
   AV *all_errors_av;
 
-  if (!accum || !accum->direct_data_hv || !accum->result_keys_av || !accum->result_values_av) {
+  if (!accum || !accum->direct_data_hv) {
     return &PL_sv_undef;
   }
 
   direct_data_hv = accum->direct_data_hv;
-  result_keys_av = accum->result_keys_av;
-  result_values_av = accum->result_values_av;
   all_errors_av = accum->all_errors_av;
 
   if (accum->promise_present) {
+    gql_ir_native_exec_accum_materialize_pending_avs(aTHX_ accum, &result_keys_av, &result_values_av);
+    if (!result_keys_av || !result_values_av) {
+      return &PL_sv_undef;
+    }
+    accum->pending_entries = NULL;
+    accum->pending_count = 0;
+    accum->pending_capacity = 0;
     SV *aggregate = gql_promise_call_all(aTHX_ promise_code_sv, result_values_av);
     AV *merge_errors_av = all_errors_av ? all_errors_av : newAV();
     SV *ret = gql_execution_call_xs_then_merge_hash_with_head(
@@ -419,14 +434,19 @@ gql_ir_finish_native_exec_result(
     return ret;
   }
 
-  if (!SvOK(promise_code_sv) || av_len(result_values_av) < 0) {
+  if (!SvOK(promise_code_sv) || accum->pending_count == 0) {
     SV *ret = gql_ir_build_native_result(aTHX_ direct_data_hv, all_errors_av);
-    SvREFCNT_dec((SV *)result_keys_av);
-    SvREFCNT_dec((SV *)result_values_av);
     return ret;
   }
 
   {
+    gql_ir_native_exec_accum_materialize_pending_avs(aTHX_ accum, &result_keys_av, &result_values_av);
+    if (!result_keys_av || !result_values_av) {
+      return &PL_sv_undef;
+    }
+    accum->pending_entries = NULL;
+    accum->pending_count = 0;
+    accum->pending_capacity = 0;
     AV *merge_errors_av = all_errors_av ? all_errors_av : newAV();
     SV *ret = gql_execution_merge_hash(aTHX_ result_keys_av, result_values_av, merge_errors_av);
     SvREFCNT_dec((SV *)direct_data_hv);
@@ -434,6 +454,73 @@ gql_ir_finish_native_exec_result(
     SvREFCNT_dec((SV *)result_values_av);
     SvREFCNT_dec((SV *)merge_errors_av);
     return ret;
+  }
+}
+
+static int
+gql_ir_native_exec_accum_push_pending(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  SV *key_sv,
+  SV *value_sv
+) {
+  gql_ir_native_pending_entry_t *new_entries;
+  UV new_capacity;
+
+  if (!accum || !key_sv || !SvOK(key_sv) || !value_sv) {
+    return 0;
+  }
+
+  if (accum->pending_count == accum->pending_capacity) {
+    new_capacity = accum->pending_capacity ? accum->pending_capacity * 2 : 4;
+    Renew(accum->pending_entries, new_capacity, gql_ir_native_pending_entry_t);
+    accum->pending_capacity = new_capacity;
+  }
+
+  new_entries = accum->pending_entries;
+  new_entries[accum->pending_count].key_sv = SvREFCNT_inc_simple_NN(key_sv);
+  new_entries[accum->pending_count].value_sv = value_sv;
+  accum->pending_count++;
+  return 1;
+}
+
+static void
+gql_ir_native_exec_accum_materialize_pending_avs(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  AV **keys_out,
+  AV **values_out
+) {
+  AV *keys_av;
+  AV *values_av;
+  UV i;
+
+  if (keys_out) {
+    *keys_out = NULL;
+  }
+  if (values_out) {
+    *values_out = NULL;
+  }
+  if (!accum) {
+    return;
+  }
+
+  keys_av = newAV();
+  values_av = newAV();
+  for (i = 0; i < accum->pending_count; i++) {
+    av_push(keys_av, accum->pending_entries[i].key_sv);
+    av_push(values_av, accum->pending_entries[i].value_sv);
+    accum->pending_entries[i].key_sv = NULL;
+    accum->pending_entries[i].value_sv = NULL;
+  }
+  Safefree(accum->pending_entries);
+  if (keys_out) {
+    *keys_out = keys_av;
+  } else {
+    SvREFCNT_dec((SV *)keys_av);
+  }
+  if (values_out) {
+    *values_out = values_av;
+  } else {
+    SvREFCNT_dec((SV *)values_av);
   }
 }
 
@@ -506,8 +593,6 @@ gql_ir_init_native_exec_accum(gql_ir_native_exec_accum_t *accum) {
   }
   Zero(accum, 1, gql_ir_native_exec_accum_t);
   accum->direct_data_hv = newHV();
-  accum->result_keys_av = newAV();
-  accum->result_values_av = newAV();
 }
 
 static void
@@ -519,18 +604,25 @@ gql_ir_cleanup_native_exec_accum(gql_ir_native_exec_accum_t *accum) {
     SvREFCNT_dec((SV *)accum->direct_data_hv);
     accum->direct_data_hv = NULL;
   }
-  if (accum->result_keys_av) {
-    SvREFCNT_dec((SV *)accum->result_keys_av);
-    accum->result_keys_av = NULL;
-  }
-  if (accum->result_values_av) {
-    SvREFCNT_dec((SV *)accum->result_values_av);
-    accum->result_values_av = NULL;
-  }
   if (accum->all_errors_av) {
     SvREFCNT_dec((SV *)accum->all_errors_av);
     accum->all_errors_av = NULL;
   }
+  if (accum->pending_entries) {
+    UV i;
+    for (i = 0; i < accum->pending_count; i++) {
+      if (accum->pending_entries[i].key_sv) {
+        SvREFCNT_dec(accum->pending_entries[i].key_sv);
+      }
+      if (accum->pending_entries[i].value_sv) {
+        SvREFCNT_dec(accum->pending_entries[i].value_sv);
+      }
+    }
+    Safefree(accum->pending_entries);
+    accum->pending_entries = NULL;
+  }
+  accum->pending_count = 0;
+  accum->pending_capacity = 0;
 }
 
 static int
@@ -884,8 +976,14 @@ gql_ir_native_field_consume_completed(
       *completed_io = NULL;
       return 1;
     }
-    av_push(accum->result_keys_av, SvREFCNT_inc_simple_NN(entry->result_name_sv));
-    av_push(accum->result_values_av, completed_sv);
+    if (!gql_ir_native_exec_accum_push_pending(
+          aTHX_
+          accum,
+          entry->result_name_sv,
+          completed_sv
+        )) {
+      return 0;
+    }
     *completed_io = NULL;
     return 1;
   }

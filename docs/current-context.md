@@ -719,6 +719,9 @@ Best next move:
   root/native-child execution already has a stable post-VM boundary
 - keep execution-frame setup shared as well; root/native-child now initialize
   the same native env/accumulator shape before entering the field-op loop
+- keep promise-pending field state in native arrays until the final merge step;
+  `result_keys_av` / `result_values_av` no longer need to exist on the hot path
+  before a promise actually appears
 
 Latest spot verification after specializing native field call ops:
 

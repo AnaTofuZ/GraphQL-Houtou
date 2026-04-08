@@ -198,6 +198,9 @@ Recent executor shaping follows that same path:
 - native field-plan entries are starting to carry explicit dispatch metadata so
   future opcode lowering can distinguish meta fields, inherited resolver calls,
   and explicit resolver calls without rediscovering that shape at runtime
+- the field-entry executor is also being split into smaller helper phases so
+  opcode lowering can replace one phase at a time instead of reworking the
+  whole root/child dispatch loop in one step
 - the aim is for compiled IR execution to look like dispatch over a sequence of
   field ops, while still reusing existing completion / promise helpers where
   that does not dominate cost

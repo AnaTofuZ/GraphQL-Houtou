@@ -367,6 +367,139 @@ gql_ir_build_native_result(pTHX_ HV *data_hv, AV *all_errors_av) {
 }
 
 static int
+gql_ir_native_field_try_meta_dispatch(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  SV *type_sv,
+  SV **completed_out
+) {
+  SV *direct_data_sv = NULL;
+
+  if (completed_out) {
+    *completed_out = NULL;
+  }
+  if (!env || !accum || !entry || !type_sv || !SvOK(type_sv)) {
+    return 0;
+  }
+  if (entry->dispatch_kind != GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME) {
+    return 0;
+  }
+
+  if (gql_execution_try_typename_meta_field_data_fast(aTHX_ env->parent_type_sv, entry->field_name_sv, type_sv, &direct_data_sv)) {
+    (void)hv_store_ent(accum->direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
+    return 1;
+  }
+  if (completed_out
+      && gql_execution_try_typename_meta_field_fast(aTHX_ env->parent_type_sv, entry->field_name_sv, type_sv, completed_out)) {
+    return 1;
+  }
+
+  return 0;
+}
+
+static SV *
+gql_ir_native_field_get_resolver(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  int *owns_resolve_out
+) {
+  if (owns_resolve_out) {
+    *owns_resolve_out = 0;
+  }
+  if (!env || !entry) {
+    return &PL_sv_undef;
+  }
+
+  switch (entry->dispatch_kind) {
+    case GQL_IR_NATIVE_FIELD_DISPATCH_EXPLICIT_RESOLVE:
+      return entry->resolve_sv;
+    case GQL_IR_NATIVE_FIELD_DISPATCH_INHERITED_RESOLVE:
+    case GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME:
+    case GQL_IR_NATIVE_FIELD_DISPATCH_GENERIC:
+    default:
+      if (entry->resolve_sv && SvOK(entry->resolve_sv)) {
+        return entry->resolve_sv;
+      }
+      if (env->field_resolver_sv && SvOK(env->field_resolver_sv)) {
+        return env->field_resolver_sv;
+      }
+      if (owns_resolve_out) {
+        *owns_resolve_out = 1;
+      }
+      return newSV(0);
+  }
+}
+
+static int
+gql_ir_native_field_call_resolver(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  SV *field_def_sv,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *resolve_sv,
+  SV **result_out,
+  SV **args_out,
+  int *owns_args_out
+) {
+  SV *field_node_sv;
+  SV *args_sv = NULL;
+
+  if (result_out) {
+    *result_out = NULL;
+  }
+  if (args_out) {
+    *args_out = NULL;
+  }
+  if (owns_args_out) {
+    *owns_args_out = 0;
+  }
+  if (!env || !entry || !field_def_sv || !lazy_info || !resolve_sv || !result_out) {
+    return 0;
+  }
+
+  (void)gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
+  if (entry->argument_count == 0 && entry->field_arg_count == 0) {
+    if (env->empty_args_sv && SvOK(env->empty_args_sv)) {
+      args_sv = env->empty_args_sv;
+    } else {
+      args_sv = newRV_noinc((SV *)newHV());
+      if (owns_args_out) {
+        *owns_args_out = 1;
+      }
+    }
+  } else {
+    field_node_sv = (entry->first_node_sv && SvOK(entry->first_node_sv))
+      ? entry->first_node_sv
+      : &PL_sv_undef;
+    if (!SvROK(field_node_sv) || SvTYPE(SvRV(field_node_sv)) != SVt_PVHV) {
+      return 0;
+    }
+    args_sv = gql_execution_get_argument_values_xs_impl(
+      aTHX_ field_def_sv,
+      field_node_sv,
+      (env->variable_values_sv && SvOK(env->variable_values_sv)) ? env->variable_values_sv : &PL_sv_undef
+    );
+    if (owns_args_out) {
+      *owns_args_out = 1;
+    }
+  }
+
+  if (args_out) {
+    *args_out = args_sv;
+  }
+  *result_out = gql_execution_call_resolver(
+    aTHX_
+    resolve_sv,
+    env->root_value_sv,
+    args_sv,
+    (env->context_value_sv && SvOK(env->context_value_sv)) ? env->context_value_sv : &PL_sv_undef,
+    lazy_info->info_sv
+  );
+  return 1;
+}
+
+static int
 gql_ir_execute_native_field_entry_into(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_exec_accum_t *accum,
@@ -420,41 +553,21 @@ gql_ir_execute_native_field_entry_into(
     lazy_info.result_name_sv = entry->result_name_sv;
   }
 
-  switch (entry->dispatch_kind) {
-    case GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME:
-      if (gql_execution_try_typename_meta_field_data_fast(aTHX_ env->parent_type_sv, entry->field_name_sv, type_sv, &direct_data_sv)) {
-        (void)hv_store_ent(accum->direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
-        goto field_done;
-      }
-      if (gql_execution_try_typename_meta_field_fast(aTHX_ env->parent_type_sv, entry->field_name_sv, type_sv, &completed_sv)) {
-        goto have_completed;
-      }
-      resolve_sv = (env->field_resolver_sv && SvOK(env->field_resolver_sv))
-        ? env->field_resolver_sv
-        : newSV(0);
-      owns_resolve_sv = !(env->field_resolver_sv && SvOK(env->field_resolver_sv));
-      break;
-    case GQL_IR_NATIVE_FIELD_DISPATCH_EXPLICIT_RESOLVE:
-      resolve_sv = entry->resolve_sv;
-      break;
-    case GQL_IR_NATIVE_FIELD_DISPATCH_INHERITED_RESOLVE:
-      resolve_sv = (env->field_resolver_sv && SvOK(env->field_resolver_sv))
-        ? env->field_resolver_sv
-        : newSV(0);
-      owns_resolve_sv = !(env->field_resolver_sv && SvOK(env->field_resolver_sv));
-      break;
-    case GQL_IR_NATIVE_FIELD_DISPATCH_GENERIC:
-    default:
-      if (entry->resolve_sv && SvOK(entry->resolve_sv)) {
-        resolve_sv = entry->resolve_sv;
-      } else {
-        resolve_sv = (env->field_resolver_sv && SvOK(env->field_resolver_sv))
-          ? env->field_resolver_sv
-          : newSV(0);
-        owns_resolve_sv = !(env->field_resolver_sv && SvOK(env->field_resolver_sv));
-      }
-      break;
+  if (gql_ir_native_field_try_meta_dispatch(
+        aTHX_
+        env,
+        accum,
+        entry,
+        type_sv,
+        &completed_sv
+      )) {
+    if (!completed_sv) {
+      goto field_done;
+    }
+    goto have_completed;
   }
+
+  resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
   resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
 
   if (entry->completion_type_sv
@@ -499,39 +612,19 @@ gql_ir_execute_native_field_entry_into(
   }
 
   if (!used_fast_default_resolve) {
-    SV *field_node_sv;
-
-    (void)gql_execution_lazy_resolve_info_materialize(aTHX_ &lazy_info);
-    if (entry->argument_count == 0 && entry->field_arg_count == 0) {
-      if (env->empty_args_sv && SvOK(env->empty_args_sv)) {
-        args_sv = env->empty_args_sv;
-      } else {
-        args_sv = newRV_noinc((SV *)newHV());
-        owns_args_sv = 1;
-      }
-    } else {
-      field_node_sv = (entry->first_node_sv && SvOK(entry->first_node_sv))
-        ? entry->first_node_sv
-        : &PL_sv_undef;
-      if (!SvROK(field_node_sv) || SvTYPE(SvRV(field_node_sv)) != SVt_PVHV) {
-        goto fail;
-      }
-      args_sv = gql_execution_get_argument_values_xs_impl(
-        aTHX_ field_def_sv,
-        field_node_sv,
-        (env->variable_values_sv && SvOK(env->variable_values_sv)) ? env->variable_values_sv : &PL_sv_undef
-      );
-      owns_args_sv = 1;
+    if (!gql_ir_native_field_call_resolver(
+          aTHX_
+          env,
+          entry,
+          field_def_sv,
+          &lazy_info,
+          resolve_sv,
+          &result_sv,
+          &args_sv,
+          &owns_args_sv
+        )) {
+      goto fail;
     }
-
-    result_sv = gql_execution_call_resolver(
-      aTHX_
-      resolve_sv,
-      env->root_value_sv,
-      args_sv,
-      (env->context_value_sv && SvOK(env->context_value_sv)) ? env->context_value_sv : &PL_sv_undef,
-      lazy_info.info_sv
-    );
   }
 
   if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))

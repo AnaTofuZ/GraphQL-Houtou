@@ -140,6 +140,9 @@ Current compiled-plan execution reuse:
   (`typename` / explicit resolver / inherited resolver / generic), so a future
   opcode executor can map field-plan entries to a smaller dispatch table
   without first re-deriving resolver shape from legacy Perl objects
+- native field execution is now further split into helper-sized phases
+  (`meta dispatch`, `resolver selection`, `resolver call`), so upcoming opcode
+  lowering can move one phase at a time without re-cutting the main field loop
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -264,6 +267,15 @@ Most recent dispatch-kind shaping checks:
 - `abstract_with_fragment` (`--count=-4`)
   - `houtou_compiled_ir`: `42308/s`
   - `houtou_xs_ast`: `41714/s`
+
+Most recent helper-splitting checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `77379/s`
+  - `houtou_xs_ast`: `74513/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `41954/s`
+  - `houtou_xs_ast`: `41813/s`
   - `houtou_xs_ast`: `43114/s`
 
 Latest spot check after lazy `resolve_info` materialization in field

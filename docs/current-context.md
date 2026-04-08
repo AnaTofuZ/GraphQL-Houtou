@@ -863,6 +863,24 @@ Interpretation:
 - this is again mainly VM-readiness work, but it also keeps the dispatcher's
   dataflow more regular and does not regress the spot cases
 
+Latest spot verification after routing sync abstract-native child completion
+through the same frame outcome/consume boundary:
+
+- `minil test t/11_execution.t`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 42430/s`
+  - `houtou_xs_ast 42619/s`
+
+Interpretation:
+
+- sync abstract completion no longer needs a special "write directly into the
+  parent accumulator here" ownership convention
+- native child plans now hand object results and child error lists back through
+  the field frame outcome, and `consume` remains the single boundary that
+  mutates the parent accumulator
+- the throughput result is effectively flat, which is acceptable because this
+  change reduces one more special-case branch on the path to a VM-like runner
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

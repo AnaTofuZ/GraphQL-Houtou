@@ -8,6 +8,7 @@ typedef struct gql_ir_native_field_frame {
   SV *args_sv;
   SV *result_sv;
   SV *outcome_sv;
+  AV *outcome_errors_av;
   int used_fast_default_resolve;
   int owns_resolve_sv;
   int owns_args_sv;
@@ -103,19 +104,16 @@ static int gql_ir_try_complete_abstract_sync_into(
   SV *nodes,
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result,
-  SV *result_name_sv,
-  HV *parent_data_hv,
-  AV **parent_errors_avp
+  gql_ir_native_field_frame_t *frame
 );
-static int gql_ir_execute_native_field_plan_into_parent_sync(
+static int gql_ir_execute_native_field_plan_sync_to_outcome(
   pTHX_ SV *context_sv,
   SV *parent_type_sv,
   SV *root_value,
   SV *path_sv,
   gql_ir_compiled_root_field_plan_t *field_plan,
-  SV *result_name_sv,
-  HV *parent_data_hv,
-  AV **parent_errors_avp
+  SV **data_out,
+  AV **errors_out
 );
 static SV *gql_ir_build_native_result(pTHX_ HV *data_hv, AV *all_errors_av);
 static SV *gql_ir_finish_native_exec_result(
@@ -317,17 +315,14 @@ gql_ir_try_complete_abstract_sync_into(
   SV *nodes,
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result,
-  SV *result_name_sv,
-  HV *parent_data_hv,
-  AV **parent_errors_avp
+  gql_ir_native_field_frame_t *frame
 ) {
   SV *resolve_type_sv;
   HV *context_hv = (SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV) ? (HV *)SvRV(context) : NULL;
   SV **schema_svp = context_hv ? hv_fetch(context_hv, "schema", 6, 0) : NULL;
 
   if (!return_type || !SvOK(return_type)
-      || !result_name_sv || !SvOK(result_name_sv)
-      || !parent_data_hv || !parent_errors_avp
+      || !frame
       || !(sv_does(return_type, "GraphQL::Houtou::Role::Abstract")
            || sv_does(return_type, "GraphQL::Role::Abstract"))) {
     return 0;
@@ -395,19 +390,23 @@ gql_ir_try_complete_abstract_sync_into(
           gql_ir_compiled_root_field_plan_t *native_field_plan
             = gql_execution_collect_single_node_concrete_native_field_plan(aTHX_ runtime_type, nodes);
           if (native_field_plan) {
+            SV *data_sv = NULL;
+            AV *errors_av = NULL;
             SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
             SvREFCNT_dec(runtime_type_or_name);
-            if (gql_ir_execute_native_field_plan_into_parent_sync(
+            if (gql_ir_execute_native_field_plan_sync_to_outcome(
                   aTHX_
                   context,
                   runtime_type,
                   result,
                   path,
                   native_field_plan,
-                  result_name_sv,
-                  parent_data_hv,
-                  parent_errors_avp
+                  &data_sv,
+                  &errors_av
                 )) {
+              frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+              frame->outcome_sv = data_sv;
+              frame->outcome_errors_av = errors_av;
               return 1;
             }
           }
@@ -1037,9 +1036,7 @@ gql_ir_native_field_complete_generic_result(
            entry->nodes_sv,
            lazy_info,
            result_sv,
-           entry->result_name_sv,
-           accum->direct_data_hv,
-           &accum->all_errors_av
+           frame
          )) {
     return 1;
   }
@@ -1073,11 +1070,31 @@ gql_ir_native_field_consume_completed(
   }
 
   if (frame->outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE) {
+    AV *child_errors_av = frame->outcome_errors_av;
     if (!frame->outcome_sv) {
       return 0;
     }
     (void)hv_store_ent(accum->direct_data_hv, entry->result_name_sv, frame->outcome_sv, 0);
     frame->outcome_sv = NULL;
+    if (child_errors_av && av_len(child_errors_av) >= 0) {
+      AV *all_errors_av = accum->all_errors_av;
+      I32 error_len = av_len(child_errors_av);
+      I32 i;
+      if (!all_errors_av) {
+        all_errors_av = newAV();
+        accum->all_errors_av = all_errors_av;
+      }
+      for (i = 0; i <= error_len; i++) {
+        SV **error_svp = av_fetch(child_errors_av, i, 0);
+        if (error_svp) {
+          av_push(all_errors_av, SvREFCNT_inc_simple_NN(*error_svp));
+        }
+      }
+    }
+    if (child_errors_av) {
+      SvREFCNT_dec((SV *)child_errors_av);
+      frame->outcome_errors_av = NULL;
+    }
     frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_NONE;
     return 1;
   }
@@ -1296,6 +1313,10 @@ gql_ir_cleanup_native_field_frame(
   if (frame->outcome_sv) {
     SvREFCNT_dec(frame->outcome_sv);
     frame->outcome_sv = NULL;
+  }
+  if (frame->outcome_errors_av) {
+    SvREFCNT_dec((SV *)frame->outcome_errors_av);
+    frame->outcome_errors_av = NULL;
   }
   frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_NONE;
 }
@@ -4581,15 +4602,14 @@ fallback:
 }
 
 static int
-gql_ir_execute_native_field_plan_into_parent_sync(
+gql_ir_execute_native_field_plan_sync_to_outcome(
   pTHX_ SV *context_sv,
   SV *parent_type_sv,
   SV *root_value,
   SV *path_sv,
   gql_ir_compiled_root_field_plan_t *field_plan,
-  SV *result_name_sv,
-  HV *parent_data_hv,
-  AV **parent_errors_avp
+  SV **data_out,
+  AV **errors_out
 ) {
   SV *promise_code_sv = &PL_sv_undef;
   gql_ir_native_exec_env_t exec_env;
@@ -4598,10 +4618,8 @@ gql_ir_execute_native_field_plan_into_parent_sync(
   Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
 
   if (!field_plan
-      || !result_name_sv
-      || !SvOK(result_name_sv)
-      || !parent_data_hv
-      || !parent_errors_avp
+      || !data_out
+      || !errors_out
       || !context_sv
       || !SvROK(context_sv)
       || SvTYPE(SvRV(context_sv)) != SVt_PVHV) {
@@ -4638,25 +4656,10 @@ gql_ir_execute_native_field_plan_into_parent_sync(
     goto fallback;
   }
 
-  (void)hv_store_ent(parent_data_hv, result_name_sv, newRV_noinc((SV *)exec_accum.direct_data_hv), 0);
+  *data_out = newRV_noinc((SV *)exec_accum.direct_data_hv);
   exec_accum.direct_data_hv = NULL;
-
-  if (exec_accum.all_errors_av && av_len(exec_accum.all_errors_av) >= 0) {
-    if (!*parent_errors_avp) {
-      *parent_errors_avp = exec_accum.all_errors_av;
-      exec_accum.all_errors_av = NULL;
-    } else {
-      AV *parent_errors_av = *parent_errors_avp;
-      I32 error_len = av_len(exec_accum.all_errors_av);
-      I32 i;
-      for (i = 0; i <= error_len; i++) {
-        SV **error_svp = av_fetch(exec_accum.all_errors_av, i, 0);
-        if (error_svp) {
-          av_push(parent_errors_av, SvREFCNT_inc_simple_NN(*error_svp));
-        }
-      }
-    }
-  }
+  *errors_out = exec_accum.all_errors_av;
+  exec_accum.all_errors_av = NULL;
 
   gql_ir_cleanup_native_exec_accum(&exec_accum);
   return 1;

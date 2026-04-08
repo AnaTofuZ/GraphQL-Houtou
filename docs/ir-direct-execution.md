@@ -643,3 +643,6 @@ Near-term implication:
 - move per-field completion results into a native outcome slot on that frame,
   so `meta`, `complete`, and `consume` communicate through a small native kind
   plus payload rather than ad hoc `completed_sv` ownership conventions
+- route sync abstract-native child completion through that same outcome slot as
+  well, so even the direct native child fast path stops being a special writer
+  and instead reuses the field-frame consume boundary

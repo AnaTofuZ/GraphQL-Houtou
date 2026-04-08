@@ -683,6 +683,9 @@ Current abstract-lowering note:
   table for the single-node native-plan case
 - that lowered table keeps only `(possible_type, native_field_plan)` pairs and
   clones the native child field plan into lowered-plan-owned storage
+- cloned lowered abstract child plans now recursively clone nested lowered
+  abstract-child tables too, so specialized ownership does not stop at the
+  first abstract child boundary
 - runtime abstract dispatch therefore no longer depends on borrowing the
   node-attached concrete-plan table at lookup time
 - the next pass should specialize the owned lowered table further so abstract

@@ -84,6 +84,9 @@ static gql_ir_compiled_root_field_plan_t *gql_ir_compiled_root_field_plan_clone(
 static gql_ir_lowered_abstract_child_plan_table_t *gql_ir_lowered_abstract_child_plan_table_from_concrete_table(
   pTHX_ gql_ir_compiled_concrete_plan_table_t *table
 );
+static gql_ir_lowered_abstract_child_plan_table_t *gql_ir_lowered_abstract_child_plan_table_clone(
+  pTHX_ gql_ir_lowered_abstract_child_plan_table_t *table
+);
 static void gql_ir_lowered_abstract_child_plan_table_destroy(gql_ir_lowered_abstract_child_plan_table_t *table);
 static void gql_ir_compiled_concrete_plan_table_destroy(gql_ir_compiled_concrete_plan_table_t *table);
 static void gql_ir_attach_concrete_field_plan_table(pTHX_ SV *sv, gql_ir_compiled_concrete_plan_table_t *table);
@@ -2929,7 +2932,39 @@ gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *p
     dst->resolve_dispatch_kind = src->resolve_dispatch_kind;
     dst->args_dispatch_kind = src->args_dispatch_kind;
     dst->completion_dispatch_kind = src->completion_dispatch_kind;
-    dst->abstract_child_plan_table = NULL;
+    dst->abstract_child_plan_table = gql_ir_lowered_abstract_child_plan_table_clone(
+      aTHX_ src->abstract_child_plan_table
+    );
+  }
+
+  return clone;
+}
+
+static gql_ir_lowered_abstract_child_plan_table_t *
+gql_ir_lowered_abstract_child_plan_table_clone(
+  pTHX_ gql_ir_lowered_abstract_child_plan_table_t *table
+) {
+  gql_ir_lowered_abstract_child_plan_table_t *clone = NULL;
+  UV i;
+
+  if (!table || table->count == 0) {
+    return NULL;
+  }
+
+  Newxz(clone, 1, gql_ir_lowered_abstract_child_plan_table_t);
+  clone->count = table->count;
+  Newxz(clone->entries, clone->count, gql_ir_lowered_abstract_child_entry_t);
+
+  for (i = 0; i < clone->count; i++) {
+    gql_ir_lowered_abstract_child_entry_t *dst = &clone->entries[i];
+    gql_ir_lowered_abstract_child_entry_t *src = &table->entries[i];
+
+    if (src->possible_type_sv) {
+      dst->possible_type_sv = gql_execution_share_or_copy_sv(src->possible_type_sv);
+    }
+    if (src->native_field_plan) {
+      dst->native_field_plan = gql_ir_compiled_root_field_plan_clone(aTHX_ src->native_field_plan);
+    }
   }
 
   return clone;

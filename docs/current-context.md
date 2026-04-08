@@ -1078,6 +1078,31 @@ Interpretation:
   lowering abstract child execution into a more self-contained specialized plan
   whose native child table is already owned by the lowered execution plan
 
+Latest structural follow-up on that owned lowered abstract-child table:
+
+- cloned lowered abstract-child plans now recursively clone nested lowered
+  abstract-child tables as well, so self-contained ownership is preserved below
+  the first abstract child boundary
+- this removes another fallback path where nested abstract child execution would
+  have had to rebuild lowered lookup state from node-attached metadata
+
+Latest spot verification after recursive lowered abstract-child cloning:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 42722/s`
+  - `houtou_xs_ast 43649/s`
+
+Interpretation:
+
+- this step is primarily about making the lowered plan recursively
+  self-contained, not about immediate throughput
+- the target case remains in the same general band, which is acceptable for
+  this ownership/VM-readiness pass
+- the next profitable step is still to specialize abstract completion/result
+  writing, not to add more lookup micro-optimizations
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

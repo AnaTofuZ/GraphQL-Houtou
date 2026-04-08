@@ -152,6 +152,10 @@ Current compiled-plan execution reuse:
 - field execution is now also explicitly split into `complete` and `consume`
   helper phases after resolution, so the current native executor already
   resembles a fixed `resolve -> complete -> consume` pipeline
+- that field-stage pipeline is now dispatched through a VM-friendly stage
+  dispatcher as well: on GCC/Clang the executor uses computed-goto based
+  direct threading, while other compilers use a matching `switch` fallback
+  over the same explicit stage enum
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -312,7 +316,15 @@ Most recent complete/consume shaping checks:
 - `abstract_with_fragment` (`--count=-4`)
   - `houtou_compiled_ir`: `42809/s`
   - `houtou_xs_ast`: `41565/s`
-  - `houtou_xs_ast`: `43114/s`
+
+Most recent direct-threaded stage-dispatch checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `79109/s`
+  - `houtou_xs_ast`: `78887/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `42048/s`
+  - `houtou_xs_ast`: `42507/s`
 
 Latest spot check after lazy `resolve_info` materialization in field
 completion (`--count=-6`):

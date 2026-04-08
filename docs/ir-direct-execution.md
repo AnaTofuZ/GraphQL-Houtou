@@ -210,6 +210,10 @@ Recent executor shaping follows that same path:
 - the post-resolve side is also now separated into explicit completion and
   consume helpers, which should make future opcode lowering a matter of
   replacing helper calls with op dispatch instead of rediscovering boundaries
+- the shared field-entry executor now also uses a stage dispatcher that is
+  written in a direct-threading-friendly shape: on compilers with computed-goto
+  support it dispatches via a label table, and otherwise falls back to a
+  `switch`-based stage loop with the same stage boundaries
 - the aim is for compiled IR execution to look like dispatch over a sequence of
   field ops, while still reusing existing completion / promise helpers where
   that does not dominate cost

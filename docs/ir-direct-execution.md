@@ -22,9 +22,38 @@ public AST contract.
 Principles:
 
 - keep the public parser and AST APIs unchanged
-- keep the existing XS execution hot paths reusable
-- do not fork business logic into a second completely independent executor
+- keep the graphql-perl-compatible AST execution layer available
+- allow compiled-IR-native hot paths to diverge from AST/legacy code when that
+  removes measurable bridge costs
 - introduce IR-oriented execution in small internal stages
+
+## Compatibility Policy
+
+The working policy for the current optimization phase is:
+
+- keep graphql-perl compatibility for user-visible AST execution
+- do not require code-sharing between AST execution and compiled-IR execution
+  if that sharing keeps legacy bridge costs in the hot path
+- allow duplicated compiled-IR-only execution code, as long as comments point
+  to the corresponding legacy / AST-oriented implementation where useful
+- allow breaking changes to internal APIs that are not intended for end users
+- keep user-visible GraphQL object APIs broadly compatible, but allow
+  performance-motivated deviations if they are explicitly reviewed first and
+  documented before landing
+- treat compatibility-affecting shortcuts such as optional info attachment,
+  lighter-weight hashes instead of full objects, or reduced metadata as
+  high-signal design decisions that must be called out explicitly
+- keep memory-leak risk visible whenever native C tables / structs are added
+
+Additional runtime / type-system policy:
+
+- built-in primitive GraphQL types may be specialized in XS and do not need to
+  stay on `Type::Tiny` internally
+- the public API should still keep a `Type::Tiny`-friendly path for typical
+  user-defined custom scalar / coercion flows
+- Moo-based object construction may be replaced or bypassed on internal hot
+  paths when measurement justifies it, but user-visible behavior changes still
+  require explicit review and documentation
 
 ## Why This Work Exists
 
@@ -140,6 +169,67 @@ This avoids both extremes:
 - it does not force public AST changes
 - it does not require maintaining a completely separate executor
 
+## Native-IR Follow-up
+
+The next major bottleneck is no longer only AST compatibility. It is also that
+prepared / compiled IR still retain too many Perl objects (`SV` / `AV` / `HV`)
+as bridge structures.
+
+That means the long-term direction is not just "execute compiled IR faster",
+but also:
+
+1. keep parser IR and compiled plans in native C structures for as long as
+   possible
+2. avoid retaining legacy AST-compatible `SV` graphs inside compiled plans
+3. materialize legacy `operation` / `fragments` / `field` buckets only when a
+   compatibility boundary actually needs them
+4. evolve compiled field plans toward native execution plans that can
+   eventually be executed by a VM-like runner
+
+This is the practical bridge between the current executor work and a future
+compiled-IR VM.
+
+Recent executor shaping follows that same path:
+
+- root/native child loops are being collapsed into a shared "execute one field
+  entry" helper
+- runtime state needed for that helper is being gathered into explicit native
+  execution env / accumulator structs
+- native field-plan entries are starting to carry explicit dispatch metadata so
+  future opcode lowering can distinguish meta fields, inherited resolver calls,
+  and explicit resolver calls without rediscovering that shape at runtime
+- the field-entry executor is also being split into smaller helper phases so
+  opcode lowering can replace one phase at a time instead of reworking the
+  whole root/child dispatch loop in one step
+- completion behavior is also being lifted into explicit plan metadata, so
+  future opcode lowering can treat trivial leaf completion as a separate op
+  family instead of inferring it ad hoc from resolver results
+- that completion metadata is now already consumed through a dedicated helper,
+  which means the current executor boundary is closer to an explicit
+  `resolve -> complete -> consume` pipeline than to one large field routine
+- the post-resolve side is also now separated into explicit completion and
+  consume helpers, which should make future opcode lowering a matter of
+  replacing helper calls with op dispatch instead of rediscovering boundaries
+- the shared field-entry executor now also uses a stage dispatcher that is
+  written in a direct-threading-friendly shape: on compilers with computed-goto
+  support it dispatches via a label table, and otherwise falls back to a
+  `switch`-based stage loop with the same stage boundaries
+- native field execution is now also moving operand ownership onto the plan
+  entry itself: root-side missing `nodes` / `field_def` / `type` operands are
+  lazily materialized once and then retained on the entry, so the dispatcher
+  can execute from a single field-op record instead of being fed extra runtime
+  operands from each loop site
+- that field-op record is also being normalized into smaller native enum
+  operands (`meta`, `resolve`, `args`, `completion`) rather than one broader
+  dispatch shape inferred from Perl objects at runtime
+- the field-entry executor now dispatches over a fixed op array stored on each
+  compiled plan entry instead of carrying a hard-coded stage enum internally;
+  this is still a small fixed sequence, but it moves control flow ownership
+  onto the compiled plan and is closer to true opcode execution
+- the aim is for compiled IR execution to look like dispatch over a sequence of
+  field ops, while still reusing existing completion / promise helpers where
+  that does not dominate cost
+
 ## Current Groundwork
 
 The codebase now has an internal prepared executable IR handle:
@@ -167,6 +257,22 @@ The current prepared-IR execution path already proves an important point:
 However, the current path still rebuilds bridge structures on every execute.
 That is why the next step is *not* "more ad-hoc prepared IR helpers", but a
 compiled plan that caches reusable front-end state.
+
+Recent follow-up on that direction:
+
+- compiled root plans now cache runtime `nodes` / `path` data directly
+- compiled root plans are beginning to retain native C entries instead of
+  keeping `field_order` / `fields` Perl containers as the primary form
+- compiled abstract child execution can use direct field plans for simple
+  single-node concrete cases
+- compiled abstract child direct-plan lookup is also moving away from
+  type-name Perl hash lookup toward native node-attached tables
+- plain compiled field buckets on compiled nodes/fragments are likewise moving
+  toward native bucket tables that the merge path can consume directly
+- compiled handles are moving away from retaining eager legacy
+  `operation` / `fragments` / `root_fields` state
+- those legacy structures are increasingly treated as lazy compatibility
+  materializations rather than as the compiled representation itself
 
 ## Reuse Strategy
 
@@ -221,6 +327,36 @@ Status: landed.
 
 ### Stage 3
 
+Reduce retained Perl-object state inside compiled plans.
+
+Target changes:
+
+- stop treating legacy `SV` maps as the canonical compiled representation
+- keep selected operation / fragment / field metadata in native IR-oriented
+  form
+- materialize legacy `operation`, `fragments`, and `root_fields` only on
+  demand
+- continue replacing compiled field buckets with execution-oriented field plans
+
+Status: in progress.
+
+### Stage 4
+
+Native child execution plans and VM-oriented lowering.
+
+Target changes:
+
+- compile object / abstract child selections into native child plans
+- lower more arguments / directives into compile-time data
+- make the hot execution loop consume plan arrays / structs instead of Perl
+  hashes
+- converge on a VM-like executor without prematurely forking GraphQL
+  semantics
+
+Status: planned.
+
+### Execution Rollout 1
+
 Internal prepared-IR execution path:
 
 - build a shared execution context
@@ -229,7 +365,7 @@ Internal prepared-IR execution path:
 
 Status: landed.
 
-### Stage 4
+### Execution Rollout 2
 
 Introduce a compiled execution plan object:
 
@@ -255,6 +391,155 @@ Current implementation note:
 - the next expansion is to make nested selection metadata and schema-resolved
   field definitions increasingly authoritative so execution no longer rebuilds
   front-end state below the root selection boundary
+
+## Current Optimization Conclusion
+
+Recent abstract/fragment-heavy tuning work clarified an important boundary.
+
+For `abstract_with_fragment`-shaped workloads:
+
+- runtime cache improvements and small AST-path fast paths help a little
+- callback lookup caching is valid but modest
+- abstract fragment matching can be made cheaper
+- low-risk bucket / refcount micro-optimizations are acceptable
+
+But the measured gains remain small and noisy once the easy cache lookups are
+in place.
+
+That means the next meaningful speedups are unlikely to come from further
+incremental AST-compatible tuning alone.
+
+## Preferred Direction If AST Compatibility Is Not A Goal
+
+If the caller does not need graphql-perl AST compatibility, and limited
+execution-only duplication is acceptable, the preferred direction is now:
+
+1. parse executable source into arena IR
+2. compile IR into an execution-oriented plan
+3. optionally compile that plan again into a schema-specialized runtime plan
+4. execute the runtime plan through an IR-native hot path
+
+This is effectively a multi-stage compilation strategy:
+
+- parser IR
+- execution plan IR
+- runtime-specialized executable plan
+
+The goal is not "duplicate all execution logic", but to stop paying legacy
+bridge costs inside the hot path.
+
+## Highest-Value IR-Native Targets
+
+If optimization work continues on the IR-direct side, these are the most
+promising targets in order:
+
+### 1. Native compiled field execution
+
+Current compiled IR still stores and executes legacy structures such as:
+
+- `operation_sv`
+- `fragments_sv`
+- `root_fields_sv`
+
+and eventually feeds them into the AST/legacy-oriented field executor.
+
+That means compiled IR is still paying for:
+
+- legacy selection/node materialization
+- hash/array bucket merging
+- legacy context shape expectations
+
+The most valuable next step is a compiled-IR-only field executor that consumes
+native field plans directly instead of `root_fields_sv`.
+
+### 2. IR-native execution context
+
+Current compiled execution still builds a Perl `HV` execution context with:
+
+- schema
+- fragments
+- operation
+- variable values
+- field resolver
+- resolve info base
+
+That is convenient for reuse but not ideal for hot execution.
+
+The preferred next step is to keep hot-path data in a C struct and materialize
+Perl hashes only on demand, especially for resolver info.
+
+### 3. Per-concrete-type abstract child plans
+
+Abstract completion is still expensive because even compiled plans eventually
+fall back toward selection/bucket structures.
+
+The preferred compiled representation for abstract fields is:
+
+- one abstract field plan
+- plus one precompiled child plan per concrete runtime object type
+
+Then `resolve_type` can jump directly to a child executable plan instead of
+rebuilding or merging nested selections.
+
+### 4. Compile-time argument and directive lowering
+
+IR execution still keeps legacy conversion helpers for arguments, directives,
+and values.
+
+A stronger compiled plan should lower:
+
+- static argument values
+- include/skip metadata
+- selection flags
+
+so runtime only resolves variables and executes.
+
+### 5. Index-based fragment/type dispatch
+
+Where possible, compiled plans should use IDs / indexes instead of repeated:
+
+- name SV creation
+- fragment-name lookup
+- type-name lookup
+
+This matters most once a native compiled executor exists.
+
+## Acceptable Duplication Boundary
+
+Some duplication is now considered acceptable if it stays inside the
+compiled-IR execution layer.
+
+Reasonable duplication:
+
+- compiled-IR-only execution context structs
+- compiled-IR-only field execution loop
+- compiled abstract child-plan dispatch
+
+Duplication to avoid unless clearly justified by measurement:
+
+- separate GraphQL semantics for directives
+- separate variable coercion semantics
+- separate error/path semantics
+- separate promise semantics
+
+In short:
+
+- duplicate the execution front-end and plan runner if needed
+- do not casually duplicate GraphQL semantics or promise/error behavior
+
+## AST-Path Maintenance Rule
+
+AST-path tuning remains worthwhile only while changes are:
+
+- low risk
+- low complexity
+- shared with IR execution
+
+If an AST-focused optimization requires substantial special cases for
+abstract/fragment-heavy execution and still yields only single-digit or noisy
+gains, prefer not to land it.
+
+At that point effort should move to compiled IR native execution instead.
 
 ## Runtime Schema Direction
 
@@ -306,3 +591,88 @@ To keep this maintainable:
 - keep IR-direct logic isolated to the execution front-end boundary
 - prefer compiling and caching reusable plan pieces over rebuilding lightweight
   bridges on every execute
+
+## Current VM-Readiness State
+
+The compiled-IR executor is now past the "shared loop with some native caches"
+stage and into a more explicit execution-plan form:
+
+- each native field-plan entry owns a fixed op array
+- the dispatcher can use direct threading / computed goto where supported
+- resolver-call ops are now specialized as:
+  - fixed resolver + empty args
+  - fixed resolver + built args
+  - context/default resolver + empty args
+  - context/default resolver + built args
+- completion ops are also now specialized as:
+  - trivial completion
+  - generic completion
+
+This matters less for immediate throughput than for architecture:
+
+- runtime no longer has to rediscover as much branch structure from Perl data
+- plan entries are closer to real bytecode operands
+- the remaining large costs are no longer the dispatch shape itself, but
+  completion work, Perl callback boundaries, and delayed legacy materialization
+
+Near-term implication:
+
+- keep pushing branch structure into native plan entries
+- avoid introducing new Perl object bridges on the compiled path
+- treat further dispatcher tuning as secondary until more completion/path/info
+  work moves behind native operands
+- keep a single native "finish execution" boundary so root/native-child loops
+  share one result materialization / promise-merge terminal step
+- keep native execution-frame initialization shared too, so a future VM can
+  enter with one stable env/accumulator shape regardless of root vs child plan
+- keep the field-plan loop itself shared too, so root/native-child execution
+  diverges only where root plans still need lazy runtime operand fill
+- keep that distinction expressed at plan granularity, not as per-entry loop
+  rediscovery, so a compiled root plan that is already self-contained can run
+  through the same hot loop as a native child plan
+- when sync abstract completion can resolve to a native child plan, prefer
+  consuming that child plan directly into the parent accumulator instead of
+  materializing a temporary `{ data, errors }` Perl result hash and unpacking
+  it again
+- keep pending async field results in native arrays and materialize Perl AVs
+  only at the final promise-merge boundary
+- keep per-field execution state in a native frame struct as well, so the
+  stage dispatcher does not need to shuttle a growing set of loose locals; this
+  makes a future bytecode / VM runner much closer to "run op against frame"
+  than to "rebuild transient Perl-facing state for each helper call"
+- move per-field completion results into a native outcome slot on that frame,
+  so `meta`, `complete`, and `consume` communicate through a small native kind
+  plus payload rather than ad hoc `completed_sv` ownership conventions
+- route sync abstract-native child completion through that same outcome slot as
+  well, so even the direct native child fast path stops being a special writer
+  and instead reuses the field-frame consume boundary
+- normalize sync generic completed hashes into that same outcome slot too, so
+  `consume` increasingly becomes a pure accumulator step rather than a place
+  that still needs to understand multiple upstream result ownership styles
+- make the ownership boundary itself explicit by having `compiled_ir` own an
+  execution-lowered plan object; the current lowered stage is still just
+  `LOWERED_NATIVE_FIELDS`, but future typed/specialized/late-lowered forms
+  should be inserted there instead of adding more ad hoc state directly to the
+  compiled handle
+
+## Next Lowering Layer
+
+The next meaningful compiler pass should not be another local runtime shortcut.
+It should be a new lowered-plan stage that targets the main remaining abstract
+costs directly:
+
+- abstract-specialized child-plan lowering
+  - lower `runtime type -> child plan` into a dedicated plan form instead of
+    letting generic completion rediscover object execution shape
+- late op fusion
+  - fuse common `resolve -> complete -> consume` sequences once operand shapes
+    are fixed
+- VM/opcode emission
+  - emit the final threaded-op representation from the stabilized lowered plan,
+    not from raw prepared IR and not from the legacy-compatible compiled
+    handle
+
+That sequence fits the current architecture better than adding more one-off
+branches to `execution.h`, because it keeps specialization decisions inside the
+compiler pipeline and leaves runtime mostly responsible for executing already
+chosen native shapes.

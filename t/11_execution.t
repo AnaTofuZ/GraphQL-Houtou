@@ -630,6 +630,26 @@ subtest 'execute union field with resolve_type through xs path' => sub {
   is_deeply $xs, $public, 'union field with resolve_type matches public facade';
 };
 
+subtest 'xs path attaches abstract execution metadata to parsed ast' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $ast = parse_with_options('{ search_result { ... on User { id name } } }', { backend => 'xs' });
+  my $result = GraphQL::Houtou::XS::Execution::execute_xs($schema, $ast);
+  my $operation = $ast->[0];
+  my $selection = $operation->{selections}[0];
+
+  is_deeply $result, {
+    data => {
+      search_result => {
+        id => '13',
+        name => 'search:13',
+      },
+    },
+  }, 'xs execution still returns expected data for parsed ast';
+  ok $operation->{_houtou_exec_meta_ready}, 'operation is marked as metadata-ready';
+  ok $selection->{compiled_field_def}, 'abstract field keeps compiled field def on parsed ast';
+};
+
 subtest 'execute interface field with default resolve_type through xs path' => sub {
   require GraphQL::Houtou::XS::Execution;
 
@@ -973,6 +993,100 @@ subtest 'execute compiled ir simple query' => sub {
   );
 };
 
+subtest 'compiled ir fast-path handles __typename in abstract child selections' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $LocalUser = GraphQL::Houtou::Type::Object->new(
+    name => 'TypenameUser',
+    fields => {
+      id => { type => $ID->non_null },
+      name => { type => $String->non_null },
+    },
+  );
+  my $LocalSearchResult = GraphQL::Houtou::Type::Union->new(
+    name => 'TypenameSearchResult',
+    resolve_type => sub { 'TypenameUser' },
+    types => [ $LocalUser ],
+  );
+  my $LocalQuery = GraphQL::Houtou::Type::Object->new(
+    name => 'TypenameQuery',
+    fields => {
+      searchResult => {
+        type => $LocalSearchResult,
+        resolve => sub {
+          return {
+            id => '13',
+            name => 'search:13',
+          };
+        },
+      },
+    },
+  );
+  my $local_schema = GraphQL::Houtou::Schema->new(query => $LocalQuery);
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ searchResult { __typename ... on TypenameUser { id } } }'
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $local_schema,
+    $prepared,
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs($compiled),
+    {
+      data => {
+        searchResult => {
+          __typename => 'TypenameUser',
+          id => '13',
+        },
+      },
+    },
+    'compiled ir returns __typename correctly for abstract child selections',
+  );
+};
+
+subtest 'compiled ir keeps default resolver coderef fallback semantics' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $Child = GraphQL::Houtou::Type::Object->new(
+    name => 'FastChild',
+    fields => {
+      name => { type => $String->non_null },
+    },
+  );
+  my $LocalQuery = GraphQL::Houtou::Type::Object->new(
+    name => 'FastQuery',
+    fields => {
+      child => {
+        type => $Child->non_null,
+        resolve => sub {
+          return {
+            name => sub {
+              my ($args, $ctx, $info) = @_;
+              return join('.', @{ $info->{path} });
+            },
+          };
+        },
+      },
+    },
+  );
+  my $local_schema = GraphQL::Houtou::Schema->new(query => $LocalQuery);
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs('{ child { name } }');
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs($local_schema, $prepared);
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs($compiled),
+    {
+      data => {
+        child => {
+          name => 'child.name',
+        },
+      },
+    },
+    'compiled ir still falls back to full default resolver call when property is a coderef',
+  );
+};
+
 subtest 'execute compiled ir with variables and fragments' => sub {
   require GraphQL::Houtou::XS::Execution;
 
@@ -1224,6 +1338,31 @@ subtest 'execute compiled ir reuses compiled fragment buckets' => sub {
       },
     },
     'compiled ir executes nested fragment and inline-fragment buckets correctly',
+  );
+};
+
+subtest 'execute compiled ir reuses concrete subfields for abstract selections' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ auto_search_result { ... on AutoNamedEntity { name } ... on AutoCheckedUser { id } } }'
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $schema,
+    $prepared,
+  );
+
+  is_deeply(
+    GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs($compiled),
+    {
+      data => {
+        auto_search_result => {
+          name => 'auto-search:15',
+          id => '15',
+        },
+      },
+    },
+    'compiled ir executes abstract selections through cached concrete subfield buckets',
   );
 };
 

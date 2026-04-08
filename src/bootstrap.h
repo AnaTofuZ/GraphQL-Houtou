@@ -145,9 +145,63 @@ typedef struct gql_ir_definition gql_ir_definition_t;
 typedef struct gql_ir_document gql_ir_document_t;
 typedef struct gql_ir_prepared_exec gql_ir_prepared_exec_t;
 typedef struct gql_ir_compiled_exec gql_ir_compiled_exec_t;
+typedef struct gql_ir_compiled_root_field_plan_entry gql_ir_compiled_root_field_plan_entry_t;
+typedef struct gql_ir_compiled_root_field_plan gql_ir_compiled_root_field_plan_t;
+typedef struct gql_ir_execution_lowered_plan gql_ir_execution_lowered_plan_t;
+typedef struct gql_ir_compiled_concrete_plan_entry gql_ir_compiled_concrete_plan_entry_t;
+typedef struct gql_ir_compiled_concrete_plan_table gql_ir_compiled_concrete_plan_table_t;
+typedef struct gql_ir_compiled_field_bucket_entry gql_ir_compiled_field_bucket_entry_t;
+typedef struct gql_ir_compiled_field_bucket_table gql_ir_compiled_field_bucket_table_t;
+typedef struct gql_execution_context_fast_cache gql_execution_context_fast_cache_t;
+typedef struct gql_ir_native_exec_env gql_ir_native_exec_env_t;
+typedef struct gql_ir_native_exec_accum gql_ir_native_exec_accum_t;
+typedef struct gql_ir_native_pending_entry gql_ir_native_pending_entry_t;
+typedef enum gql_ir_native_field_op gql_ir_native_field_op_t;
+typedef enum gql_ir_native_meta_dispatch_kind gql_ir_native_meta_dispatch_kind_t;
+typedef enum gql_ir_native_resolve_dispatch_kind gql_ir_native_resolve_dispatch_kind_t;
+typedef enum gql_ir_native_args_dispatch_kind gql_ir_native_args_dispatch_kind_t;
+typedef enum gql_ir_native_completion_dispatch_kind gql_ir_native_completion_dispatch_kind_t;
+typedef enum gql_ir_compilation_stage gql_ir_compilation_stage_t;
 typedef struct {
   gql_ir_document_t *document;
 } gql_ir_document_cleanup_t;
+
+enum gql_ir_compilation_stage {
+  GQL_IR_COMPILATION_STAGE_NONE = 0,
+  GQL_IR_COMPILATION_STAGE_LOWERED_NATIVE_FIELDS = 1
+};
+
+enum gql_ir_native_field_op {
+  GQL_IR_NATIVE_FIELD_OP_META = 0,
+  GQL_IR_NATIVE_FIELD_OP_TRIVIAL_CONTEXT = 1,
+  GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_EMPTY_ARGS = 2,
+  GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_BUILD_ARGS = 3,
+  GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_EMPTY_ARGS = 4,
+  GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_BUILD_ARGS = 5,
+  GQL_IR_NATIVE_FIELD_OP_COMPLETE_TRIVIAL = 6,
+  GQL_IR_NATIVE_FIELD_OP_COMPLETE_GENERIC = 7,
+  GQL_IR_NATIVE_FIELD_OP_CONSUME = 8
+};
+
+enum gql_ir_native_meta_dispatch_kind {
+  GQL_IR_NATIVE_META_DISPATCH_NONE = 0,
+  GQL_IR_NATIVE_META_DISPATCH_TYPENAME = 1
+};
+
+enum gql_ir_native_resolve_dispatch_kind {
+  GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED = 0,
+  GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT = 1
+};
+
+enum gql_ir_native_args_dispatch_kind {
+  GQL_IR_NATIVE_ARGS_DISPATCH_EMPTY = 0,
+  GQL_IR_NATIVE_ARGS_DISPATCH_BUILD = 1
+};
+
+enum gql_ir_native_completion_dispatch_kind {
+  GQL_IR_NATIVE_COMPLETION_GENERIC = 0,
+  GQL_IR_NATIVE_COMPLETION_TRIVIAL = 1
+};
 
 struct gql_ir_prepared_exec {
   gql_ir_document_t *document;
@@ -158,17 +212,119 @@ struct gql_ir_prepared_exec {
   SV *cached_root_legacy_fields_sv;
 };
 
+struct gql_ir_compiled_root_field_plan_entry {
+  SV *result_name_sv;
+  SV *field_name_sv;
+  SV *field_def_sv;
+  SV *return_type_sv;
+  SV *type_sv;
+  SV *completion_type_sv;
+  SV *resolve_sv;
+  SV *nodes_sv;
+  SV *first_node_sv;
+  SV *path_sv;
+  UV node_count;
+  UV argument_count;
+  UV field_arg_count;
+  UV directive_count;
+  UV selection_count;
+  UV trivial_completion_flags;
+  U8 op_count;
+  U8 consume_op_index;
+  U8 operands_ready;
+  gql_ir_native_field_op_t ops[5];
+  gql_ir_native_meta_dispatch_kind_t meta_dispatch_kind;
+  gql_ir_native_resolve_dispatch_kind_t resolve_dispatch_kind;
+  gql_ir_native_args_dispatch_kind_t args_dispatch_kind;
+  gql_ir_native_completion_dispatch_kind_t completion_dispatch_kind;
+};
+
+struct gql_ir_compiled_root_field_plan {
+  UV field_count;
+  U8 requires_runtime_operand_fill;
+  gql_ir_compiled_root_field_plan_entry_t *entries;
+};
+
+struct gql_ir_execution_lowered_plan {
+  gql_ir_compilation_stage_t stage;
+  gql_ir_compiled_root_field_plan_t *root_field_plan;
+};
+
+struct gql_ir_compiled_concrete_plan_entry {
+  SV *possible_type_sv;
+  SV *compiled_fields_sv;
+  SV *field_plan_sv;
+  gql_ir_compiled_root_field_plan_t *native_field_plan;
+};
+
+struct gql_ir_compiled_concrete_plan_table {
+  UV count;
+  gql_ir_compiled_concrete_plan_entry_t *entries;
+};
+
+struct gql_ir_compiled_field_bucket_entry {
+  SV *result_name_sv;
+  SV *nodes_sv;
+};
+
+struct gql_ir_compiled_field_bucket_table {
+  UV count;
+  gql_ir_compiled_field_bucket_entry_t *entries;
+};
+
 struct gql_ir_compiled_exec {
   SV *prepared_handle_sv;
   SV *schema_sv;
   SV *operation_name_sv;
-  SV *operation_sv;
-  SV *fragments_sv;
+  gql_ir_operation_definition_t *selected_operation;
   SV *root_selection_plan_sv;
+  gql_ir_execution_lowered_plan_t *lowered_plan;
   SV *root_field_plan_sv;
-  SV *root_fields_sv;
   SV *root_type_sv;
 };
+
+struct gql_execution_context_fast_cache {
+  SV *schema_sv;
+  SV *fragments_sv;
+  SV *root_value_sv;
+  SV *context_value_sv;
+  SV *operation_sv;
+  SV *variable_values_sv;
+  SV *field_resolver_sv;
+  SV *promise_code_sv;
+  SV *empty_args_sv;
+  SV *compiled_root_field_defs_sv;
+  HV *resolve_info_base_hv;
+};
+
+struct gql_ir_native_exec_env {
+  SV *context_sv;
+  SV *parent_type_sv;
+  SV *root_value_sv;
+  SV *base_path_sv;
+  SV *context_value_sv;
+  SV *variable_values_sv;
+  SV *empty_args_sv;
+  SV *field_resolver_sv;
+  SV *promise_code_sv;
+};
+
+struct gql_ir_native_pending_entry {
+  SV *key_sv;
+  SV *value_sv;
+};
+
+struct gql_ir_native_exec_accum {
+  HV *direct_data_hv;
+  AV *all_errors_av;
+  gql_ir_native_pending_entry_t *pending_entries;
+  UV pending_count;
+  UV pending_capacity;
+  int promise_present;
+};
+
+static gql_ir_compiled_concrete_plan_table_t *gql_ir_get_concrete_field_plan_table(pTHX_ SV *sv);
+static gql_ir_compiled_field_bucket_table_t *gql_ir_get_compiled_field_bucket_table(pTHX_ SV *sv);
 
 typedef enum {
   GQLJS_LAZY_ARRAY_ARGUMENTS = 1,

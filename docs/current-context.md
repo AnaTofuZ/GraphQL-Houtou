@@ -400,6 +400,24 @@ Interpretation:
 - this is still primarily VM-readiness work: the hot loop is closer to "run the
   plan as-is" and less tied to execution-time frontend reconstruction
 
+Most recent abstract direct-consume checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `77433/s`
+  - `houtou_xs_ast`: `74953/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `41917/s`
+  - `houtou_xs_ast`: `41917/s`
+
+Interpretation:
+
+- sync abstract completion can now execute a native child field plan directly
+  into the parent accumulator
+- that removes one `completed` result `HV` build/consume round-trip from the
+  native abstract path
+- this is still only a first step toward the larger goal; `abstract` execution
+  is not yet staying native all the way through completion/error handling
+
 Latest spot check after lazy `resolve_info` materialization in field
 completion (`--count=-6`):
 

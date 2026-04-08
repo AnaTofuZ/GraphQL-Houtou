@@ -88,6 +88,16 @@ static int gql_ir_try_complete_abstract_sync_into(
   HV *parent_data_hv,
   AV **parent_errors_avp
 );
+static int gql_ir_execute_native_field_plan_into_parent_sync(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  SV *result_name_sv,
+  HV *parent_data_hv,
+  AV **parent_errors_avp
+);
 static SV *gql_ir_build_native_result(pTHX_ HV *data_hv, AV *all_errors_av);
 static SV *gql_ir_finish_native_exec_result(
   pTHX_ SV *promise_code_sv,
@@ -358,17 +368,19 @@ gql_ir_try_complete_abstract_sync_into(
             = gql_execution_collect_single_node_concrete_native_field_plan(aTHX_ runtime_type, nodes);
           if (native_field_plan) {
             SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
-            SV *completed = gql_ir_execute_native_field_plan(aTHX_ context, runtime_type, result, path, native_field_plan);
             SvREFCNT_dec(runtime_type_or_name);
-            if (completed != &PL_sv_undef) {
-              int consumed = gql_ir_consume_completed_result(
-                aTHX_ parent_data_hv,
-                parent_errors_avp,
-                result_name_sv,
-                completed
-              );
-              SvREFCNT_dec(completed);
-              return consumed;
+            if (gql_ir_execute_native_field_plan_into_parent_sync(
+                  aTHX_
+                  context,
+                  runtime_type,
+                  result,
+                  path,
+                  native_field_plan,
+                  result_name_sv,
+                  parent_data_hv,
+                  parent_errors_avp
+                )) {
+              return 1;
             }
           }
         }
@@ -4523,6 +4535,92 @@ gql_ir_execute_native_field_plan(
 fallback:
   gql_ir_cleanup_native_exec_accum(&exec_accum);
   return &PL_sv_undef;
+}
+
+static int
+gql_ir_execute_native_field_plan_into_parent_sync(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  SV *result_name_sv,
+  HV *parent_data_hv,
+  AV **parent_errors_avp
+) {
+  SV *promise_code_sv = &PL_sv_undef;
+  gql_ir_native_exec_env_t exec_env;
+  gql_ir_native_exec_accum_t exec_accum;
+
+  Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
+
+  if (!field_plan
+      || !result_name_sv
+      || !SvOK(result_name_sv)
+      || !parent_data_hv
+      || !parent_errors_avp
+      || !context_sv
+      || !SvROK(context_sv)
+      || SvTYPE(SvRV(context_sv)) != SVt_PVHV) {
+    goto fallback;
+  }
+
+  if (!gql_ir_init_native_exec_env(
+        aTHX_
+        context_sv,
+        parent_type_sv,
+        root_value,
+        path_sv,
+        &exec_env,
+        &promise_code_sv
+      )) {
+    goto fallback;
+  }
+  if (promise_code_sv && SvOK(promise_code_sv)) {
+    goto fallback;
+  }
+
+  gql_ir_init_native_exec_accum(&exec_accum);
+  if (!gql_ir_run_native_field_plan_loop(
+        aTHX_
+        NULL,
+        field_plan,
+        &exec_env,
+        &exec_accum,
+        0
+      )) {
+    goto fallback;
+  }
+  if (exec_accum.promise_present || exec_accum.pending_count > 0 || !exec_accum.direct_data_hv) {
+    goto fallback;
+  }
+
+  (void)hv_store_ent(parent_data_hv, result_name_sv, newRV_noinc((SV *)exec_accum.direct_data_hv), 0);
+  exec_accum.direct_data_hv = NULL;
+
+  if (exec_accum.all_errors_av && av_len(exec_accum.all_errors_av) >= 0) {
+    if (!*parent_errors_avp) {
+      *parent_errors_avp = exec_accum.all_errors_av;
+      exec_accum.all_errors_av = NULL;
+    } else {
+      AV *parent_errors_av = *parent_errors_avp;
+      I32 error_len = av_len(exec_accum.all_errors_av);
+      I32 i;
+      for (i = 0; i <= error_len; i++) {
+        SV **error_svp = av_fetch(exec_accum.all_errors_av, i, 0);
+        if (error_svp) {
+          av_push(parent_errors_av, SvREFCNT_inc_simple_NN(*error_svp));
+        }
+      }
+    }
+  }
+
+  gql_ir_cleanup_native_exec_accum(&exec_accum);
+  return 1;
+
+fallback:
+  gql_ir_cleanup_native_exec_accum(&exec_accum);
+  return 0;
 }
 
 static SV *

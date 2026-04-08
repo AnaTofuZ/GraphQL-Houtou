@@ -630,5 +630,9 @@ Near-term implication:
 - keep that distinction expressed at plan granularity, not as per-entry loop
   rediscovery, so a compiled root plan that is already self-contained can run
   through the same hot loop as a native child plan
+- when sync abstract completion can resolve to a native child plan, prefer
+  consuming that child plan directly into the parent accumulator instead of
+  materializing a temporary `{ data, errors }` Perl result hash and unpacking
+  it again
 - keep pending async field results in native arrays and materialize Perl AVs
   only at the final promise-merge boundary

@@ -26,6 +26,10 @@ Recent conclusions that matter more than older commit-by-commit history:
 - the first code step in that split is now landed: `lowered_plan` no longer
   conceptually owns only a root field plan, and instead routes through an
   owned `program -> root_block -> field_plan` boundary
+- the next code step is also underway: immutable field metadata is now being
+  split from mutable field execution state, with the native field frame
+  carrying a metadata pointer instead of rediscovering every stable operand
+  directly from the entry
 
 ## Ecosystem Gap Guardrail
 

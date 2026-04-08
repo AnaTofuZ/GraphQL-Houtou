@@ -141,6 +141,9 @@ Current status:
 - this is still backed by the existing native field-plan executor, but it
   establishes the control-flow owner that later VM blocks and op arrays should
   hang from
+- a second narrow split is now in progress: stable field metadata is being
+  hoisted into an immutable metadata record that the runtime field frame can
+  point at, while mutable resolver/result/outcome state remains in the frame
 
 ## Early Design Constraints
 

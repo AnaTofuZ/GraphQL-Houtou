@@ -149,6 +149,7 @@ typedef struct gql_ir_compiled_root_field_plan_entry gql_ir_compiled_root_field_
 typedef struct gql_ir_compiled_root_field_plan gql_ir_compiled_root_field_plan_t;
 typedef struct gql_ir_execution_lowered_plan gql_ir_execution_lowered_plan_t;
 typedef struct gql_ir_vm_block gql_ir_vm_block_t;
+typedef struct gql_ir_vm_field_meta gql_ir_vm_field_meta_t;
 typedef struct gql_ir_vm_program gql_ir_vm_program_t;
 typedef struct gql_ir_lowered_abstract_child_entry gql_ir_lowered_abstract_child_entry_t;
 typedef struct gql_ir_lowered_abstract_child_plan_table gql_ir_lowered_abstract_child_plan_table_t;
@@ -217,6 +218,7 @@ struct gql_ir_prepared_exec {
 };
 
 struct gql_ir_compiled_root_field_plan_entry {
+  gql_ir_vm_field_meta_t *meta;
   SV *result_name_sv;
   SV *field_name_sv;
   SV *field_def_sv;
@@ -242,6 +244,25 @@ struct gql_ir_compiled_root_field_plan_entry {
   gql_ir_native_args_dispatch_kind_t args_dispatch_kind;
   gql_ir_native_completion_dispatch_kind_t completion_dispatch_kind;
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
+};
+
+struct gql_ir_vm_field_meta {
+  SV *result_name_sv;
+  SV *field_name_sv;
+  SV *return_type_sv;
+  SV *completion_type_sv;
+  UV argument_count;
+  UV field_arg_count;
+  UV directive_count;
+  UV selection_count;
+  UV trivial_completion_flags;
+  U8 op_count;
+  U8 consume_op_index;
+  gql_ir_native_field_op_t ops[5];
+  gql_ir_native_meta_dispatch_kind_t meta_dispatch_kind;
+  gql_ir_native_resolve_dispatch_kind_t resolve_dispatch_kind;
+  gql_ir_native_args_dispatch_kind_t args_dispatch_kind;
+  gql_ir_native_completion_dispatch_kind_t completion_dispatch_kind;
 };
 
 struct gql_ir_compiled_root_field_plan {

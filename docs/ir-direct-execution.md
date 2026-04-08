@@ -627,5 +627,8 @@ Near-term implication:
   enter with one stable env/accumulator shape regardless of root vs child plan
 - keep the field-plan loop itself shared too, so root/native-child execution
   diverges only where root plans still need lazy runtime operand fill
+- keep that distinction expressed at plan granularity, not as per-entry loop
+  rediscovery, so a compiled root plan that is already self-contained can run
+  through the same hot loop as a native child plan
 - keep pending async field results in native arrays and materialize Perl AVs
   only at the final promise-merge boundary

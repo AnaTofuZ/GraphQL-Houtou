@@ -109,6 +109,9 @@ static int gql_ir_execute_native_field_entry_into(
   gql_ir_native_exec_accum_t *accum,
   gql_ir_compiled_root_field_plan_entry_t *entry
 );
+static int gql_ir_native_field_entry_has_operands(
+  gql_ir_compiled_root_field_plan_entry_t *entry
+);
 static int gql_ir_native_exec_accum_push_pending(
   pTHX_ gql_ir_native_exec_accum_t *accum,
   SV *key_sv,
@@ -482,10 +485,13 @@ gql_ir_run_native_field_plan_loop(
   int require_runtime_operand_fill
 ) {
   UV field_i;
+  int fill_runtime_operands;
 
   if (!field_plan || !env || !accum) {
     return 0;
   }
+
+  fill_runtime_operands = require_runtime_operand_fill && field_plan->requires_runtime_operand_fill;
 
   for (field_i = 0; field_i < field_plan->field_count; field_i++) {
     gql_ir_compiled_root_field_plan_entry_t *entry = &field_plan->entries[field_i];
@@ -498,15 +504,12 @@ gql_ir_run_native_field_plan_loop(
       return 0;
     }
 
-    if (require_runtime_operand_fill) {
-      if (!compiled || !gql_ir_ensure_native_field_entry_operands(aTHX_ compiled, entry)) {
+    if (fill_runtime_operands) {
+      if (!entry->operands_ready
+          && (!compiled || !gql_ir_ensure_native_field_entry_operands(aTHX_ compiled, entry))) {
         continue;
       }
-    } else if (!entry->nodes_sv || !SvOK(entry->nodes_sv)
-               || !entry->field_def_sv || !SvOK(entry->field_def_sv)
-               || !entry->type_sv || !SvOK(entry->type_sv)
-               || !SvROK(entry->nodes_sv) || SvTYPE(SvRV(entry->nodes_sv)) != SVt_PVAV
-               || !SvROK(entry->field_def_sv) || SvTYPE(SvRV(entry->field_def_sv)) != SVt_PVHV) {
+    } else if (!entry->operands_ready && !gql_ir_native_field_entry_has_operands(entry)) {
       return 0;
     }
 
@@ -521,6 +524,21 @@ gql_ir_run_native_field_plan_loop(
   }
 
   return 1;
+}
+
+static int
+gql_ir_native_field_entry_has_operands(gql_ir_compiled_root_field_plan_entry_t *entry) {
+  return entry
+    && entry->nodes_sv
+    && SvOK(entry->nodes_sv)
+    && SvROK(entry->nodes_sv)
+    && SvTYPE(SvRV(entry->nodes_sv)) == SVt_PVAV
+    && entry->field_def_sv
+    && SvOK(entry->field_def_sv)
+    && SvROK(entry->field_def_sv)
+    && SvTYPE(SvRV(entry->field_def_sv)) == SVt_PVHV
+    && entry->type_sv
+    && SvOK(entry->type_sv);
 }
 
 static int
@@ -1129,9 +1147,8 @@ gql_ir_ensure_native_field_entry_operands(
     }
   }
 
-  return entry->nodes_sv && SvOK(entry->nodes_sv)
-    && entry->field_def_sv && SvOK(entry->field_def_sv)
-    && entry->type_sv && SvOK(entry->type_sv);
+  entry->operands_ready = gql_ir_native_field_entry_has_operands(entry) ? 1 : 0;
+  return entry->operands_ready;
 }
 
 static void
@@ -2911,6 +2928,7 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
 
   Newxz(plan, 1, gql_ir_compiled_root_field_plan_t);
   plan->field_count = field_count;
+  plan->requires_runtime_operand_fill = 0;
   if (field_count > 0) {
     Newxz(plan->entries, field_count, gql_ir_compiled_root_field_plan_entry_t);
   }
@@ -3025,6 +3043,10 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
         : 0;
     entry->directive_count = (directive_count_svp && SvOK(*directive_count_svp)) ? SvUV(*directive_count_svp) : 0;
     entry->selection_count = (selection_count_svp && SvOK(*selection_count_svp)) ? SvUV(*selection_count_svp) : 0;
+    entry->operands_ready = gql_ir_native_field_entry_has_operands(entry) ? 1 : 0;
+    if (!entry->operands_ready) {
+      plan->requires_runtime_operand_fill = 1;
+    }
     gql_ir_init_native_field_ops(entry);
     if (completion_type_sv) {
       SvREFCNT_dec(completion_type_sv);

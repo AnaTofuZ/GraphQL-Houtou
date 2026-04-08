@@ -381,6 +381,25 @@ Interpretation:
 - the next structural step should keep shrinking that distinction so field
   execution can be treated as one native op runner regardless of root vs child
 
+Most recent self-contained root-plan checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `77094/s`
+  - `houtou_xs_ast`: `77754/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `41324/s`
+  - `houtou_xs_ast`: `42210/s`
+
+Interpretation:
+
+- root compiled plans now carry a plan-level `requires_runtime_operand_fill`
+  flag
+- when a compiled root plan is already self-contained, the shared native
+  field-plan loop no longer pays the per-entry "do I need lazy operand fill?"
+  branch
+- this is still primarily VM-readiness work: the hot loop is closer to "run the
+  plan as-is" and less tied to execution-time frontend reconstruction
+
 Latest spot check after lazy `resolve_info` materialization in field
 completion (`--count=-6`):
 

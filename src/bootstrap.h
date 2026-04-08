@@ -224,6 +224,7 @@ struct gql_ir_compiled_root_field_plan_entry {
   UV trivial_completion_flags;
   U8 op_count;
   U8 consume_op_index;
+  U8 operands_ready;
   gql_ir_native_field_op_t ops[5];
   gql_ir_native_meta_dispatch_kind_t meta_dispatch_kind;
   gql_ir_native_resolve_dispatch_kind_t resolve_dispatch_kind;
@@ -233,6 +234,7 @@ struct gql_ir_compiled_root_field_plan_entry {
 
 struct gql_ir_compiled_root_field_plan {
   UV field_count;
+  U8 requires_runtime_operand_fill;
   gql_ir_compiled_root_field_plan_entry_t *entries;
 };
 

@@ -688,5 +688,8 @@ Current abstract-lowering note:
   first abstract child boundary
 - runtime abstract dispatch therefore no longer depends on borrowing the
   node-attached concrete-plan table at lookup time
+- sync compiled-IR completion now has a narrow direct-data helper for trivial
+  `null` / leaf / simple `NonNull` outcomes, so generic completion can skip
+  materializing a completed `{ data => ... }` `HV` in those cases
 - the next pass should specialize the owned lowered table further so abstract
   dispatch can run entirely against lowered-plan-native operands and outcomes

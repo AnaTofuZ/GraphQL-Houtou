@@ -1103,6 +1103,34 @@ Interpretation:
 - the next profitable step is still to specialize abstract completion/result
   writing, not to add more lookup micro-optimizations
 
+Latest completion-side allocation reduction:
+
+- `execution.h` now exposes a narrow sync fast helper that returns direct
+  `data/errors` for `null`, leaf, and simple `NonNull` completions without
+  first materializing a completed `{ data => ... }` `HV`
+- compiled-IR generic completion uses that helper before falling back to the
+  older completed-`HV` path, so sync happy paths can skip one more Perl object
+  boundary
+
+Latest spot verification after wiring the direct-data completion helper:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 42007/s`
+  - `houtou_xs_ast 42308/s`
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir 80765/s`
+  - `houtou_xs_ast 79800/s`
+
+Interpretation:
+
+- this is a modest but directionally correct object-allocation reduction
+- target-case gains are still small and noisy, but the helper does not regress
+  the broader compiled-IR sync path
+- the next high-value step remains extending this approach past trivial
+  completion and into object/abstract completion outcomes themselves
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

@@ -1117,6 +1117,25 @@ gql_ir_native_field_complete_generic_result(
     return 1;
   }
 
+  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))) {
+    SV *direct_data_sv = NULL;
+    AV *direct_errors_av = NULL;
+    if (gql_execution_complete_value_catching_error_xs_lazy_data_fast(
+          aTHX_
+          env->context_sv,
+          entry->return_type_sv ? entry->return_type_sv : entry->type_sv,
+          lazy_info,
+          result_sv,
+          &direct_data_sv,
+          &direct_errors_av
+        )) {
+      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+      frame->outcome_sv = direct_data_sv;
+      frame->outcome_errors_av = direct_errors_av;
+      return 1;
+    }
+  }
+
   frame->outcome_sv = gql_execution_complete_field_value_catching_error_xs_impl(
     aTHX_
     env->context_sv,

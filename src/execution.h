@@ -58,6 +58,14 @@ static SV *gql_execution_complete_field_value_catching_error_xs_impl(
   struct gql_execution_lazy_resolve_info *lazy_info,
   SV *result
 );
+static int gql_execution_complete_value_catching_error_xs_lazy_data_fast(
+  pTHX_ SV *context,
+  SV *return_type,
+  struct gql_execution_lazy_resolve_info *lazy_info,
+  SV *result,
+  SV **data_out,
+  AV **errors_out
+);
 static int gql_execution_try_typename_meta_field_fast(pTHX_ SV *parent_type, SV *field_name_sv, SV *return_type, SV **completed_out);
 static int gql_execution_try_typename_meta_field_data_fast(pTHX_ SV *parent_type, SV *field_name_sv, SV *return_type, SV **data_out);
 static int gql_execution_is_default_field_resolver(pTHX_ SV *resolve);
@@ -4815,6 +4823,91 @@ gql_execution_complete_value_catching_error_xs_lazy_impl(
     SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
     return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
   }
+}
+
+static int
+gql_execution_complete_value_catching_error_xs_lazy_data_fast(
+  pTHX_ SV *context,
+  SV *return_type,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  SV **data_out,
+  AV **errors_out
+) {
+  SV *promise_code;
+
+  if (data_out) {
+    *data_out = NULL;
+  }
+  if (errors_out) {
+    *errors_out = NULL;
+  }
+  if (!context || !return_type || !SvOK(return_type) || !data_out) {
+    return 0;
+  }
+
+  promise_code = gql_execution_context_promise_code(context);
+  if (result && SvROK(result) && sv_derived_from(result, "GraphQL::Error")) {
+    return 0;
+  }
+  if (SvOK(promise_code) && result && SvROK(result)) {
+    SV *is_promise_sv = gql_promise_call_is_promise(aTHX_ promise_code, result);
+    int is_promise = SvTRUE(is_promise_sv);
+    SvREFCNT_dec(is_promise_sv);
+    if (is_promise) {
+      return 0;
+    }
+  }
+
+  if (sv_derived_from(return_type, "GraphQL::Houtou::Type::NonNull")
+      || sv_derived_from(return_type, "GraphQL::Type::NonNull")) {
+    SV *inner_type = gql_execution_call_type_of(aTHX_ return_type);
+    SV *inner_data_sv = NULL;
+    AV *inner_errors_av = NULL;
+    int ok = gql_execution_complete_value_catching_error_xs_lazy_data_fast(
+      aTHX_
+      context,
+      inner_type,
+      lazy_info,
+      result,
+      &inner_data_sv,
+      &inner_errors_av
+    );
+    SvREFCNT_dec(inner_type);
+
+    if (!ok) {
+      return 0;
+    }
+    if (!inner_data_sv || !SvOK(inner_data_sv)) {
+      if (inner_data_sv) {
+        SvREFCNT_dec(inner_data_sv);
+      }
+      if (inner_errors_av) {
+        SvREFCNT_dec((SV *)inner_errors_av);
+      }
+      return 0;
+    }
+
+    *data_out = inner_data_sv;
+    if (errors_out) {
+      *errors_out = inner_errors_av;
+    } else if (inner_errors_av) {
+      SvREFCNT_dec((SV *)inner_errors_av);
+    }
+    return 1;
+  }
+
+  if (gql_execution_try_complete_trivial_value_with_metadata_data_fast(
+        aTHX_
+        return_type,
+        0,
+        result,
+        data_out
+      )) {
+    return 1;
+  }
+
+  return 0;
 }
 
 static SV *

@@ -679,10 +679,11 @@ chosen native shapes.
 
 Current abstract-lowering note:
 
-- lowered native field-plan entries can now carry a borrowed pointer to the
-  single-node abstract child concrete-plan table that was already attached to
-  the node during compilation
-- this is intentionally not the end state; it still borrows from node-attached
-  compiled metadata
-- the next pass should replace that borrowed lookup with a truly self-contained
-  lowered abstract child plan owned by the lowered execution plan itself
+- lowered native field-plan entries can now own a lowered abstract child plan
+  table for the single-node native-plan case
+- that lowered table keeps only `(possible_type, native_field_plan)` pairs and
+  clones the native child field plan into lowered-plan-owned storage
+- runtime abstract dispatch therefore no longer depends on borrowing the
+  node-attached concrete-plan table at lookup time
+- the next pass should specialize the owned lowered table further so abstract
+  dispatch can run entirely against lowered-plan-native operands and outcomes

@@ -1049,28 +1049,34 @@ Interpretation:
 
 Latest structural progress on abstract-specialized lowering:
 
-- lowered native field-plan entries now carry a borrowed pointer to the
-  single-node abstract child concrete-plan table when one is available
-- sync abstract completion on the compiled-IR path now consults that lowered
-  table first, instead of rediscovering the concrete native child plan by
-  rewalking `nodes` through the legacy helper path
+- lowered native field-plan entries now own a lowered abstract-child table for
+  the single-node native-plan case instead of borrowing the node-attached
+  concrete-plan table directly
+- the lowered table retains only `(possible_type, native_field_plan)` pairs and
+  clones the native child field plan into lowered-plan-owned storage
+- sync abstract completion on the compiled-IR path now consults that owned
+  lowered table first, instead of rediscovering the concrete native child plan
+  by rewalking `nodes` through the legacy helper path
+- destruction now runs through lowered-plan teardown, so ownership is explicit
+  and no longer depends on the lifetime of node-attached compiled metadata
 
-Latest spot verification after wiring that lowered abstract child lookup:
+Latest spot verification after owning that lowered abstract child lookup:
 
 - `minil test t/11_execution.t`
 - `minil test t/12_promise.t`
 - `abstract_with_fragment` (`--count=-4`)
-  - `houtou_compiled_ir 41917/s`
-  - `houtou_xs_ast 42729/s`
+  - `houtou_compiled_ir 43749/s`
+  - `houtou_xs_ast 43442/s`
 
 Interpretation:
 
-- the change is mostly a lowering/ownership step rather than a throughput win
-- it removes one more runtime dependency on "look back into legacy node state
-  to rediscover the concrete child native plan"
+- the change is still mostly a lowering/ownership step rather than a large
+  throughput win
+- it removes one more runtime and lifetime dependency on "look back into legacy
+  node state to rediscover the concrete child native plan"
 - this is the right insertion point for the next real optimization pass:
   lowering abstract child execution into a more self-contained specialized plan
-  instead of a borrowed pointer back into node-attached tables
+  whose native child table is already owned by the lowered execution plan
 
 ## Breaking-API Speed Notes
 

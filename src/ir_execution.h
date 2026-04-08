@@ -80,6 +80,11 @@ static void gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_p
 static gql_ir_execution_lowered_plan_t *gql_ir_execution_lowered_plan_from_root_field_plan_sv(pTHX_ SV *root_field_plan_sv);
 static void gql_ir_execution_lowered_plan_destroy(gql_ir_execution_lowered_plan_t *plan);
 static gql_ir_compiled_root_field_plan_t *gql_ir_execution_lowered_root_field_plan(gql_ir_compiled_exec_t *compiled);
+static gql_ir_compiled_root_field_plan_t *gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *plan);
+static gql_ir_lowered_abstract_child_plan_table_t *gql_ir_lowered_abstract_child_plan_table_from_concrete_table(
+  pTHX_ gql_ir_compiled_concrete_plan_table_t *table
+);
+static void gql_ir_lowered_abstract_child_plan_table_destroy(gql_ir_lowered_abstract_child_plan_table_t *table);
 static void gql_ir_compiled_concrete_plan_table_destroy(gql_ir_compiled_concrete_plan_table_t *table);
 static void gql_ir_attach_concrete_field_plan_table(pTHX_ SV *sv, gql_ir_compiled_concrete_plan_table_t *table);
 static gql_ir_compiled_field_bucket_table_t *gql_ir_compiled_field_bucket_table_from_sv(pTHX_ SV *compiled_fields_sv);
@@ -171,9 +176,9 @@ static int gql_ir_native_exec_accum_push_pending(
   SV *key_sv,
   SV *value_sv
 );
-static gql_ir_compiled_concrete_plan_table_t *gql_ir_lower_single_node_abstract_child_plan_table(pTHX_ SV *return_type_sv, SV *nodes_sv);
+static gql_ir_lowered_abstract_child_plan_table_t *gql_ir_lower_single_node_abstract_child_plan_table(pTHX_ SV *return_type_sv, SV *nodes_sv);
 static gql_ir_compiled_root_field_plan_t *gql_ir_lookup_native_concrete_child_plan(
-  gql_ir_compiled_concrete_plan_table_t *table,
+  gql_ir_lowered_abstract_child_plan_table_t *table,
   SV *object_type
 );
 static void gql_ir_native_exec_accum_materialize_pending_avs(
@@ -1306,7 +1311,7 @@ gql_ir_ensure_native_field_entry_operands(
   return entry->operands_ready;
 }
 
-static gql_ir_compiled_concrete_plan_table_t *
+static gql_ir_lowered_abstract_child_plan_table_t *
 gql_ir_lower_single_node_abstract_child_plan_table(pTHX_ SV *return_type_sv, SV *nodes_sv) {
   AV *nodes_av;
   SV **node_svp;
@@ -1331,12 +1336,14 @@ gql_ir_lower_single_node_abstract_child_plan_table(pTHX_ SV *return_type_sv, SV 
     return NULL;
   }
 
-  return gql_ir_get_concrete_field_plan_table(aTHX_ *node_svp);
+  return gql_ir_lowered_abstract_child_plan_table_from_concrete_table(
+    aTHX_ gql_ir_get_concrete_field_plan_table(aTHX_ *node_svp)
+  );
 }
 
 static gql_ir_compiled_root_field_plan_t *
 gql_ir_lookup_native_concrete_child_plan(
-  gql_ir_compiled_concrete_plan_table_t *table,
+  gql_ir_lowered_abstract_child_plan_table_t *table,
   SV *object_type
 ) {
   UV i;
@@ -1346,7 +1353,7 @@ gql_ir_lookup_native_concrete_child_plan(
   }
 
   for (i = 0; i < table->count; i++) {
-    gql_ir_compiled_concrete_plan_entry_t *entry = &table->entries[i];
+    gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
 
     if (!entry->possible_type_sv || !entry->native_field_plan) {
       continue;
@@ -2836,6 +2843,10 @@ gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan)
         SvREFCNT_dec(entry->path_sv);
         entry->path_sv = NULL;
       }
+      if (entry->abstract_child_plan_table) {
+        gql_ir_lowered_abstract_child_plan_table_destroy(entry->abstract_child_plan_table);
+        entry->abstract_child_plan_table = NULL;
+      }
     }
     Safefree(plan->entries);
     plan->entries = NULL;
@@ -2872,6 +2883,127 @@ gql_ir_execution_lowered_plan_destroy(gql_ir_execution_lowered_plan_t *plan) {
   }
 
   Safefree(plan);
+}
+
+static gql_ir_compiled_root_field_plan_t *
+gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *plan) {
+  gql_ir_compiled_root_field_plan_t *clone;
+  UV i;
+
+  if (!plan) {
+    return NULL;
+  }
+
+  Newxz(clone, 1, gql_ir_compiled_root_field_plan_t);
+  clone->field_count = plan->field_count;
+  clone->requires_runtime_operand_fill = plan->requires_runtime_operand_fill;
+  if (clone->field_count > 0) {
+    Newxz(clone->entries, clone->field_count, gql_ir_compiled_root_field_plan_entry_t);
+  }
+
+  for (i = 0; i < clone->field_count; i++) {
+    gql_ir_compiled_root_field_plan_entry_t *dst = &clone->entries[i];
+    gql_ir_compiled_root_field_plan_entry_t *src = &plan->entries[i];
+
+    if (src->result_name_sv) dst->result_name_sv = gql_execution_share_or_copy_sv(src->result_name_sv);
+    if (src->field_name_sv) dst->field_name_sv = gql_execution_share_or_copy_sv(src->field_name_sv);
+    if (src->field_def_sv) dst->field_def_sv = gql_execution_share_or_copy_sv(src->field_def_sv);
+    if (src->return_type_sv) dst->return_type_sv = gql_execution_share_or_copy_sv(src->return_type_sv);
+    if (src->type_sv) dst->type_sv = gql_execution_share_or_copy_sv(src->type_sv);
+    if (src->completion_type_sv) dst->completion_type_sv = gql_execution_share_or_copy_sv(src->completion_type_sv);
+    if (src->resolve_sv) dst->resolve_sv = gql_execution_share_or_copy_sv(src->resolve_sv);
+    if (src->nodes_sv) dst->nodes_sv = gql_execution_share_or_copy_sv(src->nodes_sv);
+    if (src->first_node_sv) dst->first_node_sv = gql_execution_share_or_copy_sv(src->first_node_sv);
+    if (src->path_sv) dst->path_sv = gql_execution_share_or_copy_sv(src->path_sv);
+    dst->node_count = src->node_count;
+    dst->argument_count = src->argument_count;
+    dst->field_arg_count = src->field_arg_count;
+    dst->directive_count = src->directive_count;
+    dst->selection_count = src->selection_count;
+    dst->trivial_completion_flags = src->trivial_completion_flags;
+    dst->op_count = src->op_count;
+    dst->consume_op_index = src->consume_op_index;
+    dst->operands_ready = src->operands_ready;
+    Copy(src->ops, dst->ops, 5, gql_ir_native_field_op_t);
+    dst->meta_dispatch_kind = src->meta_dispatch_kind;
+    dst->resolve_dispatch_kind = src->resolve_dispatch_kind;
+    dst->args_dispatch_kind = src->args_dispatch_kind;
+    dst->completion_dispatch_kind = src->completion_dispatch_kind;
+    dst->abstract_child_plan_table = NULL;
+  }
+
+  return clone;
+}
+
+static gql_ir_lowered_abstract_child_plan_table_t *
+gql_ir_lowered_abstract_child_plan_table_from_concrete_table(
+  pTHX_ gql_ir_compiled_concrete_plan_table_t *table
+) {
+  gql_ir_lowered_abstract_child_plan_table_t *lowered = NULL;
+  UV i;
+  UV count = 0;
+
+  if (!table) {
+    return NULL;
+  }
+
+  for (i = 0; i < table->count; i++) {
+    gql_ir_compiled_concrete_plan_entry_t *entry = &table->entries[i];
+    if (entry->possible_type_sv && entry->native_field_plan) {
+      count++;
+    }
+  }
+
+  if (count == 0) {
+    return NULL;
+  }
+
+  Newxz(lowered, 1, gql_ir_lowered_abstract_child_plan_table_t);
+  lowered->count = count;
+  Newxz(lowered->entries, count, gql_ir_lowered_abstract_child_entry_t);
+
+  count = 0;
+  for (i = 0; i < table->count; i++) {
+    gql_ir_compiled_concrete_plan_entry_t *entry = &table->entries[i];
+    gql_ir_lowered_abstract_child_entry_t *dst;
+
+    if (!entry->possible_type_sv || !entry->native_field_plan) {
+      continue;
+    }
+
+    dst = &lowered->entries[count++];
+    dst->possible_type_sv = gql_execution_share_or_copy_sv(entry->possible_type_sv);
+    dst->native_field_plan = gql_ir_compiled_root_field_plan_clone(aTHX_ entry->native_field_plan);
+  }
+
+  return lowered;
+}
+
+static void
+gql_ir_lowered_abstract_child_plan_table_destroy(gql_ir_lowered_abstract_child_plan_table_t *table) {
+  UV i;
+
+  if (!table) {
+    return;
+  }
+
+  if (table->entries) {
+    for (i = 0; i < table->count; i++) {
+      gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
+      if (entry->possible_type_sv) {
+        SvREFCNT_dec(entry->possible_type_sv);
+        entry->possible_type_sv = NULL;
+      }
+      if (entry->native_field_plan) {
+        gql_ir_compiled_root_field_plan_destroy(entry->native_field_plan);
+        entry->native_field_plan = NULL;
+      }
+    }
+    Safefree(table->entries);
+    table->entries = NULL;
+  }
+
+  Safefree(table);
 }
 
 static int

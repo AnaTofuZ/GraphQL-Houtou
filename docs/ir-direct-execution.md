@@ -640,3 +640,6 @@ Near-term implication:
   stage dispatcher does not need to shuttle a growing set of loose locals; this
   makes a future bytecode / VM runner much closer to "run op against frame"
   than to "rebuild transient Perl-facing state for each helper call"
+- move per-field completion results into a native outcome slot on that frame,
+  so `meta`, `complete`, and `consume` communicate through a small native kind
+  plus payload rather than ad hoc `completed_sv` ownership conventions

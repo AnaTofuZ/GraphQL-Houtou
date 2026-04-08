@@ -844,6 +844,25 @@ Interpretation:
   foundation for moving more completion/error work out of ad hoc `SV *`
   temporaries and into native outcome structs
 
+Latest spot verification after moving per-field completion results into a
+native outcome state owned by that frame:
+
+- `minil test t/11_execution.t`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 43017/s`
+  - `houtou_xs_ast 42722/s`
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir 78887/s`
+  - `houtou_xs_ast 78010/s`
+
+Interpretation:
+
+- `meta`, `trivial completion`, and generic completion now hand results to
+  `consume` through a native outcome kind instead of scattering direct `HV`
+  writes and `completed_sv` ownership across multiple helpers
+- this is again mainly VM-readiness work, but it also keeps the dispatcher's
+  dataflow more regular and does not regress the spot cases
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

@@ -1172,3 +1172,28 @@ speed wins would likely be:
   prevalidated against that runtime schema
 - allow an execution-only node/selection shape instead of graphql-perl
   compatibility hashes for resolve info, field nodes, and fragment maps
+
+## April 2026 Reset
+
+The next optimization project is now treated as a separate runtime effort.
+
+Recent conclusions:
+
+- `omit_resolve_type_info` was useful to prove that `build_resolve_info`
+  materialization is not the main bottleneck for `abstract_with_fragment`
+- `sv_does` / `sv_derived_from` / possible-type micro-optimizations also did
+  not produce a strong stable win by themselves
+- therefore the next meaningful step is not another local shortcut; it is a
+  new `compiled_ir`-only execution-lowered runtime / VM path
+
+Current project decision:
+
+- keep public execute / schema / promise APIs compatible
+- allow `compiled_ir` internal execution to stop sharing internal AST /
+  legacy-compatible shapes
+- build a new lowered plan and VM runtime beside the current executor rather
+  than continuing to stretch the mixed executor
+
+See:
+
+- `docs/compiled-ir-vm-runtime.md`

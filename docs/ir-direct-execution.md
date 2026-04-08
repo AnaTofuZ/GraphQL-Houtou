@@ -697,3 +697,20 @@ Current abstract-lowering note:
   still differs
 - the next pass should specialize the owned lowered table further so abstract
   dispatch can run entirely against lowered-plan-native operands and outcomes
+
+## April 2026 Direction Change
+
+The next phase should be treated as a new runtime project, not just another
+series of local fast paths on the current mixed executor.
+
+Key decision:
+
+- keep user-visible API compatibility
+- drop internal compatibility requirements for AST / legacy execution data
+  structures inside `compiled_ir`
+- introduce a dedicated execution-lowered IR and then a dedicated VM /
+  threaded-op runtime for that lowered form
+
+The detailed project sketch lives in:
+
+- `docs/compiled-ir-vm-runtime.md`

@@ -189,6 +189,16 @@ but also:
 This is the practical bridge between the current executor work and a future
 compiled-IR VM.
 
+Recent executor shaping follows that same path:
+
+- root/native child loops are being collapsed into a shared "execute one field
+  entry" helper
+- runtime state needed for that helper is being gathered into explicit native
+  execution env / accumulator structs
+- the aim is for compiled IR execution to look like dispatch over a sequence of
+  field ops, while still reusing existing completion / promise helpers where
+  that does not dominate cost
+
 ## Current Groundwork
 
 The codebase now has an internal prepared executable IR handle:

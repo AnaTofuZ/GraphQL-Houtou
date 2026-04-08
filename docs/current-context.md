@@ -132,6 +132,10 @@ Current compiled-plan execution reuse:
   `execute_fields`, field-plan execution, and compiled-root execution
 - per-field `path` materialization is now also deferred so compiled/object field
   execution does not eagerly allocate Perl path objects on the happy path
+- native root and child executors now share a single "execute one field entry"
+  helper plus explicit native execution env/accumulator structs, so the hot
+  loop is closer to a VM-style dispatch over field ops than to duplicated
+  root/child Perl-bridge code
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -238,6 +242,15 @@ work:
   - `houtou_xs_ast`: `79643/s`
 - `abstract_with_fragment` (`--count=-4`)
   - `houtou_compiled_ir`: `43320/s`
+
+Most recent VM-shaping refactor checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `77972/s`
+  - `houtou_xs_ast`: `73397/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `41351/s`
+  - `houtou_xs_ast`: `39919/s`
   - `houtou_xs_ast`: `43114/s`
 
 Latest spot check after lazy `resolve_info` materialization in field

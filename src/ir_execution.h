@@ -187,6 +187,21 @@ static int gql_ir_native_exec_accum_push_pending(
   SV *key_sv,
   SV *value_sv
 );
+static int gql_ir_native_result_writer_append_errors(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  AV *child_errors_av
+);
+static int gql_ir_native_result_writer_write_direct(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  SV *key_sv,
+  SV *value_sv,
+  AV *child_errors_av
+);
+static int gql_ir_native_result_writer_consume_completed(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  SV *key_sv,
+  SV *completed_sv
+);
 static gql_ir_lowered_abstract_child_plan_table_t *gql_ir_lower_single_node_abstract_child_plan_table(pTHX_ SV *return_type_sv, SV *nodes_sv);
 static gql_ir_compiled_root_field_plan_t *gql_ir_lookup_native_concrete_child_plan(
   gql_ir_lowered_abstract_child_plan_table_t *table,
@@ -695,6 +710,71 @@ gql_ir_native_exec_accum_push_pending(
   return 1;
 }
 
+static int
+gql_ir_native_result_writer_append_errors(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  AV *child_errors_av
+) {
+  AV *all_errors_av;
+  I32 error_len;
+  I32 i;
+
+  if (!accum || !child_errors_av || av_len(child_errors_av) < 0) {
+    return 1;
+  }
+
+  all_errors_av = accum->all_errors_av;
+  error_len = av_len(child_errors_av);
+  if (!all_errors_av) {
+    all_errors_av = newAV();
+    accum->all_errors_av = all_errors_av;
+  }
+
+  for (i = 0; i <= error_len; i++) {
+    SV **error_svp = av_fetch(child_errors_av, i, 0);
+    if (error_svp) {
+      av_push(all_errors_av, SvREFCNT_inc_simple_NN(*error_svp));
+    }
+  }
+
+  return 1;
+}
+
+static int
+gql_ir_native_result_writer_write_direct(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  SV *key_sv,
+  SV *value_sv,
+  AV *child_errors_av
+) {
+  if (!accum || !accum->direct_data_hv || !key_sv || !SvOK(key_sv) || !value_sv) {
+    return 0;
+  }
+
+  (void)hv_store_ent(accum->direct_data_hv, key_sv, value_sv, 0);
+  return gql_ir_native_result_writer_append_errors(aTHX_ accum, child_errors_av);
+}
+
+static int
+gql_ir_native_result_writer_consume_completed(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  SV *key_sv,
+  SV *completed_sv
+) {
+  if (!accum || !accum->direct_data_hv || !key_sv || !SvOK(key_sv) || !completed_sv) {
+    return 0;
+  }
+
+  gql_ir_accumulate_completed_result(
+    aTHX_
+    accum->direct_data_hv,
+    &accum->all_errors_av,
+    key_sv,
+    completed_sv
+  );
+  return 1;
+}
+
 static void
 gql_ir_native_exec_accum_materialize_pending_avs(
   pTHX_ gql_ir_native_exec_accum_t *accum,
@@ -1200,23 +1280,16 @@ gql_ir_native_field_consume_completed(
     if (!frame->outcome_sv) {
       return 0;
     }
-    (void)hv_store_ent(accum->direct_data_hv, meta->result_name_sv, frame->outcome_sv, 0);
-    frame->outcome_sv = NULL;
-    if (child_errors_av && av_len(child_errors_av) >= 0) {
-      AV *all_errors_av = accum->all_errors_av;
-      I32 error_len = av_len(child_errors_av);
-      I32 i;
-      if (!all_errors_av) {
-        all_errors_av = newAV();
-        accum->all_errors_av = all_errors_av;
-      }
-      for (i = 0; i <= error_len; i++) {
-        SV **error_svp = av_fetch(child_errors_av, i, 0);
-        if (error_svp) {
-          av_push(all_errors_av, SvREFCNT_inc_simple_NN(*error_svp));
-        }
-      }
+    if (!gql_ir_native_result_writer_write_direct(
+          aTHX_
+          accum,
+          meta->result_name_sv,
+          frame->outcome_sv,
+          child_errors_av
+        )) {
+      return 0;
     }
+    frame->outcome_sv = NULL;
     if (child_errors_av) {
       SvREFCNT_dec((SV *)child_errors_av);
       frame->outcome_errors_av = NULL;
@@ -1241,13 +1314,14 @@ gql_ir_native_field_consume_completed(
 
   if (SvROK(completed_sv) && (SvTYPE(SvRV(completed_sv)) == SVt_PVHV || is_completed_promise)) {
     if (!is_completed_promise && SvTYPE(SvRV(completed_sv)) == SVt_PVHV) {
-      gql_ir_accumulate_completed_result(
-        aTHX_
-        accum->direct_data_hv,
-        &accum->all_errors_av,
-        meta->result_name_sv,
-        completed_sv
-      );
+      if (!gql_ir_native_result_writer_consume_completed(
+            aTHX_
+            accum,
+            meta->result_name_sv,
+            completed_sv
+          )) {
+        return 0;
+      }
       SvREFCNT_dec(completed_sv);
       frame->outcome_sv = NULL;
       frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_NONE;

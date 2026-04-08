@@ -704,6 +704,10 @@ Keep pushing compiled-native execution toward an envelope-less happy path.
 
 Best next move:
 
+- keep specializing compiled-native field ops so plan entries own more of the
+  runtime branch structure; the current fixed op arrays now split resolver calls
+  into `FIXED/CONTEXT x EMPTY/BUILD_ARGS`, which is the first useful step
+  toward true opcode execution
 - let compiled-native child execution write successful object/list completions
   into parent result state without first materializing `{ data, errors }`
 - keep shrinking `resolve_info`, error, and path materialization in success
@@ -711,6 +715,27 @@ Best next move:
   helpers longer
 - continue moving compiled child metadata from Perl `HV` / `AV` state into
   native plan entries and node-attached tables
+
+Latest spot verification after specializing native field call ops:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir 80200/s`
+  - `houtou_xs_ast 76740/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 41724/s`
+  - `houtou_xs_ast 41616/s`
+
+Interpretation:
+
+- the resolver-op specialization is mainly a VM-readiness change, not a large
+  speed win by itself
+- `nested_variable_object` stays comfortably ahead, while
+  `abstract_with_fragment` remains essentially tied
+- this is consistent with the current model: dispatch is getting cheaper, but
+  completion, Perl callback boundaries, and legacy bridge points still dominate
+  the abstract hot path
 
 ## Breaking-API Speed Notes
 

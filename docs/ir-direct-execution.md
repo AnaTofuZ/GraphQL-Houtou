@@ -591,3 +591,30 @@ To keep this maintainable:
 - keep IR-direct logic isolated to the execution front-end boundary
 - prefer compiling and caching reusable plan pieces over rebuilding lightweight
   bridges on every execute
+
+## Current VM-Readiness State
+
+The compiled-IR executor is now past the "shared loop with some native caches"
+stage and into a more explicit execution-plan form:
+
+- each native field-plan entry owns a fixed op array
+- the dispatcher can use direct threading / computed goto where supported
+- resolver-call ops are now specialized as:
+  - fixed resolver + empty args
+  - fixed resolver + built args
+  - context/default resolver + empty args
+  - context/default resolver + built args
+
+This matters less for immediate throughput than for architecture:
+
+- runtime no longer has to rediscover as much branch structure from Perl data
+- plan entries are closer to real bytecode operands
+- the remaining large costs are no longer the dispatch shape itself, but
+  completion work, Perl callback boundaries, and delayed legacy materialization
+
+Near-term implication:
+
+- keep pushing branch structure into native plan entries
+- avoid introducing new Perl object bridges on the compiled path
+- treat further dispatcher tuning as secondary until more completion/path/info
+  work moves behind native operands

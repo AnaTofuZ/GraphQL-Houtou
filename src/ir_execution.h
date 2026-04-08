@@ -430,16 +430,14 @@ gql_ir_native_field_get_resolver(
 }
 
 static int
-gql_ir_native_field_call_resolver(
+gql_ir_native_field_call_resolver_empty_args(
   pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_compiled_root_field_plan_entry_t *entry,
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *resolve_sv,
   SV **result_out,
   SV **args_out,
   int *owns_args_out
 ) {
-  SV *field_node_sv;
   SV *args_sv = NULL;
 
   if (result_out) {
@@ -451,37 +449,74 @@ gql_ir_native_field_call_resolver(
   if (owns_args_out) {
     *owns_args_out = 0;
   }
-  if (!env || !entry || !entry->field_def_sv || !lazy_info || !resolve_sv || !result_out) {
+  if (!env || !lazy_info || !resolve_sv || !result_out) {
     return 0;
   }
 
   (void)gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
-  if (entry->args_dispatch_kind == GQL_IR_NATIVE_ARGS_DISPATCH_EMPTY) {
-    if (env->empty_args_sv && SvOK(env->empty_args_sv)) {
-      args_sv = env->empty_args_sv;
-    } else {
-      args_sv = newRV_noinc((SV *)newHV());
-      if (owns_args_out) {
-        *owns_args_out = 1;
-      }
-    }
+  if (env->empty_args_sv && SvOK(env->empty_args_sv)) {
+    args_sv = env->empty_args_sv;
   } else {
-    field_node_sv = (entry->first_node_sv && SvOK(entry->first_node_sv))
-      ? entry->first_node_sv
-      : &PL_sv_undef;
-    if (!SvROK(field_node_sv) || SvTYPE(SvRV(field_node_sv)) != SVt_PVHV) {
-      return 0;
-    }
-    args_sv = gql_execution_get_argument_values_xs_impl(
-      aTHX_ entry->field_def_sv,
-      field_node_sv,
-      (env->variable_values_sv && SvOK(env->variable_values_sv)) ? env->variable_values_sv : &PL_sv_undef
-    );
+    args_sv = newRV_noinc((SV *)newHV());
     if (owns_args_out) {
       *owns_args_out = 1;
     }
   }
 
+  if (args_out) {
+    *args_out = args_sv;
+  }
+  *result_out = gql_execution_call_resolver(
+    aTHX_
+    resolve_sv,
+    env->root_value_sv,
+    args_sv,
+    (env->context_value_sv && SvOK(env->context_value_sv)) ? env->context_value_sv : &PL_sv_undef,
+    lazy_info->info_sv
+  );
+  return 1;
+}
+
+static int
+gql_ir_native_field_call_resolver_build_args(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *resolve_sv,
+  SV **result_out,
+  SV **args_out,
+  int *owns_args_out
+) {
+  SV *field_node_sv;
+  SV *args_sv;
+
+  if (result_out) {
+    *result_out = NULL;
+  }
+  if (args_out) {
+    *args_out = NULL;
+  }
+  if (owns_args_out) {
+    *owns_args_out = 0;
+  }
+  if (!env || !entry || !entry->field_def_sv || !entry->first_node_sv || !lazy_info || !resolve_sv || !result_out) {
+    return 0;
+  }
+
+  field_node_sv = entry->first_node_sv;
+  if (!SvROK(field_node_sv) || SvTYPE(SvRV(field_node_sv)) != SVt_PVHV) {
+    return 0;
+  }
+
+  (void)gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
+  args_sv = gql_execution_get_argument_values_xs_impl(
+    aTHX_ entry->field_def_sv,
+    field_node_sv,
+    (env->variable_values_sv && SvOK(env->variable_values_sv)) ? env->variable_values_sv : &PL_sv_undef
+  );
+  if (owns_args_out) {
+    *owns_args_out = 1;
+  }
   if (args_out) {
     *args_out = args_sv;
   }
@@ -743,8 +778,22 @@ gql_ir_init_native_field_ops(gql_ir_compiled_root_field_plan_entry_t *entry) {
   if (entry->meta_dispatch_kind != GQL_IR_NATIVE_META_DISPATCH_NONE) {
     entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_META;
   }
-  entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_TRIVIAL;
-  entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_RESOLVER;
+  if (entry->resolve_dispatch_kind == GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT) {
+    entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_TRIVIAL_CONTEXT;
+  }
+  if (entry->resolve_dispatch_kind == GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED) {
+    if (entry->args_dispatch_kind == GQL_IR_NATIVE_ARGS_DISPATCH_BUILD) {
+      entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_BUILD_ARGS;
+    } else {
+      entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_EMPTY_ARGS;
+    }
+  } else {
+    if (entry->args_dispatch_kind == GQL_IR_NATIVE_ARGS_DISPATCH_BUILD) {
+      entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_BUILD_ARGS;
+    } else {
+      entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_EMPTY_ARGS;
+    }
+  }
   entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_COMPLETE;
   entry->consume_op_index = op_count;
   entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CONSUME;
@@ -808,8 +857,11 @@ dispatch:
   {
     static void *dispatch_table[] = {
       &&op_meta,
-      &&op_trivial,
-      &&op_call_resolver,
+      &&op_trivial_context,
+      &&op_call_fixed_empty_args,
+      &&op_call_fixed_build_args,
+      &&op_call_context_empty_args,
+      &&op_call_context_build_args,
       &&op_complete,
       &&op_consume
     };
@@ -826,8 +878,11 @@ dispatch:
   op = entry->ops[pc];
   switch (op) {
     case GQL_IR_NATIVE_FIELD_OP_META: goto op_meta;
-    case GQL_IR_NATIVE_FIELD_OP_TRIVIAL: goto op_trivial;
-    case GQL_IR_NATIVE_FIELD_OP_CALL_RESOLVER: goto op_call_resolver;
+    case GQL_IR_NATIVE_FIELD_OP_TRIVIAL_CONTEXT: goto op_trivial_context;
+    case GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_EMPTY_ARGS: goto op_call_fixed_empty_args;
+    case GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_BUILD_ARGS: goto op_call_fixed_build_args;
+    case GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_EMPTY_ARGS: goto op_call_context_empty_args;
+    case GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_BUILD_ARGS: goto op_call_context_build_args;
     case GQL_IR_NATIVE_FIELD_OP_COMPLETE: goto op_complete;
     case GQL_IR_NATIVE_FIELD_OP_CONSUME: goto op_consume;
     default:
@@ -851,13 +906,9 @@ op_meta:
     goto op_done;
   }
   pc++;
-  if (!resolve_sv) {
-    resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
-    resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
-  }
   goto dispatch;
 
-op_trivial:
+op_trivial_context:
   if (!resolve_sv) {
     resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
     resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
@@ -908,24 +959,78 @@ op_trivial:
   pc++;
   goto dispatch;
 
-op_call_resolver:
+op_call_fixed_empty_args:
+  resolve_sv = entry->resolve_sv;
+  resolve_is_default = 0;
+  if (!gql_ir_native_field_call_resolver_empty_args(
+        aTHX_
+        env,
+        &lazy_info,
+        resolve_sv,
+        &result_sv,
+        &args_sv,
+        &owns_args_sv
+      )) {
+    goto op_fail;
+  }
+  pc++;
+  goto dispatch;
+
+op_call_fixed_build_args:
+  resolve_sv = entry->resolve_sv;
+  resolve_is_default = 0;
+  if (!gql_ir_native_field_call_resolver_build_args(
+        aTHX_
+        env,
+        entry,
+        &lazy_info,
+        resolve_sv,
+        &result_sv,
+        &args_sv,
+        &owns_args_sv
+      )) {
+    goto op_fail;
+  }
+  pc++;
+  goto dispatch;
+
+op_call_context_empty_args:
   if (!resolve_sv) {
     resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
     resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
   }
-  if (!used_fast_default_resolve) {
-    if (!gql_ir_native_field_call_resolver(
-          aTHX_
-          env,
-          entry,
-          &lazy_info,
-          resolve_sv,
-          &result_sv,
-          &args_sv,
-          &owns_args_sv
-        )) {
-      goto op_fail;
-    }
+  if (!used_fast_default_resolve
+      && !gql_ir_native_field_call_resolver_empty_args(
+           aTHX_
+           env,
+           &lazy_info,
+           resolve_sv,
+           &result_sv,
+           &args_sv,
+           &owns_args_sv
+         )) {
+    goto op_fail;
+  }
+  pc++;
+  goto dispatch;
+
+op_call_context_build_args:
+  if (!resolve_sv) {
+    resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
+    resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
+  }
+  if (!used_fast_default_resolve
+      && !gql_ir_native_field_call_resolver_build_args(
+           aTHX_
+           env,
+           entry,
+           &lazy_info,
+           resolve_sv,
+           &result_sv,
+           &args_sv,
+           &owns_args_sv
+         )) {
+    goto op_fail;
   }
   pc++;
   goto dispatch;

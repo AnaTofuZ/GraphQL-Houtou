@@ -241,6 +241,10 @@ talks to writer helpers first. The next step is to let the writer become the
 primary runtime sink for native outcomes and make the accumulator mostly about
 execution-level state such as promise presence / finalization policy.
 
+That next step is now in progress as well: the field executor is being moved
+off `exec_accum` and toward explicit `(writer, promise_state)` inputs, so the
+hot path stops treating the accumulator as its mutable write surface.
+
 ### 5. Fallback Boundary
 
 The first VM/runtime slice should still allow explicit fallback to the current

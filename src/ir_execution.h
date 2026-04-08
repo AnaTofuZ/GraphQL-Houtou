@@ -166,7 +166,8 @@ static int gql_ir_ensure_native_field_entry_operands(
 );
 static int gql_ir_execute_native_field_entry_into(
   pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_exec_accum_t *accum,
+  gql_ir_native_result_writer_t *writer,
+  int *promise_present,
   gql_ir_compiled_root_field_plan_entry_t *entry
 );
 static void gql_ir_init_native_field_frame(
@@ -655,7 +656,8 @@ gql_ir_run_native_field_plan_loop(
     if (!gql_ir_execute_native_field_entry_into(
           aTHX_
           env,
-          accum,
+          &accum->writer,
+          &accum->promise_present,
           entry
         )) {
       return 0;
@@ -1206,14 +1208,14 @@ gql_ir_native_field_complete_trivial_result(
 static int
 gql_ir_native_field_complete_generic_result(
   pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_exec_accum_t *accum,
+  gql_ir_native_result_writer_t *writer,
   gql_ir_compiled_root_field_plan_entry_t *entry,
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result_sv,
   gql_ir_native_field_frame_t *frame
 ) {
   if (!env
-      || !accum
+      || !writer
       || !entry
       || !entry->field_def_sv
       || !entry->nodes_sv
@@ -1285,7 +1287,8 @@ gql_ir_native_field_complete_generic_result(
 static int
 gql_ir_native_field_consume_completed(
   pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_exec_accum_t *accum,
+  gql_ir_native_result_writer_t *writer,
+  int *promise_present,
   gql_ir_compiled_root_field_plan_entry_t *entry,
   gql_ir_native_field_frame_t *frame
 ) {
@@ -1293,7 +1296,7 @@ gql_ir_native_field_consume_completed(
   SV *completed_sv = NULL;
   int is_completed_promise = 0;
 
-  if (!env || !accum || !entry || !frame || !meta) {
+  if (!env || !writer || !promise_present || !entry || !frame || !meta) {
     return 0;
   }
 
@@ -1304,7 +1307,7 @@ gql_ir_native_field_consume_completed(
     }
     if (!gql_ir_native_result_writer_write_direct(
           aTHX_
-          &accum->writer,
+          writer,
           meta->result_name_sv,
           frame->outcome_sv,
           child_errors_av
@@ -1330,7 +1333,7 @@ gql_ir_native_field_consume_completed(
     is_completed_promise = SvTRUE(is_completed_promise_sv);
     SvREFCNT_dec(is_completed_promise_sv);
     if (is_completed_promise) {
-      accum->promise_present = 1;
+      *promise_present = 1;
     }
   }
 
@@ -1338,7 +1341,7 @@ gql_ir_native_field_consume_completed(
     if (!is_completed_promise && SvTYPE(SvRV(completed_sv)) == SVt_PVHV) {
       if (!gql_ir_native_result_writer_consume_completed(
             aTHX_
-            &accum->writer,
+            writer,
             meta->result_name_sv,
             completed_sv
           )) {
@@ -1351,7 +1354,7 @@ gql_ir_native_field_consume_completed(
     }
     if (!gql_ir_native_result_writer_push_pending(
           aTHX_
-          &accum->writer,
+          writer,
           meta->result_name_sv,
           completed_sv
         )) {
@@ -1620,7 +1623,8 @@ gql_ir_cleanup_native_field_frame(
 static int
 gql_ir_execute_native_field_entry_into(
   pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_exec_accum_t *accum,
+  gql_ir_native_result_writer_t *writer,
+  int *promise_present,
   gql_ir_compiled_root_field_plan_entry_t *entry
 ) {
   gql_ir_native_field_frame_t frame;
@@ -1632,7 +1636,8 @@ gql_ir_execute_native_field_entry_into(
    * compiled-IR executor treats this as the VM-ready "execute one field op"
    * unit and consumes native plan metadata directly. */
   if (!env
-      || !accum
+      || !writer
+      || !promise_present
       || !entry
       || !entry->field_def_sv
       || !SvOK(entry->field_def_sv)
@@ -1854,7 +1859,7 @@ op_complete_generic:
   if (!gql_ir_native_field_complete_generic_result(
         aTHX_
         env,
-        accum,
+        writer,
         entry,
         &frame.lazy_info,
         frame.result_sv,
@@ -1872,7 +1877,8 @@ op_consume:
   if (!gql_ir_native_field_consume_completed(
         aTHX_
         env,
-        accum,
+        writer,
+        promise_present,
         entry,
         &frame
       )) {

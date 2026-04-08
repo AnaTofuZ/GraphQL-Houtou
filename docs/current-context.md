@@ -34,13 +34,17 @@ Recent conclusions that matter more than older commit-by-commit history:
   writer has been split out of the execution accumulator so field execution
   can target a writer-owned boundary instead of reaching directly into
   accumulator state
+- the latest follow-up step is also landed locally: field execution now
+  receives the native writer plus promise-state separately, so `accum` is
+  starting to collapse toward execution-level finalization state instead of
+  being the hot-path write surface
 - latest writer-boundary spot measurements remain in-range:
   - `nested_variable_object --count=-3`
-    - `houtou_compiled_ir 80926/s`
-    - `houtou_xs_ast 79626/s`
+    - `houtou_compiled_ir 84345/s`
+    - `houtou_xs_ast 81920/s`
   - `abstract_with_fragment --count=-3`
-    - `houtou_compiled_ir 43264/s`
-    - `houtou_xs_ast 42897/s`
+    - `houtou_compiled_ir 43690/s`
+    - `houtou_xs_ast 43581/s`
 
 ## Ecosystem Gap Guardrail
 

@@ -604,6 +604,9 @@ stage and into a more explicit execution-plan form:
   - fixed resolver + built args
   - context/default resolver + empty args
   - context/default resolver + built args
+- completion ops are also now specialized as:
+  - trivial completion
+  - generic completion
 
 This matters less for immediate throughput than for architecture:
 

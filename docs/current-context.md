@@ -737,6 +737,29 @@ Interpretation:
   completion, Perl callback boundaries, and legacy bridge points still dominate
   the abstract hot path
 
+After that, completion dispatch was also specialized in the fixed op array:
+
+- `COMPLETE_TRIVIAL`
+- `COMPLETE_GENERIC`
+
+Latest spot verification after completion-op specialization:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir 79824/s`
+  - `houtou_xs_ast 77457/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 41421/s`
+  - `houtou_xs_ast 41125/s`
+
+Interpretation:
+
+- splitting completion into explicit op kinds is also primarily a VM-readiness
+  change
+- the runtime remains neutral-to-slightly-positive while more branch structure
+  moves from execution helpers into the compiled native plan
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

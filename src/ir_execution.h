@@ -595,7 +595,43 @@ gql_ir_native_field_try_trivial_completion(
 }
 
 static int
-gql_ir_native_field_complete_result(
+gql_ir_native_field_complete_trivial_result(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  SV *result_sv,
+  SV **completed_out
+) {
+  SV *direct_data_sv = NULL;
+
+  if (completed_out) {
+    *completed_out = NULL;
+  }
+  if (!env || !accum || !entry || !entry->completion_type_sv || !result_sv || !completed_out) {
+    return 0;
+  }
+
+  if (gql_execution_try_complete_trivial_value_with_metadata_data_fast(
+        aTHX_ entry->completion_type_sv,
+        entry->trivial_completion_flags,
+        result_sv,
+        &direct_data_sv
+      )) {
+    (void)hv_store_ent(accum->direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
+    return 1;
+  }
+
+  *completed_out = NULL;
+  return gql_execution_try_complete_trivial_value_with_metadata_fast(
+    aTHX_ entry->completion_type_sv,
+    entry->trivial_completion_flags,
+    result_sv,
+    completed_out
+  );
+}
+
+static int
+gql_ir_native_field_complete_generic_result(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_exec_accum_t *accum,
   gql_ir_compiled_root_field_plan_entry_t *entry,
@@ -794,7 +830,11 @@ gql_ir_init_native_field_ops(gql_ir_compiled_root_field_plan_entry_t *entry) {
       entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_EMPTY_ARGS;
     }
   }
-  entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_COMPLETE;
+  if (entry->completion_dispatch_kind == GQL_IR_NATIVE_COMPLETION_TRIVIAL) {
+    entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_COMPLETE_TRIVIAL;
+  } else {
+    entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_COMPLETE_GENERIC;
+  }
   entry->consume_op_index = op_count;
   entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CONSUME;
   entry->op_count = op_count;
@@ -862,7 +902,8 @@ dispatch:
       &&op_call_fixed_build_args,
       &&op_call_context_empty_args,
       &&op_call_context_build_args,
-      &&op_complete,
+      &&op_complete_trivial,
+      &&op_complete_generic,
       &&op_consume
     };
     if (pc >= entry->op_count) {
@@ -883,7 +924,8 @@ dispatch:
     case GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_BUILD_ARGS: goto op_call_fixed_build_args;
     case GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_EMPTY_ARGS: goto op_call_context_empty_args;
     case GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_BUILD_ARGS: goto op_call_context_build_args;
-    case GQL_IR_NATIVE_FIELD_OP_COMPLETE: goto op_complete;
+    case GQL_IR_NATIVE_FIELD_OP_COMPLETE_TRIVIAL: goto op_complete_trivial;
+    case GQL_IR_NATIVE_FIELD_OP_COMPLETE_GENERIC: goto op_complete_generic;
     case GQL_IR_NATIVE_FIELD_OP_CONSUME: goto op_consume;
     default:
       goto op_fail;
@@ -1035,8 +1077,25 @@ op_call_context_build_args:
   pc++;
   goto dispatch;
 
-op_complete:
-  if (!gql_ir_native_field_complete_result(
+op_complete_trivial:
+  if (!gql_ir_native_field_complete_trivial_result(
+        aTHX_
+        env,
+        accum,
+        entry,
+        result_sv,
+        &completed_sv
+      )) {
+    goto op_fail;
+  }
+  if (!completed_sv) {
+    goto op_done;
+  }
+  pc++;
+  goto dispatch;
+
+op_complete_generic:
+  if (!gql_ir_native_field_complete_generic_result(
         aTHX_
         env,
         accum,

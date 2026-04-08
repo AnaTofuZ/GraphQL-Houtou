@@ -156,6 +156,9 @@ Current compiled-plan execution reuse:
   dispatcher as well: on GCC/Clang the executor uses computed-goto based
   direct threading, while other compilers use a matching `switch` fallback
   over the same explicit stage enum
+- native field entries now also own the operands needed by the field-stage
+  dispatcher; root execution lazily fills missing `nodes` / `field_def` /
+  `type` once and then reuses the entry as a self-contained field-op record
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -325,6 +328,15 @@ Most recent direct-threaded stage-dispatch checks:
 - `abstract_with_fragment` (`--count=-4`)
   - `houtou_compiled_ir`: `42048/s`
   - `houtou_xs_ast`: `42507/s`
+
+Most recent operand-on-entry shaping checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `80842/s`
+  - `houtou_xs_ast`: `79853/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `41751/s`
+  - `houtou_xs_ast`: `42729/s`
 
 Latest spot check after lazy `resolve_info` materialization in field
 completion (`--count=-6`):

@@ -214,6 +214,11 @@ Recent executor shaping follows that same path:
   written in a direct-threading-friendly shape: on compilers with computed-goto
   support it dispatches via a label table, and otherwise falls back to a
   `switch`-based stage loop with the same stage boundaries
+- native field execution is now also moving operand ownership onto the plan
+  entry itself: root-side missing `nodes` / `field_def` / `type` operands are
+  lazily materialized once and then retained on the entry, so the dispatcher
+  can execute from a single field-op record instead of being fed extra runtime
+  operands from each loop site
 - the aim is for compiled IR execution to look like dispatch over a sequence of
   field ops, while still reusing existing completion / promise helpers where
   that does not dominate cost

@@ -5701,6 +5701,7 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     SV *info_sv = NULL;
     SV *borrowed_result_sv = NULL;
     SV *direct_data_sv = NULL;
+    AV *direct_errors_av = NULL;
     SV *result_sv = NULL;
     SV *completed_sv = NULL;
     SV *args_sv = NULL;
@@ -5819,6 +5820,15 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     if (gql_execution_is_default_field_resolver(aTHX_ resolve_sv)
         && gql_execution_try_default_field_resolve_borrowed_fast(aTHX_ root_value, *field_name_svp, &borrowed_result_sv)) {
       used_fast_default_resolve = 1;
+      if (gql_execution_try_complete_trivial_value_with_metadata_data_fast(
+            aTHX_
+            *type_svp,
+            0,
+            borrowed_result_sv,
+            &direct_data_sv
+          )) {
+        goto have_completed;
+      }
       if (gql_execution_try_complete_trivial_value_fast(aTHX_ *type_svp, borrowed_result_sv, &completed_sv)) {
         goto have_completed;
       }
@@ -5857,6 +5867,18 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
       );
     }
 
+    if (gql_execution_complete_value_catching_error_xs_lazy_data_fast(
+          aTHX_
+          context,
+          *type_svp,
+          &lazy_info,
+          result_sv,
+          &direct_data_sv,
+          &direct_errors_av
+        )) {
+      goto have_completed;
+    }
+
     completed_sv = gql_execution_complete_field_value_catching_error_xs_impl(
       aTHX_ context,
       parent_type,
@@ -5871,6 +5893,20 @@ have_completed:
     if (direct_data_sv) {
       (void)hv_store_ent(direct_data_hv, *result_name_svp, direct_data_sv, 0);
       direct_data_sv = NULL;
+      if (direct_errors_av && av_len(direct_errors_av) >= 0) {
+        I32 error_len = av_len(direct_errors_av);
+        I32 error_i;
+        for (error_i = 0; error_i <= error_len; error_i++) {
+          SV **error_svp = av_fetch(direct_errors_av, error_i, 0);
+          if (error_svp) {
+            av_push(all_errors_av, SvREFCNT_inc_simple_NN(*error_svp));
+          }
+        }
+      }
+      if (direct_errors_av) {
+        SvREFCNT_dec((SV *)direct_errors_av);
+        direct_errors_av = NULL;
+      }
       goto field_cleanup;
     }
 
@@ -5929,6 +5965,9 @@ field_cleanup:
     }
     if (direct_data_sv) {
       SvREFCNT_dec(direct_data_sv);
+    }
+    if (direct_errors_av) {
+      SvREFCNT_dec((SV *)direct_errors_av);
     }
   }
 
@@ -6049,6 +6088,7 @@ gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_va
     SV **field_args_svp;
     SV *borrowed_result_sv = NULL;
     SV *direct_data_sv = NULL;
+    AV *direct_errors_av = NULL;
     SV *result_sv = NULL;
     SV *completed_sv = NULL;
     int used_fast_default_resolve = 0;
@@ -6118,6 +6158,15 @@ gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_va
     if (gql_execution_is_default_field_resolver(aTHX_ resolve_sv)
         && gql_execution_try_default_field_resolve_borrowed_fast(aTHX_ root_value, *field_name_svp, &borrowed_result_sv)) {
       used_fast_default_resolve = 1;
+      if (gql_execution_try_complete_trivial_value_with_metadata_data_fast(
+            aTHX_
+            *type_svp,
+            0,
+            borrowed_result_sv,
+            &direct_data_sv
+          )) {
+        goto have_completed;
+      }
       if (gql_execution_try_complete_trivial_value_fast(aTHX_ *type_svp, borrowed_result_sv, &completed_sv)) {
         goto have_completed;
       }
@@ -6157,6 +6206,18 @@ gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_va
       );
     }
 
+    if (gql_execution_complete_value_catching_error_xs_lazy_data_fast(
+          aTHX_
+          context,
+          *type_svp,
+          &lazy_info,
+          result_sv,
+          &direct_data_sv,
+          &direct_errors_av
+        )) {
+      goto have_completed;
+    }
+
     completed_sv = gql_execution_complete_field_value_catching_error_xs_impl(
       aTHX_
       context,
@@ -6172,6 +6233,20 @@ have_completed:
     if (direct_data_sv) {
       (void)hv_store_ent(direct_data_hv, *result_name_svp, direct_data_sv, 0);
       direct_data_sv = NULL;
+      if (direct_errors_av && av_len(direct_errors_av) >= 0) {
+        I32 error_len = av_len(direct_errors_av);
+        I32 error_i;
+        for (error_i = 0; error_i <= error_len; error_i++) {
+          SV **error_svp = av_fetch(direct_errors_av, error_i, 0);
+          if (error_svp) {
+            av_push(all_errors_av, SvREFCNT_inc_simple_NN(*error_svp));
+          }
+        }
+      }
+      if (direct_errors_av) {
+        SvREFCNT_dec((SV *)direct_errors_av);
+        direct_errors_av = NULL;
+      }
       goto field_cleanup;
     }
 
@@ -6226,6 +6301,9 @@ field_cleanup:
     }
     if (direct_data_sv) {
       SvREFCNT_dec(direct_data_sv);
+    }
+    if (direct_errors_av) {
+      SvREFCNT_dec((SV *)direct_errors_av);
     }
   }
 

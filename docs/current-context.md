@@ -1131,6 +1131,36 @@ Interpretation:
 - the next high-value step remains extending this approach past trivial
   completion and into object/abstract completion outcomes themselves
 
+Latest generic XS-loop follow-up:
+
+- the same sync direct-data completion helper is now used in the generic
+  `execute_fields()` / `execute_field_plan()` loops before falling back to
+  completed-`HV` materialization
+- borrowed default-resolver values now try the direct-data trivial path before
+  they are copied into owned Perl scalars
+- this broadens the object-allocation reduction beyond compiled-IR-specific
+  code paths and keeps the "happy path stays in direct data" idea aligned
+  across both legacy XS execution and lowered native execution
+
+Latest spot verification after widening direct-data use in generic XS loops:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 42708/s`
+  - `houtou_xs_ast 42516/s`
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir 80397/s`
+  - `houtou_xs_ast 77193/s`
+
+Interpretation:
+
+- the target case stays roughly flat, which is acceptable for this broader
+  object-allocation cleanup
+- the broader XS sync path benefits more clearly than the abstract target case
+- this is still a supporting step; the main remaining abstract cost is the
+  object/abstract completion shape itself, not trivial leaf completion
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

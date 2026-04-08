@@ -691,5 +691,9 @@ Current abstract-lowering note:
 - sync compiled-IR completion now has a narrow direct-data helper for trivial
   `null` / leaf / simple `NonNull` outcomes, so generic completion can skip
   materializing a completed `{ data => ... }` `HV` in those cases
+- that same direct-data helper is now reused by the generic XS field loops too,
+  so the allocation-reduction path is no longer isolated to compiled-IR-only
+  code and the shared execution semantics stay closer while runtime ownership
+  still differs
 - the next pass should specialize the owned lowered table further so abstract
   dispatch can run entirely against lowered-plan-native operands and outcomes

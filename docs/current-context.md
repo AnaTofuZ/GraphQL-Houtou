@@ -1021,6 +1021,32 @@ Planned medium-term compiler direction:
   decisions into compile time where they are easier to reason about and less
   likely to regress hot-path stability
 
+Latest structural progress toward that staged pipeline:
+
+- `compiled_ir` no longer conceptually owns a raw `root_field_plan` directly;
+  it now owns an explicit execution-lowered plan object whose current stage is
+  `LOWERED_NATIVE_FIELDS`
+- the lowered plan currently wraps the existing native root field plan, so this
+  is mostly a structural ownership change rather than a new optimization pass
+- this is still useful because it creates a concrete insertion point for future
+  typed/specialized IR and late lowering passes without having to overload the
+  `compiled_exec` handle itself
+
+Latest spot verification after introducing the explicit lowered-plan boundary:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 43216/s`
+  - `houtou_xs_ast 43039/s`
+
+Interpretation:
+
+- this step is effectively neutral-to-slightly-positive on the target case
+- the real value is architectural: the next pass can target the lowered-plan
+  layer directly instead of bolting more specialization logic onto
+  `compiled_exec` or the runtime field loop
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

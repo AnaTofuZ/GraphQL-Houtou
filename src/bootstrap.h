@@ -147,6 +147,7 @@ typedef struct gql_ir_prepared_exec gql_ir_prepared_exec_t;
 typedef struct gql_ir_compiled_exec gql_ir_compiled_exec_t;
 typedef struct gql_ir_compiled_root_field_plan_entry gql_ir_compiled_root_field_plan_entry_t;
 typedef struct gql_ir_compiled_root_field_plan gql_ir_compiled_root_field_plan_t;
+typedef struct gql_ir_execution_lowered_plan gql_ir_execution_lowered_plan_t;
 typedef struct gql_ir_compiled_concrete_plan_entry gql_ir_compiled_concrete_plan_entry_t;
 typedef struct gql_ir_compiled_concrete_plan_table gql_ir_compiled_concrete_plan_table_t;
 typedef struct gql_ir_compiled_field_bucket_entry gql_ir_compiled_field_bucket_entry_t;
@@ -160,9 +161,15 @@ typedef enum gql_ir_native_meta_dispatch_kind gql_ir_native_meta_dispatch_kind_t
 typedef enum gql_ir_native_resolve_dispatch_kind gql_ir_native_resolve_dispatch_kind_t;
 typedef enum gql_ir_native_args_dispatch_kind gql_ir_native_args_dispatch_kind_t;
 typedef enum gql_ir_native_completion_dispatch_kind gql_ir_native_completion_dispatch_kind_t;
+typedef enum gql_ir_compilation_stage gql_ir_compilation_stage_t;
 typedef struct {
   gql_ir_document_t *document;
 } gql_ir_document_cleanup_t;
+
+enum gql_ir_compilation_stage {
+  GQL_IR_COMPILATION_STAGE_NONE = 0,
+  GQL_IR_COMPILATION_STAGE_LOWERED_NATIVE_FIELDS = 1
+};
 
 enum gql_ir_native_field_op {
   GQL_IR_NATIVE_FIELD_OP_META = 0,
@@ -238,6 +245,11 @@ struct gql_ir_compiled_root_field_plan {
   gql_ir_compiled_root_field_plan_entry_t *entries;
 };
 
+struct gql_ir_execution_lowered_plan {
+  gql_ir_compilation_stage_t stage;
+  gql_ir_compiled_root_field_plan_t *root_field_plan;
+};
+
 struct gql_ir_compiled_concrete_plan_entry {
   SV *possible_type_sv;
   SV *compiled_fields_sv;
@@ -266,7 +278,7 @@ struct gql_ir_compiled_exec {
   SV *operation_name_sv;
   gql_ir_operation_definition_t *selected_operation;
   SV *root_selection_plan_sv;
-  gql_ir_compiled_root_field_plan_t *root_field_plan;
+  gql_ir_execution_lowered_plan_t *lowered_plan;
   SV *root_field_plan_sv;
   SV *root_type_sv;
 };

@@ -56,6 +56,15 @@ gql_ir_prepared_exec_destroy(gql_ir_prepared_exec_t *prepared) {
   Safefree(prepared);
 }
 
+static gql_ir_compiled_root_field_plan_t *
+gql_ir_execution_lowered_root_field_plan(gql_ir_compiled_exec_t *compiled) {
+  if (!compiled || !compiled->lowered_plan) {
+    return NULL;
+  }
+
+  return compiled->lowered_plan->root_field_plan;
+}
+
 static const char *gql_ir_operation_kind_name(gql_ir_operation_kind_t kind);
 static gql_ir_operation_definition_t *gql_ir_prepare_select_operation(pTHX_ gql_ir_prepared_exec_t *prepared, SV *operation_name);
 static SV *gql_ir_prepare_executable_root_legacy_fields_sv(pTHX_ SV *schema, gql_ir_prepared_exec_t *prepared, SV *operation_name);
@@ -68,6 +77,9 @@ static SV *gql_ir_prepare_executable_root_field_nodes_sv(pTHX_ gql_ir_prepared_e
 static void gql_ir_compiled_attach_root_field_runtime_data(pTHX_ SV *root_field_plan_sv, SV *root_fields_sv);
 static gql_ir_compiled_root_field_plan_t *gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv);
 static void gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan);
+static gql_ir_execution_lowered_plan_t *gql_ir_execution_lowered_plan_from_root_field_plan_sv(pTHX_ SV *root_field_plan_sv);
+static void gql_ir_execution_lowered_plan_destroy(gql_ir_execution_lowered_plan_t *plan);
+static gql_ir_compiled_root_field_plan_t *gql_ir_execution_lowered_root_field_plan(gql_ir_compiled_exec_t *compiled);
 static void gql_ir_compiled_concrete_plan_table_destroy(gql_ir_compiled_concrete_plan_table_t *table);
 static void gql_ir_attach_concrete_field_plan_table(pTHX_ SV *sv, gql_ir_compiled_concrete_plan_table_t *table);
 static gql_ir_compiled_field_bucket_table_t *gql_ir_compiled_field_bucket_table_from_sv(pTHX_ SV *compiled_fields_sv);
@@ -196,9 +208,9 @@ gql_ir_compiled_exec_destroy(gql_ir_compiled_exec_t *compiled) {
     SvREFCNT_dec(compiled->root_selection_plan_sv);
     compiled->root_selection_plan_sv = NULL;
   }
-  if (compiled->root_field_plan) {
-    gql_ir_compiled_root_field_plan_destroy(compiled->root_field_plan);
-    compiled->root_field_plan = NULL;
+  if (compiled->lowered_plan) {
+    gql_ir_execution_lowered_plan_destroy(compiled->lowered_plan);
+    compiled->lowered_plan = NULL;
   }
   if (compiled->root_field_plan_sv) {
     SvREFCNT_dec(compiled->root_field_plan_sv);
@@ -1692,14 +1704,15 @@ gql_ir_compile_executable_plan_handle_sv(pTHX_ SV *schema, SV *prepared_handle_s
     gql_ir_attach_compiled_field_defs_to_fragments(aTHX_ schema, fragments_sv);
     gql_ir_attach_compiled_field_defs_to_nodes(aTHX_ schema, compiled->root_type_sv, root_fields_sv, fragments_sv);
     gql_ir_compiled_attach_root_field_runtime_data(aTHX_ root_field_plan_sv, root_fields_sv);
-    compiled->root_field_plan = gql_ir_compiled_root_field_plan_from_sv(aTHX_ root_field_plan_sv);
-    if (!compiled->root_field_plan) {
+    compiled->lowered_plan = gql_ir_execution_lowered_plan_from_root_field_plan_sv(aTHX_ root_field_plan_sv);
+    if (!compiled->lowered_plan) {
       compiled->root_field_plan_sv = root_field_plan_sv;
       root_field_plan_sv = NULL;
     } else {
+      gql_ir_compiled_root_field_plan_t *root_field_plan = gql_ir_execution_lowered_root_field_plan(compiled);
       UV field_i;
-      for (field_i = 0; field_i < compiled->root_field_plan->field_count; field_i++) {
-        gql_ir_compiled_root_field_plan_entry_t *entry = &compiled->root_field_plan->entries[field_i];
+      for (field_i = 0; field_i < root_field_plan->field_count; field_i++) {
+        gql_ir_compiled_root_field_plan_entry_t *entry = &root_field_plan->entries[field_i];
         gql_ir_compiled_strip_legacy_buckets_from_nodes(aTHX_ entry->nodes_sv);
       }
     }
@@ -2758,6 +2771,36 @@ gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan)
   Safefree(plan);
 }
 
+static gql_ir_execution_lowered_plan_t *
+gql_ir_execution_lowered_plan_from_root_field_plan_sv(pTHX_ SV *root_field_plan_sv) {
+  gql_ir_compiled_root_field_plan_t *root_field_plan;
+  gql_ir_execution_lowered_plan_t *plan;
+
+  root_field_plan = gql_ir_compiled_root_field_plan_from_sv(aTHX_ root_field_plan_sv);
+  if (!root_field_plan) {
+    return NULL;
+  }
+
+  Newxz(plan, 1, gql_ir_execution_lowered_plan_t);
+  plan->stage = GQL_IR_COMPILATION_STAGE_LOWERED_NATIVE_FIELDS;
+  plan->root_field_plan = root_field_plan;
+  return plan;
+}
+
+static void
+gql_ir_execution_lowered_plan_destroy(gql_ir_execution_lowered_plan_t *plan) {
+  if (!plan) {
+    return;
+  }
+
+  if (plan->root_field_plan) {
+    gql_ir_compiled_root_field_plan_destroy(plan->root_field_plan);
+    plan->root_field_plan = NULL;
+  }
+
+  Safefree(plan);
+}
+
 static int
 gql_ir_compiled_concrete_plan_table_magic_free(pTHX_ SV *sv, MAGIC *mg) {
   gql_ir_compiled_concrete_plan_table_t *table = (mg && mg->mg_ptr)
@@ -3311,7 +3354,7 @@ gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled
     return compiled->root_field_plan_sv;
   }
 
-  if (!compiled->root_field_plan) {
+  if (!gql_ir_execution_lowered_root_field_plan(compiled)) {
     return &PL_sv_undef;
   }
 
@@ -3325,8 +3368,10 @@ gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled
   );
   gql_store_sv(root_field_plan_hv, "root_type", gql_execution_share_or_copy_sv(compiled->root_type_sv));
 
-  for (field_i = 0; field_i < compiled->root_field_plan->field_count; field_i++) {
-    gql_ir_compiled_root_field_plan_entry_t *entry = &compiled->root_field_plan->entries[field_i];
+  {
+    gql_ir_compiled_root_field_plan_t *root_field_plan = gql_ir_execution_lowered_root_field_plan(compiled);
+    for (field_i = 0; field_i < root_field_plan->field_count; field_i++) {
+      gql_ir_compiled_root_field_plan_entry_t *entry = &root_field_plan->entries[field_i];
     HV *field_plan_hv = newHV();
 
     gql_store_sv(field_plan_hv, "result_name", gql_execution_share_or_copy_sv(entry->result_name_sv));
@@ -3355,6 +3400,7 @@ gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled
       newRV_noinc((SV *)field_plan_hv),
       0
     );
+    }
   }
 
   gql_store_sv(root_field_plan_hv, "field_order", newRV_noinc((SV *)field_order_av));
@@ -4568,14 +4614,14 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
   Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
 
   if (!compiled
-      || !compiled->root_field_plan
+      || !gql_ir_execution_lowered_root_field_plan(compiled)
       || !context_sv
       || !SvROK(context_sv)
       || SvTYPE(SvRV(context_sv)) != SVt_PVHV) {
     goto fallback;
   }
 
-  root_field_plan = compiled->root_field_plan;
+  root_field_plan = gql_ir_execution_lowered_root_field_plan(compiled);
   if (!gql_ir_init_native_exec_env(
         aTHX_
         context_sv,

@@ -649,3 +649,30 @@ Near-term implication:
 - normalize sync generic completed hashes into that same outcome slot too, so
   `consume` increasingly becomes a pure accumulator step rather than a place
   that still needs to understand multiple upstream result ownership styles
+- make the ownership boundary itself explicit by having `compiled_ir` own an
+  execution-lowered plan object; the current lowered stage is still just
+  `LOWERED_NATIVE_FIELDS`, but future typed/specialized/late-lowered forms
+  should be inserted there instead of adding more ad hoc state directly to the
+  compiled handle
+
+## Next Lowering Layer
+
+The next meaningful compiler pass should not be another local runtime shortcut.
+It should be a new lowered-plan stage that targets the main remaining abstract
+costs directly:
+
+- abstract-specialized child-plan lowering
+  - lower `runtime type -> child plan` into a dedicated plan form instead of
+    letting generic completion rediscover object execution shape
+- late op fusion
+  - fuse common `resolve -> complete -> consume` sequences once operand shapes
+    are fixed
+- VM/opcode emission
+  - emit the final threaded-op representation from the stabilized lowered plan,
+    not from raw prepared IR and not from the legacy-compatible compiled
+    handle
+
+That sequence fits the current architecture better than adding more one-off
+branches to `execution.h`, because it keeps specialization decisions inside the
+compiler pipeline and leaves runtime mostly responsible for executing already
+chosen native shapes.

@@ -898,6 +898,31 @@ Interpretation:
   boundary is more regular and ready for a future "generic complete directly to
   outcome" lowering
 
+Latest spot verification after accumulating sync completed hashes directly into
+head data/errors inside the XS execution loops:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir 78758/s`
+  - `houtou_xs_ast 76204/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 42308/s`
+  - `houtou_xs_ast 42111/s`
+
+Interpretation:
+
+- `gql_execution_execute_fields(...)` and
+  `gql_execution_execute_field_plan(...)` no longer retain sync completed
+  `{ data, errors }` hashes in `result_values_av`; they now extract into a
+  direct head accumulator immediately and only keep promises in the pending
+  arrays
+- this does not yet remove the upstream completed-hash allocation, but it
+  aligns the AST/XS sync loops more closely with the compiled-IR
+  `head data + pending promises` execution shape
+- spot numbers are neutral-to-positive, so this is a good staging step before
+  pushing `execution.h` completion helpers toward native outcomes as well
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

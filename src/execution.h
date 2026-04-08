@@ -518,6 +518,117 @@ gql_execution_merge_completed_list(pTHX_ AV *list_av) {
 }
 
 static SV *
+gql_execution_build_list_result_from_head(pTHX_ AV *head_data_av, AV *errors_av) {
+  HV *ret_hv = newHV();
+
+  gql_store_sv(ret_hv, "data", newRV_noinc((SV *)head_data_av));
+  if (errors_av && av_len(errors_av) >= 0) {
+    gql_store_sv(ret_hv, "errors", newRV_noinc((SV *)errors_av));
+  } else if (errors_av) {
+    SvREFCNT_dec((SV *)errors_av);
+  }
+
+  return newRV_noinc((SV *)ret_hv);
+}
+
+static void
+gql_execution_accumulate_completed_list_item_into_head(
+  pTHX_ AV *data_av,
+  AV *errors_av,
+  I32 index,
+  SV *completed_sv
+) {
+  HV *item_hv;
+  SV **data_svp;
+  SV **item_errors_svp;
+
+  if (!data_av || !errors_av || !completed_sv || !SvROK(completed_sv) || SvTYPE(SvRV(completed_sv)) != SVt_PVHV) {
+    return;
+  }
+
+  item_hv = (HV *)SvRV(completed_sv);
+  data_svp = hv_fetch(item_hv, "data", 4, 0);
+  av_fill(data_av, index);
+  (void)av_store(data_av, index, data_svp ? newSVsv(*data_svp) : newSV(0));
+
+  item_errors_svp = hv_fetch(item_hv, "errors", 6, 0);
+  if (item_errors_svp && SvROK(*item_errors_svp) && SvTYPE(SvRV(*item_errors_svp)) == SVt_PVAV) {
+    AV *item_errors_av = (AV *)SvRV(*item_errors_svp);
+    I32 err_len = av_len(item_errors_av);
+    I32 err_i;
+    for (err_i = 0; err_i <= err_len; err_i++) {
+      SV **err_svp = av_fetch(item_errors_av, err_i, 0);
+      if (err_svp) {
+        av_push(errors_av, newSVsv(*err_svp));
+      }
+    }
+  }
+}
+
+static SV *
+gql_execution_merge_completed_list_with_head(
+  pTHX_ AV *head_data_av,
+  AV *indexes_av,
+  AV *values_av,
+  AV *errors_av
+) {
+  AV *data_av = newAV();
+  AV *all_errors_av = newAV();
+  I32 head_len = head_data_av ? av_len(head_data_av) : -1;
+  I32 error_len = errors_av ? av_len(errors_av) : -1;
+  I32 value_len = values_av ? av_len(values_av) : -1;
+  I32 i;
+
+  for (i = 0; i <= head_len; i++) {
+    SV **item_svp = av_fetch(head_data_av, i, 0);
+    av_fill(data_av, i);
+    (void)av_store(data_av, i, item_svp ? newSVsv(*item_svp) : newSV(0));
+  }
+
+  for (i = 0; i <= error_len; i++) {
+    SV **error_svp = av_fetch(errors_av, i, 0);
+    if (error_svp) {
+      av_push(all_errors_av, newSVsv(*error_svp));
+    }
+  }
+
+  for (i = 0; i <= value_len; i++) {
+    SV **index_svp = av_fetch(indexes_av, i, 0);
+    SV **value_svp = av_fetch(values_av, i, 0);
+    IV index;
+    HV *item_hv;
+    SV **data_svp;
+    SV **item_errors_svp;
+
+    if (!index_svp || !value_svp || !SvOK(*index_svp)
+        || !SvROK(*value_svp) || SvTYPE(SvRV(*value_svp)) != SVt_PVHV) {
+      continue;
+    }
+
+    index = SvIV(*index_svp);
+    item_hv = (HV *)SvRV(*value_svp);
+    data_svp = hv_fetch(item_hv, "data", 4, 0);
+    av_fill(data_av, (I32)index);
+    (void)av_store(data_av, (I32)index, data_svp ? newSVsv(*data_svp) : newSV(0));
+
+    item_errors_svp = hv_fetch(item_hv, "errors", 6, 0);
+    if (item_errors_svp && SvROK(*item_errors_svp) && SvTYPE(SvRV(*item_errors_svp)) == SVt_PVAV) {
+      AV *item_errors_av = (AV *)SvRV(*item_errors_svp);
+      I32 err_len = av_len(item_errors_av);
+      I32 err_i;
+      for (err_i = 0; err_i <= err_len; err_i++) {
+        SV **err_svp = av_fetch(item_errors_av, err_i, 0);
+        if (err_svp) {
+          av_push(all_errors_av, newSVsv(*err_svp));
+        }
+      }
+    }
+  }
+
+  return gql_execution_build_list_result_from_head(aTHX_ data_av, all_errors_av);
+}
+
+static SV *
 gql_execution_build_response_xs(pTHX_ SV *result, int force_data) {
   HV *out_hv = newHV();
   HV *result_hv = NULL;
@@ -1720,6 +1831,51 @@ gql_execution_call_xs_then_merge_completed_list(pTHX_ SV *promise_code, SV *prom
     FREETMPS;
     LEAVE;
     croak("_then_merge_completed_list_xs did not return a scalar");
+  }
+  ret = newSVsv(POPs);
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
+gql_execution_call_xs_then_merge_completed_list_with_head(
+  pTHX_ SV *promise_code,
+  AV *head_data_av,
+  AV *indexes_av,
+  SV *promise,
+  AV *errors_av
+) {
+  dSP;
+  int count;
+  SV *ret;
+  static CV *cv = NULL;
+
+  if (!cv) {
+    cv = get_cv("GraphQL::Houtou::XS::Execution::_then_merge_completed_list_with_head_xs", 0);
+    if (!cv) {
+      croak("unable to resolve GraphQL::Houtou::XS::Execution::_then_merge_completed_list_with_head_xs");
+    }
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  EXTEND(SP, 5);
+  XPUSHs(gql_execution_mortal_sv_ref(promise_code));
+  XPUSHs(sv_2mortal(newRV_inc((SV *)head_data_av)));
+  XPUSHs(sv_2mortal(newRV_inc((SV *)indexes_av)));
+  XPUSHs(gql_execution_mortal_sv_ref(promise));
+  XPUSHs(sv_2mortal(newRV_inc((SV *)errors_av)));
+  PUTBACK;
+  count = call_sv((SV *)cv, G_SCALAR);
+  SPAGAIN;
+  if (count != 1) {
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("_then_merge_completed_list_with_head_xs did not return a scalar");
   }
   ret = newSVsv(POPs);
   PUTBACK;
@@ -4273,7 +4429,8 @@ gql_execution_complete_value_catching_error_xs_lazy_impl(
     if (SvROK(result) && SvTYPE(SvRV(result)) == SVt_PVAV) {
       AV *result_av = (AV *)SvRV(result);
       I32 result_len = av_len(result_av);
-      AV *completed_values_av = newAV();
+      AV *pending_indexes_av = newAV();
+      AV *pending_values_av = newAV();
       AV *data_av = newAV();
       AV *errors_av = newAV();
       I32 i;
@@ -4305,19 +4462,28 @@ gql_execution_complete_value_catching_error_xs_lazy_impl(
           SvREFCNT_dec(is_completed_promise_sv);
           if (is_completed_promise) {
             promise_present = 1;
-            av_push(completed_values_av, completed);
+            av_fill(data_av, i);
+            av_push(pending_indexes_av, newSViv(i));
+            av_push(pending_values_av, completed);
             completed = NULL;
           }
         }
 
         if (completed && SvROK(completed) && SvTYPE(SvRV(completed)) == SVt_PVHV) {
-          av_push(completed_values_av, completed);
+          gql_execution_accumulate_completed_list_item_into_head(
+            aTHX_ data_av,
+            errors_av,
+            i,
+            completed
+          );
+          SvREFCNT_dec(completed);
           completed = NULL;
         } else if (!promise_present) {
           SV *info = gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
           SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
           SvREFCNT_dec(item_path_sv);
-          SvREFCNT_dec((SV *)completed_values_av);
+          SvREFCNT_dec((SV *)pending_indexes_av);
+          SvREFCNT_dec((SV *)pending_values_av);
           if (completed) {
             SvREFCNT_dec(completed);
           }
@@ -4333,60 +4499,29 @@ gql_execution_complete_value_catching_error_xs_lazy_impl(
       }
 
       if (promise_present) {
-        SV *aggregate = gql_promise_call_all(aTHX_ promise_code, completed_values_av);
-        SV *ret = gql_execution_call_xs_then_merge_completed_list(aTHX_ promise_code, aggregate);
+        SV *aggregate = gql_promise_call_all(aTHX_ promise_code, pending_values_av);
+        SV *ret = gql_execution_call_xs_then_merge_completed_list_with_head(
+          aTHX_
+          promise_code,
+          data_av,
+          pending_indexes_av,
+          aggregate,
+          errors_av
+        );
 
         SvREFCNT_dec(aggregate);
         SvREFCNT_dec(item_type);
-        SvREFCNT_dec((SV *)completed_values_av);
+        SvREFCNT_dec((SV *)pending_indexes_av);
+        SvREFCNT_dec((SV *)pending_values_av);
         SvREFCNT_dec((SV *)data_av);
         SvREFCNT_dec((SV *)errors_av);
         return ret;
       }
 
-      for (i = 0; i <= av_len(completed_values_av); i++) {
-        SV **completed_svp = av_fetch(completed_values_av, i, 0);
-        HV *completed_hv;
-        SV **data_svp;
-        SV **item_errors_svp;
-
-        if (!completed_svp || !SvROK(*completed_svp) || SvTYPE(SvRV(*completed_svp)) != SVt_PVHV) {
-          continue;
-        }
-
-        completed_hv = (HV *)SvRV(*completed_svp);
-        data_svp = hv_fetch(completed_hv, "data", 4, 0);
-        item_errors_svp = hv_fetch(completed_hv, "errors", 6, 0);
-        if (data_svp) {
-          av_push(data_av, newSVsv(*data_svp));
-        } else {
-          av_push(data_av, newSV(0));
-        }
-        if (item_errors_svp && SvROK(*item_errors_svp) && SvTYPE(SvRV(*item_errors_svp)) == SVt_PVAV) {
-          AV *item_errors_av = (AV *)SvRV(*item_errors_svp);
-          I32 err_len = av_len(item_errors_av);
-          I32 err_i;
-          for (err_i = 0; err_i <= err_len; err_i++) {
-            SV **err_svp = av_fetch(item_errors_av, err_i, 0);
-            if (err_svp) {
-              av_push(errors_av, newSVsv(*err_svp));
-            }
-          }
-        }
-      }
-
       SvREFCNT_dec(item_type);
-      SvREFCNT_dec((SV *)completed_values_av);
-      {
-        HV *ret_hv = newHV();
-        (void)hv_store(ret_hv, "data", 4, newRV_noinc((SV *)data_av), 0);
-        if (av_len(errors_av) >= 0) {
-          (void)hv_store(ret_hv, "errors", 6, newRV_noinc((SV *)errors_av), 0);
-        } else {
-          SvREFCNT_dec((SV *)errors_av);
-        }
-        return newRV_noinc((SV *)ret_hv);
-      }
+      SvREFCNT_dec((SV *)pending_indexes_av);
+      SvREFCNT_dec((SV *)pending_values_av);
+      return gql_execution_build_list_result_from_head(aTHX_ data_av, errors_av);
     }
 
     SvREFCNT_dec(item_type);

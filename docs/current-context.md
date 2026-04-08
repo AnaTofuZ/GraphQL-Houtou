@@ -923,6 +923,34 @@ Interpretation:
 - spot numbers are neutral-to-positive, so this is a good staging step before
   pushing `execution.h` completion helpers toward native outcomes as well
 
+Latest spot verification after applying the same `head data + pending promises`
+shape to list completion in `execution.h`:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir 77207/s`
+  - `houtou_xs_ast 74974/s`
+- `async_list` (`--count=-4`)
+  - `houtou_compiled_ir 44032/s`
+  - `houtou_facade_ast 44032/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - run 1: `houtou_compiled_ir 40573/s`
+  - run 2: `houtou_compiled_ir 42212/s`
+
+Interpretation:
+
+- sync list items are now accumulated directly into list `data/errors`, and
+  promise items are tracked only as `(index, promise)` pending entries until
+  the final merge step
+- this is mainly a shape-alignment change for the non-IR XS executor; it
+  reduces retained completed-hash arrays on the list path and gives the promise
+  path a direct "head + pending" merge API too
+- `nested_variable_object` and `async_list` hold up, while
+  `abstract_with_fragment` remains noisy; keep the change as VM-readiness and
+  continue focusing abstract-path work on native outcome lowering rather than
+  list-specific shortcuts
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

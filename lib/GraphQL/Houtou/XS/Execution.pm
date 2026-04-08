@@ -43,6 +43,7 @@ our @EXPORT_OK = qw(
   _promise_resolve_xs
   _promise_reject_xs
   _merge_completed_list_xs
+  _merge_completed_list_with_head_xs
   _merge_hash_xs
   _merge_hash_with_head_xs
   _build_response_xs
@@ -52,6 +53,7 @@ our @EXPORT_OK = qw(
   _then_reject_located_error_xs
   _then_complete_value_xs
   _then_merge_completed_list_xs
+  _then_merge_completed_list_with_head_xs
   _then_build_response_xs
   _then_merge_hash_xs
   _then_merge_hash_with_head_xs
@@ -180,6 +182,18 @@ sub _then_merge_completed_list_xs {
   my ($promise_code, $promise) = @_;
   return then_promise($promise_code, $promise, sub {
     return _merge_completed_list_xs(_promise_all_values_to_arrayref(@_));
+  });
+}
+
+sub _then_merge_completed_list_with_head_xs {
+  my ($promise_code, $head_data, $indexes, $promise, $errors) = @_;
+  return then_promise($promise_code, $promise, sub {
+    return _merge_completed_list_with_head_xs(
+      $head_data,
+      $indexes,
+      _promise_all_values_to_arrayref(@_),
+      $errors,
+    );
   });
 }
 

@@ -145,6 +145,96 @@ The first lowered runtime should deliberately leave room for:
 - future async transport / incremental delivery by not assuming that the only
   terminal output is one eagerly completed Perl response hash
 
+## Concrete First Runtime Boundary
+
+The current lowered runtime still uses these legacy-leaning structures as its
+main currency:
+
+- `gql_ir_compiled_root_field_plan_t`
+- `gql_ir_compiled_root_field_plan_entry_t`
+- `gql_ir_native_exec_env_t`
+- `gql_ir_native_exec_accum_t`
+- `gql_ir_native_field_frame_t`
+
+That is good enough for shaping experiments, but not yet a clean VM runtime
+boundary. The next design step should split these roles more explicitly.
+
+### 1. Lowered Program
+
+Introduce a new owned lowered program type for `compiled_ir`, separate from
+legacy-compatible root field plans:
+
+- `gql_ir_vm_program_t`
+- `gql_ir_vm_block_t`
+- `gql_ir_vm_op_t`
+
+Initial scope:
+
+- one root block
+- child blocks for object selections
+- child blocks for abstract dispatch targets
+
+The important part is that the lowered program owns execution order and child
+edges directly, instead of reconstructing them from node-attached or
+legacy-compatible metadata.
+
+### 2. Static Field Metadata
+
+Move per-field stable operands into a dedicated immutable record, for example:
+
+- result key
+- field name
+- field def
+- return type
+- parent type
+- resolver dispatch kind
+- args dispatch kind
+- completion kind
+- abstract child dispatch table pointer
+
+This record should be owned by the lowered program, not lazily rediscovered
+from legacy `SV` containers during the hot loop.
+
+### 3. Runtime Frame
+
+Keep runtime-only mutable state in a separate frame struct:
+
+- resolver result
+- native outcome kind
+- native outcome payload
+- promise marker
+- lazy info/path handles if still needed
+
+The runtime frame should never own plan metadata. That separation makes later
+threaded execution or register-style execution much simpler.
+
+### 4. Result Writer
+
+The first real new runtime component should be a writer that owns:
+
+- object field writes
+- null writes
+- child object attachment
+- error accumulation
+- pending promise slots
+
+The writer should become the only place that knows how to materialize Perl
+response hashes or arrays. Field execution itself should only produce native
+outcomes for the writer to consume.
+
+### 5. Fallback Boundary
+
+The first VM/runtime slice should still allow explicit fallback to the current
+compiled-IR executor when a field or completion shape is not yet lowered.
+
+That fallback boundary should be:
+
+- visible in the lowered program
+- counted / measurable in benchmarks
+- narrow enough that it can be retired block by block
+
+This avoids another mixed executor with hidden bridge paths.
+
 ## Constraints
 
 - memory ownership must stay explicit; lowered plans own lowered data

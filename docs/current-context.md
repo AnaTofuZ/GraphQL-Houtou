@@ -18,6 +18,11 @@ Recent conclusions that matter more than older commit-by-commit history:
   `compiled_ir`, not more mixed-mode shortcuts inside the current executor
 - `docs/ecosystem-feature-gap.md` is now tracked and must be treated as a
   design constraint for that runtime
+- the next concrete design task is to split the current lowered runtime into:
+  - an owned lowered program
+  - immutable field metadata
+  - mutable execution frames
+  - a dedicated native result writer
 
 ## Ecosystem Gap Guardrail
 

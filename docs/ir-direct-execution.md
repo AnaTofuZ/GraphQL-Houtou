@@ -623,3 +623,5 @@ Near-term implication:
   work moves behind native operands
 - keep a single native "finish execution" boundary so root/native-child loops
   share one result materialization / promise-merge terminal step
+- keep native execution-frame initialization shared too, so a future VM can
+  enter with one stable env/accumulator shape regardless of root vs child plan

@@ -93,6 +93,16 @@ static SV *gql_ir_finish_native_exec_result(
   pTHX_ SV *promise_code_sv,
   gql_ir_native_exec_accum_t *accum
 );
+static int gql_ir_init_native_exec_env(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value_sv,
+  SV *base_path_sv,
+  gql_ir_native_exec_env_t *env_out,
+  SV **promise_code_out
+);
+static void gql_ir_init_native_exec_accum(gql_ir_native_exec_accum_t *accum);
+static void gql_ir_cleanup_native_exec_accum(gql_ir_native_exec_accum_t *accum);
 
 static void
 gql_ir_compiled_exec_destroy(gql_ir_compiled_exec_t *compiled) {
@@ -424,6 +434,102 @@ gql_ir_finish_native_exec_result(
     SvREFCNT_dec((SV *)result_values_av);
     SvREFCNT_dec((SV *)merge_errors_av);
     return ret;
+  }
+}
+
+static int
+gql_ir_init_native_exec_env(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value_sv,
+  SV *base_path_sv,
+  gql_ir_native_exec_env_t *env_out,
+  SV **promise_code_out
+) {
+  HV *context_hv;
+  gql_execution_context_fast_cache_t *context_cache;
+  SV **context_value_svp;
+  SV **variable_values_svp;
+  SV **empty_args_svp;
+  SV **field_resolver_svp;
+  SV **promise_code_svp;
+  SV *promise_code_sv = &PL_sv_undef;
+
+  if (!context_sv
+      || !SvROK(context_sv)
+      || SvTYPE(SvRV(context_sv)) != SVt_PVHV
+      || !env_out) {
+    return 0;
+  }
+
+  context_hv = (HV *)SvRV(context_sv);
+  context_cache = gql_execution_context_fast_cache(aTHX_ context_sv);
+  if (context_cache) {
+    context_value_svp = context_cache->context_value_sv ? &context_cache->context_value_sv : NULL;
+    variable_values_svp = context_cache->variable_values_sv ? &context_cache->variable_values_sv : NULL;
+    empty_args_svp = context_cache->empty_args_sv ? &context_cache->empty_args_sv : NULL;
+    field_resolver_svp = context_cache->field_resolver_sv ? &context_cache->field_resolver_sv : NULL;
+    promise_code_svp = context_cache->promise_code_sv ? &context_cache->promise_code_sv : NULL;
+  } else {
+    context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
+    variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
+    empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
+    field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
+    promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  }
+
+  if (promise_code_svp && SvOK(*promise_code_svp)) {
+    promise_code_sv = *promise_code_svp;
+  }
+
+  Zero(env_out, 1, gql_ir_native_exec_env_t);
+  env_out->context_sv = context_sv;
+  env_out->parent_type_sv = parent_type_sv;
+  env_out->root_value_sv = root_value_sv;
+  env_out->base_path_sv = base_path_sv;
+  env_out->context_value_sv = (context_value_svp && SvOK(*context_value_svp)) ? *context_value_svp : &PL_sv_undef;
+  env_out->variable_values_sv = (variable_values_svp && SvOK(*variable_values_svp)) ? *variable_values_svp : &PL_sv_undef;
+  env_out->empty_args_sv = (empty_args_svp && SvOK(*empty_args_svp)) ? *empty_args_svp : &PL_sv_undef;
+  env_out->field_resolver_sv = (field_resolver_svp && SvOK(*field_resolver_svp)) ? *field_resolver_svp : &PL_sv_undef;
+  env_out->promise_code_sv = promise_code_sv;
+
+  if (promise_code_out) {
+    *promise_code_out = promise_code_sv;
+  }
+  return 1;
+}
+
+static void
+gql_ir_init_native_exec_accum(gql_ir_native_exec_accum_t *accum) {
+  if (!accum) {
+    return;
+  }
+  Zero(accum, 1, gql_ir_native_exec_accum_t);
+  accum->direct_data_hv = newHV();
+  accum->result_keys_av = newAV();
+  accum->result_values_av = newAV();
+}
+
+static void
+gql_ir_cleanup_native_exec_accum(gql_ir_native_exec_accum_t *accum) {
+  if (!accum) {
+    return;
+  }
+  if (accum->direct_data_hv) {
+    SvREFCNT_dec((SV *)accum->direct_data_hv);
+    accum->direct_data_hv = NULL;
+  }
+  if (accum->result_keys_av) {
+    SvREFCNT_dec((SV *)accum->result_keys_av);
+    accum->result_keys_av = NULL;
+  }
+  if (accum->result_values_av) {
+    SvREFCNT_dec((SV *)accum->result_values_av);
+    accum->result_values_av = NULL;
+  }
+  if (accum->all_errors_av) {
+    SvREFCNT_dec((SV *)accum->all_errors_av);
+    accum->all_errors_av = NULL;
   }
 }
 
@@ -4134,22 +4240,13 @@ gql_ir_build_execution_context_from_compiled_sv(
 
 static SV *
 gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, SV *context_sv, SV *root_value, SV *path_sv) {
-  HV *context_hv;
-  gql_execution_context_fast_cache_t *context_cache;
   gql_ir_compiled_root_field_plan_t *root_field_plan;
-  SV **context_value_svp;
-  SV **variable_values_svp;
-  SV **empty_args_svp;
-  SV **field_resolver_svp;
-  SV **promise_code_svp;
   SV *promise_code_sv = &PL_sv_undef;
   gql_ir_native_exec_env_t exec_env;
   gql_ir_native_exec_accum_t exec_accum;
-  HV *direct_data_hv = newHV();
-  AV *result_keys_av = newAV();
-  AV *result_values_av = newAV();
-  AV *all_errors_av = NULL;
   UV field_i;
+
+  Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
 
   if (!compiled
       || !compiled->root_field_plan
@@ -4160,42 +4257,18 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
   }
 
   root_field_plan = compiled->root_field_plan;
-  context_hv = (HV *)SvRV(context_sv);
-  context_cache = gql_execution_context_fast_cache(aTHX_ context_sv);
-  if (context_cache) {
-    context_value_svp = context_cache->context_value_sv ? &context_cache->context_value_sv : NULL;
-    variable_values_svp = context_cache->variable_values_sv ? &context_cache->variable_values_sv : NULL;
-    empty_args_svp = context_cache->empty_args_sv ? &context_cache->empty_args_sv : NULL;
-    field_resolver_svp = context_cache->field_resolver_sv ? &context_cache->field_resolver_sv : NULL;
-    promise_code_svp = context_cache->promise_code_sv ? &context_cache->promise_code_sv : NULL;
-  } else {
-    context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
-    variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
-    empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
-    field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
-    promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  if (!gql_ir_init_native_exec_env(
+        aTHX_
+        context_sv,
+        compiled->root_type_sv,
+        root_value,
+        path_sv,
+        &exec_env,
+        &promise_code_sv
+      )) {
+    goto fallback;
   }
-
-  if (promise_code_svp && SvOK(*promise_code_svp)) {
-    promise_code_sv = *promise_code_svp;
-  }
-
-  Zero(&exec_env, 1, gql_ir_native_exec_env_t);
-  exec_env.context_sv = context_sv;
-  exec_env.parent_type_sv = compiled->root_type_sv;
-  exec_env.root_value_sv = root_value;
-  exec_env.base_path_sv = path_sv;
-  exec_env.context_value_sv = (context_value_svp && SvOK(*context_value_svp)) ? *context_value_svp : &PL_sv_undef;
-  exec_env.variable_values_sv = (variable_values_svp && SvOK(*variable_values_svp)) ? *variable_values_svp : &PL_sv_undef;
-  exec_env.empty_args_sv = (empty_args_svp && SvOK(*empty_args_svp)) ? *empty_args_svp : &PL_sv_undef;
-  exec_env.field_resolver_sv = (field_resolver_svp && SvOK(*field_resolver_svp)) ? *field_resolver_svp : &PL_sv_undef;
-  exec_env.promise_code_sv = promise_code_sv;
-
-  Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
-  exec_accum.direct_data_hv = direct_data_hv;
-  exec_accum.result_keys_av = result_keys_av;
-  exec_accum.result_values_av = result_values_av;
-  exec_accum.all_errors_av = all_errors_av;
+  gql_ir_init_native_exec_accum(&exec_accum);
 
   for (field_i = 0; field_i < root_field_plan->field_count; field_i++) {
     gql_ir_compiled_root_field_plan_entry_t *entry = &root_field_plan->entries[field_i];
@@ -4217,21 +4290,14 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
           &exec_accum,
           entry
         )) {
-      all_errors_av = exec_accum.all_errors_av;
       goto fallback;
     }
   }
 
-  all_errors_av = exec_accum.all_errors_av;
   return gql_ir_finish_native_exec_result(aTHX_ promise_code_sv, &exec_accum);
 
 fallback:
-  SvREFCNT_dec((SV *)direct_data_hv);
-  SvREFCNT_dec((SV *)result_keys_av);
-  SvREFCNT_dec((SV *)result_values_av);
-  if (all_errors_av) {
-    SvREFCNT_dec((SV *)all_errors_av);
-  }
+  gql_ir_cleanup_native_exec_accum(&exec_accum);
   return &PL_sv_undef;
 }
 
@@ -4245,21 +4311,12 @@ gql_ir_execute_native_field_plan(
 ) {
   /* Mirrors gql_execution_execute_field_plan(), but compiled IR is allowed to
    * diverge here so native plan metadata can replace legacy bucket lookups. */
-  HV *context_hv;
-  gql_execution_context_fast_cache_t *context_cache;
-  SV **context_value_svp;
-  SV **variable_values_svp;
-  SV **empty_args_svp;
-  SV **field_resolver_svp;
-  SV **promise_code_svp;
   SV *promise_code_sv = &PL_sv_undef;
   gql_ir_native_exec_env_t exec_env;
   gql_ir_native_exec_accum_t exec_accum;
-  HV *direct_data_hv = newHV();
-  AV *result_keys_av = newAV();
-  AV *result_values_av = newAV();
-  AV *all_errors_av = NULL;
   UV field_i;
+
+  Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
 
   if (!field_plan
       || !context_sv
@@ -4268,42 +4325,18 @@ gql_ir_execute_native_field_plan(
     goto fallback;
   }
 
-  context_hv = (HV *)SvRV(context_sv);
-  context_cache = gql_execution_context_fast_cache(aTHX_ context_sv);
-  if (context_cache) {
-    context_value_svp = context_cache->context_value_sv ? &context_cache->context_value_sv : NULL;
-    variable_values_svp = context_cache->variable_values_sv ? &context_cache->variable_values_sv : NULL;
-    empty_args_svp = context_cache->empty_args_sv ? &context_cache->empty_args_sv : NULL;
-    field_resolver_svp = context_cache->field_resolver_sv ? &context_cache->field_resolver_sv : NULL;
-    promise_code_svp = context_cache->promise_code_sv ? &context_cache->promise_code_sv : NULL;
-  } else {
-    context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
-    variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
-    empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
-    field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
-    promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  if (!gql_ir_init_native_exec_env(
+        aTHX_
+        context_sv,
+        parent_type_sv,
+        root_value,
+        path_sv,
+        &exec_env,
+        &promise_code_sv
+      )) {
+    goto fallback;
   }
-
-  if (promise_code_svp && SvOK(*promise_code_svp)) {
-    promise_code_sv = *promise_code_svp;
-  }
-
-  Zero(&exec_env, 1, gql_ir_native_exec_env_t);
-  exec_env.context_sv = context_sv;
-  exec_env.parent_type_sv = parent_type_sv;
-  exec_env.root_value_sv = root_value;
-  exec_env.base_path_sv = path_sv;
-  exec_env.context_value_sv = (context_value_svp && SvOK(*context_value_svp)) ? *context_value_svp : &PL_sv_undef;
-  exec_env.variable_values_sv = (variable_values_svp && SvOK(*variable_values_svp)) ? *variable_values_svp : &PL_sv_undef;
-  exec_env.empty_args_sv = (empty_args_svp && SvOK(*empty_args_svp)) ? *empty_args_svp : &PL_sv_undef;
-  exec_env.field_resolver_sv = (field_resolver_svp && SvOK(*field_resolver_svp)) ? *field_resolver_svp : &PL_sv_undef;
-  exec_env.promise_code_sv = promise_code_sv;
-
-  Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
-  exec_accum.direct_data_hv = direct_data_hv;
-  exec_accum.result_keys_av = result_keys_av;
-  exec_accum.result_values_av = result_values_av;
-  exec_accum.all_errors_av = all_errors_av;
+  gql_ir_init_native_exec_accum(&exec_accum);
 
   for (field_i = 0; field_i < field_plan->field_count; field_i++) {
     gql_ir_compiled_root_field_plan_entry_t *entry = &field_plan->entries[field_i];
@@ -4327,21 +4360,14 @@ gql_ir_execute_native_field_plan(
           &exec_accum,
           entry
         )) {
-      all_errors_av = exec_accum.all_errors_av;
       goto fallback;
     }
   }
 
-  all_errors_av = exec_accum.all_errors_av;
   return gql_ir_finish_native_exec_result(aTHX_ promise_code_sv, &exec_accum);
 
 fallback:
-  SvREFCNT_dec((SV *)direct_data_hv);
-  SvREFCNT_dec((SV *)result_keys_av);
-  SvREFCNT_dec((SV *)result_values_av);
-  if (all_errors_av) {
-    SvREFCNT_dec((SV *)all_errors_av);
-  }
+  gql_ir_cleanup_native_exec_accum(&exec_accum);
   return &PL_sv_undef;
 }
 

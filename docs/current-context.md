@@ -717,6 +717,8 @@ Best next move:
   native plan entries and node-attached tables
 - keep the native executor's terminal materialization in one shared helper so
   root/native-child execution already has a stable post-VM boundary
+- keep execution-frame setup shared as well; root/native-child now initialize
+  the same native env/accumulator shape before entering the field-op loop
 
 Latest spot verification after specializing native field call ops:
 

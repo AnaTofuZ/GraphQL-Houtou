@@ -5606,6 +5606,7 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     SV *resolve_sv;
     SV *path_copy_sv = NULL;
     SV *info_sv = NULL;
+    SV *borrowed_result_sv = NULL;
     SV *result_sv = NULL;
     SV *completed_sv = NULL;
     SV *args_sv = NULL;
@@ -5719,11 +5720,12 @@ gql_execution_execute_fields(pTHX_ SV *context, SV *parent_type, SV *root_value,
     }
 
     if (gql_execution_is_default_field_resolver(aTHX_ resolve_sv)
-        && gql_execution_try_default_field_resolve_fast(aTHX_ root_value, *field_name_svp, &result_sv)) {
+        && gql_execution_try_default_field_resolve_borrowed_fast(aTHX_ root_value, *field_name_svp, &borrowed_result_sv)) {
       used_fast_default_resolve = 1;
-      if (gql_execution_try_complete_trivial_value_fast(aTHX_ *type_svp, result_sv, &completed_sv)) {
+      if (gql_execution_try_complete_trivial_value_fast(aTHX_ *type_svp, borrowed_result_sv, &completed_sv)) {
         goto have_completed;
       }
+      result_sv = gql_execution_share_or_copy_sv(borrowed_result_sv);
     }
 
     if (!used_fast_default_resolve) {
@@ -5938,6 +5940,7 @@ gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_va
     SV **type_svp;
     SV **node_args_svp;
     SV **field_args_svp;
+    SV *borrowed_result_sv = NULL;
     SV *result_sv = NULL;
     SV *completed_sv = NULL;
     int used_fast_default_resolve = 0;
@@ -6002,11 +6005,12 @@ gql_execution_execute_field_plan(pTHX_ SV *context, SV *parent_type, SV *root_va
     }
 
     if (gql_execution_is_default_field_resolver(aTHX_ resolve_sv)
-        && gql_execution_try_default_field_resolve_fast(aTHX_ root_value, *field_name_svp, &result_sv)) {
+        && gql_execution_try_default_field_resolve_borrowed_fast(aTHX_ root_value, *field_name_svp, &borrowed_result_sv)) {
       used_fast_default_resolve = 1;
-      if (gql_execution_try_complete_trivial_value_fast(aTHX_ *type_svp, result_sv, &completed_sv)) {
+      if (gql_execution_try_complete_trivial_value_fast(aTHX_ *type_svp, borrowed_result_sv, &completed_sv)) {
         goto have_completed;
       }
+      result_sv = gql_execution_share_or_copy_sv(borrowed_result_sv);
     }
 
     if (!used_fast_default_resolve) {

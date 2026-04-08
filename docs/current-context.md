@@ -951,6 +951,31 @@ Interpretation:
   continue focusing abstract-path work on native outcome lowering rather than
   list-specific shortcuts
 
+Latest spot verification after trying trivial default-resolver completion
+against borrowed values before copying in the non-IR XS field loops:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir 78195/s`
+  - `houtou_xs_ast 76025/s`
+- `async_list` (`--count=-4`)
+  - `houtou_compiled_ir 42407/s`
+  - `houtou_facade_ast 42884/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 41228/s`
+  - `houtou_xs_ast 40983/s`
+
+Interpretation:
+
+- `gql_execution_execute_fields(...)` and
+  `gql_execution_execute_field_plan(...)` now try trivial completion against a
+  borrowed default-resolver property first, and only `share_or_copy` that value
+  if execution has to fall through to the generic completion path
+- this is a small but safe allocation reduction on the XS/AST side; it is not
+  a major abstract-path win by itself, but it keeps the field loops closer to
+  the compiled-IR "borrow first, materialize later" strategy
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

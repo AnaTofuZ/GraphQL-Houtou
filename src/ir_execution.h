@@ -732,23 +732,32 @@ gql_ir_ensure_native_field_entry_operands(
     && entry->type_sv && SvOK(entry->type_sv);
 }
 
+static void
+gql_ir_init_native_field_ops(gql_ir_compiled_root_field_plan_entry_t *entry) {
+  U8 op_count = 0;
+
+  if (!entry) {
+    return;
+  }
+
+  if (entry->meta_dispatch_kind != GQL_IR_NATIVE_META_DISPATCH_NONE) {
+    entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_META;
+  }
+  entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_TRIVIAL;
+  entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_RESOLVER;
+  entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_COMPLETE;
+  entry->consume_op_index = op_count;
+  entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CONSUME;
+  entry->op_count = op_count;
+}
+
 static int
 gql_ir_execute_native_field_entry_into(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_exec_accum_t *accum,
   gql_ir_compiled_root_field_plan_entry_t *entry
 ) {
-  typedef enum {
-    GQL_IR_FIELD_STAGE_META = 0,
-    GQL_IR_FIELD_STAGE_RESOLVE = 1,
-    GQL_IR_FIELD_STAGE_TRIVIAL = 2,
-    GQL_IR_FIELD_STAGE_CALL_RESOLVER = 3,
-    GQL_IR_FIELD_STAGE_COMPLETE = 4,
-    GQL_IR_FIELD_STAGE_CONSUME = 5,
-    GQL_IR_FIELD_STAGE_DONE = 6,
-    GQL_IR_FIELD_STAGE_FAIL = 7
-  } gql_ir_native_field_stage_t;
-  SV *resolve_sv;
+  SV *resolve_sv = NULL;
   SV *args_sv = NULL;
   gql_execution_lazy_resolve_info_t lazy_info;
   SV *result_sv = NULL;
@@ -757,7 +766,8 @@ gql_ir_execute_native_field_entry_into(
   int owns_resolve_sv = 0;
   int owns_args_sv = 0;
   int resolve_is_default = 0;
-  gql_ir_native_field_stage_t stage = GQL_IR_FIELD_STAGE_META;
+  U8 pc = 0;
+  gql_ir_native_field_op_t op;
 
   /* Mirrors one field iteration of gql_execution_execute_field_plan(), but the
    * compiled-IR executor treats this as the VM-ready "execute one field op"
@@ -774,7 +784,8 @@ gql_ir_execute_native_field_entry_into(
       || !SvROK(entry->nodes_sv)
       || SvTYPE(SvRV(entry->nodes_sv)) != SVt_PVAV
       || !entry->type_sv
-      || !SvOK(entry->type_sv)) {
+      || !SvOK(entry->type_sv)
+      || entry->op_count == 0) {
     return 0;
   }
 
@@ -797,26 +808,28 @@ dispatch:
   {
     static void *dispatch_table[] = {
       &&op_meta,
-      &&op_resolve,
       &&op_trivial,
       &&op_call_resolver,
       &&op_complete,
-      &&op_consume,
-      &&op_done,
-      &&op_fail
+      &&op_consume
     };
-    goto *dispatch_table[stage];
+    if (pc >= entry->op_count) {
+      goto op_done;
+    }
+    op = entry->ops[pc];
+    goto *dispatch_table[op];
   }
 #else
-  switch (stage) {
-    case GQL_IR_FIELD_STAGE_META: goto op_meta;
-    case GQL_IR_FIELD_STAGE_RESOLVE: goto op_resolve;
-    case GQL_IR_FIELD_STAGE_TRIVIAL: goto op_trivial;
-    case GQL_IR_FIELD_STAGE_CALL_RESOLVER: goto op_call_resolver;
-    case GQL_IR_FIELD_STAGE_COMPLETE: goto op_complete;
-    case GQL_IR_FIELD_STAGE_CONSUME: goto op_consume;
-    case GQL_IR_FIELD_STAGE_DONE: goto op_done;
-    case GQL_IR_FIELD_STAGE_FAIL:
+  if (pc >= entry->op_count) {
+    goto op_done;
+  }
+  op = entry->ops[pc];
+  switch (op) {
+    case GQL_IR_NATIVE_FIELD_OP_META: goto op_meta;
+    case GQL_IR_NATIVE_FIELD_OP_TRIVIAL: goto op_trivial;
+    case GQL_IR_NATIVE_FIELD_OP_CALL_RESOLVER: goto op_call_resolver;
+    case GQL_IR_NATIVE_FIELD_OP_COMPLETE: goto op_complete;
+    case GQL_IR_NATIVE_FIELD_OP_CONSUME: goto op_consume;
     default:
       goto op_fail;
   }
@@ -831,19 +844,24 @@ op_meta:
         entry->type_sv,
         &completed_sv
       )) {
-    stage = completed_sv ? GQL_IR_FIELD_STAGE_CONSUME : GQL_IR_FIELD_STAGE_DONE;
-    goto dispatch;
+    if (completed_sv) {
+      pc = entry->consume_op_index;
+      goto dispatch;
+    }
+    goto op_done;
   }
-  stage = GQL_IR_FIELD_STAGE_RESOLVE;
-  goto dispatch;
-
-op_resolve:
-  resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
-  resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
-  stage = GQL_IR_FIELD_STAGE_TRIVIAL;
+  pc++;
+  if (!resolve_sv) {
+    resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
+    resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
+  }
   goto dispatch;
 
 op_trivial:
+  if (!resolve_sv) {
+    resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
+    resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
+  }
   if (gql_ir_native_field_try_trivial_completion(
         aTHX_
         env,
@@ -854,8 +872,11 @@ op_trivial:
         &result_sv,
         &completed_sv
       )) {
-    stage = completed_sv ? GQL_IR_FIELD_STAGE_CONSUME : GQL_IR_FIELD_STAGE_DONE;
-    goto dispatch;
+    if (completed_sv) {
+      pc = entry->consume_op_index;
+      goto dispatch;
+    }
+    goto op_done;
   }
 
   if (resolve_is_default
@@ -871,20 +892,27 @@ op_trivial:
           &result_sv,
           &completed_sv
         )) {
-      stage = completed_sv ? GQL_IR_FIELD_STAGE_CONSUME : GQL_IR_FIELD_STAGE_DONE;
-      goto dispatch;
+      if (completed_sv) {
+        pc = entry->consume_op_index;
+        goto dispatch;
+      }
+      goto op_done;
     }
     if (entry->completion_dispatch_kind == GQL_IR_NATIVE_COMPLETION_GENERIC
         && gql_execution_try_complete_trivial_value_fast(aTHX_ entry->type_sv, result_sv, &completed_sv)) {
-      stage = GQL_IR_FIELD_STAGE_CONSUME;
+      pc = entry->consume_op_index;
       goto dispatch;
     }
   }
 
-  stage = GQL_IR_FIELD_STAGE_CALL_RESOLVER;
+  pc++;
   goto dispatch;
 
 op_call_resolver:
+  if (!resolve_sv) {
+    resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
+    resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
+  }
   if (!used_fast_default_resolve) {
     if (!gql_ir_native_field_call_resolver(
           aTHX_
@@ -896,11 +924,10 @@ op_call_resolver:
           &args_sv,
           &owns_args_sv
         )) {
-      stage = GQL_IR_FIELD_STAGE_FAIL;
-      goto dispatch;
+      goto op_fail;
     }
   }
-  stage = GQL_IR_FIELD_STAGE_COMPLETE;
+  pc++;
   goto dispatch;
 
 op_complete:
@@ -913,10 +940,12 @@ op_complete:
         result_sv,
         &completed_sv
       )) {
-    stage = GQL_IR_FIELD_STAGE_FAIL;
-    goto dispatch;
+    goto op_fail;
   }
-  stage = completed_sv ? GQL_IR_FIELD_STAGE_CONSUME : GQL_IR_FIELD_STAGE_DONE;
+  if (!completed_sv) {
+    goto op_done;
+  }
+  pc++;
   goto dispatch;
 
 op_consume:
@@ -927,10 +956,9 @@ op_consume:
         entry,
         &completed_sv
       )) {
-    stage = GQL_IR_FIELD_STAGE_FAIL;
-    goto dispatch;
+    goto op_fail;
   }
-  stage = GQL_IR_FIELD_STAGE_DONE;
+  pc++;
   goto dispatch;
 
 op_done:
@@ -2502,6 +2530,7 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
         : 0;
     entry->directive_count = (directive_count_svp && SvOK(*directive_count_svp)) ? SvUV(*directive_count_svp) : 0;
     entry->selection_count = (selection_count_svp && SvOK(*selection_count_svp)) ? SvUV(*selection_count_svp) : 0;
+    gql_ir_init_native_field_ops(entry);
     if (completion_type_sv) {
       SvREFCNT_dec(completion_type_sv);
       completion_type_sv = NULL;

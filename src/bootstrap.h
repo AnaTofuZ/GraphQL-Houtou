@@ -154,6 +154,7 @@ typedef struct gql_ir_compiled_field_bucket_table gql_ir_compiled_field_bucket_t
 typedef struct gql_execution_context_fast_cache gql_execution_context_fast_cache_t;
 typedef struct gql_ir_native_exec_env gql_ir_native_exec_env_t;
 typedef struct gql_ir_native_exec_accum gql_ir_native_exec_accum_t;
+typedef enum gql_ir_native_field_op gql_ir_native_field_op_t;
 typedef enum gql_ir_native_meta_dispatch_kind gql_ir_native_meta_dispatch_kind_t;
 typedef enum gql_ir_native_resolve_dispatch_kind gql_ir_native_resolve_dispatch_kind_t;
 typedef enum gql_ir_native_args_dispatch_kind gql_ir_native_args_dispatch_kind_t;
@@ -161,6 +162,14 @@ typedef enum gql_ir_native_completion_dispatch_kind gql_ir_native_completion_dis
 typedef struct {
   gql_ir_document_t *document;
 } gql_ir_document_cleanup_t;
+
+enum gql_ir_native_field_op {
+  GQL_IR_NATIVE_FIELD_OP_META = 0,
+  GQL_IR_NATIVE_FIELD_OP_TRIVIAL = 1,
+  GQL_IR_NATIVE_FIELD_OP_CALL_RESOLVER = 2,
+  GQL_IR_NATIVE_FIELD_OP_COMPLETE = 3,
+  GQL_IR_NATIVE_FIELD_OP_CONSUME = 4
+};
 
 enum gql_ir_native_meta_dispatch_kind {
   GQL_IR_NATIVE_META_DISPATCH_NONE = 0,
@@ -208,6 +217,9 @@ struct gql_ir_compiled_root_field_plan_entry {
   UV directive_count;
   UV selection_count;
   UV trivial_completion_flags;
+  U8 op_count;
+  U8 consume_op_index;
+  gql_ir_native_field_op_t ops[5];
   gql_ir_native_meta_dispatch_kind_t meta_dispatch_kind;
   gql_ir_native_resolve_dispatch_kind_t resolve_dispatch_kind;
   gql_ir_native_args_dispatch_kind_t args_dispatch_kind;

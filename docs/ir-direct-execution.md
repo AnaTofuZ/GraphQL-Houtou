@@ -222,6 +222,10 @@ Recent executor shaping follows that same path:
 - that field-op record is also being normalized into smaller native enum
   operands (`meta`, `resolve`, `args`, `completion`) rather than one broader
   dispatch shape inferred from Perl objects at runtime
+- the field-entry executor now dispatches over a fixed op array stored on each
+  compiled plan entry instead of carrying a hard-coded stage enum internally;
+  this is still a small fixed sequence, but it moves control flow ownership
+  onto the compiled plan and is closer to true opcode execution
 - the aim is for compiled IR execution to look like dispatch over a sequence of
   field ops, while still reusing existing completion / promise helpers where
   that does not dominate cost

@@ -163,6 +163,9 @@ Current compiled-plan execution reuse:
   operands for `meta`, `resolve`, `args`, and `completion`, which reduces
   runtime shape rediscovery from Perl objects and is closer to a future opcode
   stream
+- field execution control flow is now also owned by the compiled plan entry:
+  each native field entry carries a fixed op array, and the executor dispatches
+  over that array rather than over a hard-coded internal stage enum
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -350,6 +353,15 @@ Most recent enum-operand shaping checks:
 - `abstract_with_fragment` (`--count=-4`)
   - `houtou_compiled_ir`: `41751/s`
   - `houtou_xs_ast`: `42210/s`
+
+Most recent fixed-op-array shaping checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `77008/s`
+  - `houtou_xs_ast`: `75037/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `42629/s`
+  - `houtou_xs_ast`: `42430/s`
 
 Latest spot check after lazy `resolve_info` materialization in field
 completion (`--count=-6`):

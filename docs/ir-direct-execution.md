@@ -646,3 +646,6 @@ Near-term implication:
 - route sync abstract-native child completion through that same outcome slot as
   well, so even the direct native child fast path stops being a special writer
   and instead reuses the field-frame consume boundary
+- normalize sync generic completed hashes into that same outcome slot too, so
+  `consume` increasingly becomes a pure accumulator step rather than a place
+  that still needs to understand multiple upstream result ownership styles

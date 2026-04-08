@@ -881,6 +881,23 @@ Interpretation:
 - the throughput result is effectively flat, which is acceptable because this
   change reduces one more special-case branch on the path to a VM-like runner
 
+Latest spot verification after normalizing sync generic completed hashes into
+frame outcomes before `consume`:
+
+- `minil test t/11_execution.t`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 42643/s`
+  - `houtou_xs_ast 41724/s`
+
+Interpretation:
+
+- sync generic completion now extracts `{ data, errors }` into the field
+  frame's native outcome state before `consume`, instead of making `consume`
+  reinterpret every completed hash itself
+- the completed-hash allocation is still present upstream, but the execution
+  boundary is more regular and ready for a future "generic complete directly to
+  outcome" lowering
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

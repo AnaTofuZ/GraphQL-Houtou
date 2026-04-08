@@ -98,6 +98,11 @@ static void gql_ir_attach_compiled_concrete_subfields_to_node(pTHX_ SV *schema, 
 static void gql_ir_attach_compiled_field_defs_to_selection_sv(pTHX_ SV *schema, SV *parent_type, SV *selection_sv, SV *fragments_sv);
 static void gql_ir_accumulate_completed_result(pTHX_ HV *data_hv, AV **all_errors_avp, SV *key_sv, SV *completed_sv);
 static int gql_ir_consume_completed_result(pTHX_ HV *data_hv, AV **all_errors_avp, SV *key_sv, SV *completed_sv);
+static int gql_ir_extract_completed_outcome(
+  pTHX_ SV *completed_sv,
+  SV **data_out,
+  AV **errors_out
+);
 static int gql_ir_try_complete_abstract_sync_into(
   pTHX_ SV *context,
   SV *return_type,
@@ -303,6 +308,47 @@ gql_ir_consume_completed_result(pTHX_ HV *data_hv, AV **all_errors_avp, SV *key_
         av_push(all_errors_av, SvREFCNT_inc_simple_NN(*child_error_svp));
       }
     }
+  }
+
+  return 1;
+}
+
+static int
+gql_ir_extract_completed_outcome(
+  pTHX_ SV *completed_sv,
+  SV **data_out,
+  AV **errors_out
+) {
+  HV *value_hv;
+  SV **data_svp;
+  SV **child_errors_svp;
+
+  if (data_out) {
+    *data_out = NULL;
+  }
+  if (errors_out) {
+    *errors_out = NULL;
+  }
+  if (!completed_sv || !SvROK(completed_sv) || SvTYPE(SvRV(completed_sv)) != SVt_PVHV) {
+    return 0;
+  }
+
+  value_hv = (HV *)SvRV(completed_sv);
+  data_svp = hv_fetch(value_hv, "data", 4, 0);
+  if (!data_svp || !SvOK(*data_svp)) {
+    return 0;
+  }
+  if (data_out) {
+    *data_out = SvREFCNT_inc_simple_NN(*data_svp);
+  }
+
+  child_errors_svp = hv_fetch(value_hv, "errors", 6, 0);
+  if (errors_out
+      && child_errors_svp
+      && SvROK(*child_errors_svp)
+      && SvTYPE(SvRV(*child_errors_svp)) == SVt_PVAV
+      && av_len((AV *)SvRV(*child_errors_svp)) >= 0) {
+    *errors_out = (AV *)SvREFCNT_inc_simple_NN(SvRV(*child_errors_svp));
   }
 
   return 1;
@@ -1051,7 +1097,19 @@ gql_ir_native_field_complete_generic_result(
     lazy_info,
     result_sv
   );
-  frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
+      && gql_ir_extract_completed_outcome(
+           aTHX_
+           frame->outcome_sv,
+           &result_sv,
+           &frame->outcome_errors_av
+         )) {
+    SvREFCNT_dec(frame->outcome_sv);
+    frame->outcome_sv = result_sv;
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+  } else {
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+  }
   return 1;
 }
 

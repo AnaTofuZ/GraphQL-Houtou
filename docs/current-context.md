@@ -38,13 +38,16 @@ Recent conclusions that matter more than older commit-by-commit history:
   receives the native writer plus promise-state separately, so `accum` is
   starting to collapse toward execution-level finalization state instead of
   being the hot-path write surface
+- sync trivial completion paths now normalize `completed { data, errors }`
+  hashes into direct native outcomes before `consume`, which further narrows
+  the surface where the writer has to interpret Perl completed envelopes
 - latest writer-boundary spot measurements remain in-range:
   - `nested_variable_object --count=-3`
-    - `houtou_compiled_ir 84345/s`
-    - `houtou_xs_ast 81920/s`
+    - `houtou_compiled_ir 83649/s`
+    - `houtou_xs_ast 80142/s`
   - `abstract_with_fragment --count=-3`
-    - `houtou_compiled_ir 43690/s`
-    - `houtou_xs_ast 43581/s`
+    - `houtou_compiled_ir 43826/s`
+    - `houtou_xs_ast 43962/s`
 
 ## Ecosystem Gap Guardrail
 

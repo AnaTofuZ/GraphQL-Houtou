@@ -245,6 +245,11 @@ That next step is now in progress as well: the field executor is being moved
 off `exec_accum` and toward explicit `(writer, promise_state)` inputs, so the
 hot path stops treating the accumulator as its mutable write surface.
 
+As a follow-up, sync trivial completion paths are now being normalized into
+direct native outcomes before the consume phase. This is important because it
+shrinks the remaining places where the runtime still has to treat Perl
+`{ data, errors }` envelopes as an internal execution currency.
+
 ### 5. Fallback Boundary
 
 The first VM/runtime slice should still allow explicit fallback to the current

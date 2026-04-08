@@ -130,6 +130,9 @@ static int gql_ir_extract_completed_outcome(
   SV **data_out,
   AV **errors_out
 );
+static int gql_ir_native_field_normalize_sync_completed_outcome(
+  pTHX_ gql_ir_native_field_frame_t *frame
+);
 static int gql_ir_try_complete_abstract_sync_into(
   pTHX_ SV *context,
   SV *return_type,
@@ -403,6 +406,30 @@ gql_ir_extract_completed_outcome(
     *errors_out = (AV *)SvREFCNT_inc_simple_NN(SvRV(*child_errors_svp));
   }
 
+  return 1;
+}
+
+static int
+gql_ir_native_field_normalize_sync_completed_outcome(
+  pTHX_ gql_ir_native_field_frame_t *frame
+) {
+  SV *data_sv = NULL;
+  AV *errors_av = NULL;
+
+  if (!frame
+      || frame->outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV
+      || !frame->outcome_sv) {
+    return 0;
+  }
+
+  if (!gql_ir_extract_completed_outcome(aTHX_ frame->outcome_sv, &data_sv, &errors_av)) {
+    return 0;
+  }
+
+  SvREFCNT_dec(frame->outcome_sv);
+  frame->outcome_sv = data_sv;
+  frame->outcome_errors_av = errors_av;
+  frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
   return 1;
 }
 
@@ -1160,6 +1187,7 @@ gql_ir_native_field_try_trivial_completion(
           &frame->outcome_sv
         )) {
       frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+      (void)gql_ir_native_field_normalize_sync_completed_outcome(aTHX_ frame);
       return 1;
     }
   }
@@ -1199,6 +1227,7 @@ gql_ir_native_field_complete_trivial_result(
         &frame->outcome_sv
       )) {
     frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+    (void)gql_ir_native_field_normalize_sync_completed_outcome(aTHX_ frame);
     return 1;
   }
 
@@ -1755,6 +1784,7 @@ op_trivial_context:
     if (meta->completion_dispatch_kind == GQL_IR_NATIVE_COMPLETION_GENERIC
         && gql_execution_try_complete_trivial_value_fast(aTHX_ entry->type_sv, frame.result_sv, &frame.outcome_sv)) {
       frame.outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+      (void)gql_ir_native_field_normalize_sync_completed_outcome(aTHX_ &frame);
       pc = meta->consume_op_index;
       goto dispatch;
     }

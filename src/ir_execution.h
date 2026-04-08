@@ -500,6 +500,69 @@ gql_ir_native_field_call_resolver(
 }
 
 static int
+gql_ir_native_field_try_trivial_completion(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  SV *type_sv,
+  int resolve_is_default,
+  SV **result_io,
+  SV **completed_out
+) {
+  SV *direct_data_sv = NULL;
+  SV *result_sv = result_io ? *result_io : NULL;
+
+  if (completed_out) {
+    *completed_out = NULL;
+  }
+  if (!env || !accum || !entry || !result_io || !type_sv || !SvOK(type_sv)) {
+    return 0;
+  }
+  if (entry->completion_dispatch_kind != GQL_IR_NATIVE_COMPLETION_TRIVIAL) {
+    return 0;
+  }
+
+  if (!result_sv && resolve_is_default
+      && gql_execution_try_default_field_resolve_borrowed_fast(aTHX_ env->root_value_sv, entry->field_name_sv, &result_sv)) {
+    *result_io = result_sv;
+    if (gql_execution_try_complete_trivial_value_with_metadata_data_fast(
+          aTHX_ entry->completion_type_sv,
+          entry->trivial_completion_flags,
+          result_sv,
+          &direct_data_sv
+        )) {
+      (void)hv_store_ent(accum->direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
+      SvREFCNT_dec(result_sv);
+      *result_io = NULL;
+      return 1;
+    }
+  }
+
+  if (result_sv) {
+    if (gql_execution_try_complete_trivial_value_with_metadata_data_fast(
+          aTHX_ entry->completion_type_sv,
+          entry->trivial_completion_flags,
+          result_sv,
+          &direct_data_sv
+        )) {
+      (void)hv_store_ent(accum->direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
+      return 1;
+    }
+    if (completed_out
+        && gql_execution_try_complete_trivial_value_with_metadata_fast(
+             aTHX_ entry->completion_type_sv,
+             entry->trivial_completion_flags,
+             result_sv,
+             completed_out
+           )) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+static int
 gql_ir_execute_native_field_entry_into(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_exec_accum_t *accum,
@@ -510,7 +573,6 @@ gql_ir_execute_native_field_entry_into(
 ) {
   SV *resolve_sv;
   SV *args_sv = NULL;
-  SV *direct_data_sv = NULL;
   gql_execution_lazy_resolve_info_t lazy_info;
   SV *result_sv = NULL;
   SV *completed_sv = NULL;
@@ -570,43 +632,41 @@ gql_ir_execute_native_field_entry_into(
   resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
   resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
 
-  if (entry->completion_type_sv
-      && resolve_is_default
-      && gql_execution_try_default_field_resolve_borrowed_fast(aTHX_ env->root_value_sv, entry->field_name_sv, &result_sv)
-      && gql_execution_try_complete_trivial_value_with_metadata_data_fast(
-          aTHX_ entry->completion_type_sv,
-          entry->trivial_completion_flags,
-          result_sv,
-          &direct_data_sv
-        )) {
-    (void)hv_store_ent(accum->direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
-    result_sv = NULL;
-    goto field_done;
+  if (gql_ir_native_field_try_trivial_completion(
+        aTHX_
+        env,
+        accum,
+        entry,
+        type_sv,
+        resolve_is_default,
+        &result_sv,
+        &completed_sv
+      )) {
+    if (!completed_sv) {
+      goto field_done;
+    }
+    goto have_completed;
   }
 
   if (resolve_is_default
       && gql_execution_try_default_field_resolve_fast(aTHX_ env->root_value_sv, entry->field_name_sv, &result_sv)) {
     used_fast_default_resolve = 1;
-    if (entry->completion_type_sv
-        && gql_execution_try_complete_trivial_value_with_metadata_data_fast(
-            aTHX_ entry->completion_type_sv,
-            entry->trivial_completion_flags,
-            result_sv,
-            &direct_data_sv
-          )) {
-      (void)hv_store_ent(accum->direct_data_hv, entry->result_name_sv, direct_data_sv, 0);
-      goto field_done;
-    }
-    if (entry->completion_type_sv && entry->trivial_completion_flags) {
-      if (gql_execution_try_complete_trivial_value_with_metadata_fast(
-            aTHX_ entry->completion_type_sv,
-            entry->trivial_completion_flags,
-            result_sv,
-            &completed_sv
-          )) {
-        goto have_completed;
+    if (gql_ir_native_field_try_trivial_completion(
+          aTHX_
+          env,
+          accum,
+          entry,
+          type_sv,
+          0,
+          &result_sv,
+          &completed_sv
+        )) {
+      if (!completed_sv) {
+        goto field_done;
       }
-    } else if (gql_execution_try_complete_trivial_value_fast(aTHX_ type_sv, result_sv, &completed_sv)) {
+      goto have_completed;
+    } else if (entry->completion_dispatch_kind == GQL_IR_NATIVE_COMPLETION_GENERIC
+               && gql_execution_try_complete_trivial_value_fast(aTHX_ type_sv, result_sv, &completed_sv)) {
       goto have_completed;
     }
   }
@@ -2219,6 +2279,7 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
       if (gql_execution_get_trivial_completion_metadata(aTHX_ *type_svp, &completion_type_sv, &trivial_completion_flags)) {
         entry->completion_type_sv = completion_type_sv;
         entry->trivial_completion_flags = trivial_completion_flags;
+        entry->completion_dispatch_kind = GQL_IR_NATIVE_COMPLETION_TRIVIAL;
         completion_type_sv = NULL;
       }
     }

@@ -143,6 +143,9 @@ Current compiled-plan execution reuse:
 - native field execution is now further split into helper-sized phases
   (`meta dispatch`, `resolver selection`, `resolver call`), so upcoming opcode
   lowering can move one phase at a time without re-cutting the main field loop
+- native field plan entries now also carry completion dispatch kind, so
+  trivial completion and generic completion are explicit operands on the plan
+  rather than implicit branches rediscovered inside the field executor
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -276,6 +279,15 @@ Most recent helper-splitting checks:
 - `abstract_with_fragment` (`--count=-4`)
   - `houtou_compiled_ir`: `41954/s`
   - `houtou_xs_ast`: `41813/s`
+
+Most recent completion-dispatch shaping checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `78245/s`
+  - `houtou_xs_ast`: `74854/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `41518/s`
+  - `houtou_xs_ast`: `40766/s`
   - `houtou_xs_ast`: `43114/s`
 
 Latest spot check after lazy `resolve_info` materialization in field

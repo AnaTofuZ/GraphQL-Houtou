@@ -201,6 +201,9 @@ Recent executor shaping follows that same path:
 - the field-entry executor is also being split into smaller helper phases so
   opcode lowering can replace one phase at a time instead of reworking the
   whole root/child dispatch loop in one step
+- completion behavior is also being lifted into explicit plan metadata, so
+  future opcode lowering can treat trivial leaf completion as a separate op
+  family instead of inferring it ad hoc from resolver results
 - the aim is for compiled IR execution to look like dispatch over a sequence of
   field ops, while still reusing existing completion / promise helpers where
   that does not dominate cost

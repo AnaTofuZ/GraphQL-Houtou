@@ -636,3 +636,7 @@ Near-term implication:
   it again
 - keep pending async field results in native arrays and materialize Perl AVs
   only at the final promise-merge boundary
+- keep per-field execution state in a native frame struct as well, so the
+  stage dispatcher does not need to shuttle a growing set of loose locals; this
+  makes a future bytecode / VM runner much closer to "run op against frame"
+  than to "rebuild transient Perl-facing state for each helper call"

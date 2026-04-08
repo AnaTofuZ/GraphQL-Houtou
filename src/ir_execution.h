@@ -2,6 +2,18 @@
  * Responsibility: prepared executable IR handle ownership and small
  * introspection helpers used as groundwork for future IR-direct execution.
  */
+typedef struct gql_ir_native_field_frame {
+  gql_execution_lazy_resolve_info_t lazy_info;
+  SV *resolve_sv;
+  SV *args_sv;
+  SV *result_sv;
+  SV *completed_sv;
+  int used_fast_default_resolve;
+  int owns_resolve_sv;
+  int owns_args_sv;
+  int resolve_is_default;
+} gql_ir_native_field_frame_t;
+
 static void
 gql_ir_prepared_exec_destroy(gql_ir_prepared_exec_t *prepared) {
   if (!prepared) {
@@ -117,6 +129,15 @@ static int gql_ir_ensure_native_field_entry_operands(
 static int gql_ir_execute_native_field_entry_into(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_exec_accum_t *accum,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+);
+static void gql_ir_init_native_field_frame(
+  gql_ir_native_field_frame_t *frame,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+);
+static void gql_ir_cleanup_native_field_frame(
+  pTHX_ gql_ir_native_field_frame_t *frame,
   gql_ir_compiled_root_field_plan_entry_t *entry
 );
 static int gql_ir_native_field_entry_has_operands(
@@ -1200,21 +1221,73 @@ gql_ir_init_native_field_ops(gql_ir_compiled_root_field_plan_entry_t *entry) {
   entry->op_count = op_count;
 }
 
+static void
+gql_ir_init_native_field_frame(
+  gql_ir_native_field_frame_t *frame,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+) {
+  if (!frame || !env || !entry) {
+    return;
+  }
+
+  Zero(frame, 1, gql_ir_native_field_frame_t);
+  frame->lazy_info.context_sv = env->context_sv;
+  frame->lazy_info.parent_type_sv = env->parent_type_sv;
+  frame->lazy_info.field_def_sv = entry->field_def_sv;
+  frame->lazy_info.return_type_sv = entry->return_type_sv ? entry->return_type_sv : entry->type_sv;
+  frame->lazy_info.field_name_sv = entry->field_name_sv;
+  frame->lazy_info.nodes_sv = entry->nodes_sv;
+  if (entry->path_sv && SvOK(entry->path_sv)) {
+    frame->lazy_info.path_sv = entry->path_sv;
+  } else {
+    frame->lazy_info.base_path_sv = env->base_path_sv;
+    frame->lazy_info.result_name_sv = entry->result_name_sv;
+  }
+}
+
+static void
+gql_ir_cleanup_native_field_frame(
+  pTHX_ gql_ir_native_field_frame_t *frame,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+) {
+  if (!frame || !entry) {
+    return;
+  }
+
+  if (frame->lazy_info.info_sv) {
+    SvREFCNT_dec(frame->lazy_info.info_sv);
+    frame->lazy_info.info_sv = NULL;
+  }
+  if (frame->owns_args_sv && frame->args_sv) {
+    SvREFCNT_dec(frame->args_sv);
+    frame->args_sv = NULL;
+  }
+  if (frame->result_sv) {
+    SvREFCNT_dec(frame->result_sv);
+    frame->result_sv = NULL;
+  }
+  if (frame->owns_resolve_sv && frame->resolve_sv) {
+    SvREFCNT_dec(frame->resolve_sv);
+    frame->resolve_sv = NULL;
+  }
+  if (frame->lazy_info.path_sv && (!entry->path_sv || !SvOK(entry->path_sv))) {
+    SvREFCNT_dec(frame->lazy_info.path_sv);
+    frame->lazy_info.path_sv = NULL;
+  }
+  if (frame->completed_sv) {
+    SvREFCNT_dec(frame->completed_sv);
+    frame->completed_sv = NULL;
+  }
+}
+
 static int
 gql_ir_execute_native_field_entry_into(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_exec_accum_t *accum,
   gql_ir_compiled_root_field_plan_entry_t *entry
 ) {
-  SV *resolve_sv = NULL;
-  SV *args_sv = NULL;
-  gql_execution_lazy_resolve_info_t lazy_info;
-  SV *result_sv = NULL;
-  SV *completed_sv = NULL;
-  int used_fast_default_resolve = 0;
-  int owns_resolve_sv = 0;
-  int owns_args_sv = 0;
-  int resolve_is_default = 0;
+  gql_ir_native_field_frame_t frame;
   U8 pc = 0;
   gql_ir_native_field_op_t op;
 
@@ -1238,19 +1311,7 @@ gql_ir_execute_native_field_entry_into(
     return 0;
   }
 
-  Zero(&lazy_info, 1, gql_execution_lazy_resolve_info_t);
-  lazy_info.context_sv = env->context_sv;
-  lazy_info.parent_type_sv = env->parent_type_sv;
-  lazy_info.field_def_sv = entry->field_def_sv;
-  lazy_info.return_type_sv = entry->return_type_sv ? entry->return_type_sv : entry->type_sv;
-  lazy_info.field_name_sv = entry->field_name_sv;
-  lazy_info.nodes_sv = entry->nodes_sv;
-  if (entry->path_sv && SvOK(entry->path_sv)) {
-    lazy_info.path_sv = entry->path_sv;
-  } else {
-    lazy_info.base_path_sv = env->base_path_sv;
-    lazy_info.result_name_sv = entry->result_name_sv;
-  }
+  gql_ir_init_native_field_frame(&frame, env, entry);
 
 dispatch:
 #if defined(__GNUC__) || defined(__clang__)
@@ -1299,9 +1360,9 @@ op_meta:
         accum,
         entry,
         entry->type_sv,
-        &completed_sv
+        &frame.completed_sv
       )) {
-    if (completed_sv) {
+    if (frame.completed_sv) {
       pc = entry->consume_op_index;
       goto dispatch;
     }
@@ -1311,9 +1372,9 @@ op_meta:
   goto dispatch;
 
 op_trivial_context:
-  if (!resolve_sv) {
-    resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
-    resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
+  if (!frame.resolve_sv) {
+    frame.resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame.owns_resolve_sv);
+    frame.resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame.resolve_sv);
   }
   if (gql_ir_native_field_try_trivial_completion(
         aTHX_
@@ -1321,20 +1382,20 @@ op_trivial_context:
         accum,
         entry,
         entry->type_sv,
-        resolve_is_default,
-        &result_sv,
-        &completed_sv
+        frame.resolve_is_default,
+        &frame.result_sv,
+        &frame.completed_sv
       )) {
-    if (completed_sv) {
+    if (frame.completed_sv) {
       pc = entry->consume_op_index;
       goto dispatch;
     }
     goto op_done;
   }
 
-  if (resolve_is_default
-      && gql_execution_try_default_field_resolve_fast(aTHX_ env->root_value_sv, entry->field_name_sv, &result_sv)) {
-    used_fast_default_resolve = 1;
+  if (frame.resolve_is_default
+      && gql_execution_try_default_field_resolve_fast(aTHX_ env->root_value_sv, entry->field_name_sv, &frame.result_sv)) {
+    frame.used_fast_default_resolve = 1;
     if (gql_ir_native_field_try_trivial_completion(
           aTHX_
           env,
@@ -1342,17 +1403,17 @@ op_trivial_context:
           entry,
           entry->type_sv,
           0,
-          &result_sv,
-          &completed_sv
+          &frame.result_sv,
+          &frame.completed_sv
         )) {
-      if (completed_sv) {
+      if (frame.completed_sv) {
         pc = entry->consume_op_index;
         goto dispatch;
       }
       goto op_done;
     }
     if (entry->completion_dispatch_kind == GQL_IR_NATIVE_COMPLETION_GENERIC
-        && gql_execution_try_complete_trivial_value_fast(aTHX_ entry->type_sv, result_sv, &completed_sv)) {
+        && gql_execution_try_complete_trivial_value_fast(aTHX_ entry->type_sv, frame.result_sv, &frame.completed_sv)) {
       pc = entry->consume_op_index;
       goto dispatch;
     }
@@ -1362,16 +1423,16 @@ op_trivial_context:
   goto dispatch;
 
 op_call_fixed_empty_args:
-  resolve_sv = entry->resolve_sv;
-  resolve_is_default = 0;
+  frame.resolve_sv = entry->resolve_sv;
+  frame.resolve_is_default = 0;
   if (!gql_ir_native_field_call_resolver_empty_args(
         aTHX_
         env,
-        &lazy_info,
-        resolve_sv,
-        &result_sv,
-        &args_sv,
-        &owns_args_sv
+        &frame.lazy_info,
+        frame.resolve_sv,
+        &frame.result_sv,
+        &frame.args_sv,
+        &frame.owns_args_sv
       )) {
     goto op_fail;
   }
@@ -1379,17 +1440,17 @@ op_call_fixed_empty_args:
   goto dispatch;
 
 op_call_fixed_build_args:
-  resolve_sv = entry->resolve_sv;
-  resolve_is_default = 0;
+  frame.resolve_sv = entry->resolve_sv;
+  frame.resolve_is_default = 0;
   if (!gql_ir_native_field_call_resolver_build_args(
         aTHX_
         env,
         entry,
-        &lazy_info,
-        resolve_sv,
-        &result_sv,
-        &args_sv,
-        &owns_args_sv
+        &frame.lazy_info,
+        frame.resolve_sv,
+        &frame.result_sv,
+        &frame.args_sv,
+        &frame.owns_args_sv
       )) {
     goto op_fail;
   }
@@ -1397,19 +1458,19 @@ op_call_fixed_build_args:
   goto dispatch;
 
 op_call_context_empty_args:
-  if (!resolve_sv) {
-    resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
-    resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
+  if (!frame.resolve_sv) {
+    frame.resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame.owns_resolve_sv);
+    frame.resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame.resolve_sv);
   }
-  if (!used_fast_default_resolve
+  if (!frame.used_fast_default_resolve
       && !gql_ir_native_field_call_resolver_empty_args(
            aTHX_
            env,
-           &lazy_info,
-           resolve_sv,
-           &result_sv,
-           &args_sv,
-           &owns_args_sv
+           &frame.lazy_info,
+           frame.resolve_sv,
+           &frame.result_sv,
+           &frame.args_sv,
+           &frame.owns_args_sv
          )) {
     goto op_fail;
   }
@@ -1417,20 +1478,20 @@ op_call_context_empty_args:
   goto dispatch;
 
 op_call_context_build_args:
-  if (!resolve_sv) {
-    resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &owns_resolve_sv);
-    resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ resolve_sv);
+  if (!frame.resolve_sv) {
+    frame.resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame.owns_resolve_sv);
+    frame.resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame.resolve_sv);
   }
-  if (!used_fast_default_resolve
+  if (!frame.used_fast_default_resolve
       && !gql_ir_native_field_call_resolver_build_args(
            aTHX_
            env,
            entry,
-           &lazy_info,
-           resolve_sv,
-           &result_sv,
-           &args_sv,
-           &owns_args_sv
+           &frame.lazy_info,
+           frame.resolve_sv,
+           &frame.result_sv,
+           &frame.args_sv,
+           &frame.owns_args_sv
          )) {
     goto op_fail;
   }
@@ -1443,12 +1504,12 @@ op_complete_trivial:
         env,
         accum,
         entry,
-        result_sv,
-        &completed_sv
+        frame.result_sv,
+        &frame.completed_sv
       )) {
     goto op_fail;
   }
-  if (!completed_sv) {
+  if (!frame.completed_sv) {
     goto op_done;
   }
   pc++;
@@ -1460,13 +1521,13 @@ op_complete_generic:
         env,
         accum,
         entry,
-        &lazy_info,
-        result_sv,
-        &completed_sv
+        &frame.lazy_info,
+        frame.result_sv,
+        &frame.completed_sv
       )) {
     goto op_fail;
   }
-  if (!completed_sv) {
+  if (!frame.completed_sv) {
     goto op_done;
   }
   pc++;
@@ -1478,7 +1539,7 @@ op_consume:
         env,
         accum,
         entry,
-        &completed_sv
+        &frame.completed_sv
       )) {
     goto op_fail;
   }
@@ -1486,45 +1547,11 @@ op_consume:
   goto dispatch;
 
 op_done:
-  if (lazy_info.info_sv) {
-    SvREFCNT_dec(lazy_info.info_sv);
-  }
-  if (owns_args_sv) {
-    SvREFCNT_dec(args_sv);
-  }
-  if (result_sv) {
-    SvREFCNT_dec(result_sv);
-  }
-  if (owns_resolve_sv) {
-    SvREFCNT_dec(resolve_sv);
-  }
-  if (lazy_info.path_sv && (!entry->path_sv || !SvOK(entry->path_sv))) {
-    SvREFCNT_dec(lazy_info.path_sv);
-  }
-  if (completed_sv) {
-    SvREFCNT_dec(completed_sv);
-  }
+  gql_ir_cleanup_native_field_frame(aTHX_ &frame, entry);
   return 1;
 
 op_fail:
-  if (lazy_info.info_sv) {
-    SvREFCNT_dec(lazy_info.info_sv);
-  }
-  if (owns_args_sv) {
-    SvREFCNT_dec(args_sv);
-  }
-  if (result_sv) {
-    SvREFCNT_dec(result_sv);
-  }
-  if (owns_resolve_sv) {
-    SvREFCNT_dec(resolve_sv);
-  }
-  if (lazy_info.path_sv && (!entry->path_sv || !SvOK(entry->path_sv))) {
-    SvREFCNT_dec(lazy_info.path_sv);
-  }
-  if (completed_sv) {
-    SvREFCNT_dec(completed_sv);
-  }
+  gql_ir_cleanup_native_field_frame(aTHX_ &frame, entry);
   return 0;
 }
 

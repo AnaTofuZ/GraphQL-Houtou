@@ -822,6 +822,28 @@ Interpretation:
 - the runtime remains neutral-to-slightly-positive while more branch structure
   moves from execution helpers into the compiled native plan
 
+Latest spot verification after moving per-field execution state into a native
+field frame struct:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir 82267/s`
+  - `houtou_xs_ast 78569/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 42308/s`
+  - `houtou_xs_ast 41714/s`
+
+Interpretation:
+
+- the hot-loop field state is now carried in one native frame struct instead of
+  a loose set of local Perl-facing temporaries
+- this is primarily VM-readiness work: `resolve`, `complete`, and `consume`
+  now operate over a more self-contained native execution state
+- the change is neutral-to-positive on both spot cases, so it is a good
+  foundation for moving more completion/error work out of ad hoc `SV *`
+  temporaries and into native outcome structs
+
 ## Breaking-API Speed Notes
 
 If public compatibility constraints were relaxed, the highest-probability extra

@@ -154,17 +154,27 @@ typedef struct gql_ir_compiled_field_bucket_table gql_ir_compiled_field_bucket_t
 typedef struct gql_execution_context_fast_cache gql_execution_context_fast_cache_t;
 typedef struct gql_ir_native_exec_env gql_ir_native_exec_env_t;
 typedef struct gql_ir_native_exec_accum gql_ir_native_exec_accum_t;
-typedef enum gql_ir_native_field_dispatch_kind gql_ir_native_field_dispatch_kind_t;
+typedef enum gql_ir_native_meta_dispatch_kind gql_ir_native_meta_dispatch_kind_t;
+typedef enum gql_ir_native_resolve_dispatch_kind gql_ir_native_resolve_dispatch_kind_t;
+typedef enum gql_ir_native_args_dispatch_kind gql_ir_native_args_dispatch_kind_t;
 typedef enum gql_ir_native_completion_dispatch_kind gql_ir_native_completion_dispatch_kind_t;
 typedef struct {
   gql_ir_document_t *document;
 } gql_ir_document_cleanup_t;
 
-enum gql_ir_native_field_dispatch_kind {
-  GQL_IR_NATIVE_FIELD_DISPATCH_GENERIC = 0,
-  GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME = 1,
-  GQL_IR_NATIVE_FIELD_DISPATCH_EXPLICIT_RESOLVE = 2,
-  GQL_IR_NATIVE_FIELD_DISPATCH_INHERITED_RESOLVE = 3
+enum gql_ir_native_meta_dispatch_kind {
+  GQL_IR_NATIVE_META_DISPATCH_NONE = 0,
+  GQL_IR_NATIVE_META_DISPATCH_TYPENAME = 1
+};
+
+enum gql_ir_native_resolve_dispatch_kind {
+  GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED = 0,
+  GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT = 1
+};
+
+enum gql_ir_native_args_dispatch_kind {
+  GQL_IR_NATIVE_ARGS_DISPATCH_EMPTY = 0,
+  GQL_IR_NATIVE_ARGS_DISPATCH_BUILD = 1
 };
 
 enum gql_ir_native_completion_dispatch_kind {
@@ -198,7 +208,9 @@ struct gql_ir_compiled_root_field_plan_entry {
   UV directive_count;
   UV selection_count;
   UV trivial_completion_flags;
-  gql_ir_native_field_dispatch_kind_t dispatch_kind;
+  gql_ir_native_meta_dispatch_kind_t meta_dispatch_kind;
+  gql_ir_native_resolve_dispatch_kind_t resolve_dispatch_kind;
+  gql_ir_native_args_dispatch_kind_t args_dispatch_kind;
   gql_ir_native_completion_dispatch_kind_t completion_dispatch_kind;
 };
 

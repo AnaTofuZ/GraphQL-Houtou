@@ -159,6 +159,10 @@ Current compiled-plan execution reuse:
 - native field entries now also own the operands needed by the field-stage
   dispatcher; root execution lazily fills missing `nodes` / `field_def` /
   `type` once and then reuses the entry as a self-contained field-op record
+- the field-op record is now further normalized into separate native enum
+  operands for `meta`, `resolve`, `args`, and `completion`, which reduces
+  runtime shape rediscovery from Perl objects and is closer to a future opcode
+  stream
 
 This means compiled IR is already faster than prepared IR and is now beating
 `houtou_xs_ast` in several nested cases.
@@ -337,6 +341,15 @@ Most recent operand-on-entry shaping checks:
 - `abstract_with_fragment` (`--count=-4`)
   - `houtou_compiled_ir`: `41751/s`
   - `houtou_xs_ast`: `42729/s`
+
+Most recent enum-operand shaping checks:
+
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir`: `77433/s`
+  - `houtou_xs_ast`: `76554/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir`: `41751/s`
+  - `houtou_xs_ast`: `42210/s`
 
 Latest spot check after lazy `resolve_info` materialization in field
 completion (`--count=-6`):

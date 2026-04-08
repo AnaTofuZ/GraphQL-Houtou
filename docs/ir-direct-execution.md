@@ -219,6 +219,9 @@ Recent executor shaping follows that same path:
   lazily materialized once and then retained on the entry, so the dispatcher
   can execute from a single field-op record instead of being fed extra runtime
   operands from each loop site
+- that field-op record is also being normalized into smaller native enum
+  operands (`meta`, `resolve`, `args`, `completion`) rather than one broader
+  dispatch shape inferred from Perl objects at runtime
 - the aim is for compiled IR execution to look like dispatch over a sequence of
   field ops, while still reusing existing completion / promise helpers where
   that does not dominate cost

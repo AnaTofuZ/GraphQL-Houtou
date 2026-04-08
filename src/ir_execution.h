@@ -382,7 +382,7 @@ gql_ir_native_field_try_meta_dispatch(
   if (!env || !accum || !entry || !type_sv || !SvOK(type_sv)) {
     return 0;
   }
-  if (entry->dispatch_kind != GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME) {
+  if (entry->meta_dispatch_kind != GQL_IR_NATIVE_META_DISPATCH_TYPENAME) {
     return 0;
   }
 
@@ -411,12 +411,10 @@ gql_ir_native_field_get_resolver(
     return &PL_sv_undef;
   }
 
-  switch (entry->dispatch_kind) {
-    case GQL_IR_NATIVE_FIELD_DISPATCH_EXPLICIT_RESOLVE:
+  switch (entry->resolve_dispatch_kind) {
+    case GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED:
       return entry->resolve_sv;
-    case GQL_IR_NATIVE_FIELD_DISPATCH_INHERITED_RESOLVE:
-    case GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME:
-    case GQL_IR_NATIVE_FIELD_DISPATCH_GENERIC:
+    case GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT:
     default:
       if (entry->resolve_sv && SvOK(entry->resolve_sv)) {
         return entry->resolve_sv;
@@ -458,7 +456,7 @@ gql_ir_native_field_call_resolver(
   }
 
   (void)gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
-  if (entry->argument_count == 0 && entry->field_arg_count == 0) {
+  if (entry->args_dispatch_kind == GQL_IR_NATIVE_ARGS_DISPATCH_EMPTY) {
     if (env->empty_args_sv && SvOK(env->empty_args_sv)) {
       args_sv = env->empty_args_sv;
     } else {
@@ -2460,9 +2458,20 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
 
     entry->result_name_sv = gql_execution_share_or_copy_sv(*result_name_svp);
     entry->field_name_sv = gql_execution_share_or_copy_sv(*field_name_svp);
+    entry->meta_dispatch_kind = GQL_IR_NATIVE_META_DISPATCH_NONE;
+    entry->resolve_dispatch_kind = GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT;
+    entry->args_dispatch_kind =
+      ((argument_count_svp && SvOK(*argument_count_svp)) ? SvUV(*argument_count_svp) : 0) == 0
+      && ((field_args_svp
+           && SvROK(*field_args_svp)
+           && SvTYPE(SvRV(*field_args_svp)) == SVt_PVHV)
+            ? (UV)HvUSEDKEYS((HV *)SvRV(*field_args_svp))
+            : 0) == 0
+        ? GQL_IR_NATIVE_ARGS_DISPATCH_EMPTY
+        : GQL_IR_NATIVE_ARGS_DISPATCH_BUILD;
     field_name_pv = SvPV(*field_name_svp, field_name_len);
     if (field_name_len == 10 && memEQ(field_name_pv, "__typename", 10)) {
-      entry->dispatch_kind = GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME;
+      entry->meta_dispatch_kind = GQL_IR_NATIVE_META_DISPATCH_TYPENAME;
     }
     entry->field_def_sv = gql_execution_share_or_copy_sv(*field_def_svp);
     if (type_svp && SvOK(*type_svp)) {
@@ -2479,11 +2488,7 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     }
     if (resolve_svp && SvOK(*resolve_svp)) {
       entry->resolve_sv = gql_execution_share_or_copy_sv(*resolve_svp);
-      if (entry->dispatch_kind != GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME) {
-        entry->dispatch_kind = GQL_IR_NATIVE_FIELD_DISPATCH_EXPLICIT_RESOLVE;
-      }
-    } else if (entry->dispatch_kind != GQL_IR_NATIVE_FIELD_DISPATCH_TYPENAME) {
-      entry->dispatch_kind = GQL_IR_NATIVE_FIELD_DISPATCH_INHERITED_RESOLVE;
+      entry->resolve_dispatch_kind = GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED;
     }
     entry->nodes_sv = gql_execution_share_or_copy_sv(*nodes_svp);
     entry->first_node_sv = gql_execution_share_or_copy_sv(*first_node_svp);

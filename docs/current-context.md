@@ -1345,3 +1345,30 @@ Current next steps:
   envelopes as an internal currency
 - preserve an explicit fallback boundary so future VM lowering can retire
   mixed paths block by block
+
+Follow-up after the first hot-operand pass:
+
+- path/count-style fields are now also split behind a cold view
+- frame setup, frame cleanup, metadata extraction, cloning, and legacy
+  materialization now prefer the cold view instead of reading those values
+  directly from the full entry
+- this keeps the inner execution loop focused on `meta + hot + writer`, while
+  path/count/debug-style data move further away from the hot working set
+
+Latest spot verification after the first cold split:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 82048/s`
+  - `houtou_xs_ast 79626/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 42575/s`
+  - `houtou_xs_ast 42306/s`
+
+Interpretation:
+
+- the cold split is small but directionally correct
+- the broader sync object case benefits a little more clearly
+- the abstract target stays effectively tied or slightly ahead, which is good
+  enough for a structural locality improvement

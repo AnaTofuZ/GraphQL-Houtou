@@ -151,6 +151,7 @@ typedef struct gql_ir_execution_lowered_plan gql_ir_execution_lowered_plan_t;
 typedef struct gql_ir_vm_block gql_ir_vm_block_t;
 typedef struct gql_ir_vm_field_meta gql_ir_vm_field_meta_t;
 typedef struct gql_ir_vm_field_hot gql_ir_vm_field_hot_t;
+typedef struct gql_ir_vm_field_cold gql_ir_vm_field_cold_t;
 typedef struct gql_ir_vm_program gql_ir_vm_program_t;
 typedef struct gql_ir_lowered_abstract_child_entry gql_ir_lowered_abstract_child_entry_t;
 typedef struct gql_ir_lowered_abstract_child_plan_table gql_ir_lowered_abstract_child_plan_table_t;
@@ -248,11 +249,22 @@ struct gql_ir_vm_field_hot {
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
 };
 
+struct gql_ir_vm_field_cold {
+  SV *path_sv;
+  UV node_count;
+  UV argument_count;
+  UV field_arg_count;
+  UV directive_count;
+  UV selection_count;
+};
+
 struct gql_ir_compiled_root_field_plan_entry {
   gql_ir_vm_field_meta_t *meta;
   gql_ir_vm_field_meta_t meta_inline;
   gql_ir_vm_field_hot_t *hot;
   gql_ir_vm_field_hot_t hot_inline;
+  gql_ir_vm_field_cold_t *cold;
+  gql_ir_vm_field_cold_t cold_inline;
   SV *result_name_sv;
   SV *field_name_sv;
   SV *field_def_sv;
@@ -262,12 +274,6 @@ struct gql_ir_compiled_root_field_plan_entry {
   SV *resolve_sv;
   SV *nodes_sv;
   SV *first_node_sv;
-  SV *path_sv;
-  UV node_count;
-  UV argument_count;
-  UV field_arg_count;
-  UV directive_count;
-  UV selection_count;
   UV trivial_completion_flags;
   U8 op_count;
   U8 consume_op_index;

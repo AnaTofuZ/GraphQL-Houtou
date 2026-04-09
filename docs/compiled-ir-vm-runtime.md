@@ -331,6 +331,17 @@ The first hot/cold split is now partially landed:
 - resolver selection, generic completion, frame setup, and abstract-child
   lookup now prefer that hot view
 
+The next small slice of that split is now landed too:
+
+- path/count-style fields live behind a separate cold view
+- frame setup / cleanup, metadata extraction, cloning, and legacy
+  materialization use the cold view instead of assuming those fields belong in
+  the hot loop's primary struct
+
+This does not yet create a radically different memory layout, but it does make
+the intended boundary explicit: the field loop should mostly walk `meta + hot`,
+while `cold` stays on the side for fallback, path, and exported-plan concerns.
+
 This is intentionally conservative. The current step is not trying to build an
 entire new memory layout in one shot; it is creating a clear place where we can
 move hot operands without keeping the whole execution loop coupled to the full
@@ -351,7 +362,8 @@ This is a better fit for the current architecture than more local
 ### Near-Term Plan
 
 1. continue moving hot operands into the hot view
-2. push path/count/debug/fallback data out of the hot loop
+2. keep path/count/debug/fallback data in the cold view and stop re-reading
+   them from the full entry in hot paths
 3. let child-plan runners and outcome writers operate mostly on hot metadata
 4. only after that, lower those hot operands into a more explicit VM opcode /
    operand stream

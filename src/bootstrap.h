@@ -270,19 +270,10 @@ struct gql_ir_compiled_root_field_plan_entry {
   SV *field_def_sv;
   SV *return_type_sv;
   SV *type_sv;
-  SV *completion_type_sv;
   SV *resolve_sv;
   SV *nodes_sv;
   SV *first_node_sv;
-  UV trivial_completion_flags;
-  U8 op_count;
-  U8 consume_op_index;
   U8 operands_ready;
-  gql_ir_native_field_op_t ops[5];
-  gql_ir_native_meta_dispatch_kind_t meta_dispatch_kind;
-  gql_ir_native_resolve_dispatch_kind_t resolve_dispatch_kind;
-  gql_ir_native_args_dispatch_kind_t args_dispatch_kind;
-  gql_ir_native_completion_dispatch_kind_t completion_dispatch_kind;
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
 };
 

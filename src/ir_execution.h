@@ -79,7 +79,10 @@ static SV *gql_ir_prepare_executable_root_field_nodes_sv(pTHX_ gql_ir_prepared_e
 static void gql_ir_compiled_attach_root_field_runtime_data(pTHX_ SV *root_field_plan_sv, SV *root_fields_sv);
 static gql_ir_compiled_root_field_plan_t *gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv);
 static void gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan);
-static gql_ir_vm_field_meta_t *gql_ir_vm_field_meta_from_entry(pTHX_ gql_ir_compiled_root_field_plan_entry_t *entry);
+static gql_ir_vm_field_meta_t *gql_ir_vm_field_meta_from_seed(
+  pTHX_ gql_ir_compiled_root_field_plan_entry_t *entry,
+  const gql_ir_vm_field_meta_t *seed
+);
 static void gql_ir_vm_field_meta_destroy(gql_ir_vm_field_meta_t *meta);
 static gql_ir_execution_lowered_plan_t *gql_ir_execution_lowered_plan_from_root_field_plan_sv(pTHX_ SV *root_field_plan_sv);
 static void gql_ir_execution_lowered_plan_destroy(gql_ir_execution_lowered_plan_t *plan);
@@ -1780,39 +1783,37 @@ gql_ir_init_native_field_ops(gql_ir_compiled_root_field_plan_entry_t *entry) {
     return;
   }
   meta = gql_ir_native_field_meta(entry);
+  if (!meta) {
+    return;
+  }
 
-  if ((meta ? meta->meta_dispatch_kind : entry->meta_dispatch_kind) != GQL_IR_NATIVE_META_DISPATCH_NONE) {
-    entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_META;
+  if (meta->meta_dispatch_kind != GQL_IR_NATIVE_META_DISPATCH_NONE) {
+    meta->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_META;
   }
-  if ((meta ? meta->resolve_dispatch_kind : entry->resolve_dispatch_kind) == GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT) {
-    entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_TRIVIAL_CONTEXT;
+  if (meta->resolve_dispatch_kind == GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT) {
+    meta->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_TRIVIAL_CONTEXT;
   }
-  if ((meta ? meta->resolve_dispatch_kind : entry->resolve_dispatch_kind) == GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED) {
-    if ((meta ? meta->args_dispatch_kind : entry->args_dispatch_kind) == GQL_IR_NATIVE_ARGS_DISPATCH_BUILD) {
-      entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_BUILD_ARGS;
+  if (meta->resolve_dispatch_kind == GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED) {
+    if (meta->args_dispatch_kind == GQL_IR_NATIVE_ARGS_DISPATCH_BUILD) {
+      meta->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_BUILD_ARGS;
     } else {
-      entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_EMPTY_ARGS;
+      meta->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_EMPTY_ARGS;
     }
   } else {
-    if ((meta ? meta->args_dispatch_kind : entry->args_dispatch_kind) == GQL_IR_NATIVE_ARGS_DISPATCH_BUILD) {
-      entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_BUILD_ARGS;
+    if (meta->args_dispatch_kind == GQL_IR_NATIVE_ARGS_DISPATCH_BUILD) {
+      meta->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_BUILD_ARGS;
     } else {
-      entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_EMPTY_ARGS;
+      meta->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_EMPTY_ARGS;
     }
   }
-  if ((meta ? meta->completion_dispatch_kind : entry->completion_dispatch_kind) == GQL_IR_NATIVE_COMPLETION_TRIVIAL) {
-    entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_COMPLETE_TRIVIAL;
+  if (meta->completion_dispatch_kind == GQL_IR_NATIVE_COMPLETION_TRIVIAL) {
+    meta->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_COMPLETE_TRIVIAL;
   } else {
-    entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_COMPLETE_GENERIC;
+    meta->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_COMPLETE_GENERIC;
   }
-  entry->consume_op_index = op_count;
-  entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CONSUME;
-  entry->op_count = op_count;
-  if (meta) {
-    meta->consume_op_index = entry->consume_op_index;
-    meta->op_count = entry->op_count;
-    Copy(entry->ops, meta->ops, 5, gql_ir_native_field_op_t);
-  }
+  meta->consume_op_index = op_count;
+  meta->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CONSUME;
+  meta->op_count = op_count;
 }
 
 static void
@@ -3280,34 +3281,35 @@ gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan)
 }
 
 static gql_ir_vm_field_meta_t *
-gql_ir_vm_field_meta_from_entry(pTHX_ gql_ir_compiled_root_field_plan_entry_t *entry) {
+gql_ir_vm_field_meta_from_seed(
+  pTHX_ gql_ir_compiled_root_field_plan_entry_t *entry,
+  const gql_ir_vm_field_meta_t *seed
+) {
   gql_ir_vm_field_meta_t *meta;
-  gql_ir_vm_field_cold_t *cold;
 
-  if (!entry) {
+  if (!entry || !seed) {
     return NULL;
   }
 
-  cold = entry->cold ? entry->cold : &entry->cold_inline;
   meta = &entry->meta_inline;
   Zero(meta, 1, gql_ir_vm_field_meta_t);
 
-  if (entry->result_name_sv) meta->result_name_sv = gql_execution_share_or_copy_sv(entry->result_name_sv);
-  if (entry->field_name_sv) meta->field_name_sv = gql_execution_share_or_copy_sv(entry->field_name_sv);
-  if (entry->return_type_sv) meta->return_type_sv = gql_execution_share_or_copy_sv(entry->return_type_sv);
-  if (entry->completion_type_sv) meta->completion_type_sv = gql_execution_share_or_copy_sv(entry->completion_type_sv);
-  meta->argument_count = cold ? cold->argument_count : 0;
-  meta->field_arg_count = cold ? cold->field_arg_count : 0;
-  meta->directive_count = cold ? cold->directive_count : 0;
-  meta->selection_count = cold ? cold->selection_count : 0;
-  meta->trivial_completion_flags = entry->trivial_completion_flags;
-  meta->op_count = entry->op_count;
-  meta->consume_op_index = entry->consume_op_index;
-  Copy(entry->ops, meta->ops, 5, gql_ir_native_field_op_t);
-  meta->meta_dispatch_kind = entry->meta_dispatch_kind;
-  meta->resolve_dispatch_kind = entry->resolve_dispatch_kind;
-  meta->args_dispatch_kind = entry->args_dispatch_kind;
-  meta->completion_dispatch_kind = entry->completion_dispatch_kind;
+  if (seed->result_name_sv) meta->result_name_sv = gql_execution_share_or_copy_sv(seed->result_name_sv);
+  if (seed->field_name_sv) meta->field_name_sv = gql_execution_share_or_copy_sv(seed->field_name_sv);
+  if (seed->return_type_sv) meta->return_type_sv = gql_execution_share_or_copy_sv(seed->return_type_sv);
+  if (seed->completion_type_sv) meta->completion_type_sv = gql_execution_share_or_copy_sv(seed->completion_type_sv);
+  meta->argument_count = seed->argument_count;
+  meta->field_arg_count = seed->field_arg_count;
+  meta->directive_count = seed->directive_count;
+  meta->selection_count = seed->selection_count;
+  meta->trivial_completion_flags = seed->trivial_completion_flags;
+  meta->op_count = seed->op_count;
+  meta->consume_op_index = seed->consume_op_index;
+  Copy(seed->ops, meta->ops, 5, gql_ir_native_field_op_t);
+  meta->meta_dispatch_kind = seed->meta_dispatch_kind;
+  meta->resolve_dispatch_kind = seed->resolve_dispatch_kind;
+  meta->args_dispatch_kind = seed->args_dispatch_kind;
+  meta->completion_dispatch_kind = seed->completion_dispatch_kind;
   entry->meta = meta;
 
   return meta;
@@ -3415,7 +3417,6 @@ gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *p
     if (src->field_def_sv) dst->field_def_sv = gql_execution_share_or_copy_sv(src->field_def_sv);
     if (src->return_type_sv) dst->return_type_sv = gql_execution_share_or_copy_sv(src->return_type_sv);
     if (src->type_sv) dst->type_sv = gql_execution_share_or_copy_sv(src->type_sv);
-    if (src->completion_type_sv) dst->completion_type_sv = gql_execution_share_or_copy_sv(src->completion_type_sv);
     if (src->resolve_sv) dst->resolve_sv = gql_execution_share_or_copy_sv(src->resolve_sv);
     if (src->nodes_sv) dst->nodes_sv = gql_execution_share_or_copy_sv(src->nodes_sv);
     if (src->first_node_sv) dst->first_node_sv = gql_execution_share_or_copy_sv(src->first_node_sv);
@@ -3429,17 +3430,9 @@ gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *p
       dst->cold_inline.directive_count = src->cold->directive_count;
       dst->cold_inline.selection_count = src->cold->selection_count;
     }
-    dst->trivial_completion_flags = src->trivial_completion_flags;
-    dst->op_count = src->op_count;
-    dst->consume_op_index = src->consume_op_index;
     dst->operands_ready = src->operands_ready;
-    Copy(src->ops, dst->ops, 5, gql_ir_native_field_op_t);
-    dst->meta_dispatch_kind = src->meta_dispatch_kind;
-    dst->resolve_dispatch_kind = src->resolve_dispatch_kind;
-    dst->args_dispatch_kind = src->args_dispatch_kind;
-    dst->completion_dispatch_kind = src->completion_dispatch_kind;
     gql_ir_native_field_cold_refresh(dst);
-    dst->meta = gql_ir_vm_field_meta_from_entry(aTHX_ dst);
+    dst->meta = gql_ir_vm_field_meta_from_seed(aTHX_ dst, src->meta);
     dst->abstract_child_plan_table = gql_ir_lowered_abstract_child_plan_table_clone(
       aTHX_ src->abstract_child_plan_table
     );
@@ -3865,13 +3858,19 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     HV *field_plan_hv;
     HV *field_def_hv;
     gql_ir_compiled_root_field_plan_entry_t *entry = &plan->entries[field_i];
+    gql_ir_vm_field_meta_t meta_seed;
     SV **field_name_svp;
     SV **field_def_svp;
     SV **type_svp;
     SV **resolve_svp;
     SV **field_args_svp;
     SV *completion_type_sv = NULL;
+    SV *meta_completion_type_sv = NULL;
     UV trivial_completion_flags = 0;
+    gql_ir_native_meta_dispatch_kind_t meta_dispatch_kind = GQL_IR_NATIVE_META_DISPATCH_NONE;
+    gql_ir_native_resolve_dispatch_kind_t resolve_dispatch_kind = GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT;
+    gql_ir_native_args_dispatch_kind_t args_dispatch_kind;
+    gql_ir_native_completion_dispatch_kind_t completion_dispatch_kind = GQL_IR_NATIVE_COMPLETION_GENERIC;
     SV **nodes_svp;
     AV *nodes_av;
     SV **first_node_svp;
@@ -3925,9 +3924,7 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
 
     entry->result_name_sv = gql_execution_share_or_copy_sv(*result_name_svp);
     entry->field_name_sv = gql_execution_share_or_copy_sv(*field_name_svp);
-    entry->meta_dispatch_kind = GQL_IR_NATIVE_META_DISPATCH_NONE;
-    entry->resolve_dispatch_kind = GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT;
-    entry->args_dispatch_kind =
+    args_dispatch_kind =
       ((argument_count_svp && SvOK(*argument_count_svp)) ? SvUV(*argument_count_svp) : 0) == 0
       && ((field_args_svp
            && SvROK(*field_args_svp)
@@ -3938,7 +3935,7 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
         : GQL_IR_NATIVE_ARGS_DISPATCH_BUILD;
     field_name_pv = SvPV(*field_name_svp, field_name_len);
     if (field_name_len == 10 && memEQ(field_name_pv, "__typename", 10)) {
-      entry->meta_dispatch_kind = GQL_IR_NATIVE_META_DISPATCH_TYPENAME;
+      meta_dispatch_kind = GQL_IR_NATIVE_META_DISPATCH_TYPENAME;
     }
     entry->field_def_sv = gql_execution_share_or_copy_sv(*field_def_svp);
     if (type_svp && SvOK(*type_svp)) {
@@ -3947,15 +3944,14 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     if (type_svp && SvOK(*type_svp)) {
       entry->type_sv = gql_execution_share_or_copy_sv(*type_svp);
       if (gql_execution_get_trivial_completion_metadata(aTHX_ *type_svp, &completion_type_sv, &trivial_completion_flags)) {
-        entry->completion_type_sv = completion_type_sv;
-        entry->trivial_completion_flags = trivial_completion_flags;
-        entry->completion_dispatch_kind = GQL_IR_NATIVE_COMPLETION_TRIVIAL;
+        meta_completion_type_sv = completion_type_sv;
+        completion_dispatch_kind = GQL_IR_NATIVE_COMPLETION_TRIVIAL;
         completion_type_sv = NULL;
       }
     }
     if (resolve_svp && SvOK(*resolve_svp)) {
       entry->resolve_sv = gql_execution_share_or_copy_sv(*resolve_svp);
-      entry->resolve_dispatch_kind = GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED;
+      resolve_dispatch_kind = GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED;
     }
     entry->nodes_sv = gql_execution_share_or_copy_sv(*nodes_svp);
     entry->first_node_sv = gql_execution_share_or_copy_sv(*first_node_svp);
@@ -3977,12 +3973,26 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     if (!entry->operands_ready) {
       plan->requires_runtime_operand_fill = 1;
     }
-    gql_ir_init_native_field_ops(entry);
     gql_ir_native_field_cold_refresh(entry);
-    entry->meta = gql_ir_vm_field_meta_from_entry(aTHX_ entry);
+    Zero(&meta_seed, 1, gql_ir_vm_field_meta_t);
+    meta_seed.result_name_sv = *result_name_svp;
+    meta_seed.field_name_sv = *field_name_svp;
+    meta_seed.return_type_sv = entry->return_type_sv;
+    meta_seed.completion_type_sv = meta_completion_type_sv;
+    meta_seed.argument_count = entry->cold_inline.argument_count;
+    meta_seed.field_arg_count = entry->cold_inline.field_arg_count;
+    meta_seed.directive_count = entry->cold_inline.directive_count;
+    meta_seed.selection_count = entry->cold_inline.selection_count;
+    meta_seed.trivial_completion_flags = trivial_completion_flags;
+    meta_seed.meta_dispatch_kind = meta_dispatch_kind;
+    meta_seed.resolve_dispatch_kind = resolve_dispatch_kind;
+    meta_seed.args_dispatch_kind = args_dispatch_kind;
+    meta_seed.completion_dispatch_kind = completion_dispatch_kind;
+    entry->meta = gql_ir_vm_field_meta_from_seed(aTHX_ entry, &meta_seed);
     if (!entry->meta) {
       goto fail;
     }
+    gql_ir_init_native_field_ops(entry);
     gql_ir_native_field_hot_refresh(entry);
     if (completion_type_sv) {
       SvREFCNT_dec(completion_type_sv);

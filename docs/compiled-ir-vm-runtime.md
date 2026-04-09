@@ -352,6 +352,25 @@ entire new memory layout in one shot; it is creating a clear place where we can
 move hot operands without keeping the whole execution loop coupled to the full
 entry struct.
 
+The next ownership cleanup on top of that split is now landed as well:
+
+- op-stream state no longer lives redundantly on the full lowered entry
+- trivial-completion flags and completion dispatch state also moved under
+  immutable field metadata
+- clone/build paths now seed metadata and derive op arrays from that metadata,
+  instead of preserving a second control copy on the full entry
+
+This matters because the eventual VM/runtime should not need the full entry to
+be a shadow owner of the same control state. The hot loop should only need:
+
+- immutable metadata
+- hot operands
+- mutable frame state
+- result writer state
+
+and the full lowered entry should be free to keep shrinking toward import /
+clone / export duties rather than hot execution duties.
+
 ### Why This Matters
 
 The compiled-IR runtime is now much closer to a VM-style executor, so the next

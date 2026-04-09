@@ -1427,3 +1427,34 @@ Interpretation:
 - the abstract target remains effectively tied
 - this is acceptable because the point of the change is to make the VM/runtime
   loop less dependent on the full entry struct before shrinking it further
+
+Follow-up after moving control/trivial metadata fully into `meta`:
+
+- lowered field-plan entries no longer store duplicated completion/op/dispatch
+  control fields directly on the full entry
+- `completion_type`, trivial-completion flags, op stream, and dispatch enums
+  now live under immutable field metadata, and cloning rebuilds that metadata
+  from a seed instead of copying runtime control state field-by-field
+- the hot loop was already using `meta + hot + writer`; this change makes that
+  ownership model explicit by removing one more category of full-entry control
+  data
+
+Latest spot verification after the control-metadata move:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 78640/s`
+  - `houtou_xs_ast 76624/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 40841/s`
+  - `houtou_xs_ast 41253/s`
+
+Interpretation:
+
+- `nested_variable_object` did not regress in this spot check and stays ahead
+  of `houtou_xs_ast`
+- `abstract_with_fragment` remains close to parity, which is acceptable for a
+  locality/ownership cleanup step
+- the architectural value is that future shrinking of the full entry no longer
+  has to preserve a second copy of dispatch/op/trivial-completion state

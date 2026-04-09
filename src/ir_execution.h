@@ -3420,10 +3420,6 @@ gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *p
     }
     if (src->cold) {
       dst->cold_inline.node_count = src->cold->node_count;
-      dst->cold_inline.argument_count = src->cold->argument_count;
-      dst->cold_inline.field_arg_count = src->cold->field_arg_count;
-      dst->cold_inline.directive_count = src->cold->directive_count;
-      dst->cold_inline.selection_count = src->cold->selection_count;
     }
     dst->operands_ready = src->operands_ready;
     gql_ir_native_field_cold_refresh(dst);
@@ -3875,6 +3871,10 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     SV **selection_count_svp;
     const char *field_name_pv;
     STRLEN field_name_len;
+    UV argument_count;
+    UV field_arg_count;
+    UV directive_count;
+    UV selection_count;
 
     if (!result_name_svp || !SvOK(*result_name_svp)) {
       goto fail;
@@ -3930,6 +3930,15 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     if (field_name_len == 10 && memEQ(field_name_pv, "__typename", 10)) {
       meta_dispatch_kind = GQL_IR_NATIVE_META_DISPATCH_TYPENAME;
     }
+    argument_count = (argument_count_svp && SvOK(*argument_count_svp)) ? SvUV(*argument_count_svp) : 0;
+    field_arg_count =
+      (field_args_svp
+       && SvROK(*field_args_svp)
+       && SvTYPE(SvRV(*field_args_svp)) == SVt_PVHV)
+        ? (UV)HvUSEDKEYS((HV *)SvRV(*field_args_svp))
+        : 0;
+    directive_count = (directive_count_svp && SvOK(*directive_count_svp)) ? SvUV(*directive_count_svp) : 0;
+    selection_count = (selection_count_svp && SvOK(*selection_count_svp)) ? SvUV(*selection_count_svp) : 0;
     entry->field_def_sv = gql_execution_share_or_copy_sv(*field_def_svp);
     if (type_svp && SvOK(*type_svp)) {
       entry->type_sv = gql_execution_share_or_copy_sv(*type_svp);
@@ -3946,15 +3955,6 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     entry->nodes_sv = gql_execution_share_or_copy_sv(*nodes_svp);
     entry->first_node_sv = gql_execution_share_or_copy_sv(*first_node_svp);
     entry->cold_inline.node_count = (node_count_svp && SvOK(*node_count_svp)) ? SvUV(*node_count_svp) : 0;
-    entry->cold_inline.argument_count = (argument_count_svp && SvOK(*argument_count_svp)) ? SvUV(*argument_count_svp) : 0;
-    entry->cold_inline.field_arg_count =
-      (field_args_svp
-       && SvROK(*field_args_svp)
-       && SvTYPE(SvRV(*field_args_svp)) == SVt_PVHV)
-        ? (UV)HvUSEDKEYS((HV *)SvRV(*field_args_svp))
-        : 0;
-    entry->cold_inline.directive_count = (directive_count_svp && SvOK(*directive_count_svp)) ? SvUV(*directive_count_svp) : 0;
-    entry->cold_inline.selection_count = (selection_count_svp && SvOK(*selection_count_svp)) ? SvUV(*selection_count_svp) : 0;
     entry->abstract_child_plan_table = gql_ir_lower_single_node_abstract_child_plan_table(
       aTHX_ entry->type_sv,
       entry->nodes_sv
@@ -3969,10 +3969,10 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     meta_seed.field_name_sv = *field_name_svp;
     meta_seed.return_type_sv = (type_svp && SvOK(*type_svp)) ? *type_svp : NULL;
     meta_seed.completion_type_sv = meta_completion_type_sv;
-    meta_seed.argument_count = entry->cold_inline.argument_count;
-    meta_seed.field_arg_count = entry->cold_inline.field_arg_count;
-    meta_seed.directive_count = entry->cold_inline.directive_count;
-    meta_seed.selection_count = entry->cold_inline.selection_count;
+    meta_seed.argument_count = argument_count;
+    meta_seed.field_arg_count = field_arg_count;
+    meta_seed.directive_count = directive_count;
+    meta_seed.selection_count = selection_count;
     meta_seed.trivial_completion_flags = trivial_completion_flags;
     meta_seed.meta_dispatch_kind = meta_dispatch_kind;
     meta_seed.resolve_dispatch_kind = resolve_dispatch_kind;
@@ -4131,6 +4131,7 @@ gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled
     gql_ir_compiled_root_field_plan_t *root_field_plan = gql_ir_execution_lowered_root_field_plan(compiled);
     for (field_i = 0; field_i < root_field_plan->field_count; field_i++) {
       gql_ir_compiled_root_field_plan_entry_t *entry = &root_field_plan->entries[field_i];
+      gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
       gql_ir_vm_field_cold_t *cold = gql_ir_native_field_cold(entry);
       SV *result_name_sv = gql_ir_native_field_result_name(entry);
       SV *field_name_sv = gql_ir_native_field_name(entry);
@@ -4151,9 +4152,9 @@ gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled
         gql_store_sv(field_plan_hv, "path", newRV_noinc((SV *)path_av));
       }
       hv_stores(field_plan_hv, "node_count", newSVuv(cold ? cold->node_count : 0));
-      hv_stores(field_plan_hv, "argument_count", newSVuv(cold ? cold->argument_count : 0));
-      hv_stores(field_plan_hv, "directive_count", newSVuv(cold ? cold->directive_count : 0));
-      hv_stores(field_plan_hv, "selection_count", newSVuv(cold ? cold->selection_count : 0));
+      hv_stores(field_plan_hv, "argument_count", newSVuv(meta ? meta->argument_count : 0));
+      hv_stores(field_plan_hv, "directive_count", newSVuv(meta ? meta->directive_count : 0));
+      hv_stores(field_plan_hv, "selection_count", newSVuv(meta ? meta->selection_count : 0));
 
       av_push(field_order_av, gql_execution_share_or_copy_sv(result_name_sv));
       (void)hv_store_ent(

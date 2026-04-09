@@ -1517,3 +1517,33 @@ Interpretation:
   for another locality-driven shrink step
 - the full entry is now closer to a mutable execution shell, while read-only
   type/name/control data continue consolidating under metadata
+
+Follow-up after dropping duplicated count fields from the cold view:
+
+- `argument_count`, `field_arg_count`, `directive_count`, and
+  `selection_count` are now owned only by immutable field metadata
+- the cold view now focuses on `path` and `node_count`, which better matches
+  its real role as fallback/export state rather than hot execution state
+- clone/import/export paths now read those counts from metadata, so the full
+  entry and cold view both shrink without changing the runtime ownership model
+
+Latest spot verification after trimming the cold count payload:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-4`)
+  - `houtou_compiled_ir 77825/s`
+  - `houtou_xs_ast 76823/s`
+- `abstract_with_fragment` (`--count=-4`)
+  - `houtou_compiled_ir 41057/s`
+  - `houtou_xs_ast 40960/s`
+
+Interpretation:
+
+- `nested_variable_object` remains ahead, so the smaller cold/full entry shape
+  is safe for the object-heavy case
+- `abstract_with_fragment` stays effectively tied, which is acceptable for a
+  cache-locality cleanup step
+- the next shrink step should continue pushing read-mostly export/debug
+  payload out of hot-adjacent structs without changing ownership of the truly
+  hot operands yet

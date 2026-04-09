@@ -400,6 +400,20 @@ This is a small but important step toward the intended shape:
 - the full entry becomes mostly a container for those views plus mutable
   runtime-adjacent pointers
 
+That ownership split now goes one step further for count-like metadata:
+
+- `argument_count`, `field_arg_count`, `directive_count`, and
+  `selection_count` no longer live in the cold view
+- immutable metadata is now their only owner
+- the cold view keeps just `path` and `node_count`, which are the only pieces
+  that still behave like true export/fallback payload rather than execution
+  control
+
+This matters because those counts were read-mostly, duplicated, and not part
+of the true hot execution operand set. Moving them into metadata trims the
+full entry and cold view without destabilizing the ownership model that the
+runtime loop already depends on.
+
 ### Why This Matters
 
 The compiled-IR runtime is now much closer to a VM-style executor, so the next

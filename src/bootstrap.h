@@ -252,10 +252,6 @@ struct gql_ir_vm_field_hot {
 struct gql_ir_vm_field_cold {
   SV *path_sv;
   UV node_count;
-  UV argument_count;
-  UV field_arg_count;
-  UV directive_count;
-  UV selection_count;
 };
 
 struct gql_ir_compiled_root_field_plan_entry {

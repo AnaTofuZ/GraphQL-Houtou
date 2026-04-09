@@ -158,6 +158,9 @@ Current status:
   execution env for sync object/abstract child plans, instead of rebuilding a
   fresh env from `context` for each nested direct-plan hop; this reduces
   repeated context-cache fetch/setup work on the native path
+- the same direct object/abstract child path now also keeps child object data
+  as raw native `HV*` outcomes until the parent writer consumes them, instead
+  of eagerly allocating a temporary Perl hashref at each child-plan boundary
 - field metadata has also moved toward cache-local storage: the runtime no
   longer needs one heap allocation for `gql_ir_vm_field_meta_t` per field-plan
   entry, and instead keeps that metadata inline with the compiled entry while

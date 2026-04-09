@@ -62,6 +62,10 @@ Recent conclusions that matter more than older commit-by-commit history:
   derive a child execution env from the current native env instead of
   rebuilding it from `context` and re-fetching cached members for every nested
   direct-plan hop
+- compiled-IR direct object/abstract child completion now also keeps child
+  object results as raw native `HV*` outcomes until the parent writer actually
+  attaches them, instead of eagerly wrapping each child object result in a
+  temporary Perl hashref at the child-plan boundary
 - VM/runtime work is now also explicitly targeting memory locality:
   native field metadata is no longer a separately allocated heap object per
   entry, and instead lives inline with the compiled field-plan entry so the
@@ -69,14 +73,14 @@ Recent conclusions that matter more than older commit-by-commit history:
   allocation/free pair per field
 - latest writer-boundary spot measurements remain in-range:
   - `nested_variable_object --count=-3`
-    - `houtou_compiled_ir 81261/s`
-    - `houtou_xs_ast 76972/s`
+    - `houtou_compiled_ir 80926/s`
+    - `houtou_xs_ast 77795/s`
   - `list_of_objects --count=-3`
     - `houtou_compiled_ir 62637/s`
     - `houtou_xs_ast 61250/s`
   - `abstract_with_fragment --count=-3`
-    - `houtou_compiled_ir 42040/s`
-    - `houtou_xs_ast 41647/s`
+    - `houtou_compiled_ir 42331/s`
+    - `houtou_xs_ast 42306/s`
 
 ## Ecosystem Gap Guardrail
 

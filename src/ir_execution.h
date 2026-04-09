@@ -142,14 +142,30 @@ static int gql_ir_try_complete_sync_list_into_outcome(
   SV *result_sv,
   gql_ir_native_field_frame_t *frame
 );
+static int gql_ir_try_complete_sync_object_into_outcome(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  SV *return_type,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result_sv,
+  gql_ir_native_field_frame_t *frame
+);
 static int gql_ir_try_complete_abstract_sync_into(
-  pTHX_ SV *context,
+  pTHX_ gql_ir_native_exec_env_t *env,
   SV *return_type,
   SV *nodes,
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result,
   gql_ir_native_field_frame_t *frame,
   gql_ir_compiled_root_field_plan_entry_t *entry
+);
+static int gql_ir_execute_native_child_field_plan_sync_to_outcome(
+  pTHX_ gql_ir_native_exec_env_t *parent_env,
+  SV *child_parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  SV **data_out,
+  AV **errors_out
 );
 static int gql_ir_execute_native_field_plan_sync_to_outcome(
   pTHX_ SV *context_sv,
@@ -458,7 +474,7 @@ gql_ir_native_field_normalize_sync_completed_outcome(
 
 static int
 gql_ir_try_complete_abstract_sync_into(
-  pTHX_ SV *context,
+  pTHX_ gql_ir_native_exec_env_t *env,
   SV *return_type,
   SV *nodes,
   gql_execution_lazy_resolve_info_t *lazy_info,
@@ -466,11 +482,19 @@ gql_ir_try_complete_abstract_sync_into(
   gql_ir_native_field_frame_t *frame,
   gql_ir_compiled_root_field_plan_entry_t *entry
 ) {
+  SV *context;
   SV *resolve_type_sv;
-  HV *context_hv = (SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV) ? (HV *)SvRV(context) : NULL;
-  SV **schema_svp = context_hv ? hv_fetch(context_hv, "schema", 6, 0) : NULL;
+  HV *context_hv;
+  SV **schema_svp = NULL;
 
-  if (!return_type || !SvOK(return_type)
+  context = env ? env->context_sv : NULL;
+  context_hv = (SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV) ? (HV *)SvRV(context) : NULL;
+  schema_svp = context_hv ? hv_fetch(context_hv, "schema", 6, 0) : NULL;
+
+  if (!env
+      || !context
+      || !return_type
+      || !SvOK(return_type)
       || !frame
       || !(sv_does(return_type, "GraphQL::Houtou::Role::Abstract")
            || sv_does(return_type, "GraphQL::Role::Abstract"))) {
@@ -550,9 +574,9 @@ gql_ir_try_complete_abstract_sync_into(
             AV *errors_av = NULL;
             SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
             SvREFCNT_dec(runtime_type_or_name);
-            if (gql_ir_execute_native_field_plan_sync_to_outcome(
+            if (gql_ir_execute_native_child_field_plan_sync_to_outcome(
                   aTHX_
-                  context,
+                  env,
                   runtime_type,
                   result,
                   path,
@@ -583,6 +607,68 @@ gql_ir_try_complete_abstract_sync_into(
 
   SvREFCNT_dec(resolve_type_sv);
   return 0;
+}
+
+static int
+gql_ir_execute_native_child_field_plan_sync_to_outcome(
+  pTHX_ gql_ir_native_exec_env_t *parent_env,
+  SV *child_parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  SV **data_out,
+  AV **errors_out
+) {
+  gql_ir_native_exec_env_t child_env;
+  gql_ir_native_result_writer_t writer;
+  int promise_present = 0;
+
+  if (data_out) {
+    *data_out = NULL;
+  }
+  if (errors_out) {
+    *errors_out = NULL;
+  }
+
+  if (!parent_env
+      || !field_plan
+      || !data_out
+      || !errors_out
+      || (parent_env->promise_code_sv && SvOK(parent_env->promise_code_sv))) {
+    return 0;
+  }
+
+  child_env = *parent_env;
+  child_env.parent_type_sv = child_parent_type_sv;
+  child_env.root_value_sv = root_value;
+  child_env.base_path_sv = path_sv;
+
+  gql_ir_init_native_result_writer(&writer);
+  if (!gql_ir_run_native_field_plan_loop_into_writer(
+        aTHX_
+        NULL,
+        field_plan,
+        &child_env,
+        &writer,
+        &promise_present,
+        0
+      )) {
+    gql_ir_cleanup_native_result_writer(&writer);
+    return 0;
+  }
+
+  if (promise_present || writer.pending_count > 0 || !writer.direct_data_hv) {
+    gql_ir_cleanup_native_result_writer(&writer);
+    return 0;
+  }
+
+  *data_out = newRV_noinc((SV *)writer.direct_data_hv);
+  writer.direct_data_hv = NULL;
+  *errors_out = writer.all_errors_av;
+  writer.all_errors_av = NULL;
+
+  gql_ir_cleanup_native_result_writer(&writer);
+  return 1;
 }
 
 static SV *
@@ -1341,6 +1427,65 @@ gql_ir_native_field_complete_trivial_result(
 }
 
 static int
+gql_ir_try_complete_sync_object_into_outcome(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  SV *return_type,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result_sv,
+  gql_ir_native_field_frame_t *frame
+) {
+  gql_ir_compiled_root_field_plan_t *native_field_plan;
+  SV *path_sv;
+  SV *data_sv = NULL;
+  AV *errors_av = NULL;
+
+  if (!env
+      || !return_type
+      || !SvOK(return_type)
+      || !lazy_info
+      || !lazy_info->nodes_sv
+      || !result_sv
+      || !SvOK(result_sv)
+      || !frame
+      || (env->promise_code_sv && SvOK(env->promise_code_sv))) {
+    return 0;
+  }
+
+  if (!(SvROK(return_type)
+        && (sv_derived_from(return_type, "GraphQL::Houtou::Type::Object")
+            || sv_derived_from(return_type, "GraphQL::Type::Object")))) {
+    return 0;
+  }
+
+  native_field_plan = gql_execution_collect_single_node_concrete_native_field_plan(
+    aTHX_ return_type,
+    lazy_info->nodes_sv
+  );
+  if (!native_field_plan) {
+    return 0;
+  }
+
+  path_sv = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
+  if (!gql_ir_execute_native_child_field_plan_sync_to_outcome(
+        aTHX_
+        env,
+        return_type,
+        result_sv,
+        path_sv,
+        native_field_plan,
+        &data_sv,
+        &errors_av
+      )) {
+    return 0;
+  }
+
+  frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+  frame->outcome_sv = data_sv;
+  frame->outcome_errors_av = errors_av;
+  return 1;
+}
+
+static int
 gql_ir_try_complete_sync_list_into_outcome(
   pTHX_ gql_ir_native_exec_env_t *env,
   SV *return_type,
@@ -1475,13 +1620,25 @@ gql_ir_native_field_complete_generic_result(
   if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
       && gql_ir_try_complete_abstract_sync_into(
            aTHX_
-           env->context_sv,
+           env,
            return_type_sv,
            nodes_sv,
            lazy_info,
            result_sv,
            frame,
            entry
+         )) {
+    return 1;
+  }
+
+  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
+      && gql_ir_try_complete_sync_object_into_outcome(
+           aTHX_
+           env,
+           return_type_sv,
+           lazy_info,
+           result_sv,
+           frame
          )) {
     return 1;
   }

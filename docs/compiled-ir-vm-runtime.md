@@ -154,6 +154,10 @@ Current status:
   plan; it now drives the loop with `writer + promise_present` directly, which
   better matches the future VM split between hot-path result sinks and
   execution-level finalization
+- compiled-IR-owned direct child execution now also reuses the parent native
+  execution env for sync object/abstract child plans, instead of rebuilding a
+  fresh env from `context` for each nested direct-plan hop; this reduces
+  repeated context-cache fetch/setup work on the native path
 - field metadata has also moved toward cache-local storage: the runtime no
   longer needs one heap allocation for `gql_ir_vm_field_meta_t` per field-plan
   entry, and instead keeps that metadata inline with the compiled entry while

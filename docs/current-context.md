@@ -57,6 +57,11 @@ Recent conclusions that matter more than older commit-by-commit history:
   `*_sync_to_outcome(...)` path; it now runs against `writer + promise_present`
   directly, which is closer to the intended VM/runtime split between hot-path
   writing and execution-level finalization
+- compiled-IR sync child-plan execution now also has an internal
+  parent-env-reuse path: object and abstract direct child-plan completion can
+  derive a child execution env from the current native env instead of
+  rebuilding it from `context` and re-fetching cached members for every nested
+  direct-plan hop
 - VM/runtime work is now also explicitly targeting memory locality:
   native field metadata is no longer a separately allocated heap object per
   entry, and instead lives inline with the compiled field-plan entry so the
@@ -64,14 +69,14 @@ Recent conclusions that matter more than older commit-by-commit history:
   allocation/free pair per field
 - latest writer-boundary spot measurements remain in-range:
   - `nested_variable_object --count=-3`
-    - `houtou_compiled_ir 81517/s`
-    - `houtou_xs_ast 81766/s`
+    - `houtou_compiled_ir 81261/s`
+    - `houtou_xs_ast 76972/s`
   - `list_of_objects --count=-3`
     - `houtou_compiled_ir 62637/s`
     - `houtou_xs_ast 61250/s`
   - `abstract_with_fragment --count=-3`
-    - `houtou_compiled_ir 43609/s`
-    - `houtou_xs_ast 42897/s`
+    - `houtou_compiled_ir 42040/s`
+    - `houtou_xs_ast 41647/s`
 
 ## Ecosystem Gap Guardrail
 

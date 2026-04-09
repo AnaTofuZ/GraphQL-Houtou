@@ -1290,3 +1290,58 @@ Current project decision:
 See:
 
 - `docs/compiled-ir-vm-runtime.md`
+
+## April 2026 VM Runtime Follow-Up
+
+The current branch is now pushing the new compiled-IR runtime in a direction
+that is explicitly cache-locality-aware, not only "fewer Perl objects".
+
+Current implementation status:
+
+- lowered program ownership exists as `program -> root_block -> field_plan`
+- field execution already separates immutable metadata, mutable frame state,
+  and a native result writer
+- sync child-plan runners already operate on `(writer, promise_present)` rather
+  than a full execution accumulator
+- sync trivial completion, sync object-child direct paths, and sync list fast
+  paths can already produce native outcomes instead of always flowing through
+  Perl `{ data, errors }` envelopes
+
+Newest structural step:
+
+- each lowered field-plan entry now has an inline immutable metadata block and
+  a separate inline "hot operand" view for values that the execution loop
+  touches on nearly every field
+- the hot view currently carries `field_def`, `return_type`, `type`, `resolve`,
+  `nodes`, `first_node`, and `abstract_child_plan_table`
+- hot paths such as resolver selection, generic completion, frame setup, and
+  abstract-child native lookup now prefer this hot view instead of repeatedly
+  reading the colder full entry
+
+Latest spot verification after landing the first hot-operand pass:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 80894/s`
+  - `houtou_xs_ast 78156/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 42593/s`
+  - `houtou_xs_ast 42575/s`
+
+Interpretation:
+
+- the first hot/cold split step does not yet create a large standalone win
+- it does keep the broader sync object case ahead while leaving the abstract
+  target roughly tied
+- this is acceptable because the main value of the change is architectural:
+  the runtime loop is starting to traverse a denser hot working set
+
+Current next steps:
+
+- move more frequently touched operands out of the full entry and into the
+  hot view, while pushing path/count/debug-style data into colder storage
+- keep shrinking the places where compiled-IR still uses Perl completed
+  envelopes as an internal currency
+- preserve an explicit fallback boundary so future VM lowering can retire
+  mixed paths block by block

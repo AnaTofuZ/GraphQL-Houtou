@@ -306,3 +306,52 @@ The new runtime is worth keeping if it can do both:
 
 If it only improves one micro-benchmark by layering more mixed-mode branches
 onto the old executor, that is not success.
+
+## Cache-Locality Direction
+
+The next runtime work should explicitly optimize for CPU cache locality and
+pointer-chase reduction, not just "fewer Perl objects".
+
+That means treating a lowered field-plan entry as two different shapes:
+
+- hot: operands touched by the inner execution loop on nearly every field
+- cold: counts, path/debug metadata, fallback-only details, and setup data
+
+The first hot/cold split is now partially landed:
+
+- immutable field metadata is already separated from mutable runtime frames
+- each lowered entry now also has an inline hot-operand view carrying:
+  - `field_def`
+  - `return_type`
+  - `type`
+  - `resolve`
+  - `nodes`
+  - `first_node`
+  - `abstract_child_plan_table`
+- resolver selection, generic completion, frame setup, and abstract-child
+  lookup now prefer that hot view
+
+This is intentionally conservative. The current step is not trying to build an
+entire new memory layout in one shot; it is creating a clear place where we can
+move hot operands without keeping the whole execution loop coupled to the full
+entry struct.
+
+### Why This Matters
+
+The compiled-IR runtime is now much closer to a VM-style executor, so the next
+real performance wins are likely to come from:
+
+- tighter hot structs that fit more useful operands per cache line
+- fewer dependent loads from cold/full entries
+- fewer transient Perl allocations on success paths
+
+This is a better fit for the current architecture than more local
+`sv_does`/`sv_derived_from`/resolve-type micro-optimizations.
+
+### Near-Term Plan
+
+1. continue moving hot operands into the hot view
+2. push path/count/debug/fallback data out of the hot loop
+3. let child-plan runners and outcome writers operate mostly on hot metadata
+4. only after that, lower those hot operands into a more explicit VM opcode /
+   operand stream

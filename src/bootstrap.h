@@ -150,6 +150,7 @@ typedef struct gql_ir_compiled_root_field_plan gql_ir_compiled_root_field_plan_t
 typedef struct gql_ir_execution_lowered_plan gql_ir_execution_lowered_plan_t;
 typedef struct gql_ir_vm_block gql_ir_vm_block_t;
 typedef struct gql_ir_vm_field_meta gql_ir_vm_field_meta_t;
+typedef struct gql_ir_vm_field_hot gql_ir_vm_field_hot_t;
 typedef struct gql_ir_vm_program gql_ir_vm_program_t;
 typedef struct gql_ir_lowered_abstract_child_entry gql_ir_lowered_abstract_child_entry_t;
 typedef struct gql_ir_lowered_abstract_child_plan_table gql_ir_lowered_abstract_child_plan_table_t;
@@ -237,9 +238,21 @@ struct gql_ir_vm_field_meta {
   gql_ir_native_completion_dispatch_kind_t completion_dispatch_kind;
 };
 
+struct gql_ir_vm_field_hot {
+  SV *field_def_sv;
+  SV *return_type_sv;
+  SV *type_sv;
+  SV *resolve_sv;
+  SV *nodes_sv;
+  SV *first_node_sv;
+  gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
+};
+
 struct gql_ir_compiled_root_field_plan_entry {
   gql_ir_vm_field_meta_t *meta;
   gql_ir_vm_field_meta_t meta_inline;
+  gql_ir_vm_field_hot_t *hot;
+  gql_ir_vm_field_hot_t hot_inline;
   SV *result_name_sv;
   SV *field_name_sv;
   SV *field_def_sv;

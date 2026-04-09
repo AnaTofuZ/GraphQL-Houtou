@@ -53,16 +53,20 @@ Recent conclusions that matter more than older commit-by-commit history:
   completed through the existing direct-data helper, the executor now produces
   a direct native list outcome instead of immediately falling back to
   completed-envelope list completion
+- sync child-plan execution no longer needs a full `exec_accum` in the
+  `*_sync_to_outcome(...)` path; it now runs against `writer + promise_present`
+  directly, which is closer to the intended VM/runtime split between hot-path
+  writing and execution-level finalization
 - latest writer-boundary spot measurements remain in-range:
+  - `nested_variable_object --count=-3`
+    - `houtou_compiled_ir 81517/s`
+    - `houtou_xs_ast 81766/s`
   - `list_of_objects --count=-3`
-    - `houtou_compiled_ir 60119/s`
-    - `houtou_xs_ast 59024/s`
+    - `houtou_compiled_ir 62637/s`
+    - `houtou_xs_ast 61250/s`
   - `abstract_with_fragment --count=-3`
-    - `houtou_compiled_ir 42724/s`
-    - `houtou_xs_ast 43305/s`
-  - `async_list --count=-3`
-    - `houtou_compiled_ir 44800/s`
-    - `houtou_facade_ast 44685/s`
+    - `houtou_compiled_ir 43609/s`
+    - `houtou_xs_ast 42897/s`
 
 ## Ecosystem Gap Guardrail
 

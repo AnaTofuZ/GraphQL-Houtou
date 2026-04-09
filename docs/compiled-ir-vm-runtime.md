@@ -149,6 +149,11 @@ Current status:
   no-promise and every list item completes through the existing direct-data
   helper; this stays inside the compiled-IR runtime instead of broadening the
   generic execution helper too early
+- the sync child-plan `*_sync_to_outcome(...)` path has also been narrowed so
+  it no longer allocates a full execution accumulator just to run a sync child
+  plan; it now drives the loop with `writer + promise_present` directly, which
+  better matches the future VM split between hot-path result sinks and
+  execution-level finalization
 
 ## Early Design Constraints
 

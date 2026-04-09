@@ -250,6 +250,11 @@ direct native outcomes before the consume phase. This is important because it
 shrinks the remaining places where the runtime still has to treat Perl
 `{ data, errors }` envelopes as an internal execution currency.
 
+The next extension of that idea is now underway too: when a compiled-IR field
+completes to a plain object with a single-node concrete child plan, the sync
+generic completion path may jump straight into the native child-plan executor
+and return a direct outcome instead of first materializing a completed hash.
+
 ### 5. Fallback Boundary
 
 The first VM/runtime slice should still allow explicit fallback to the current

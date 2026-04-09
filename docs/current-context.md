@@ -41,13 +41,16 @@ Recent conclusions that matter more than older commit-by-commit history:
 - sync trivial completion paths now normalize `completed { data, errors }`
   hashes into direct native outcomes before `consume`, which further narrows
   the surface where the writer has to interpret Perl completed envelopes
+- sync generic completion now also tries a plain-object native child-plan
+  direct path for compiled IR single-node object children before falling back
+  to generic completed envelopes
 - latest writer-boundary spot measurements remain in-range:
   - `nested_variable_object --count=-3`
-    - `houtou_compiled_ir 83649/s`
-    - `houtou_xs_ast 80142/s`
+    - `houtou_compiled_ir 82048/s`
+    - `houtou_xs_ast 77700/s`
   - `abstract_with_fragment --count=-3`
-    - `houtou_compiled_ir 43826/s`
-    - `houtou_xs_ast 43962/s`
+    - `houtou_compiled_ir 42593/s`
+    - `houtou_xs_ast 42440/s`
 
 ## Ecosystem Gap Guardrail
 

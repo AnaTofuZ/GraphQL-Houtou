@@ -48,13 +48,21 @@ Recent conclusions that matter more than older commit-by-commit history:
   `gql_execution_complete_value_catching_error_xs_lazy_data_fast(...)`, so the
   compiled-IR generic completion path can reuse a narrower execution helper
   instead of carrying the special case inline
+- sync generic completion in `compiled_ir` now also has a compiled-IR-only
+  narrow list path: if a list field is sync/no-promise and every item can be
+  completed through the existing direct-data helper, the executor now produces
+  a direct native list outcome instead of immediately falling back to
+  completed-envelope list completion
 - latest writer-boundary spot measurements remain in-range:
-  - `nested_variable_object --count=-3`
-    - `houtou_compiled_ir 81177/s`
-    - `houtou_xs_ast 78884/s`
+  - `list_of_objects --count=-3`
+    - `houtou_compiled_ir 60119/s`
+    - `houtou_xs_ast 59024/s`
   - `abstract_with_fragment --count=-3`
-    - `houtou_compiled_ir 42331/s`
-    - `houtou_xs_ast 41945/s`
+    - `houtou_compiled_ir 42724/s`
+    - `houtou_xs_ast 43305/s`
+  - `async_list --count=-3`
+    - `houtou_compiled_ir 44800/s`
+    - `houtou_facade_ast 44685/s`
 
 ## Ecosystem Gap Guardrail
 

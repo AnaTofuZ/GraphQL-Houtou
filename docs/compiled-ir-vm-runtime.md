@@ -144,6 +144,11 @@ Current status:
 - a second narrow split is now in progress: stable field metadata is being
   hoisted into an immutable metadata record that the runtime field frame can
   point at, while mutable resolver/result/outcome state remains in the frame
+- the next narrow slice has also landed: sync generic completion in
+  `compiled_ir` can now produce a direct native list outcome when the field is
+  no-promise and every list item completes through the existing direct-data
+  helper; this stays inside the compiled-IR runtime instead of broadening the
+  generic execution helper too early
 
 ## Early Design Constraints
 

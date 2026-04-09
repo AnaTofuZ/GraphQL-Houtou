@@ -133,6 +133,13 @@ static int gql_ir_extract_completed_outcome(
 static int gql_ir_native_field_normalize_sync_completed_outcome(
   pTHX_ gql_ir_native_field_frame_t *frame
 );
+static int gql_ir_try_complete_sync_list_into_outcome(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  SV *return_type,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result_sv,
+  gql_ir_native_field_frame_t *frame
+);
 static int gql_ir_try_complete_abstract_sync_into(
   pTHX_ SV *context,
   SV *return_type,
@@ -1235,6 +1242,109 @@ gql_ir_native_field_complete_trivial_result(
 }
 
 static int
+gql_ir_try_complete_sync_list_into_outcome(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  SV *return_type,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result_sv,
+  gql_ir_native_field_frame_t *frame
+) {
+  SV *item_type = NULL;
+  AV *result_av;
+  AV *data_av = NULL;
+  AV *errors_av = NULL;
+  I32 result_len;
+  I32 i;
+
+  if (!env
+      || !return_type
+      || !lazy_info
+      || !frame
+      || (env->promise_code_sv && SvOK(env->promise_code_sv))
+      || !(sv_derived_from(return_type, "GraphQL::Houtou::Type::List")
+           || sv_derived_from(return_type, "GraphQL::Type::List"))
+      || !result_sv
+      || !SvROK(result_sv)
+      || SvTYPE(SvRV(result_sv)) != SVt_PVAV) {
+    return 0;
+  }
+
+  item_type = gql_execution_call_type_of(aTHX_ return_type);
+  result_av = (AV *)SvRV(result_sv);
+  result_len = av_len(result_av);
+  data_av = newAV();
+
+  for (i = 0; i <= result_len; i++) {
+    SV **item_svp = av_fetch(result_av, i, 0);
+    SV *item_data_sv = NULL;
+    AV *item_errors_av = NULL;
+    SV *base_path_sv = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
+    SV *item_path_sv = gql_execution_path_with_index(aTHX_ base_path_sv, (IV)i);
+    gql_execution_lazy_resolve_info_t item_lazy_info = *lazy_info;
+
+    item_lazy_info.base_path_sv = NULL;
+    item_lazy_info.result_name_sv = NULL;
+    item_lazy_info.path_sv = item_path_sv;
+    item_lazy_info.info_sv = NULL;
+
+    if (!gql_execution_complete_value_catching_error_xs_lazy_data_fast(
+          aTHX_
+          env->context_sv,
+          item_type,
+          &item_lazy_info,
+          item_svp ? *item_svp : &PL_sv_undef,
+          &item_data_sv,
+          &item_errors_av
+        )) {
+      SvREFCNT_dec(item_path_sv);
+      if (item_errors_av) {
+        SvREFCNT_dec((SV *)item_errors_av);
+      }
+      goto fallback;
+    }
+
+    av_fill(data_av, i);
+    (void)av_store(data_av, i, item_data_sv ? item_data_sv : newSV(0));
+
+    if (item_errors_av && av_len(item_errors_av) >= 0) {
+      I32 err_len = av_len(item_errors_av);
+      I32 err_i;
+      if (!errors_av) {
+        errors_av = newAV();
+      }
+      for (err_i = 0; err_i <= err_len; err_i++) {
+        SV **err_svp = av_fetch(item_errors_av, err_i, 0);
+        if (err_svp) {
+          av_push(errors_av, SvREFCNT_inc_simple_NN(*err_svp));
+        }
+      }
+    }
+    if (item_errors_av) {
+      SvREFCNT_dec((SV *)item_errors_av);
+    }
+    SvREFCNT_dec(item_path_sv);
+  }
+
+  SvREFCNT_dec(item_type);
+  frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+  frame->outcome_sv = newRV_noinc((SV *)data_av);
+  frame->outcome_errors_av = errors_av;
+  return 1;
+
+fallback:
+  if (item_type) {
+    SvREFCNT_dec(item_type);
+  }
+  if (data_av) {
+    SvREFCNT_dec((SV *)data_av);
+  }
+  if (errors_av) {
+    SvREFCNT_dec((SV *)errors_av);
+  }
+  return 0;
+}
+
+static int
 gql_ir_native_field_complete_generic_result(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
@@ -1264,6 +1374,18 @@ gql_ir_native_field_complete_generic_result(
            result_sv,
            frame,
            entry
+         )) {
+    return 1;
+  }
+
+  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
+      && gql_ir_try_complete_sync_list_into_outcome(
+           aTHX_
+           env,
+           entry->return_type_sv ? entry->return_type_sv : entry->type_sv,
+           lazy_info,
+           result_sv,
+           frame
          )) {
     return 1;
   }

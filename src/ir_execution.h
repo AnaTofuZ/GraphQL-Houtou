@@ -1271,11 +1271,10 @@ gql_ir_native_field_complete_generic_result(
   if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))) {
     SV *direct_data_sv = NULL;
     AV *direct_errors_av = NULL;
-    SV *object_type = entry->return_type_sv ? entry->return_type_sv : entry->type_sv;
     if (gql_execution_complete_value_catching_error_xs_lazy_data_fast(
           aTHX_
           env->context_sv,
-          object_type,
+          entry->return_type_sv ? entry->return_type_sv : entry->type_sv,
           lazy_info,
           result_sv,
           &direct_data_sv,
@@ -1285,33 +1284,6 @@ gql_ir_native_field_complete_generic_result(
       frame->outcome_sv = direct_data_sv;
       frame->outcome_errors_av = direct_errors_av;
       return 1;
-    }
-
-    if (result_sv
-        && SvOK(result_sv)
-        && SvROK(object_type)
-        && (sv_derived_from(object_type, "GraphQL::Houtou::Type::Object")
-            || sv_derived_from(object_type, "GraphQL::Type::Object"))) {
-      gql_ir_compiled_root_field_plan_t *native_field_plan
-        = gql_execution_collect_single_node_concrete_native_field_plan(aTHX_ object_type, entry->nodes_sv);
-      if (native_field_plan) {
-        SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
-        if (gql_ir_execute_native_field_plan_sync_to_outcome(
-              aTHX_
-              env->context_sv,
-              object_type,
-              result_sv,
-              path,
-              native_field_plan,
-              &direct_data_sv,
-              &direct_errors_av
-            )) {
-          frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
-          frame->outcome_sv = direct_data_sv;
-          frame->outcome_errors_av = direct_errors_av;
-          return 1;
-        }
-      }
     }
   }
 

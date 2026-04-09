@@ -35,6 +35,15 @@ static SV *gql_execution_runtime_cache_type_callback_sv(pTHX_ HV *runtime_cache_
 static SV *gql_execution_collect_concrete_compiled_object_fields(pTHX_ SV *object_type, SV *nodes, int *ok);
 static SV *gql_execution_collect_single_node_concrete_field_plan(pTHX_ SV *object_type, SV *nodes, int *ok);
 static gql_ir_compiled_root_field_plan_t *gql_execution_collect_single_node_concrete_native_field_plan(pTHX_ SV *object_type, SV *nodes);
+static int gql_ir_execute_native_field_plan_sync_to_outcome(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  SV **data_out,
+  AV **errors_out
+);
 static SV *gql_execution_build_field_plan_from_compiled_fields(pTHX_ SV *schema, SV *parent_type, SV *compiled_fields_sv);
 static SV *gql_execution_get_object_is_type_of_sv(pTHX_ SV *context, SV *type);
 static SV *gql_execution_call_abstract_resolve_type(pTHX_ SV *type);
@@ -59,6 +68,14 @@ static SV *gql_execution_complete_field_value_catching_error_xs_impl(
   SV *result
 );
 static int gql_execution_complete_value_catching_error_xs_lazy_data_fast(
+  pTHX_ SV *context,
+  SV *return_type,
+  struct gql_execution_lazy_resolve_info *lazy_info,
+  SV *result,
+  SV **data_out,
+  AV **errors_out
+);
+static int gql_execution_try_complete_single_node_object_data_fast(
   pTHX_ SV *context,
   SV *return_type,
   struct gql_execution_lazy_resolve_info *lazy_info,
@@ -4826,6 +4843,62 @@ gql_execution_complete_value_catching_error_xs_lazy_impl(
 }
 
 static int
+gql_execution_try_complete_single_node_object_data_fast(
+  pTHX_ SV *context,
+  SV *return_type,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  SV **data_out,
+  AV **errors_out
+) {
+  gql_ir_compiled_root_field_plan_t *native_field_plan;
+  SV *path_sv;
+
+  if (data_out) {
+    *data_out = NULL;
+  }
+  if (errors_out) {
+    *errors_out = NULL;
+  }
+  if (!context
+      || !return_type
+      || !SvOK(return_type)
+      || !lazy_info
+      || !lazy_info->nodes_sv
+      || !result
+      || !SvOK(result)
+      || !data_out) {
+    return 0;
+  }
+
+  if (!(SvROK(return_type)
+        && (sv_derived_from(return_type, "GraphQL::Houtou::Type::Object")
+            || sv_derived_from(return_type, "GraphQL::Type::Object")))) {
+    return 0;
+  }
+
+  native_field_plan = gql_execution_collect_single_node_concrete_native_field_plan(
+    aTHX_ return_type,
+    lazy_info->nodes_sv
+  );
+  if (!native_field_plan) {
+    return 0;
+  }
+
+  path_sv = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
+  return gql_ir_execute_native_field_plan_sync_to_outcome(
+    aTHX_
+    context,
+    return_type,
+    result,
+    path_sv,
+    native_field_plan,
+    data_out,
+    errors_out
+  );
+}
+
+static int
 gql_execution_complete_value_catching_error_xs_lazy_data_fast(
   pTHX_ SV *context,
   SV *return_type,
@@ -4903,6 +4976,18 @@ gql_execution_complete_value_catching_error_xs_lazy_data_fast(
         0,
         result,
         data_out
+      )) {
+    return 1;
+  }
+
+  if (gql_execution_try_complete_single_node_object_data_fast(
+        aTHX_
+        context,
+        return_type,
+        lazy_info,
+        result,
+        data_out,
+        errors_out
       )) {
     return 1;
   }

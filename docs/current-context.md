@@ -44,13 +44,17 @@ Recent conclusions that matter more than older commit-by-commit history:
 - sync generic completion now also tries a plain-object native child-plan
   direct path for compiled IR single-node object children before falling back
   to generic completed envelopes
+- that plain-object direct path has now been hoisted into
+  `gql_execution_complete_value_catching_error_xs_lazy_data_fast(...)`, so the
+  compiled-IR generic completion path can reuse a narrower execution helper
+  instead of carrying the special case inline
 - latest writer-boundary spot measurements remain in-range:
   - `nested_variable_object --count=-3`
-    - `houtou_compiled_ir 82048/s`
-    - `houtou_xs_ast 77700/s`
+    - `houtou_compiled_ir 81177/s`
+    - `houtou_xs_ast 78884/s`
   - `abstract_with_fragment --count=-3`
-    - `houtou_compiled_ir 42593/s`
-    - `houtou_xs_ast 42440/s`
+    - `houtou_compiled_ir 42331/s`
+    - `houtou_xs_ast 41945/s`
 
 ## Ecosystem Gap Guardrail
 

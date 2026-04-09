@@ -255,6 +255,12 @@ completes to a plain object with a single-node concrete child plan, the sync
 generic completion path may jump straight into the native child-plan executor
 and return a direct outcome instead of first materializing a completed hash.
 
+That object-child direct path is now being hoisted into a narrower
+execution-level fast helper as well. This matters because the longer-term
+goal is not to keep adding compiled-IR-only branches everywhere, but to grow a
+small set of direct-data / native-outcome helpers that both compiled-IR and
+future VM lowering can target.
+
 ### 5. Fallback Boundary
 
 The first VM/runtime slice should still allow explicit fallback to the current

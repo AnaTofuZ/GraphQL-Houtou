@@ -177,6 +177,14 @@ static int gql_ir_execute_native_child_field_plan_sync_to_direct_hv(
   HV **data_hv_out,
   AV **errors_out
 );
+static int gql_ir_execute_native_child_field_plan_sync_to_frame_outcome(
+  pTHX_ gql_ir_native_exec_env_t *parent_env,
+  SV *child_parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  gql_ir_native_field_frame_t *frame
+);
 static int gql_ir_execute_native_field_plan_sync_to_outcome(
   pTHX_ SV *context_sv,
   SV *parent_type_sv,
@@ -580,23 +588,17 @@ gql_ir_try_complete_abstract_sync_into(
               ? gql_ir_lookup_native_concrete_child_plan(abstract_child_plan_table, runtime_type)
               : gql_execution_collect_single_node_concrete_native_field_plan(aTHX_ runtime_type, nodes);
           if (native_field_plan) {
-            HV *data_hv = NULL;
-            AV *errors_av = NULL;
             SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
             SvREFCNT_dec(runtime_type_or_name);
-            if (gql_ir_execute_native_child_field_plan_sync_to_direct_hv(
+            if (gql_ir_execute_native_child_field_plan_sync_to_frame_outcome(
                   aTHX_
                   env,
                   runtime_type,
                   result,
                   path,
                   native_field_plan,
-                  &data_hv,
-                  &errors_av
+                  frame
                 )) {
-              frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV;
-              frame->outcome_sv = (SV *)data_hv;
-              frame->outcome_errors_av = errors_av;
               return 1;
             }
           }
@@ -740,6 +742,41 @@ gql_ir_execute_native_child_field_plan_sync_to_direct_hv(
   writer.all_errors_av = NULL;
 
   gql_ir_cleanup_native_result_writer(&writer);
+  return 1;
+}
+
+static int
+gql_ir_execute_native_child_field_plan_sync_to_frame_outcome(
+  pTHX_ gql_ir_native_exec_env_t *parent_env,
+  SV *child_parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  gql_ir_native_field_frame_t *frame
+) {
+  HV *data_hv = NULL;
+  AV *errors_av = NULL;
+
+  if (!frame) {
+    return 0;
+  }
+
+  if (!gql_ir_execute_native_child_field_plan_sync_to_direct_hv(
+        aTHX_
+        parent_env,
+        child_parent_type_sv,
+        root_value,
+        path_sv,
+        field_plan,
+        &data_hv,
+        &errors_av
+      )) {
+    return 0;
+  }
+
+  frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV;
+  frame->outcome_sv = (SV *)data_hv;
+  frame->outcome_errors_av = errors_av;
   return 1;
 }
 
@@ -1508,8 +1545,6 @@ gql_ir_try_complete_sync_object_into_outcome(
 ) {
   gql_ir_compiled_root_field_plan_t *native_field_plan;
   SV *path_sv;
-  HV *data_hv = NULL;
-  AV *errors_av = NULL;
 
   if (!env
       || !return_type
@@ -1538,23 +1573,15 @@ gql_ir_try_complete_sync_object_into_outcome(
   }
 
   path_sv = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
-  if (!gql_ir_execute_native_child_field_plan_sync_to_direct_hv(
+  return gql_ir_execute_native_child_field_plan_sync_to_frame_outcome(
         aTHX_
         env,
         return_type,
         result_sv,
         path_sv,
         native_field_plan,
-        &data_hv,
-        &errors_av
-      )) {
-    return 0;
-  }
-
-  frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV;
-  frame->outcome_sv = (SV *)data_hv;
-  frame->outcome_errors_av = errors_av;
-  return 1;
+        frame
+      );
 }
 
 static int

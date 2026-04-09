@@ -45,6 +45,42 @@ Recent experiments showed:
 So the next profitable step is to make `compiled_ir` execution mostly a new
 runtime, not a longer chain of local fast paths.
 
+## External Reference
+
+`Text::Xslate` is a useful reference point for this project. Its published
+design explicitly compiles templates into intermediate code and executes them
+on a virtual machine, with the goal of high performance in persistent
+applications. That is close to the architectural direction desired here for
+`compiled_ir`, even though GraphQL execution semantics are more complex than a
+template engine. See the distribution overview and description:
+
+- MetaCPAN `Text::Xslate`: <https://metacpan.org/pod/Text::Xslate>
+- GitHub repository: <https://github.com/xslate/p5-Text-Xslate>
+
+The useful lessons to import are architectural, not surface-level:
+
+- own an explicit lowered/intermediate representation
+- keep the hot runtime on a small native instruction/data model
+- separate immutable program metadata from mutable execution frames
+- delay host-language object materialization until API boundaries
+
+The runtime here should follow those principles while still preserving the
+public GraphQL execution API, promise behavior, and response semantics.
+
+Additional useful references for design ideas:
+
+- SQLite VDBE, for an owned lowered program and explicit opcode/operand model
+- Lua 5.0, for a compact register-based VM and runtime frame design
+- CPython PEP 659, for specialization, quickening, and inline-cache thinking
+
+Those references matter here not because GraphQL execution should look like a
+template engine or SQL VM, but because they all separate:
+
+- immutable program state
+- mutable execution state
+- specialization metadata
+- delayed host-language object materialization
+
 ## Target Architecture
 
 Planned stages:
@@ -101,6 +137,197 @@ Expected op families:
 - `QUEUE_PROMISE`
 
 This is intentionally more specialized than the current generic executor.
+
+## Whole-Runtime Design
+
+The future `compiled_ir` runtime should be designed as four explicit layers,
+with each layer owning a clear kind of state.
+
+### 1. Front-End Compatibility Layer
+
+This layer keeps public GraphQL behavior stable and may still accept:
+
+- schema/type objects users already build today
+- prepared IR / compiled IR entry points
+- current promise adapter API
+- current execute-style public call shapes
+
+This layer should *not* decide hot-path runtime shape. Its job is to:
+
+- validate options
+- select operation / runtime mode
+- invoke lowering
+- expose final response objects
+
+### 2. Lowering Pipeline
+
+The lowering pipeline should be explicit and multi-stage:
+
+1. normalized IR
+2. typed/specialized IR
+3. execution-lowered IR
+4. fused lowered IR
+5. threaded-op/VM program
+
+Expected responsibilities:
+
+- normalized IR:
+  preserve source-level meaning, but remove parser/AST specifics
+- typed/specialized IR:
+  resolve field metadata, return types, abstract dispatch metadata,
+  resolver-call shape, and static argument/directive facts
+- execution-lowered IR:
+  own child edges, block layout, writer metadata, and completion strategy
+- fused lowered IR:
+  collapse trivial stage boundaries where runtime data flow is fixed
+- threaded-op/VM program:
+  produce compact hot-path records for the actual runtime
+
+The key point is that runtime branching should be moved into lowering whenever
+possible.
+
+### 3. Runtime Core
+
+The runtime core should be split into:
+
+- immutable program
+- immutable field/block metadata
+- mutable execution frame
+- mutable native result writer
+- finalization / promise boundary
+
+The runtime core should not use Perl objects as its internal currency except
+where user code forces it.
+
+#### Immutable Program
+
+Own:
+
+- blocks
+- field records
+- child edges
+- abstract dispatch tables
+- static specialization flags
+- inline-cache slots / metadata hooks
+
+Do not own:
+
+- AST-compatible node trees
+- legacy compiled bucket hashes
+- eager `ResolveInfo`
+- eager Perl paths
+
+#### Execution Frame
+
+Per-field mutable state should contain only data needed for the current step:
+
+- resolved value
+- native outcome kind
+- native outcome payload
+- promise/pending marker
+- optional lazy-info/path handles
+
+The frame should be cheap to initialize, cheap to recycle, and small enough to
+stay hot in cache.
+
+#### Native Result Writer
+
+The writer should become the primary sink for successful execution.
+It should accept:
+
+- scalar/null direct value
+- raw object `HV*`
+- list head data
+- aggregated child errors
+- pending promise entries
+
+It should not require intermediate completed-envelope hashes on the sync happy
+path.
+
+### 4. Boundary Materialization
+
+Perl object materialization should be delayed to explicit boundaries:
+
+- resolver call arguments
+- `ResolveInfo` when actually needed
+- path materialization when needed for errors/info
+- promise adapter boundaries
+- final response hash creation
+
+That means the runtime should prefer:
+
+- native path chains over eager Perl arrays
+- native outcomes over `{ data, errors }`
+- writer state over temporary result hashes
+- shared immutable metadata over repeated field/node lookups
+
+## Primary Performance Priorities
+
+The most strategic optimization priorities are:
+
+1. reduce Perl `HV/AV/SV` creation on sync happy paths
+2. reduce pointer chasing in the field loop
+3. keep hot runtime structs cache-local and compact
+4. move runtime shape decisions into lowering
+5. let promise/error/final-response handling remain colder paths
+
+This project is not primarily limited by syscalls. The dominant costs are more
+often:
+
+- heap allocation
+- refcount churn
+- hash/array traversal
+- MRO/type checks
+- generic completion fallback
+- bridge crossings between native runtime and Perl-owned intermediates
+
+## What To Build Next
+
+The highest-value next steps are:
+
+1. compiled-IR-only sync `COMPLETE_OBJECT`
+2. compiled-IR-only sync `COMPLETE_LIST`
+3. compiled-IR-only sync `COMPLETE_ABSTRACT`
+4. child-plan boundaries that pass native outcomes, not completed envelopes
+5. a real threaded/block runner that consumes the lowered program directly
+
+That ordering is deliberate:
+
+- first remove generic completion fallback from common success paths
+- then make child execution and writer ownership fully native
+- only then let the VM/opcode runner become the dominant execution surface
+
+## Inline Cache Strategy
+
+The runtime should leave room for inline caches similar in spirit to
+specializing interpreters:
+
+- field-def / resolver-call shape caches
+- abstract dispatch hit caches
+- completion strategy caches
+- argument-building shape caches
+
+These caches should live in immutable program-owned slots plus tiny mutable
+runtime counters/guards, not in ad hoc Perl hashes.
+
+## Compatibility Boundary
+
+Compatibility should be preserved at the public surface:
+
+- returned response shape
+- promise behavior
+- schema/type object API
+- execute entry points
+
+Compatibility does *not* need to be preserved for:
+
+- internal AST-like data structures
+- internal compiled field bucket shape
+- internal executor helper boundaries
+- internal intermediate result representation
+
+If a future optimization requires a user-visible compatibility tradeoff,
+document and review it explicitly before landing.
 
 ## Short-Term Implementation Order
 
@@ -161,6 +388,10 @@ Current status:
 - the same direct object/abstract child path now also keeps child object data
   as raw native `HV*` outcomes until the parent writer consumes them, instead
   of eagerly allocating a temporary Perl hashref at each child-plan boundary
+- that boundary is now slightly narrower again: direct sync object/abstract
+  child-plan execution can write its raw child-object outcome straight into
+  the current field frame, rather than first staging the same `HV*`/errors
+  pair in local temporaries and then copying that state into the frame
 - field metadata has also moved toward cache-local storage: the runtime no
   longer needs one heap allocation for `gql_ir_vm_field_meta_t` per field-plan
   entry, and instead keeps that metadata inline with the compiled entry while

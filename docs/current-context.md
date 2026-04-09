@@ -2,6 +2,86 @@
 
 Compressed handoff for the current `GraphQL::Houtou` worktree.
 
+## Pause Snapshot
+
+Current pause point for `proj/compiled-ir-vm-runtime`:
+
+- working tree is clean
+- last kept runtime change is `44b5b0e` + `eebaa31`
+  plus the newer VM/runtime split work already recorded below
+- recent failed experiments were reverted:
+  - list-item-level narrow recursion inside sync list completion
+  - additional hot/cold layout tweaks that weakened `nested_variable_object`
+- current tests rechecked before pause:
+  - `minil test t/11_execution.t`
+  - `minil test t/12_promise.t`
+  - both passed
+- next profitable area is still the same:
+  - reduce the number of times `compiled_ir` falls back to
+    `gql_execution_complete_field_value_catching_error_xs_impl(...)`
+  - prefer object/list/abstract boundary narrowing over per-item recursion
+  - keep optimizing for fewer Perl `HV/AV/SV`, less pointer chasing, and
+    better hot-path locality
+- the next design baseline is now explicitly documented as a four-layer
+  runtime:
+  - front-end compatibility boundary
+  - lowering pipeline
+  - native runtime core
+  - delayed boundary materialization
+
+## Current Runtime Flow
+
+```mermaid
+flowchart TD
+    A[execute_compiled_ir_xs_impl] --> B[lowered program/root block]
+    B --> C[native field plan loop]
+    C --> D[field frame init from meta + hot + writer]
+    D --> E[resolve stage]
+
+    E --> E1[meta fast path __typename / trivial]
+    E --> E2[fixed resolver or inherited resolver call]
+    E --> E3[generic resolver call]
+
+    E1 --> F[complete stage]
+    E2 --> F
+    E3 --> F
+
+    F --> F1[try abstract sync narrow path]
+    F --> F2[try object sync narrow path]
+    F --> F3[try list sync narrow path]
+    F --> F4[try direct data fast helper]
+    F --> F5[fallback to generic XS completion]
+
+    F1 --> G[native outcome in field frame]
+    F2 --> G
+    F3 --> G
+    F4 --> G
+    F5 --> G
+
+    G --> H[writer consume]
+    H --> H1[direct value write]
+    H --> H2[direct object HV attach]
+    H --> H3[errors merge]
+    H --> H4[pending promise capture]
+
+    H1 --> I[execution finalization]
+    H2 --> I
+    H3 --> I
+    H4 --> I
+
+    I --> J[sync result hash or promise merge]
+```
+
+Hot-path interpretation:
+
+- ideal path:
+  `resolve -> narrow sync object/list/abstract completion -> native outcome ->
+  writer`
+- still-expensive path:
+  `resolve -> generic XS completion -> completed Perl envelope ->
+  outcome extraction -> writer`
+- next optimization target is to shrink that second path further
+
 ## April 2026 VM Reset
 
 The active branch for the next phase is `proj/compiled-ir-vm-runtime`.
@@ -66,6 +146,10 @@ Recent conclusions that matter more than older commit-by-commit history:
   object results as raw native `HV*` outcomes until the parent writer actually
   attaches them, instead of eagerly wrapping each child object result in a
   temporary Perl hashref at the child-plan boundary
+- direct object/abstract child-plan execution now also writes those raw child
+  outcomes straight into the field frame through a dedicated helper, instead
+  of bouncing through local `HV*/AV*` temporaries before re-encoding the same
+  state as a native field outcome
 - VM/runtime work is now also explicitly targeting memory locality:
   native field metadata is no longer a separately allocated heap object per
   entry, and instead lives inline with the compiled field-plan entry so the
@@ -73,14 +157,14 @@ Recent conclusions that matter more than older commit-by-commit history:
   allocation/free pair per field
 - latest writer-boundary spot measurements remain in-range:
   - `nested_variable_object --count=-3`
-    - `houtou_compiled_ir 80926/s`
+    - `houtou_compiled_ir 80651/s`
     - `houtou_xs_ast 77795/s`
   - `list_of_objects --count=-3`
     - `houtou_compiled_ir 62637/s`
     - `houtou_xs_ast 61250/s`
   - `abstract_with_fragment --count=-3`
-    - `houtou_compiled_ir 42331/s`
-    - `houtou_xs_ast 42306/s`
+    - `houtou_compiled_ir 43305/s`
+    - `houtou_xs_ast 43421/s`
 
 ## Ecosystem Gap Guardrail
 

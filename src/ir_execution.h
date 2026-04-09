@@ -200,6 +200,8 @@ static int gql_ir_native_field_entry_has_operands(
   gql_ir_compiled_root_field_plan_entry_t *entry
 );
 static gql_ir_vm_field_meta_t *gql_ir_native_field_meta(gql_ir_compiled_root_field_plan_entry_t *entry);
+static SV *gql_ir_native_field_result_name(gql_ir_compiled_root_field_plan_entry_t *entry);
+static SV *gql_ir_native_field_name(gql_ir_compiled_root_field_plan_entry_t *entry);
 static gql_ir_vm_field_hot_t *gql_ir_native_field_hot(gql_ir_compiled_root_field_plan_entry_t *entry);
 static void gql_ir_native_field_hot_refresh(gql_ir_compiled_root_field_plan_entry_t *entry);
 static gql_ir_vm_field_cold_t *gql_ir_native_field_cold(gql_ir_compiled_root_field_plan_entry_t *entry);
@@ -759,6 +761,18 @@ gql_ir_native_field_entry_has_operands(gql_ir_compiled_root_field_plan_entry_t *
 static gql_ir_vm_field_meta_t *
 gql_ir_native_field_meta(gql_ir_compiled_root_field_plan_entry_t *entry) {
   return entry ? entry->meta : NULL;
+}
+
+static SV *
+gql_ir_native_field_result_name(gql_ir_compiled_root_field_plan_entry_t *entry) {
+  gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
+  return (meta && meta->result_name_sv) ? meta->result_name_sv : (entry ? entry->result_name_sv : NULL);
+}
+
+static SV *
+gql_ir_native_field_name(gql_ir_compiled_root_field_plan_entry_t *entry) {
+  gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
+  return (meta && meta->field_name_sv) ? meta->field_name_sv : (entry ? entry->field_name_sv : NULL);
 }
 
 static void
@@ -1616,12 +1630,17 @@ gql_ir_ensure_native_field_entry_operands(
 ) {
   gql_ir_prepared_exec_t *prepared;
   SV *prepared_inner_sv;
+  SV *result_name_sv;
+  SV *field_name_sv;
 
   if (!compiled || !entry) {
     return 0;
   }
 
-  if ((!entry->nodes_sv || !SvOK(entry->nodes_sv)) && entry->result_name_sv && SvOK(entry->result_name_sv)) {
+  result_name_sv = gql_ir_native_field_result_name(entry);
+  field_name_sv = gql_ir_native_field_name(entry);
+
+  if ((!entry->nodes_sv || !SvOK(entry->nodes_sv)) && result_name_sv && SvOK(result_name_sv)) {
     SV *nodes_sv;
     SV **first_node_svp;
     AV *nodes_av;
@@ -1641,7 +1660,7 @@ gql_ir_ensure_native_field_entry_operands(
       prepared,
       compiled->root_type_sv,
       compiled->operation_name_sv,
-      entry->result_name_sv
+      result_name_sv
     );
     if (nodes_sv == &PL_sv_undef || !SvROK(nodes_sv) || SvTYPE(SvRV(nodes_sv)) != SVt_PVAV) {
       if (nodes_sv != &PL_sv_undef) {
@@ -1661,8 +1680,8 @@ gql_ir_ensure_native_field_entry_operands(
   }
 
   if ((!entry->field_def_sv || !SvOK(entry->field_def_sv))
-      && entry->field_name_sv && SvOK(entry->field_name_sv)) {
-    entry->field_def_sv = gql_execution_get_field_def(aTHX_ compiled->schema_sv, compiled->root_type_sv, entry->field_name_sv);
+      && field_name_sv && SvOK(field_name_sv)) {
+    entry->field_def_sv = gql_execution_get_field_def(aTHX_ compiled->schema_sv, compiled->root_type_sv, field_name_sv);
   }
 
   if (!entry->field_def_sv || !SvOK(entry->field_def_sv)
@@ -1821,13 +1840,13 @@ gql_ir_init_native_field_frame(
   frame->lazy_info.parent_type_sv = env->parent_type_sv;
   frame->lazy_info.field_def_sv = field_def_sv;
   frame->lazy_info.return_type_sv = return_type_sv;
-  frame->lazy_info.field_name_sv = (meta && meta->field_name_sv) ? meta->field_name_sv : entry->field_name_sv;
+  frame->lazy_info.field_name_sv = gql_ir_native_field_name(entry);
   frame->lazy_info.nodes_sv = nodes_sv;
   if (cold && cold->path_sv && SvOK(cold->path_sv)) {
     frame->lazy_info.path_sv = cold->path_sv;
   } else {
     frame->lazy_info.base_path_sv = env->base_path_sv;
-    frame->lazy_info.result_name_sv = (meta && meta->result_name_sv) ? meta->result_name_sv : entry->result_name_sv;
+    frame->lazy_info.result_name_sv = gql_ir_native_field_result_name(entry);
   }
 }
 
@@ -4103,10 +4122,12 @@ gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled
     for (field_i = 0; field_i < root_field_plan->field_count; field_i++) {
       gql_ir_compiled_root_field_plan_entry_t *entry = &root_field_plan->entries[field_i];
       gql_ir_vm_field_cold_t *cold = gql_ir_native_field_cold(entry);
+      SV *result_name_sv = gql_ir_native_field_result_name(entry);
+      SV *field_name_sv = gql_ir_native_field_name(entry);
       HV *field_plan_hv = newHV();
 
-      gql_store_sv(field_plan_hv, "result_name", gql_execution_share_or_copy_sv(entry->result_name_sv));
-      gql_store_sv(field_plan_hv, "field_name", gql_execution_share_or_copy_sv(entry->field_name_sv));
+      gql_store_sv(field_plan_hv, "result_name", gql_execution_share_or_copy_sv(result_name_sv));
+      gql_store_sv(field_plan_hv, "field_name", gql_execution_share_or_copy_sv(field_name_sv));
       gql_store_sv(field_plan_hv, "field_def", gql_execution_share_or_copy_sv(entry->field_def_sv));
       if (entry->return_type_sv) {
         gql_store_sv(field_plan_hv, "return_type", gql_execution_share_or_copy_sv(entry->return_type_sv));
@@ -4116,7 +4137,7 @@ gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled
         gql_store_sv(field_plan_hv, "path", gql_execution_share_or_copy_sv(cold->path_sv));
       } else {
         AV *path_av = newAV();
-        av_push(path_av, gql_execution_share_or_copy_sv(entry->result_name_sv));
+        av_push(path_av, gql_execution_share_or_copy_sv(result_name_sv));
         gql_store_sv(field_plan_hv, "path", newRV_noinc((SV *)path_av));
       }
       hv_stores(field_plan_hv, "node_count", newSVuv(cold ? cold->node_count : 0));
@@ -4124,10 +4145,10 @@ gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled
       hv_stores(field_plan_hv, "directive_count", newSVuv(cold ? cold->directive_count : 0));
       hv_stores(field_plan_hv, "selection_count", newSVuv(cold ? cold->selection_count : 0));
 
-      av_push(field_order_av, gql_execution_share_or_copy_sv(entry->result_name_sv));
+      av_push(field_order_av, gql_execution_share_or_copy_sv(result_name_sv));
       (void)hv_store_ent(
         fields_hv,
-        gql_execution_share_or_copy_sv(entry->result_name_sv),
+        gql_execution_share_or_copy_sv(result_name_sv),
         newRV_noinc((SV *)field_plan_hv),
         0
       );

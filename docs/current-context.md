@@ -1372,3 +1372,31 @@ Interpretation:
 - the broader sync object case benefits a little more clearly
 - the abstract target stays effectively tied or slightly ahead, which is good
   enough for a structural locality improvement
+
+Follow-up after making runtime name access prefer `meta`:
+
+- operand fill now looks up `result_name` / `field_name` through metadata-first
+  accessors
+- frame setup and legacy lowered-plan materialization also prefer metadata
+  rather than reading those names directly from the full entry
+- this is not yet the removal of the duplicated fields, but it makes runtime
+  execution less coupled to the full entry layout and is a prerequisite for
+  shrinking that struct later
+
+Latest spot verification after the metadata-first name access change:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 79377/s`
+  - `houtou_xs_ast 78640/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 42040/s`
+  - `houtou_xs_ast 42040/s`
+
+Interpretation:
+
+- the change is roughly neutral for the abstract target
+- the broader sync object case remains slightly ahead
+- the architectural value is that future entry-size reduction can now happen
+  with fewer runtime call sites still bound to full-entry name storage

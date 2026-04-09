@@ -1400,3 +1400,30 @@ Interpretation:
 - the broader sync object case remains slightly ahead
 - the architectural value is that future entry-size reduction can now happen
   with fewer runtime call sites still bound to full-entry name storage
+
+Follow-up after moving the field loop further onto `meta + hot`:
+
+- the main native field loop now validates and uses `field_def`, `nodes`,
+  `type`, and fixed resolver values through the hot view instead of touching
+  the full entry directly
+- metadata-driven name access remains in place, so the loop is now largely
+  coupled to `meta + hot + writer`, with `cold` only used for path/fallback
+  concerns
+
+Latest spot verification after the loop-side hot operand shift:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 82195/s`
+  - `houtou_xs_ast 78884/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 42173/s`
+  - `houtou_xs_ast 42202/s`
+
+Interpretation:
+
+- the broad sync object case benefits more clearly
+- the abstract target remains effectively tied
+- this is acceptable because the point of the change is to make the VM/runtime
+  loop less dependent on the full entry struct before shrinking it further

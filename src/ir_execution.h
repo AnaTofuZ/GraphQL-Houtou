@@ -1900,6 +1900,10 @@ gql_ir_execute_native_field_entry_into(
 ) {
   gql_ir_native_field_frame_t frame;
   gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
+  gql_ir_vm_field_hot_t *hot = gql_ir_native_field_hot(entry);
+  SV *type_sv;
+  SV *nodes_sv;
+  SV *field_def_sv;
   U8 pc = 0;
   gql_ir_native_field_op_t op;
 
@@ -1910,18 +1914,24 @@ gql_ir_execute_native_field_entry_into(
       || !writer
       || !promise_present
       || !entry
-      || !entry->field_def_sv
-      || !SvOK(entry->field_def_sv)
-      || !SvROK(entry->field_def_sv)
-      || SvTYPE(SvRV(entry->field_def_sv)) != SVt_PVHV
-      || !entry->nodes_sv
-      || !SvOK(entry->nodes_sv)
-      || !SvROK(entry->nodes_sv)
-      || SvTYPE(SvRV(entry->nodes_sv)) != SVt_PVAV
-      || !entry->type_sv
-      || !SvOK(entry->type_sv)
       || !meta
       || meta->op_count == 0) {
+    return 0;
+  }
+
+  field_def_sv = (hot && hot->field_def_sv) ? hot->field_def_sv : entry->field_def_sv;
+  nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
+  type_sv = (hot && hot->type_sv) ? hot->type_sv : entry->type_sv;
+  if (!field_def_sv
+      || !SvOK(field_def_sv)
+      || !SvROK(field_def_sv)
+      || SvTYPE(SvRV(field_def_sv)) != SVt_PVHV
+      || !nodes_sv
+      || !SvOK(nodes_sv)
+      || !SvROK(nodes_sv)
+      || SvTYPE(SvRV(nodes_sv)) != SVt_PVAV
+      || !type_sv
+      || !SvOK(type_sv)) {
     return 0;
   }
 
@@ -1972,7 +1982,7 @@ op_meta:
         aTHX_
         env,
         entry,
-        entry->type_sv,
+        type_sv,
         &frame
       )) {
     if (frame.outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
@@ -1994,7 +2004,7 @@ op_trivial_context:
         env,
         entry,
         &frame,
-        entry->type_sv,
+        type_sv,
         frame.resolve_is_default,
         &frame.result_sv
       )) {
@@ -2013,7 +2023,7 @@ op_trivial_context:
           env,
           entry,
           &frame,
-          entry->type_sv,
+          type_sv,
           0,
           &frame.result_sv
         )) {
@@ -2024,7 +2034,7 @@ op_trivial_context:
       goto op_done;
     }
     if (meta->completion_dispatch_kind == GQL_IR_NATIVE_COMPLETION_GENERIC
-        && gql_execution_try_complete_trivial_value_fast(aTHX_ entry->type_sv, frame.result_sv, &frame.outcome_sv)) {
+        && gql_execution_try_complete_trivial_value_fast(aTHX_ type_sv, frame.result_sv, &frame.outcome_sv)) {
       frame.outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
       (void)gql_ir_native_field_normalize_sync_completed_outcome(aTHX_ &frame);
       pc = meta->consume_op_index;
@@ -2036,7 +2046,7 @@ op_trivial_context:
   goto dispatch;
 
 op_call_fixed_empty_args:
-  frame.resolve_sv = entry->resolve_sv;
+  frame.resolve_sv = (hot && hot->resolve_sv) ? hot->resolve_sv : entry->resolve_sv;
   frame.resolve_is_default = 0;
   if (!gql_ir_native_field_call_resolver_empty_args(
         aTHX_
@@ -2053,7 +2063,7 @@ op_call_fixed_empty_args:
   goto dispatch;
 
 op_call_fixed_build_args:
-  frame.resolve_sv = entry->resolve_sv;
+  frame.resolve_sv = (hot && hot->resolve_sv) ? hot->resolve_sv : entry->resolve_sv;
   frame.resolve_is_default = 0;
   if (!gql_ir_native_field_call_resolver_build_args(
         aTHX_

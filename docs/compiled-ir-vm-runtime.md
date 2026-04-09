@@ -339,6 +339,9 @@ The next small slice of that split is now landed too:
   the hot loop's primary struct
 - runtime name lookups now prefer metadata-first accessors instead of reading
   `result_name` / `field_name` directly from the full entry
+- the main field loop now also prefers hot-view `field_def`, `nodes`, `type`,
+  and fixed resolver operands instead of treating the full entry as the
+  primary runtime operand store
 
 This does not yet create a radically different memory layout, but it does make
 the intended boundary explicit: the field loop should mostly walk `meta + hot`,

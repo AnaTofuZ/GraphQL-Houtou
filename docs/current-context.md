@@ -1458,3 +1458,33 @@ Interpretation:
   locality/ownership cleanup step
 - the architectural value is that future shrinking of the full entry no longer
   has to preserve a second copy of dispatch/op/trivial-completion state
+
+Follow-up after dropping duplicated runtime names from the full entry:
+
+- lowered field-plan entries no longer keep their own `result_name` /
+  `field_name`; those names now live only under immutable field metadata
+- runtime accessors already preferred metadata, so this change mostly shrinks
+  the full entry and removes one more duplicated piece of name storage from the
+  hot-adjacent layout
+- import/clone/export paths now treat metadata as the sole owner of runtime
+  field names
+
+Latest spot verification after removing the duplicated entry names:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 81023/s`
+  - `houtou_xs_ast 78443/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 42593/s`
+  - `houtou_xs_ast 42173/s`
+
+Interpretation:
+
+- `nested_variable_object` is not regressing in this run and remains clearly
+  ahead
+- `abstract_with_fragment` is slightly ahead as well, so the entry-size
+  reduction is safe to keep
+- the next shrink step should focus on moving more fallback/debug-only data out
+  of the full entry rather than re-adding duplicated runtime names

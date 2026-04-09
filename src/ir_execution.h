@@ -769,13 +769,13 @@ gql_ir_native_field_meta(gql_ir_compiled_root_field_plan_entry_t *entry) {
 static SV *
 gql_ir_native_field_result_name(gql_ir_compiled_root_field_plan_entry_t *entry) {
   gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
-  return (meta && meta->result_name_sv) ? meta->result_name_sv : (entry ? entry->result_name_sv : NULL);
+  return (meta && meta->result_name_sv) ? meta->result_name_sv : NULL;
 }
 
 static SV *
 gql_ir_native_field_name(gql_ir_compiled_root_field_plan_entry_t *entry) {
   gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
-  return (meta && meta->field_name_sv) ? meta->field_name_sv : (entry ? entry->field_name_sv : NULL);
+  return (meta && meta->field_name_sv) ? meta->field_name_sv : NULL;
 }
 
 static void
@@ -3412,8 +3412,6 @@ gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *p
     gql_ir_compiled_root_field_plan_entry_t *dst = &clone->entries[i];
     gql_ir_compiled_root_field_plan_entry_t *src = &plan->entries[i];
 
-    if (src->result_name_sv) dst->result_name_sv = gql_execution_share_or_copy_sv(src->result_name_sv);
-    if (src->field_name_sv) dst->field_name_sv = gql_execution_share_or_copy_sv(src->field_name_sv);
     if (src->field_def_sv) dst->field_def_sv = gql_execution_share_or_copy_sv(src->field_def_sv);
     if (src->return_type_sv) dst->return_type_sv = gql_execution_share_or_copy_sv(src->return_type_sv);
     if (src->type_sv) dst->type_sv = gql_execution_share_or_copy_sv(src->type_sv);
@@ -3922,8 +3920,6 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     resolve_svp = hv_fetch(field_def_hv, "resolve", 7, 0);
     field_args_svp = hv_fetch(field_def_hv, "args", 4, 0);
 
-    entry->result_name_sv = gql_execution_share_or_copy_sv(*result_name_svp);
-    entry->field_name_sv = gql_execution_share_or_copy_sv(*field_name_svp);
     args_dispatch_kind =
       ((argument_count_svp && SvOK(*argument_count_svp)) ? SvUV(*argument_count_svp) : 0) == 0
       && ((field_args_svp

@@ -371,6 +371,19 @@ be a shadow owner of the same control state. The hot loop should only need:
 and the full lowered entry should be free to keep shrinking toward import /
 clone / export duties rather than hot execution duties.
 
+The next cleanup on that same axis is now landed too:
+
+- `result_name` and `field_name` are no longer duplicated on the full lowered
+  entry
+- immutable metadata is now the sole owner of runtime field names
+- clone/import/export paths already had metadata-first accessors, so this
+  change mostly removes duplicated name storage and trims the full entry shape
+
+This is important for cache locality because those names are read constantly by
+field execution and writer paths, but they no longer need to live in two
+places. The runtime can now keep treating metadata as the primary read-only
+source while the full entry continues shrinking toward cold/import/export use.
+
 ### Why This Matters
 
 The compiled-IR runtime is now much closer to a VM-style executor, so the next

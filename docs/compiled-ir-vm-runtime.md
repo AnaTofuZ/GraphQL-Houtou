@@ -154,6 +154,10 @@ Current status:
   plan; it now drives the loop with `writer + promise_present` directly, which
   better matches the future VM split between hot-path result sinks and
   execution-level finalization
+- field metadata has also moved toward cache-local storage: the runtime no
+  longer needs one heap allocation for `gql_ir_vm_field_meta_t` per field-plan
+  entry, and instead keeps that metadata inline with the compiled entry while
+  preserving the existing `entry->meta` access pattern
 
 ## Early Design Constraints
 

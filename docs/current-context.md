@@ -57,6 +57,11 @@ Recent conclusions that matter more than older commit-by-commit history:
   `*_sync_to_outcome(...)` path; it now runs against `writer + promise_present`
   directly, which is closer to the intended VM/runtime split between hot-path
   writing and execution-level finalization
+- VM/runtime work is now also explicitly targeting memory locality:
+  native field metadata is no longer a separately allocated heap object per
+  entry, and instead lives inline with the compiled field-plan entry so the
+  field loop can touch one less pointer-indirection and one less tiny
+  allocation/free pair per field
 - latest writer-boundary spot measurements remain in-range:
   - `nested_variable_object --count=-3`
     - `houtou_compiled_ir 81517/s`

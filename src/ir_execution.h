@@ -789,7 +789,7 @@ gql_ir_native_field_hot_refresh(gql_ir_compiled_root_field_plan_entry_t *entry) 
   hot = &entry->hot_inline;
   Zero(hot, 1, gql_ir_vm_field_hot_t);
   hot->field_def_sv = entry->field_def_sv;
-  hot->return_type_sv = entry->return_type_sv;
+  hot->return_type_sv = entry->meta ? entry->meta->return_type_sv : NULL;
   hot->type_sv = entry->type_sv;
   hot->resolve_sv = entry->resolve_sv;
   hot->nodes_sv = entry->nodes_sv;
@@ -1453,9 +1453,10 @@ gql_ir_native_field_complete_generic_result(
   gql_ir_native_field_frame_t *frame
 ) {
   gql_ir_vm_field_hot_t *hot = gql_ir_native_field_hot(entry);
+  gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
   SV *field_def_sv = (hot && hot->field_def_sv) ? hot->field_def_sv : entry->field_def_sv;
   SV *nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
-  SV *return_type_sv = (hot && hot->return_type_sv) ? hot->return_type_sv : entry->return_type_sv;
+  SV *return_type_sv = (hot && hot->return_type_sv) ? hot->return_type_sv : (meta ? meta->return_type_sv : NULL);
   if (!return_type_sv || !SvOK(return_type_sv)) {
     return_type_sv = (hot && hot->type_sv) ? hot->type_sv : entry->type_sv;
   }
@@ -1698,9 +1699,6 @@ gql_ir_ensure_native_field_entry_operands(
       return 0;
     }
     entry->type_sv = gql_execution_share_or_copy_sv(*type_svp);
-    if (!entry->return_type_sv) {
-      entry->return_type_sv = gql_execution_share_or_copy_sv(*type_svp);
-    }
   }
 
   if (!entry->abstract_child_plan_table && entry->nodes_sv && entry->type_sv) {
@@ -3413,7 +3411,6 @@ gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *p
     gql_ir_compiled_root_field_plan_entry_t *src = &plan->entries[i];
 
     if (src->field_def_sv) dst->field_def_sv = gql_execution_share_or_copy_sv(src->field_def_sv);
-    if (src->return_type_sv) dst->return_type_sv = gql_execution_share_or_copy_sv(src->return_type_sv);
     if (src->type_sv) dst->type_sv = gql_execution_share_or_copy_sv(src->type_sv);
     if (src->resolve_sv) dst->resolve_sv = gql_execution_share_or_copy_sv(src->resolve_sv);
     if (src->nodes_sv) dst->nodes_sv = gql_execution_share_or_copy_sv(src->nodes_sv);
@@ -3935,9 +3932,6 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     }
     entry->field_def_sv = gql_execution_share_or_copy_sv(*field_def_svp);
     if (type_svp && SvOK(*type_svp)) {
-      entry->return_type_sv = gql_execution_share_or_copy_sv(*type_svp);
-    }
-    if (type_svp && SvOK(*type_svp)) {
       entry->type_sv = gql_execution_share_or_copy_sv(*type_svp);
       if (gql_execution_get_trivial_completion_metadata(aTHX_ *type_svp, &completion_type_sv, &trivial_completion_flags)) {
         meta_completion_type_sv = completion_type_sv;
@@ -3973,7 +3967,7 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     Zero(&meta_seed, 1, gql_ir_vm_field_meta_t);
     meta_seed.result_name_sv = *result_name_svp;
     meta_seed.field_name_sv = *field_name_svp;
-    meta_seed.return_type_sv = entry->return_type_sv;
+    meta_seed.return_type_sv = (type_svp && SvOK(*type_svp)) ? *type_svp : NULL;
     meta_seed.completion_type_sv = meta_completion_type_sv;
     meta_seed.argument_count = entry->cold_inline.argument_count;
     meta_seed.field_arg_count = entry->cold_inline.field_arg_count;
@@ -4145,8 +4139,8 @@ gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled
       gql_store_sv(field_plan_hv, "result_name", gql_execution_share_or_copy_sv(result_name_sv));
       gql_store_sv(field_plan_hv, "field_name", gql_execution_share_or_copy_sv(field_name_sv));
       gql_store_sv(field_plan_hv, "field_def", gql_execution_share_or_copy_sv(entry->field_def_sv));
-      if (entry->return_type_sv) {
-        gql_store_sv(field_plan_hv, "return_type", gql_execution_share_or_copy_sv(entry->return_type_sv));
+      if (entry->meta && entry->meta->return_type_sv) {
+        gql_store_sv(field_plan_hv, "return_type", gql_execution_share_or_copy_sv(entry->meta->return_type_sv));
       }
       gql_store_sv(field_plan_hv, "nodes", gql_execution_share_or_copy_sv(entry->nodes_sv));
       if (cold && cold->path_sv && SvOK(cold->path_sv)) {

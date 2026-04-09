@@ -1488,3 +1488,32 @@ Interpretation:
   reduction is safe to keep
 - the next shrink step should focus on moving more fallback/debug-only data out
   of the full entry rather than re-adding duplicated runtime names
+
+Follow-up after moving `return_type` ownership fully into metadata:
+
+- lowered field-plan entries no longer store their own `return_type`; metadata
+  is now the single read-only owner of that value
+- the hot view refresh now reads `return_type` from metadata, and clone/build
+  paths seed metadata directly instead of preserving another copy on the full
+  entry
+- legacy lowered-plan export also now takes `return_type` from metadata, which
+  keeps the full entry focused on mutable/runtime-adjacent operands only
+
+Latest spot verification after dropping duplicated `return_type` storage:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 81831/s`
+  - `houtou_xs_ast 79130/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 42334/s`
+  - `houtou_xs_ast 42712/s`
+
+Interpretation:
+
+- `nested_variable_object` still does not regress and remains clearly ahead
+- `abstract_with_fragment` stays in the same noise band, which is acceptable
+  for another locality-driven shrink step
+- the full entry is now closer to a mutable execution shell, while read-only
+  type/name/control data continue consolidating under metadata

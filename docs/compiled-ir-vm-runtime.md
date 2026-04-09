@@ -384,6 +384,22 @@ field execution and writer paths, but they no longer need to live in two
 places. The runtime can now keep treating metadata as the primary read-only
 source while the full entry continues shrinking toward cold/import/export use.
 
+The same ownership cleanup now applies to `return_type` as well:
+
+- the full lowered entry no longer stores a duplicate `return_type`
+- immutable metadata is now the only owner of runtime `return_type`
+- the hot view refresh derives `return_type` from metadata, so runtime code
+  keeps seeing the same operand through `hot + meta` without carrying another
+  full-entry copy
+
+This is a small but important step toward the intended shape:
+
+- metadata owns read-only names/types/control state
+- hot owns the minimal runtime operand view
+- cold owns path/count/fallback/export details
+- the full entry becomes mostly a container for those views plus mutable
+  runtime-adjacent pointers
+
 ### Why This Matters
 
 The compiled-IR runtime is now much closer to a VM-style executor, so the next

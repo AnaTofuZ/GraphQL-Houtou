@@ -266,7 +266,6 @@ struct gql_ir_compiled_root_field_plan_entry {
   gql_ir_vm_field_cold_t *cold;
   gql_ir_vm_field_cold_t cold_inline;
   SV *field_def_sv;
-  SV *return_type_sv;
   SV *type_sv;
   SV *resolve_sv;
   SV *nodes_sv;

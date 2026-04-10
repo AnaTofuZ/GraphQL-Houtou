@@ -677,3 +677,24 @@ This is a better fit for the current architecture than more local
 3. let child-plan runners and outcome writers operate mostly on hot metadata
 4. only after that, lower those hot operands into a more explicit VM opcode /
    operand stream
+
+That last step has now started in a concrete way for completion families:
+
+- `COMPLETE_OBJECT`, `COMPLETE_LIST`, and `COMPLETE_ABSTRACT` now exist as
+  distinct native field ops rather than being represented only as metadata
+  that funnels into one `COMPLETE_GENERIC` stage
+- lowering chooses those op families up front, and the threaded dispatcher
+  jumps directly to the matching object/list/abstract completion helper
+- `COMPLETE_GENERIC` remains the true catch-all fallback, which keeps the cold
+  compatibility path isolated while the hot path becomes more VM-like
+
+This is intentionally a structural step, not a local micro-optimization.
+Its value is that the runtime is no longer forced to re-discover completion
+shape inside one generic stage. That in turn makes the next steps much
+cleaner:
+
+1. teach each completion-family op to own more of the sync happy path
+2. reduce how often those ops fall back into `execution.h` completed envelopes
+3. keep pushing native outcome / writer handling across child-plan boundaries
+4. only then consider further dispatch tightening or more specialized op
+   families

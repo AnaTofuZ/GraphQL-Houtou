@@ -1644,3 +1644,36 @@ Interpretation:
 - the next shrink step should continue pushing read-mostly export/debug
   payload out of hot-adjacent structs without changing ownership of the truly
   hot operands yet
+
+Follow-up after turning completion families into explicit native ops:
+
+- `COMPLETE_OBJECT`, `COMPLETE_LIST`, and `COMPLETE_ABSTRACT` are now real
+  native field ops instead of all flowing through a single
+  `COMPLETE_GENERIC` stage
+- lowering now chooses the completion-family op up front, so the threaded
+  dispatcher reaches the relevant object/list/abstract helper directly
+- this is a VM-shape change more than a throughput change, but it removes one
+  more layer of runtime shape re-dispatch inside the generic completion stage
+
+Latest spot verification after wiring the completion-family op dispatch:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 80202/s`
+  - `houtou_xs_ast 77072/s`
+- `list_of_objects` (`--count=-3`)
+  - `houtou_compiled_ir 59130/s`
+  - `houtou_xs_ast 58195/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 42306/s`
+  - `houtou_xs_ast 42173/s`
+
+Interpretation:
+
+- `nested_variable_object` remains clearly ahead, so the extra op-family split
+  is not harming the object-heavy path
+- `list_of_objects` and `abstract_with_fragment` stay in the same competitive
+  band while the runtime shape moves closer to a true VM dispatch family
+- the next real wins are still expected to come from shrinking generic
+  completion fallback frequency rather than from more dispatcher-local tweaks

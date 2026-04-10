@@ -392,6 +392,11 @@ Current status:
   child-plan execution can write its raw child-object outcome straight into
   the current field frame, rather than first staging the same `HV*`/errors
   pair in local temporaries and then copying that state into the frame
+- lowering now also specializes generic completion one step further for the
+  compiled-IR runtime: exact `object`, `list`, and `abstract` return types are
+  tagged in field metadata so the hot loop can try only the relevant narrow
+  sync completion path instead of probing all generic object/list/abstract
+  helpers in sequence
 - field metadata has also moved toward cache-local storage: the runtime no
   longer needs one heap allocation for `gql_ir_vm_field_meta_t` per field-plan
   entry, and instead keeps that metadata inline with the compiled entry while

@@ -150,6 +150,10 @@ Recent conclusions that matter more than older commit-by-commit history:
   outcomes straight into the field frame through a dedicated helper, instead
   of bouncing through local `HV*/AV*` temporaries before re-encoding the same
   state as a native field outcome
+- completion dispatch is now also specialized one step earlier:
+  lowered field metadata distinguishes exact `object`, `list`, and
+  `abstract` generic-completion shapes, so the native field executor no
+  longer has to probe all three narrow sync paths on every generic field
 - VM/runtime work is now also explicitly targeting memory locality:
   native field metadata is no longer a separately allocated heap object per
   entry, and instead lives inline with the compiled field-plan entry so the
@@ -157,14 +161,14 @@ Recent conclusions that matter more than older commit-by-commit history:
   allocation/free pair per field
 - latest writer-boundary spot measurements remain in-range:
   - `nested_variable_object --count=-3`
-    - `houtou_compiled_ir 80651/s`
-    - `houtou_xs_ast 77795/s`
+    - `houtou_compiled_ir 78884/s`
+    - `houtou_xs_ast 75912/s`
   - `list_of_objects --count=-3`
-    - `houtou_compiled_ir 62637/s`
-    - `houtou_xs_ast 61250/s`
+    - `houtou_compiled_ir 58333/s`
+    - `houtou_xs_ast 58477/s`
   - `abstract_with_fragment --count=-3`
-    - `houtou_compiled_ir 43305/s`
-    - `houtou_xs_ast 43421/s`
+    - `houtou_compiled_ir 42102/s`
+    - `houtou_xs_ast 42040/s`
 
 ## Ecosystem Gap Guardrail
 

@@ -208,7 +208,10 @@ enum gql_ir_native_args_dispatch_kind {
 
 enum gql_ir_native_completion_dispatch_kind {
   GQL_IR_NATIVE_COMPLETION_GENERIC = 0,
-  GQL_IR_NATIVE_COMPLETION_TRIVIAL = 1
+  GQL_IR_NATIVE_COMPLETION_TRIVIAL = 1,
+  GQL_IR_NATIVE_COMPLETION_OBJECT = 2,
+  GQL_IR_NATIVE_COMPLETION_LIST = 3,
+  GQL_IR_NATIVE_COMPLETION_ABSTRACT = 4
 };
 
 struct gql_ir_prepared_exec {

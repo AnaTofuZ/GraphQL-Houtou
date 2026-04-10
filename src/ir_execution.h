@@ -1716,42 +1716,49 @@ gql_ir_native_field_complete_generic_result(
     return 0;
   }
 
-  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
-      && gql_ir_try_complete_abstract_sync_into(
-           aTHX_
-           env,
-           return_type_sv,
-           nodes_sv,
-           lazy_info,
-           result_sv,
-           frame,
-           entry
-         )) {
-    return 1;
-  }
-
-  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
-      && gql_ir_try_complete_sync_object_into_outcome(
-           aTHX_
-           env,
-           return_type_sv,
-           lazy_info,
-           result_sv,
-           frame
-         )) {
-    return 1;
-  }
-
-  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
-      && gql_ir_try_complete_sync_list_into_outcome(
-           aTHX_
-           env,
-           return_type_sv,
-           lazy_info,
-           result_sv,
-           frame
-         )) {
-    return 1;
+  if (!env->promise_code_sv || !SvOK(env->promise_code_sv)) {
+    switch (meta ? meta->completion_dispatch_kind : GQL_IR_NATIVE_COMPLETION_GENERIC) {
+      case GQL_IR_NATIVE_COMPLETION_ABSTRACT:
+        if (gql_ir_try_complete_abstract_sync_into(
+              aTHX_
+              env,
+              return_type_sv,
+              nodes_sv,
+              lazy_info,
+              result_sv,
+              frame,
+              entry
+            )) {
+          return 1;
+        }
+        break;
+      case GQL_IR_NATIVE_COMPLETION_OBJECT:
+        if (gql_ir_try_complete_sync_object_into_outcome(
+              aTHX_
+              env,
+              return_type_sv,
+              lazy_info,
+              result_sv,
+              frame
+            )) {
+          return 1;
+        }
+        break;
+      case GQL_IR_NATIVE_COMPLETION_LIST:
+        if (gql_ir_try_complete_sync_list_into_outcome(
+              aTHX_
+              env,
+              return_type_sv,
+              lazy_info,
+              result_sv,
+              frame
+            )) {
+          return 1;
+        }
+        break;
+      default:
+        break;
+    }
   }
 
   if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))) {
@@ -4243,6 +4250,20 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
       aTHX_ entry->type_sv,
       entry->nodes_sv
     );
+    if (completion_dispatch_kind == GQL_IR_NATIVE_COMPLETION_GENERIC
+        && type_svp && SvOK(*type_svp)) {
+      if (SvROK(*type_svp)
+          && (sv_derived_from(*type_svp, "GraphQL::Houtou::Type::Object")
+              || sv_derived_from(*type_svp, "GraphQL::Type::Object"))) {
+        completion_dispatch_kind = GQL_IR_NATIVE_COMPLETION_OBJECT;
+      } else if (sv_derived_from(*type_svp, "GraphQL::Houtou::Type::List")
+                 || sv_derived_from(*type_svp, "GraphQL::Type::List")) {
+        completion_dispatch_kind = GQL_IR_NATIVE_COMPLETION_LIST;
+      } else if (sv_does(*type_svp, "GraphQL::Houtou::Role::Abstract")
+                 || sv_does(*type_svp, "GraphQL::Role::Abstract")) {
+        completion_dispatch_kind = GQL_IR_NATIVE_COMPLETION_ABSTRACT;
+      }
+    }
     entry->operands_ready = gql_ir_native_field_entry_has_operands(entry) ? 1 : 0;
     if (!entry->operands_ready) {
       plan->requires_runtime_operand_fill = 1;

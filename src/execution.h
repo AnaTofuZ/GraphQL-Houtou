@@ -6977,6 +6977,32 @@ gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_o
           && schema_svp
           && SvROK(*schema_svp)
           && SvTYPE(SvRV(*schema_svp)) == SVt_PVHV) {
+        gql_ir_compiled_root_field_plan_t *native_field_plan = abstract_child_plan_table
+          ? gql_execution_lookup_lowered_abstract_child_native_field_plan(
+              aTHX_ abstract_child_plan_table,
+              runtime_type
+            )
+          : NULL;
+
+        if (native_field_plan) {
+          SvREFCNT_dec(runtime_type_or_name);
+          if (gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_plan(
+                aTHX_
+                context,
+                parent_type,
+                field_def,
+                runtime_type,
+                nodes,
+                lazy_info,
+                result,
+                native_field_plan,
+                outcome
+              )) {
+            return 1;
+          }
+          goto abstract_fallback;
+        }
+
         int possible_ok = 0;
         SV *condition_name_sv = gql_execution_type_name_sv(aTHX_ return_type);
         SV *runtime_name_sv = gql_execution_type_name_sv(aTHX_ runtime_type);
@@ -6990,18 +7016,10 @@ gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_o
           runtime_name_sv,
           &possible_ok
         );
-        gql_ir_compiled_root_field_plan_t *native_field_plan = NULL;
         SvREFCNT_dec(runtime_name_sv);
         SvREFCNT_dec(condition_name_sv);
 
         if (possible_ok && possible_match) {
-          native_field_plan = abstract_child_plan_table
-            ? gql_execution_lookup_lowered_abstract_child_native_field_plan(
-                aTHX_ abstract_child_plan_table,
-                runtime_type
-              )
-            : NULL;
-
           SvREFCNT_dec(runtime_type_or_name);
           if (gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_plan(
                 aTHX_

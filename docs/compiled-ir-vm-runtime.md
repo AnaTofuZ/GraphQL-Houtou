@@ -1222,3 +1222,22 @@ Architecturally this is important because it removes another mixed boundary:
 - this is much closer to the future VM shape, where abstract completion should
   mostly be "resolve + dispatch to object completion family" rather than a
   separate mini-runtime
+
+The next checkpoint tightens that same corridor a little more without adding a
+new abstract-local special case:
+
+- when a lowered abstract child-plan table is already attached and the resolved
+  runtime type is found in that table, abstract completion now enters the
+  object-family contract immediately
+- only lowered-table misses fall through to
+  `gql_execution_possible_type_match_simple(...)`
+- this keeps the semantics conservative while making the hot path more clearly
+  "resolve, then dispatch into object completion"
+
+Operationally, this is a good sign for the larger VM plan:
+
+- object-heavy and list-heavy checkpoints remain healthy
+- abstract completion moves closer to parity again
+- the remaining performance gap is therefore less about abstract-specific table
+  lookup trivia and more about how often the family contracts still need to
+  materialize generic completion state

@@ -2527,3 +2527,45 @@ Interpretation:
 - the next wins should come from continuing to reduce native-to-generic
   fallback frequency inside the abstract/object contracts, not from more
   isolated lookup tricks
+
+Follow-up after preferring lowered abstract child-plan hits before generic
+possible-type checks:
+
+- when `COMPLETE_ABSTRACT` already has a lowered abstract child-plan table and
+  the resolved runtime type is present in that table, execution now jumps
+  straight into the object-family contract before building type-name `SV`s and
+  before calling `gql_execution_possible_type_match_simple(...)`
+- the old generic possible-type check is still retained as the cold fallback
+  when the lowered table misses, so semantics do not depend on the cache/table
+  being complete
+- this keeps the family-owned shape intact while shortening the
+  `resolve_type -> exact child plan/object-head` corridor a little further
+
+Verification status for this lowered-table-first abstract checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after preferring lowered abstract child-plan hits before
+generic possible-type checks (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80535/s`
+  - `houtou_xs_ast 79455/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 60119/s`
+  - `houtou_xs_ast 59570/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 42857/s`
+  - `houtou_xs_ast 43165/s`
+
+Interpretation:
+
+- this checkpoint materially improves the list-family and keeps the object-heavy
+  path healthy, which means the lowered-table-first branch is not perturbing the
+  stronger compiled-IR families
+- `abstract` is still narrowly behind `xs_ast`, but it moved in the right
+  direction again without adding another abstract-local mini-runtime
+- the next likely wins still come from reducing how often the abstract/object
+  family contracts fall back to generic completion, rather than from more
+  isolated type-check micro-optimizations

@@ -1102,3 +1102,26 @@ This is an important turning point for the runtime design:
   writer consumption
 - future widening work can target family-specific narrow paths directly,
   without first refactoring result-boundary plumbing again
+
+That family-owned contract model has now started to pay for real widening:
+
+- the object-family API can lazily derive an exact concrete native child plan
+  for single-node object completion even when no pre-lowered exact plan was
+  attached
+- the abstract-family API now reuses that widened object-family path after
+  `resolve_type`, so `resolve_type -> object child` stays under execution-side
+  ownership longer
+- the list-family API can derive and reuse an exact item native child plan and
+  route concrete object items through the object-family contract before
+  falling back
+
+This is the first stage where execution-side family ownership is doing
+meaningful hot-path work instead of only boundary cleanup:
+
+- `execution.h` now owns more of the "can I stay native?" logic for
+  object/list/abstract sync completion
+- `ir_execution.h` remains orchestration-heavy and does not need to regain
+  helper-specific widening logic
+- the remaining performance problem is sharper: `COMPLETE_ABSTRACT` still
+  reaches generic completion too often, while `OBJECT` and `LIST` are already
+  beginning to benefit from widened family-owned narrow paths

@@ -2338,3 +2338,44 @@ Interpretation:
 - `list` and `abstract` are still roughly tied with `xs_ast`, so the next
   wins still need to come from widening family-specific narrow paths rather
   than from more boundary cleanup alone
+
+Follow-up after widening family-owned narrow paths inside `execution.h`:
+
+- `OBJECT` family can now lazily derive an exact single-node concrete native
+  child plan inside the execution-side family contract when no lowered exact
+  plan was preattached
+- `ABSTRACT` family reuses that object-family widening path after
+  `resolve_type`, rather than dropping directly to the older shared fallback
+- `LIST` family can derive and reuse an exact item native child plan so
+  concrete object items can route through the object-family narrow path
+  before falling back
+
+Verification status for this widened family-owned narrow-path checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after widening execution-side family narrow paths
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80188/s`
+  - `houtou_xs_ast 76293/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58526/s`
+  - `houtou_xs_ast 56925/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 40199/s`
+  - `houtou_xs_ast 42173/s`
+
+Interpretation:
+
+- this batch is the first one where execution-side family ownership is not
+  just boundary cleanup; the family contracts now widen their own sync
+  narrow paths
+- `nested` and `list` improved materially, which suggests the execution-side
+  family contracts are now carrying real hot-path value rather than only
+  architectural cleanup
+- `abstract` is still behind `xs_ast`, so the next wins still need to come
+  from reducing how often `COMPLETE_ABSTRACT` reaches generic completion at
+  all, not from more result-shape plumbing work

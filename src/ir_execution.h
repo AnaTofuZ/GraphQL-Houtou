@@ -1814,7 +1814,7 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
     return 0;
   }
 
-  if (gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome(
+  if (gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome_no_direct_data(
         aTHX_
         gql_ir_native_env_context(env),
         gql_ir_native_env_parent_type(env),

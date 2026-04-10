@@ -1895,3 +1895,31 @@ Interpretation:
   extraction logic again
 - the next structural target remains shrinking how often
   `COMPLETE_OBJECT/LIST/ABSTRACT` need that shared fallback at all
+
+Follow-up after splitting shared sync outcomes into direct-data and
+no-direct-data variants:
+
+- `execution.h` now exposes both:
+  - a sync outcome helper that still probes `direct_data_fast`
+  - a sync outcome helper that skips `direct_data_fast` and goes straight to
+    full completion plus outcome extraction
+- `COMPLETE_GENERIC` continues to use the direct-data-capable path
+- `COMPLETE_OBJECT/LIST/ABSTRACT` now use the no-direct-data variant again, so
+  the specialized completion families do not accidentally re-run the generic
+  probe after their own narrow paths miss
+
+Verification status for the split shared outcome helpers:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- no benchmark yet; this is still being accumulated as part of the broader
+  specialized completion/runtime reshaping
+
+Interpretation:
+
+- this restores the intended specialized-family ownership while keeping the
+  shared outcome boundary in `execution.h`
+- the main benefit is cleaner control flow: generic probing remains generic,
+  specialized miss handling remains specialized
+- the next step is still to widen specialized object/list/abstract completion
+  so those families reach the shared fallback less often overall

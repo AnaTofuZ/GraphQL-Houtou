@@ -824,3 +824,19 @@ This is an enabling change for later performance work:
   compiled IR
 - the runtime is one step closer to a clean split between lowered program,
   native frame/writer, and a narrow generic-completion escape hatch
+
+That shared sync outcome boundary is now also split by role:
+
+- one variant keeps the generic `direct_data_fast` probe
+- one variant skips the generic probe and goes directly to full completion plus
+  sync outcome extraction
+- compiled IR now uses the generic-probe variant only for `COMPLETE_GENERIC`
+  and keeps `COMPLETE_OBJECT/LIST/ABSTRACT` on the no-direct-data path
+
+This keeps the architecture honest:
+
+- generic probing stays in the generic family
+- specialized completion families do not regain duplicated generic work through
+  the shared boundary
+- further narrowing work can focus on reducing calls to the shared fallback
+  itself, not on disentangling duplicated probes again

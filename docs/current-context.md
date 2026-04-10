@@ -1774,3 +1774,36 @@ Interpretation:
   handling instead of bouncing through the fully generic direct-data probe
 - the next likely structural gain remains a compiled-IR-native object/abstract
   completion path that avoids the shared completed-envelope helper more often
+
+Follow-up after recursively lowering exact object child plans for object/list:
+
+- lowered plans now recursively attach exact concrete object child native plans
+  using schema-aware compilation after the initial lowered program is built
+- this applies both to direct object completion and to list item object
+  completion, so child execution can use owned lowered plans more often
+- `COMPLETE_LIST` now consults the lowered exact child native plan before
+  falling back to per-item generic fast helpers
+
+Latest spot verification after recursive exact child plan lowering:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 78884/s`
+  - `houtou_xs_ast 75127/s`
+- `list_of_objects` (`--count=-3`)
+  - `houtou_compiled_ir 56241/s`
+  - `houtou_xs_ast 57415/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 42040/s`
+  - `houtou_xs_ast 42334/s`
+
+Interpretation:
+
+- `abstract_with_fragment` returns to the same competitive band while exact
+  child plan ownership becomes more complete
+- `nested_variable_object` remains clearly ahead, so object-child lowering is
+  still paying off on the object-heavy path
+- `list_of_objects` is still somewhat weaker, which suggests list item
+  completion will need more direct compiled-IR-native handling before this
+  ownership work turns into a clean throughput gain

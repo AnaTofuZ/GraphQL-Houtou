@@ -748,3 +748,21 @@ This is still not the end-state, but it improves the shape of the runtime:
   than a second object fast-path probe
 - future compiled-IR-native object completion can replace that fallback helper
   without having to disentangle duplicated direct-data checks first
+
+The same ownership idea now extends one level deeper:
+
+- after the initial lowered program is built, the schema-aware lowering pass
+  now recursively attaches exact concrete object child native plans where they
+  can be reconstructed from compiled concrete field buckets
+- this is used both for direct object completion and for list item object
+  completion, so child runners can stay on owned lowered plans more often
+
+This is an important architectural step even when the benchmark impact is
+mixed:
+
+- object/list child execution becomes less dependent on re-collecting plans
+  from Perl node buckets at runtime
+- more of the true child execution shape is now owned by the lowered program
+  rather than rediscovered by helpers
+- it creates a cleaner base for a later VM/runtime where `COMPLETE_OBJECT` and
+  `COMPLETE_LIST` can jump into owned child blocks directly

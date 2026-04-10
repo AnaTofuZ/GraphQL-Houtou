@@ -2127,3 +2127,18 @@ Verification status for this structural checkpoint:
 
 - `minil test t/11_execution.t`
 - `minil test t/12_promise.t`
+
+Follow-up after removing duplicate object-family narrow handling:
+
+- `COMPLETE_OBJECT` no longer runs an inline object-head branch in
+  `ir_execution.h` after exact native child-plan dispatch misses
+- the object-head probe now lives only behind the object-family sync outcome
+  API in `execution.h`
+- this makes the compiled-IR object family structurally match the current VM
+  plan: exact child plan first, then family-owned fallback contract, then
+  writer/frame consumption
+
+Verification status for this consolidation:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`

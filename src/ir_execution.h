@@ -2170,8 +2170,6 @@ gql_ir_native_field_complete_object_result(
   SV *field_def_sv = (hot && hot->field_def_sv) ? hot->field_def_sv : entry->field_def_sv;
   SV *nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
   SV *return_type_sv = (hot && hot->return_type_sv) ? hot->return_type_sv : (meta ? meta->return_type_sv : NULL);
-  HV *direct_data_hv = NULL;
-  AV *direct_errors_av = NULL;
 
   if (!return_type_sv || !SvOK(return_type_sv)) {
     return_type_sv = (hot && hot->type_sv) ? hot->type_sv : entry->type_sv;
@@ -2190,22 +2188,6 @@ gql_ir_native_field_complete_object_result(
            result_sv,
            frame
          )) {
-    return 1;
-  }
-
-  if ((!gql_ir_native_env_promise_code(env) || !SvOK(gql_ir_native_env_promise_code(env)))
-      && gql_execution_try_complete_object_sync_head_fast(
-           aTHX_
-           gql_ir_native_env_context(env),
-           return_type_sv,
-           lazy_info,
-           result_sv,
-           &direct_data_hv,
-           &direct_errors_av
-         )) {
-    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV;
-    frame->outcome_sv = (SV *)direct_data_hv;
-    frame->outcome_errors_av = direct_errors_av;
     return 1;
   }
 

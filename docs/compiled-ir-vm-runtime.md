@@ -978,3 +978,20 @@ This is mainly about keeping the runtime malleable:
   without another boundary reshuffle
 - the VM/runtime is closer to `family op -> family fallback contract` instead
   of `family op -> generic helper selection`
+
+That ownership split has now been enforced for the object family as well:
+
+- `COMPLETE_OBJECT` no longer carries its own post-exact-plan object-head probe
+  in `ir_execution.h`
+- the object-head probe is owned only by the object-family fallback API in
+  `execution.h`
+- this keeps compiled IR on a cleaner runtime shape:
+  exact child plan -> family fallback contract -> frame/writer
+
+This matters because it removes duplicated narrowing logic:
+
+- future object-family widening happens in one place
+- `ir_execution.h` keeps the family runtime orchestration role instead of
+  regaining helper-specific escape branches
+- the VM path becomes easier to reason about as "family op invokes family
+  contract" rather than "family op mixes orchestration and fallback tricks"

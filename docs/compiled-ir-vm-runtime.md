@@ -929,3 +929,35 @@ Architecturally this is an important confirmation:
   native head -> shared fallback`, not `specialized family -> generic helper`
 - future VM work should keep lowering these family-specific boundaries instead
   of trying to fold them back into legacy completion APIs
+
+The next runtime checkpoint pushes that boundary one level lower:
+
+- `execution.h` now exposes distinct shared sync outcome entrypoints for
+  generic-with-probe, generic-without-probe, and object-family fallback
+- `ir_execution.h` uses one family-owned fallback helper that dispatches by
+  completion family instead of hard-coding different completion calls inside
+  `COMPLETE_OBJECT`, `COMPLETE_LIST`, and `COMPLETE_ABSTRACT`
+- the specialized completion families still share the same native outcome
+  contract, but they no longer own mismatched completion-envelope glue
+
+This is mainly a runtime-architecture win:
+
+- future widening of `COMPLETE_OBJECT` can replace only the object-family
+  fallback contract without touching list/abstract paths
+- future widening of `COMPLETE_ABSTRACT` can reuse the same family-owned
+  boundary while changing only the pre-fallback narrow path
+- the generic shared fallback is now a thinner cold escape hatch instead of a
+  partially inlined execution path inside each family
+
+The latest benchmark checkpoint reflects that shape:
+
+- `nested_variable_object` stays clearly ahead
+- `list_of_objects` is effectively tied
+- `abstract_with_fragment` is still slightly behind
+
+That combination reinforces the current plan:
+
+- stop spending effort on item-level list tricks
+- keep object/abstract family widening as the main target
+- treat shared sync outcome fallbacks as cold contracts that should become
+  rarer, not smarter

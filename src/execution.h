@@ -129,6 +129,18 @@ static int gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcom
   AV **errors_out,
   SV **completed_out
 );
+static int gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_outcome(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  struct gql_execution_lazy_resolve_info *lazy_info,
+  SV *result,
+  SV **data_out,
+  AV **errors_out,
+  SV **completed_out
+);
 static int gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome_no_direct_data(
   pTHX_ SV *context,
   SV *parent_type,
@@ -6057,6 +6069,70 @@ gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome_no_direct
     errors_out,
     completed_out,
     0
+  );
+}
+
+static int
+gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_outcome(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  SV **data_out,
+  AV **errors_out,
+  SV **completed_out
+) {
+  HV *direct_data_hv = NULL;
+  AV *direct_errors_av = NULL;
+
+  if (data_out) {
+    *data_out = NULL;
+  }
+  if (errors_out) {
+    *errors_out = NULL;
+  }
+  if (completed_out) {
+    *completed_out = NULL;
+  }
+
+  if (gql_execution_try_complete_object_sync_head_fast(
+        aTHX_
+        context,
+        return_type,
+        lazy_info,
+        result,
+        &direct_data_hv,
+        &direct_errors_av
+      )) {
+    if (data_out) {
+      *data_out = direct_data_hv ? newRV_noinc((SV *)direct_data_hv) : newSV(0);
+    } else if (direct_data_hv) {
+      SvREFCNT_dec((SV *)direct_data_hv);
+    }
+
+    if (errors_out) {
+      *errors_out = direct_errors_av;
+    } else if (direct_errors_av) {
+      SvREFCNT_dec((SV *)direct_errors_av);
+    }
+    return 1;
+  }
+
+  return gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome_no_direct_data(
+    aTHX_
+    context,
+    parent_type,
+    field_def,
+    return_type,
+    nodes,
+    lazy_info,
+    result,
+    data_out,
+    errors_out,
+    completed_out
   );
 }
 

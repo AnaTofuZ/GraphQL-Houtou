@@ -2069,3 +2069,44 @@ Interpretation:
   specialized families" rather than micro-optimizing `resolve_type` itself
 - the next natural step is to widen the same family-specific narrowing on the
   list/object/item boundaries without reintroducing broad generic-helper reuse
+
+Follow-up after introducing family-owned sync fallback boundaries:
+
+- `execution.h` now exposes three distinct sync outcome entrypoints for the
+  shared XS completion boundary:
+  - generic with `direct_data_fast`
+  - generic without `direct_data_fast`
+  - object-family fallback with object-head probing
+- `ir_execution.h` now routes `COMPLETE_OBJECT`, `COMPLETE_LIST`, and
+  `COMPLETE_ABSTRACT` through a single family-owned fallback helper instead of
+  inlining a different completion call shape in each specialized family
+- this does not yet widen the narrow paths themselves; it fixes the ownership
+  boundary so future family-specific widening can swap one fallback contract at
+  a time
+
+Verification status for this family-fallback checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after the family-fallback checkpoint (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80926/s`
+  - `houtou_xs_ast 78194/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57764/s`
+  - `houtou_xs_ast 57806/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 42462/s`
+  - `houtou_xs_ast 43024/s`
+
+Interpretation:
+
+- `nested_variable_object` remains comfortably ahead, which means the
+  family-owned fallback split did not hurt the strongest compiled-IR path
+- `list_of_objects` is effectively tied, so the list family still needs a
+  bigger boundary change rather than more item-level tricks
+- `abstract_with_fragment` is still slightly behind, which keeps the main
+  priority unchanged: widen `COMPLETE_OBJECT`/`COMPLETE_ABSTRACT` so they reach
+  the shared fallback less often

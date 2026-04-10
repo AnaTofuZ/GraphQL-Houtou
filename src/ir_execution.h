@@ -1851,6 +1851,10 @@ gql_ir_native_field_complete_generic_fallback_result(
   SV *field_def_sv = (hot && hot->field_def_sv) ? hot->field_def_sv : entry->field_def_sv;
   SV *nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
   SV *return_type_sv = (hot && hot->return_type_sv) ? hot->return_type_sv : (meta ? meta->return_type_sv : NULL);
+  gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table =
+    (hot && hot->abstract_child_plan_table)
+      ? hot->abstract_child_plan_table
+      : (entry ? entry->abstract_child_plan_table : NULL);
   gql_ir_compiled_root_field_plan_t *native_field_plan = (hot && hot->native_field_plan)
     ? hot->native_field_plan
     : NULL;
@@ -1914,6 +1918,10 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
   SV *field_def_sv = (hot && hot->field_def_sv) ? hot->field_def_sv : entry->field_def_sv;
   SV *nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
   SV *return_type_sv = (hot && hot->return_type_sv) ? hot->return_type_sv : (meta ? meta->return_type_sv : NULL);
+  gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table =
+    (hot && hot->abstract_child_plan_table)
+      ? hot->abstract_child_plan_table
+      : (entry ? entry->abstract_child_plan_table : NULL);
   gql_ir_compiled_root_field_plan_t *native_field_plan = (hot && hot->native_field_plan)
     ? hot->native_field_plan
     : NULL;
@@ -1979,6 +1987,10 @@ gql_ir_native_field_complete_family_fallback_result(
   SV *field_def_sv = (hot && hot->field_def_sv) ? hot->field_def_sv : entry->field_def_sv;
   SV *nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
   SV *return_type_sv = (hot && hot->return_type_sv) ? hot->return_type_sv : (meta ? meta->return_type_sv : NULL);
+  gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table =
+    (hot && hot->abstract_child_plan_table)
+      ? hot->abstract_child_plan_table
+      : (entry ? entry->abstract_child_plan_table : NULL);
   gql_ir_compiled_root_field_plan_t *native_field_plan = (hot && hot->native_field_plan)
     ? hot->native_field_plan
     : NULL;
@@ -2038,7 +2050,7 @@ gql_ir_native_field_complete_family_fallback_result(
       }
       return 0;
     case GQL_IR_NATIVE_COMPLETION_ABSTRACT:
-      if (gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_outcome(
+      if (gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_outcome_with_table(
             aTHX_
             gql_ir_native_env_context(env),
             gql_ir_native_env_parent_type(env),
@@ -2047,6 +2059,7 @@ gql_ir_native_field_complete_family_fallback_result(
             nodes_sv,
             lazy_info,
             result_sv,
+            abstract_child_plan_table,
             &direct_data_sv,
             &direct_errors_av,
             &completed_sv
@@ -2267,20 +2280,6 @@ gql_ir_native_field_complete_abstract_result(
   }
   if (!env || !writer || !entry || !field_def_sv || !nodes_sv || !return_type_sv || !lazy_info || !frame) {
     return 0;
-  }
-
-  if ((!gql_ir_native_env_promise_code(env) || !SvOK(gql_ir_native_env_promise_code(env)))
-      && gql_ir_try_complete_abstract_sync_into(
-           aTHX_
-           env,
-           return_type_sv,
-           nodes_sv,
-           lazy_info,
-           result_sv,
-           frame,
-           entry
-         )) {
-    return 1;
   }
 
   return gql_ir_native_field_complete_family_fallback_result(

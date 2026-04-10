@@ -1006,3 +1006,20 @@ That same ownership move is now one step deeper:
 - this is intentionally biased toward VM/runtime clarity rather than tiny
   local wins, because it keeps exact-plan narrowing behind the same family
   contract that will later own more of object completion
+
+The same pattern now applies to the abstract family as well:
+
+- the abstract-family API in `execution.h` can now receive the lowered
+  abstract child plan table directly
+- `COMPLETE_ABSTRACT` no longer owns an early
+  `resolve_type -> exact child plan/object-head` branch in `ir_execution.h`
+- the abstract-family contract now owns the whole sync chain:
+  `resolve_type -> exact child plan/object-head -> no-direct-data fallback`
+
+This matters for the VM/runtime split because:
+
+- `ir_execution.h` stays closer to orchestration and field-family dispatch
+- narrowing policy for abstract completion lives behind a single family
+  contract, just like object completion
+- future widening of abstract completion can happen in one execution-side
+  family API instead of reintroducing mixed ownership in the runtime loop

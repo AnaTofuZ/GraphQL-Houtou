@@ -2157,3 +2157,21 @@ Verification status for this ownership move:
 
 - `minil test t/11_execution.t`
 - `minil test t/12_promise.t`
+
+Follow-up after moving exact abstract child plans behind the abstract-family API:
+
+- `execution.h` now exposes an internal abstract-family sync outcome helper
+  that can receive the lowered abstract child plan table directly
+- `COMPLETE_ABSTRACT` no longer runs its own early
+  `resolve_type -> exact child plan/object-head` narrow path in
+  `ir_execution.h`
+- the abstract-family contract in `execution.h` now owns the whole sync chain:
+  `resolve_type -> exact child plan/object-head -> no-direct-data fallback`
+- this keeps the compiled-IR runtime shape closer to the intended VM family-op
+  model, where `ir_execution.h` orchestrates and the family API owns the
+  narrowing policy
+
+Verification status for this abstract-family ownership move:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`

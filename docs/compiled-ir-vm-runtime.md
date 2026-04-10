@@ -876,3 +876,19 @@ This is another structural step toward a compiled-IR-native runtime:
   child outcome" model already used for object and abstract field completion
 - future VM/runtime work can treat list item object/abstract execution as
   lowered operands rather than ad hoc helper selection
+
+The first spot benchmark after this step is instructive:
+
+- `nested_variable_object` and `list_of_objects` remain ahead or roughly ahead
+  with the owned lowered-plan direction intact
+- `abstract_with_fragment` still trails slightly, so the next priority remains
+  widening `COMPLETE_OBJECT` and `COMPLETE_ABSTRACT` before the next benchmark
+  round
+
+That matches the intended strategy:
+
+- list ownership work is now good enough as a base
+- the target-case work has shifted back to abstract/object completion family
+  narrowing
+- further progress is more likely to come from reducing specialized-family
+  fallback than from more list-specific micro-layout tweaks

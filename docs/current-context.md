@@ -1973,3 +1973,24 @@ Interpretation:
   throughput claim
 - the next step remains reducing how often the specialized families need the
   shared fallback at all
+
+Spot benchmark after this list-item abstract lowering round (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 77314/s`
+  - `houtou_xs_ast 76494/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 56697/s`
+  - `houtou_xs_ast 55825/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 40338/s`
+  - `houtou_xs_ast 41160/s`
+
+Interpretation:
+
+- `nested` and `list` stayed healthy and still benefit from the owned lowered
+  plan direction
+- `abstract_with_fragment` is still slightly behind, which reinforces the
+  current priority: widen `COMPLETE_OBJECT`/`COMPLETE_ABSTRACT` further before
+  the next benchmark round instead of spending more effort on list-specific
+  micro-optimizations

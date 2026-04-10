@@ -1742,3 +1742,35 @@ Interpretation:
   child execution avoiding repeated plan discovery
 - the remaining target-case work is still to make `COMPLETE_OBJECT` and
   `COMPLETE_ABSTRACT` stay out of generic completion fallback more often
+
+Follow-up after splitting the object-only fallback from the generic fallback:
+
+- `COMPLETE_OBJECT` now uses its own fallback helper after the compiled-IR
+  native object path misses
+- that fallback no longer re-runs the generic `direct_data_fast` probe that is
+  already covered by the object-specific narrow path
+- object completion still falls back to the shared XS completion semantics, but
+  it does so without duplicating the object fast probe inside the generic
+  fallback helper
+
+Latest spot verification after the object-only fallback split:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 79377/s`
+  - `houtou_xs_ast 78640/s`
+- `list_of_objects` (`--count=-3`)
+  - `houtou_compiled_ir 58477/s`
+  - `houtou_xs_ast 56697/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 41154/s`
+  - `houtou_xs_ast 41818/s`
+
+Interpretation:
+
+- this is still more of a runtime-shape cleanup than a target-case win
+- however, the specialized object completion path now owns more of its miss
+  handling instead of bouncing through the fully generic direct-data probe
+- the next likely structural gain remains a compiled-IR-native object/abstract
+  completion path that avoids the shared completed-envelope helper more often

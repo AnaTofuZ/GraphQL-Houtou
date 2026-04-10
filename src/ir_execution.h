@@ -1768,6 +1768,62 @@ gql_ir_native_field_complete_generic_fallback_result(
 }
 
 static int
+gql_ir_native_field_complete_object_fallback_result(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result_sv,
+  gql_ir_native_field_frame_t *frame
+) {
+  gql_ir_vm_field_hot_t *hot = gql_ir_native_field_hot(entry);
+  gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
+  SV *field_def_sv = (hot && hot->field_def_sv) ? hot->field_def_sv : entry->field_def_sv;
+  SV *nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
+  SV *return_type_sv = (hot && hot->return_type_sv) ? hot->return_type_sv : (meta ? meta->return_type_sv : NULL);
+
+  if (!return_type_sv || !SvOK(return_type_sv)) {
+    return_type_sv = (hot && hot->type_sv) ? hot->type_sv : entry->type_sv;
+  }
+
+  if (!env
+      || !writer
+      || !entry
+      || !field_def_sv
+      || !nodes_sv
+      || !return_type_sv
+      || !lazy_info
+      || !frame) {
+    return 0;
+  }
+
+  frame->outcome_sv = gql_execution_complete_field_value_catching_error_xs_impl(
+    aTHX_
+    env->context_sv,
+    env->parent_type_sv,
+    field_def_sv,
+    return_type_sv,
+    nodes_sv,
+    lazy_info,
+    result_sv
+  );
+  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
+      && gql_ir_extract_completed_outcome(
+           aTHX_
+           frame->outcome_sv,
+           &result_sv,
+           &frame->outcome_errors_av
+         )) {
+    SvREFCNT_dec(frame->outcome_sv);
+    frame->outcome_sv = result_sv;
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+  } else {
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+  }
+  return 1;
+}
+
+static int
 gql_ir_native_field_complete_generic_result(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
@@ -1880,7 +1936,7 @@ gql_ir_native_field_complete_object_result(
     return 1;
   }
 
-  return gql_ir_native_field_complete_generic_fallback_result(
+  return gql_ir_native_field_complete_object_fallback_result(
     aTHX_
     env,
     writer,

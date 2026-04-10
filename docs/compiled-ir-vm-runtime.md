@@ -733,3 +733,18 @@ ownership improvement:
 - the full entry now owns more of the exact child execution shape up front
 - future VM work can treat exact object child execution more like a direct op
   edge and less like a helper that rebuilds its own child plan from scratch
+
+That same ownership split now extends into object fallback handling:
+
+- `COMPLETE_OBJECT` no longer falls back by calling the fully generic
+  `direct_data_fast` probe again after its native object path already missed
+- instead it now has its own fallback helper that goes straight to the shared
+  XS completion semantics
+
+This is still not the end-state, but it improves the shape of the runtime:
+
+- object completion family owns more of its own miss path
+- the generic fallback helper becomes more clearly the catch-all path rather
+  than a second object fast-path probe
+- future compiled-IR-native object completion can replace that fallback helper
+  without having to disentangle duplicated direct-data checks first

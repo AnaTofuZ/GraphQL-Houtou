@@ -2379,3 +2379,43 @@ Interpretation:
 - `abstract` is still behind `xs_ast`, so the next wins still need to come
   from reducing how often `COMPLETE_ABSTRACT` reaches generic completion at
   all, not from more result-shape plumbing work
+
+Follow-up after carrying raw object/native child outcomes further inside the
+family-owned execution APIs:
+
+- sync execution outcomes can now carry a direct object `HV*` without forcing
+  an immediate `newRV_noinc(...)`
+- exact native child-plan execution inside `OBJECT/LIST/ABSTRACT` family APIs
+  now prefers `gql_ir_native_child_outcome_t` instead of the older
+  `SV *data + AV *errors` pair
+- the `ir_execution` field frame already understands direct object outcomes,
+  so execution-side family contracts can keep object results in raw-hash form
+  until writer consumption is unavoidable
+
+Verification status for this raw-object/native-child-outcome checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after moving exact child-plan success paths onto raw object /
+native child outcomes (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80382/s`
+  - `houtou_xs_ast 77456/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58715/s`
+  - `houtou_xs_ast 58841/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41908/s`
+  - `houtou_xs_ast 42331/s`
+
+Interpretation:
+
+- this batch materially helps the strongest object-heavy compiled-IR path
+  again, which suggests the extra `RV` and tuple-shape work was still visible
+  in exact child-plan success paths
+- `list` is now essentially tied with `xs_ast`, so the remaining weakness is
+  no longer list-family boundary translation
+- `abstract` is still slightly behind, so the next likely wins are still in
+  reducing how often `COMPLETE_ABSTRACT` reaches generic completion at all

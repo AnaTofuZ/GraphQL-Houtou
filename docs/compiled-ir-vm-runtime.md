@@ -1125,3 +1125,26 @@ meaningful hot-path work instead of only boundary cleanup:
 - the remaining performance problem is sharper: `COMPLETE_ABSTRACT` still
   reaches generic completion too often, while `OBJECT` and `LIST` are already
   beginning to benefit from widened family-owned narrow paths
+
+The next narrowing step has now pushed that ownership into the internal
+success currency as well:
+
+- sync execution outcomes can now carry a direct object `HV*` without forcing
+  an immediate `RV` wrapper
+- exact native child-plan execution inside execution-side family APIs now
+  prefers `gql_ir_native_child_outcome_t`, so `OBJECT/LIST/ABSTRACT` families
+  can keep raw object results and child errors together in a native shape
+  longer
+- `ir_execution.h` already understands direct object outcomes at the field
+  frame level, so this change shortens the remaining path between
+  family-owned success cases and writer consumption
+
+This matters because it shifts the next optimization target again:
+
+- the runtime no longer spends as much effort translating exact child-plan
+  success into temporary Perl reference shapes
+- `OBJECT` and `LIST` are now mostly constrained by how often they still hit
+  generic completion, not by exact-plan result packaging
+- `ABSTRACT` remains the main lagging family, which confirms that future
+  widening should focus on reducing `resolve_type -> generic completion`
+  frequency rather than on more generic result-shape cleanup

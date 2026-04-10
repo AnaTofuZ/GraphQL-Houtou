@@ -273,7 +273,8 @@ struct gql_ir_native_child_outcome {
 typedef enum {
   GQL_EXECUTION_SYNC_OUTCOME_NONE = 0,
   GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE = 1,
-  GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV = 2
+  GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV = 2,
+  GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV = 3
 } gql_execution_sync_outcome_kind_t;
 
 struct gql_execution_sync_outcome {

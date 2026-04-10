@@ -1794,7 +1794,7 @@ gql_ir_native_field_complete_generic_fallback_result(
 }
 
 static int
-gql_ir_native_field_complete_object_fallback_result(
+gql_ir_native_field_complete_no_direct_data_fallback_result(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
   gql_ir_compiled_root_field_plan_entry_t *entry,
@@ -1963,7 +1963,7 @@ gql_ir_native_field_complete_object_result(
     return 1;
   }
 
-  return gql_ir_native_field_complete_object_fallback_result(
+  return gql_ir_native_field_complete_no_direct_data_fallback_result(
     aTHX_
     env,
     writer,
@@ -2009,7 +2009,7 @@ gql_ir_native_field_complete_list_result(
     return 1;
   }
 
-  return gql_ir_native_field_complete_generic_fallback_result(
+  return gql_ir_native_field_complete_no_direct_data_fallback_result(
     aTHX_
     env,
     writer,
@@ -2056,7 +2056,7 @@ gql_ir_native_field_complete_abstract_result(
     return 1;
   }
 
-  return gql_ir_native_field_complete_generic_fallback_result(
+  return gql_ir_native_field_complete_no_direct_data_fallback_result(
     aTHX_
     env,
     writer,

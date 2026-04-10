@@ -1807,3 +1807,39 @@ Interpretation:
 - `list_of_objects` is still somewhat weaker, which suggests list item
   completion will need more direct compiled-IR-native handling before this
   ownership work turns into a clean throughput gain
+
+Follow-up after removing duplicate direct-data retries from specialized
+completion families:
+
+- `COMPLETE_OBJECT`, `COMPLETE_LIST`, and `COMPLETE_ABSTRACT` now skip the
+  generic direct-data retry path after their specialized narrow helpers miss
+- only `COMPLETE_GENERIC` keeps the generic `direct_data_fast` probe, so the
+  specialized completion families own more of their miss behavior directly
+- this does not yet remove the shared XS completion fallback, but it reduces
+  duplicate probing and makes later compiled-IR-native completion replacement
+  easier
+
+Latest spot verification after removing duplicate retries:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 81532/s`
+  - `houtou_xs_ast 77441/s`
+- `list_of_objects` (`--count=-3`)
+  - `houtou_compiled_ir 59024/s`
+  - `houtou_xs_ast 58526/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 42440/s`
+  - `houtou_xs_ast 42073/s`
+
+Interpretation:
+
+- this is a structural cleanup more than a single-step win, but it lands in a
+  healthy range across all three spot cases
+- `nested_variable_object` and `list_of_objects` both stay competitive or
+  slightly ahead, so the specialized-family split is not paying for itself
+  with regressions elsewhere
+- `abstract_with_fragment` remains in the same competitive band, which keeps
+  the path open for a larger compiled-IR-native object/abstract completion
+  replacement next

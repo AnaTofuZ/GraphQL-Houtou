@@ -766,3 +766,23 @@ mixed:
   rather than rediscovered by helpers
 - it creates a cleaner base for a later VM/runtime where `COMPLETE_OBJECT` and
   `COMPLETE_LIST` can jump into owned child blocks directly
+
+The next cleanup in the same direction removes duplicated generic retries from
+specialized completion families:
+
+- `COMPLETE_OBJECT`, `COMPLETE_LIST`, and `COMPLETE_ABSTRACT` now fall back
+  directly into the shared XS completion semantics after their own narrow
+  helper misses
+- only `COMPLETE_GENERIC` still performs the generic `direct_data_fast` probe
+- this keeps the specialized op families from re-probing the same general
+  direct-data path after they already attempted their own family-specific
+  fast path
+
+This matters less as an isolated throughput trick and more as runtime-shape
+cleanup:
+
+- each specialized completion family now owns its miss path more explicitly
+- the generic direct-data probe is confined to the true catch-all path
+- future compiled-IR-native `COMPLETE_OBJECT/LIST/ABSTRACT` implementations
+  can replace those specialized families without first disentangling duplicate
+  retry behavior

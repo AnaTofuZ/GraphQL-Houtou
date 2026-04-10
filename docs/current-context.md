@@ -1868,3 +1868,30 @@ Interpretation:
   completion-family dispatch, not an isolated one-step benchmark gain
 - the next natural follow-up is to keep using these hot env accesses while
   removing more generic-completion fallback from `COMPLETE_OBJECT/LIST/ABSTRACT`
+
+Follow-up after moving sync completed-outcome extraction into `execution.h`:
+
+- `execution.h` now owns a shared sync outcome helper that performs:
+  - direct-data fast completion
+  - full XS completion fallback
+  - completed-envelope extraction into `data/errors`
+- `compiled_ir` specialized fallback paths now consume that shared outcome API
+  instead of open-coding their own completed-envelope extraction logic
+- the old IR-local completed extractor has been removed, so compiled IR and the
+  generic execution layer now meet at a cleaner outcome boundary
+
+Verification status for the shared sync outcome boundary:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- no benchmark yet; this is intentionally being accumulated as part of the
+  broader completion/runtime refactor before the next measurement round
+
+Interpretation:
+
+- this is mostly a boundary cleanup, not a one-step throughput play
+- the important effect is that future outcome-side optimizations can now live
+  in `execution.h` once and be consumed by compiled IR without duplicating the
+  extraction logic again
+- the next structural target remains shrinking how often
+  `COMPLETE_OBJECT/LIST/ABSTRACT` need that shared fallback at all

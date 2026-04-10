@@ -805,3 +805,22 @@ This is primarily a memory-locality and responsibility-boundary change:
   `env hot/cold` split
 - it gives the later VM/runtime a cleaner model: immutable lowered program,
   mutable field frame, native writer, and compact hot execution env
+
+The next boundary cleanup now in place is a shared sync outcome API in
+`execution.h`:
+
+- sync direct-data completion and sync full-XS-completion-plus-envelope-extract
+  are now exposed through one shared outcome helper
+- compiled IR specialized fallbacks call that helper instead of duplicating the
+  "complete then extract `data/errors`" logic locally
+- this keeps compiled IR focused on runtime shape and lowers the amount of
+  completion-envelope glue that lives only in `ir_execution.h`
+
+This is an enabling change for later performance work:
+
+- future object/list/abstract narrowing can reduce calls to the shared outcome
+  helper without changing the writer/frame contract
+- future optimizations inside the shared outcome helper automatically benefit
+  compiled IR
+- the runtime is one step closer to a clean split between lowered program,
+  native frame/writer, and a narrow generic-completion escape hatch

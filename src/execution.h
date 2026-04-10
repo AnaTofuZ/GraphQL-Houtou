@@ -75,6 +75,23 @@ static int gql_execution_complete_value_catching_error_xs_lazy_data_fast(
   SV **data_out,
   AV **errors_out
 );
+static int gql_execution_extract_completed_outcome(
+  pTHX_ SV *completed_sv,
+  SV **data_out,
+  AV **errors_out
+);
+static int gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  struct gql_execution_lazy_resolve_info *lazy_info,
+  SV *result,
+  SV **data_out,
+  AV **errors_out,
+  SV **completed_out
+);
 static int gql_execution_try_complete_single_node_object_data_fast(
   pTHX_ SV *context,
   SV *return_type,
@@ -5351,6 +5368,121 @@ gql_execution_build_result_from_head(pTHX_ HV *head_data_hv, AV *errors_av) {
   }
 
   return newRV_noinc((SV *)result_hv);
+}
+
+static int
+gql_execution_extract_completed_outcome(
+  pTHX_ SV *completed_sv,
+  SV **data_out,
+  AV **errors_out
+) {
+  HV *value_hv;
+  SV **data_svp;
+  SV **child_errors_svp;
+
+  if (data_out) {
+    *data_out = NULL;
+  }
+  if (errors_out) {
+    *errors_out = NULL;
+  }
+  if (!completed_sv || !SvROK(completed_sv) || SvTYPE(SvRV(completed_sv)) != SVt_PVHV) {
+    return 0;
+  }
+
+  value_hv = (HV *)SvRV(completed_sv);
+  data_svp = hv_fetch(value_hv, "data", 4, 0);
+  if (!data_svp || !SvOK(*data_svp)) {
+    return 0;
+  }
+
+  if (data_out) {
+    *data_out = SvREFCNT_inc_simple_NN(*data_svp);
+  }
+
+  child_errors_svp = hv_fetch(value_hv, "errors", 6, 0);
+  if (errors_out
+      && child_errors_svp
+      && SvROK(*child_errors_svp)
+      && SvTYPE(SvRV(*child_errors_svp)) == SVt_PVAV
+      && av_len((AV *)SvRV(*child_errors_svp)) >= 0) {
+    *errors_out = (AV *)SvREFCNT_inc_simple_NN(SvRV(*child_errors_svp));
+  }
+
+  return 1;
+}
+
+static int
+gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  SV **data_out,
+  AV **errors_out,
+  SV **completed_out
+) {
+  SV *completed_sv = NULL;
+
+  if (data_out) {
+    *data_out = NULL;
+  }
+  if (errors_out) {
+    *errors_out = NULL;
+  }
+  if (completed_out) {
+    *completed_out = NULL;
+  }
+  if (!context || !return_type || !lazy_info) {
+    return 0;
+  }
+
+  if (gql_execution_complete_value_catching_error_xs_lazy_data_fast(
+        aTHX_
+        context,
+        return_type,
+        lazy_info,
+        result,
+        data_out,
+        errors_out
+      )) {
+    return 1;
+  }
+
+  completed_sv = gql_execution_complete_field_value_catching_error_xs_impl(
+    aTHX_
+    context,
+    parent_type,
+    field_def,
+    return_type,
+    nodes,
+    lazy_info,
+    result
+  );
+  if (!completed_sv) {
+    return 0;
+  }
+
+  if (gql_execution_extract_completed_outcome(
+        aTHX_
+        completed_sv,
+        data_out,
+        errors_out
+      )) {
+    SvREFCNT_dec(completed_sv);
+    return 1;
+  }
+
+  if (completed_out) {
+    *completed_out = completed_sv;
+    return 1;
+  }
+
+  SvREFCNT_dec(completed_sv);
+  return 0;
 }
 
 static void

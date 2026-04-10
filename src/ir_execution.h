@@ -1851,6 +1851,9 @@ gql_ir_native_field_complete_generic_fallback_result(
   SV *field_def_sv = (hot && hot->field_def_sv) ? hot->field_def_sv : entry->field_def_sv;
   SV *nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
   SV *return_type_sv = (hot && hot->return_type_sv) ? hot->return_type_sv : (meta ? meta->return_type_sv : NULL);
+  gql_ir_compiled_root_field_plan_t *native_field_plan = (hot && hot->native_field_plan)
+    ? hot->native_field_plan
+    : NULL;
   SV *direct_data_sv = NULL;
   AV *direct_errors_av = NULL;
   SV *completed_sv = NULL;
@@ -1911,6 +1914,9 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
   SV *field_def_sv = (hot && hot->field_def_sv) ? hot->field_def_sv : entry->field_def_sv;
   SV *nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
   SV *return_type_sv = (hot && hot->return_type_sv) ? hot->return_type_sv : (meta ? meta->return_type_sv : NULL);
+  gql_ir_compiled_root_field_plan_t *native_field_plan = (hot && hot->native_field_plan)
+    ? hot->native_field_plan
+    : NULL;
   SV *direct_data_sv = NULL;
   AV *direct_errors_av = NULL;
   SV *completed_sv = NULL;
@@ -1973,6 +1979,9 @@ gql_ir_native_field_complete_family_fallback_result(
   SV *field_def_sv = (hot && hot->field_def_sv) ? hot->field_def_sv : entry->field_def_sv;
   SV *nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
   SV *return_type_sv = (hot && hot->return_type_sv) ? hot->return_type_sv : (meta ? meta->return_type_sv : NULL);
+  gql_ir_compiled_root_field_plan_t *native_field_plan = (hot && hot->native_field_plan)
+    ? hot->native_field_plan
+    : NULL;
   SV *direct_data_sv = NULL;
   AV *direct_errors_av = NULL;
   SV *completed_sv = NULL;
@@ -1994,7 +2003,7 @@ gql_ir_native_field_complete_family_fallback_result(
 
   switch (family_kind) {
     case GQL_IR_NATIVE_COMPLETION_OBJECT:
-      if (gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_outcome(
+      if (gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_outcome_with_plan(
             aTHX_
             gql_ir_native_env_context(env),
             gql_ir_native_env_parent_type(env),
@@ -2003,6 +2012,7 @@ gql_ir_native_field_complete_family_fallback_result(
             nodes_sv,
             lazy_info,
             result_sv,
+            native_field_plan,
             &direct_data_sv,
             &direct_errors_av,
             &completed_sv
@@ -2176,19 +2186,6 @@ gql_ir_native_field_complete_object_result(
   }
   if (!env || !writer || !entry || !field_def_sv || !nodes_sv || !return_type_sv || !lazy_info || !frame) {
     return 0;
-  }
-
-  if ((!gql_ir_native_env_promise_code(env) || !SvOK(gql_ir_native_env_promise_code(env)))
-      && gql_ir_try_complete_sync_object_into_outcome(
-           aTHX_
-           env,
-           entry,
-           return_type_sv,
-           lazy_info,
-           result_sv,
-           frame
-         )) {
-    return 1;
   }
 
   return gql_ir_native_field_complete_family_fallback_result(

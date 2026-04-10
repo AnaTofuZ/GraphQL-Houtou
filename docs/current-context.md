@@ -2142,3 +2142,18 @@ Verification status for this consolidation:
 
 - `minil test t/11_execution.t`
 - `minil test t/12_promise.t`
+
+Follow-up after moving exact object child plans behind the object-family API:
+
+- `execution.h` now exposes an internal object-family sync outcome helper that
+  can accept a pre-lowered exact native child plan
+- `COMPLETE_OBJECT` no longer probes that exact child plan in
+  `ir_execution.h`; it delegates the whole "exact child plan -> object head ->
+  no-direct-data fallback" chain to the object-family API
+- this keeps `ir_execution.h` closer to orchestration only, and makes the
+  object family contract match the intended VM/runtime split more closely
+
+Verification status for this ownership move:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`

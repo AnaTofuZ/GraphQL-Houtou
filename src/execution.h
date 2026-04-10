@@ -141,6 +141,19 @@ static int gql_execution_complete_object_field_value_catching_error_xs_lazy_sync
   AV **errors_out,
   SV **completed_out
 );
+static int gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_outcome_with_plan(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  struct gql_execution_lazy_resolve_info *lazy_info,
+  SV *result,
+  gql_ir_compiled_root_field_plan_t *native_field_plan,
+  SV **data_out,
+  AV **errors_out,
+  SV **completed_out
+);
 static int gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_outcome(
   pTHX_ SV *context,
   SV *parent_type,
@@ -6109,8 +6122,40 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_outcome(
   AV **errors_out,
   SV **completed_out
 ) {
+  return gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_outcome_with_plan(
+    aTHX_
+    context,
+    parent_type,
+    field_def,
+    return_type,
+    nodes,
+    lazy_info,
+    result,
+    NULL,
+    data_out,
+    errors_out,
+    completed_out
+  );
+}
+
+static int
+gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_outcome_with_plan(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  gql_ir_compiled_root_field_plan_t *native_field_plan,
+  SV **data_out,
+  AV **errors_out,
+  SV **completed_out
+) {
   HV *direct_data_hv = NULL;
   AV *direct_errors_av = NULL;
+  SV *direct_data_sv = NULL;
+  SV *promise_code = NULL;
 
   if (data_out) {
     *data_out = NULL;
@@ -6120,6 +6165,35 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_outcome(
   }
   if (completed_out) {
     *completed_out = NULL;
+  }
+
+  promise_code = context ? gql_execution_context_promise_code(context) : NULL;
+  if ((!promise_code || !SvOK(promise_code))
+      && native_field_plan
+      && lazy_info) {
+    SV *path_sv = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
+    if (gql_ir_execute_native_field_plan_sync_to_outcome(
+          aTHX_
+          context,
+          return_type,
+          result,
+          path_sv,
+          native_field_plan,
+          &direct_data_sv,
+          &direct_errors_av
+        )) {
+      if (data_out) {
+        *data_out = direct_data_sv;
+      } else if (direct_data_sv) {
+        SvREFCNT_dec(direct_data_sv);
+      }
+      if (errors_out) {
+        *errors_out = direct_errors_av;
+      } else if (direct_errors_av) {
+        SvREFCNT_dec((SV *)direct_errors_av);
+      }
+      return 1;
+    }
   }
 
   if (gql_execution_try_complete_object_sync_head_fast(

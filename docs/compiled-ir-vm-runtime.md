@@ -995,3 +995,14 @@ This matters because it removes duplicated narrowing logic:
   regaining helper-specific escape branches
 - the VM path becomes easier to reason about as "family op invokes family
   contract" rather than "family op mixes orchestration and fallback tricks"
+
+That same ownership move is now one step deeper:
+
+- the object-family API in `execution.h` can now receive a pre-lowered exact
+  native child plan directly
+- `COMPLETE_OBJECT` no longer tries exact child-plan execution before entering
+  the family contract; the family API now owns the whole chain:
+  exact child plan -> object head -> no-direct-data fallback
+- this is intentionally biased toward VM/runtime clarity rather than tiny
+  local wins, because it keeps exact-plan narrowing behind the same family
+  contract that will later own more of object completion

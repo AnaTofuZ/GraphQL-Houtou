@@ -1066,3 +1066,22 @@ more mixed boundary:
 - `ir_execution.h` becomes closer to a VM/runtime dispatcher that consumes
   immutable plan metadata and mutable frame state, rather than manually
   translating between several fallback result shapes
+
+That ownership model has now been pushed one step deeper:
+
+- `OBJECT`, `LIST`, and `ABSTRACT` family APIs in `execution.h` now build
+  `gql_execution_sync_outcome_t` directly as their primary sync result
+  currency
+- the older tuple-style export interfaces remain only as adapters around that
+  native outcome
+- this means the runtime boundary is finally uniform:
+  family contract -> `gql_execution_sync_outcome_t` -> field frame/writer
+
+This is a meaningful architectural checkpoint even though the benchmark is
+mixed:
+
+- it removes another full layer of tuple/result-shape translation
+- it makes future family widening local to execution-side APIs
+- it narrows the remaining problem to one core issue: how often specialized
+  families still fall back to generic completion, not how many temporary
+  result shapes the boundary has to translate

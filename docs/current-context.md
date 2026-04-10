@@ -2259,3 +2259,44 @@ Interpretation:
   outcome currency
 - the next widening work should happen inside the execution-side family APIs,
   not by adding more ad-hoc result tuples in `ir_execution.h`
+
+Follow-up after moving all execution-side completion families onto native
+sync-outcome ownership:
+
+- `OBJECT`, `LIST`, and `ABSTRACT` family APIs in `execution.h` now construct
+  `gql_execution_sync_outcome_t` directly as their primary sync result
+  currency
+- the legacy `SV **data_out, AV **errors_out, SV **completed_out` interfaces
+  remain only as export wrappers around that native outcome
+- `ir_execution.h` continues to consume the single native outcome boundary,
+  so widening work can now stay fully inside execution-side family contracts
+
+Verification status for this family-owned native-outcome checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after moving object/list/abstract family APIs to native
+sync-outcome ownership (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 78372/s`
+  - `houtou_xs_ast 77213/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 54640/s`
+  - `houtou_xs_ast 57415/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41154/s`
+  - `houtou_xs_ast 42334/s`
+
+Interpretation:
+
+- this checkpoint is still primarily structural: all specialized families now
+  share the same native sync-outcome ownership model
+- `nested` stays ahead, so the strongest compiled-IR path remains healthy
+- `list` and `abstract` softened somewhat, which suggests the next wins will
+  come from widening the family-owned narrow paths rather than from more
+  boundary cleanup alone
+- the important architectural gain is that future `OBJECT/LIST/ABSTRACT`
+  widening can happen without another interface reshuffle between
+  `execution.h` and `ir_execution.h`

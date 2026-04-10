@@ -2110,3 +2110,20 @@ Interpretation:
 - `abstract_with_fragment` is still slightly behind, which keeps the main
   priority unchanged: widen `COMPLETE_OBJECT`/`COMPLETE_ABSTRACT` so they reach
   the shared fallback less often
+
+Follow-up after pushing family-owned APIs into `execution.h` as well:
+
+- `execution.h` now exposes dedicated sync outcome entrypoints for
+  `OBJECT/LIST/ABSTRACT`, even where `LIST/ABSTRACT` still delegate to the same
+  no-direct-data implementation
+- `ir_execution.h` now dispatches specialized-family fallback entirely through
+  those family-owned entrypoints instead of selecting raw generic helpers
+  itself
+- this is intentionally a structural checkpoint: the next widening of
+  `COMPLETE_OBJECT`/`COMPLETE_ABSTRACT` can happen behind the family-specific
+  entrypoints without another boundary refactor
+
+Verification status for this structural checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`

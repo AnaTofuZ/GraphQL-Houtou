@@ -141,6 +141,30 @@ static int gql_execution_complete_object_field_value_catching_error_xs_lazy_sync
   AV **errors_out,
   SV **completed_out
 );
+static int gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_outcome(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  struct gql_execution_lazy_resolve_info *lazy_info,
+  SV *result,
+  SV **data_out,
+  AV **errors_out,
+  SV **completed_out
+);
+static int gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_outcome(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  struct gql_execution_lazy_resolve_info *lazy_info,
+  SV *result,
+  SV **data_out,
+  AV **errors_out,
+  SV **completed_out
+);
 static int gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome_no_direct_data(
   pTHX_ SV *context,
   SV *parent_type,
@@ -6121,6 +6145,62 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_outcome(
     return 1;
   }
 
+  return gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome_no_direct_data(
+    aTHX_
+    context,
+    parent_type,
+    field_def,
+    return_type,
+    nodes,
+    lazy_info,
+    result,
+    data_out,
+    errors_out,
+    completed_out
+  );
+}
+
+static int
+gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_outcome(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  SV **data_out,
+  AV **errors_out,
+  SV **completed_out
+) {
+  return gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome_no_direct_data(
+    aTHX_
+    context,
+    parent_type,
+    field_def,
+    return_type,
+    nodes,
+    lazy_info,
+    result,
+    data_out,
+    errors_out,
+    completed_out
+  );
+}
+
+static int
+gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_outcome(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  SV **data_out,
+  AV **errors_out,
+  SV **completed_out
+) {
   return gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome_no_direct_data(
     aTHX_
     context,

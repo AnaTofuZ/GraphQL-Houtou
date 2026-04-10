@@ -2011,8 +2011,24 @@ gql_ir_native_field_complete_family_fallback_result(
       }
       return 0;
     case GQL_IR_NATIVE_COMPLETION_LIST:
+      if (gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_outcome(
+            aTHX_
+            gql_ir_native_env_context(env),
+            gql_ir_native_env_parent_type(env),
+            field_def_sv,
+            return_type_sv,
+            nodes_sv,
+            lazy_info,
+            result_sv,
+            &direct_data_sv,
+            &direct_errors_av,
+            &completed_sv
+          )) {
+        break;
+      }
+      return 0;
     case GQL_IR_NATIVE_COMPLETION_ABSTRACT:
-      if (gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome_no_direct_data(
+      if (gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_outcome(
             aTHX_
             gql_ir_native_env_context(env),
             gql_ir_native_env_parent_type(env),

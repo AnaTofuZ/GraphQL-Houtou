@@ -961,3 +961,20 @@ That combination reinforces the current plan:
 - keep object/abstract family widening as the main target
 - treat shared sync outcome fallbacks as cold contracts that should become
   rarer, not smarter
+
+The next structural step pushes that ownership split into `execution.h`:
+
+- `OBJECT`, `LIST`, and `ABSTRACT` sync outcome fallbacks now each have a
+  dedicated entrypoint on the shared XS side
+- `compiled_ir` no longer chooses between raw generic helper variants for
+  specialized families; it asks the corresponding family API instead
+- `LIST` and `ABSTRACT` still reuse the same no-direct-data body today, but the
+  widening seam now lives entirely behind the family-owned API
+
+This is mainly about keeping the runtime malleable:
+
+- future widening of `COMPLETE_OBJECT` can stay local to the object-family API
+- future widening of `COMPLETE_ABSTRACT` can diverge from list/generic fallback
+  without another boundary reshuffle
+- the VM/runtime is closer to `family op -> family fallback contract` instead
+  of `family op -> generic helper selection`

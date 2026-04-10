@@ -859,3 +859,20 @@ This matters because it removes another source of runtime glue:
   outcome contract
 - later VM/runtime work can treat child execution as another native op/family
   boundary instead of a Perl-oriented helper API
+
+The same ownership direction now extends into abstract list items:
+
+- lowered field metadata caches the list item type as immutable metadata
+  instead of recomputing it on every specialized list completion
+- lowered entries can now own a `list_item_abstract_child_plan_table` alongside
+  the existing exact object child native plan
+- `COMPLETE_LIST` can therefore keep both exact object items and abstract items
+  on owned lowered child plans before resorting to the shared sync fallback
+
+This is another structural step toward a compiled-IR-native runtime:
+
+- list completion depends less on runtime shape rediscovery
+- abstract list items move closer to the same "owned lowered plan + native
+  child outcome" model already used for object and abstract field completion
+- future VM/runtime work can treat list item object/abstract execution as
+  lowered operands rather than ad hoc helper selection

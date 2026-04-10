@@ -233,6 +233,7 @@ struct gql_ir_vm_field_meta {
   SV *field_name_sv;
   SV *return_type_sv;
   SV *completion_type_sv;
+  SV *list_item_type_sv;
   UV argument_count;
   UV field_arg_count;
   UV directive_count;
@@ -256,6 +257,7 @@ struct gql_ir_vm_field_hot {
   SV *first_node_sv;
   gql_ir_compiled_root_field_plan_t *native_field_plan;
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
+  gql_ir_lowered_abstract_child_plan_table_t *list_item_abstract_child_plan_table;
 };
 
 struct gql_ir_vm_field_cold {
@@ -283,6 +285,7 @@ struct gql_ir_compiled_root_field_plan_entry {
   U8 operands_ready;
   gql_ir_compiled_root_field_plan_t *native_field_plan;
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
+  gql_ir_lowered_abstract_child_plan_table_t *list_item_abstract_child_plan_table;
 };
 
 struct gql_ir_compiled_root_field_plan {

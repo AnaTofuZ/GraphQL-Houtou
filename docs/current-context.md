@@ -1947,3 +1947,29 @@ Interpretation:
   specialized completion families
 - this creates a cleaner base for widening `COMPLETE_OBJECT/LIST/ABSTRACT`
   without reintroducing ad hoc `HV* + errors*` plumbing at each boundary
+
+Follow-up after lowering list-item abstract ownership into compiled IR:
+
+- lowered field metadata now caches `list_item_type_sv` for list completion
+  families instead of recomputing it at runtime
+- lowered entries can now own a `list_item_abstract_child_plan_table`, mirroring
+  the existing exact object child-plan ownership for list items
+- `COMPLETE_LIST` now tries that owned abstract child table before falling back
+  to the shared sync outcome helper, so abstract list items can stay in the
+  specialized family longer
+
+Verification status for the list-item abstract lowering:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- no benchmark yet; this remains part of the broader compiled-IR completion
+  reshaping before the next measurement round
+
+Interpretation:
+
+- this extends owned lowered-plan execution from exact object list items to
+  abstract list items as well
+- the important effect is ownership and control-flow narrowing, not a one-step
+  throughput claim
+- the next step remains reducing how often the specialized families need the
+  shared fallback at all

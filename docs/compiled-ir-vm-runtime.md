@@ -714,3 +714,22 @@ shape of the runtime:
 - clearer ownership of "specialized op first, generic fallback second"
 - a better foundation for teaching those completion-family ops to own more of
   the sync happy path without duplicating retry logic
+
+The next lowering-aligned step now in place is exact object child-plan
+ownership:
+
+- when a lowered field entry has a concrete object completion type and its
+  current nodes can already be lowered into a single-node native child plan,
+  that child plan is now owned directly by the lowered entry
+- the hot operand view exposes that owned child plan so `COMPLETE_OBJECT` can
+  jump into native child execution without re-collecting the same child plan
+  from `nodes` on every execution
+
+This matters less as a standalone micro-benchmark win and more as a runtime
+ownership improvement:
+
+- object child execution moves one step closer to "program-owned plan plus
+  mutable frame" rather than "runtime re-discovery from Perl node buckets"
+- the full entry now owns more of the exact child execution shape up front
+- future VM work can treat exact object child execution more like a direct op
+  edge and less like a helper that rebuilds its own child plan from scratch

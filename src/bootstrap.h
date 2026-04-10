@@ -252,6 +252,7 @@ struct gql_ir_vm_field_hot {
   SV *resolve_sv;
   SV *nodes_sv;
   SV *first_node_sv;
+  gql_ir_compiled_root_field_plan_t *native_field_plan;
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
 };
 
@@ -273,6 +274,7 @@ struct gql_ir_compiled_root_field_plan_entry {
   SV *nodes_sv;
   SV *first_node_sv;
   U8 operands_ready;
+  gql_ir_compiled_root_field_plan_t *native_field_plan;
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
 };
 

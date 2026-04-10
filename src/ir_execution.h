@@ -145,6 +145,7 @@ static int gql_ir_try_complete_sync_list_into_outcome(
 );
 static int gql_ir_try_complete_sync_object_into_outcome(
   pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
   SV *return_type,
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result_sv,
@@ -989,6 +990,7 @@ gql_ir_native_field_hot_refresh(gql_ir_compiled_root_field_plan_entry_t *entry) 
   hot->resolve_sv = entry->resolve_sv;
   hot->nodes_sv = entry->nodes_sv;
   hot->first_node_sv = entry->first_node_sv;
+  hot->native_field_plan = entry->native_field_plan;
   hot->abstract_child_plan_table = entry->abstract_child_plan_table;
   entry->hot = hot;
 }
@@ -1538,6 +1540,7 @@ gql_ir_native_field_complete_trivial_result(
 static int
 gql_ir_try_complete_sync_object_into_outcome(
   pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
   SV *return_type,
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result_sv,
@@ -1545,6 +1548,7 @@ gql_ir_try_complete_sync_object_into_outcome(
 ) {
   gql_ir_compiled_root_field_plan_t *native_field_plan;
   SV *path_sv;
+  gql_ir_vm_field_hot_t *hot = gql_ir_native_field_hot(entry);
 
   if (!env
       || !return_type
@@ -1564,10 +1568,12 @@ gql_ir_try_complete_sync_object_into_outcome(
     return 0;
   }
 
-  native_field_plan = gql_execution_collect_single_node_concrete_native_field_plan(
-    aTHX_ return_type,
-    lazy_info->nodes_sv
-  );
+  native_field_plan = (hot && hot->native_field_plan)
+    ? hot->native_field_plan
+    : gql_execution_collect_single_node_concrete_native_field_plan(
+        aTHX_ return_type,
+        lazy_info->nodes_sv
+      );
   if (!native_field_plan) {
     return 0;
   }
@@ -1802,6 +1808,7 @@ gql_ir_native_field_complete_generic_result(
         if (gql_ir_try_complete_sync_object_into_outcome(
               aTHX_
               env,
+              entry,
               return_type_sv,
               lazy_info,
               result_sv,
@@ -1864,6 +1871,7 @@ gql_ir_native_field_complete_object_result(
       && gql_ir_try_complete_sync_object_into_outcome(
            aTHX_
            env,
+           entry,
            return_type_sv,
            lazy_info,
            result_sv,
@@ -3796,6 +3804,10 @@ gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan)
         gql_ir_lowered_abstract_child_plan_table_destroy(entry->abstract_child_plan_table);
         entry->abstract_child_plan_table = NULL;
       }
+      if (entry->native_field_plan) {
+        gql_ir_compiled_root_field_plan_destroy(entry->native_field_plan);
+        entry->native_field_plan = NULL;
+      }
     }
     Safefree(plan->entries);
     plan->entries = NULL;
@@ -3950,6 +3962,9 @@ gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *p
     dst->operands_ready = src->operands_ready;
     gql_ir_native_field_cold_refresh(dst);
     dst->meta = gql_ir_vm_field_meta_from_seed(aTHX_ dst, src->meta);
+    if (src->native_field_plan) {
+      dst->native_field_plan = gql_ir_compiled_root_field_plan_clone(aTHX_ src->native_field_plan);
+    }
     dst->abstract_child_plan_table = gql_ir_lowered_abstract_child_plan_table_clone(
       aTHX_ src->abstract_child_plan_table
     );
@@ -4485,6 +4500,16 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
       aTHX_ entry->type_sv,
       entry->nodes_sv
     );
+    if (type_svp
+        && SvOK(*type_svp)
+        && SvROK(*type_svp)
+        && (sv_derived_from(*type_svp, "GraphQL::Houtou::Type::Object")
+            || sv_derived_from(*type_svp, "GraphQL::Type::Object"))) {
+      entry->native_field_plan = gql_execution_collect_single_node_concrete_native_field_plan(
+        aTHX_ *type_svp,
+        entry->nodes_sv
+      );
+    }
     if (completion_dispatch_kind == GQL_IR_NATIVE_COMPLETION_GENERIC
         && type_svp && SvOK(*type_svp)) {
       if (SvROK(*type_svp)

@@ -1708,3 +1708,37 @@ Interpretation:
   a structural cleanup rather than a target-case win
 - the next likely gains still require shrinking the generic completion
   fallback itself, not just removing control-flow duplication around it
+
+Follow-up after lowering exact object child native plans into field entries:
+
+- lowered `compiled_ir` field entries now own an exact object child
+  `native_field_plan` when the completion type is a concrete object and the
+  current nodes can already be lowered into a single-node native child plan
+- `COMPLETE_OBJECT` and generic object completion now consult that owned plan
+  before rebuilding the child plan from `nodes`
+- this keeps object-child execution more firmly inside lowered-program
+  ownership and avoids repeating the single-node native plan collection on the
+  sync hot path
+
+Latest spot verification after caching exact object child native plans:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 78884/s`
+  - `houtou_xs_ast 76021/s`
+- `list_of_objects` (`--count=-3`)
+  - `houtou_compiled_ir 58151/s`
+  - `houtou_xs_ast 58298/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 40841/s`
+  - `houtou_xs_ast 41285/s`
+
+Interpretation:
+
+- this is primarily an ownership/lowering improvement, not yet an
+  `abstract_with_fragment` win
+- `nested_variable_object` still benefits, which is consistent with object
+  child execution avoiding repeated plan discovery
+- the remaining target-case work is still to make `COMPLETE_OBJECT` and
+  `COMPLETE_ABSTRACT` stay out of generic completion fallback more often

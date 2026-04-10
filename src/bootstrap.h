@@ -165,6 +165,7 @@ typedef struct gql_ir_vm_exec_hot gql_ir_vm_exec_hot_t;
 typedef struct gql_ir_native_exec_accum gql_ir_native_exec_accum_t;
 typedef struct gql_ir_native_result_writer gql_ir_native_result_writer_t;
 typedef struct gql_ir_native_pending_entry gql_ir_native_pending_entry_t;
+typedef struct gql_ir_native_child_outcome gql_ir_native_child_outcome_t;
 typedef enum gql_ir_native_field_op gql_ir_native_field_op_t;
 typedef enum gql_ir_native_meta_dispatch_kind gql_ir_native_meta_dispatch_kind_t;
 typedef enum gql_ir_native_resolve_dispatch_kind gql_ir_native_resolve_dispatch_kind_t;
@@ -260,6 +261,11 @@ struct gql_ir_vm_field_hot {
 struct gql_ir_vm_field_cold {
   SV *path_sv;
   UV node_count;
+};
+
+struct gql_ir_native_child_outcome {
+  HV *data_hv;
+  AV *errors_av;
 };
 
 struct gql_ir_compiled_root_field_plan_entry {

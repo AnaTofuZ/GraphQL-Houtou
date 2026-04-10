@@ -1923,3 +1923,27 @@ Interpretation:
   specialized miss handling remains specialized
 - the next step is still to widen specialized object/list/abstract completion
   so those families reach the shared fallback less often overall
+
+Follow-up after introducing a native child outcome struct:
+
+- child-plan sync execution no longer returns `HV** + AV**` as a loose pair in
+  the hot path
+- instead, object/list/abstract family helpers now share a single
+  `gql_ir_native_child_outcome_t` currency for direct child-plan results
+- `sync_to_outcome`, `sync_to_frame_outcome`, and list item direct-child
+  handling now all consume that same struct
+
+Verification status for the native child outcome boundary:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- no benchmark yet; this is still being accumulated with the broader
+  compiled-IR completion/runtime reshaping
+
+Interpretation:
+
+- this is another runtime-shape cleanup rather than a one-off benchmark play
+- the main value is reducing API scatter between child runners, frames, and
+  specialized completion families
+- this creates a cleaner base for widening `COMPLETE_OBJECT/LIST/ABSTRACT`
+  without reintroducing ad hoc `HV* + errors*` plumbing at each boundary

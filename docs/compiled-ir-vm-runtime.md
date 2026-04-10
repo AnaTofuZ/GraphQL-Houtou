@@ -840,3 +840,22 @@ This keeps the architecture honest:
   the shared boundary
 - further narrowing work can focus on reducing calls to the shared fallback
   itself, not on disentangling duplicated probes again
+
+The same cleanup is now being applied one level lower at the child-plan
+boundary:
+
+- sync child-plan execution now has a native `gql_ir_native_child_outcome_t`
+  currency instead of passing `HV** + AV**` pairs through each helper
+- `sync_to_outcome`, `sync_to_frame_outcome`, and list-item direct child
+  execution all consume the same child-outcome struct
+- this keeps child object/list/abstract execution aligned with the broader
+  "native frame + native writer + native outcome" direction
+
+This matters because it removes another source of runtime glue:
+
+- specialized completion families no longer need bespoke out-parameter wiring
+  for child-plan execution
+- future widening of `COMPLETE_OBJECT/LIST/ABSTRACT` can reuse a single child
+  outcome contract
+- later VM/runtime work can treat child execution as another native op/family
+  boundary instead of a Perl-oriented helper API

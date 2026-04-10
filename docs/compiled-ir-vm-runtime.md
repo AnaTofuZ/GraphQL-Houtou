@@ -1085,3 +1085,20 @@ mixed:
 - it narrows the remaining problem to one core issue: how often specialized
   families still fall back to generic completion, not how many temporary
   result shapes the boundary has to translate
+
+That boundary cleanup has now crossed the next threshold:
+
+- `OBJECT`, `LIST`, and `ABSTRACT` family APIs are no longer thin wrappers
+  around tuple-style result exports
+- they now build `gql_execution_sync_outcome_t` directly as their primary sync
+  result representation
+- tuple exports remain only as adapters for older callers
+
+This is an important turning point for the runtime design:
+
+- the execution-side family contracts now own both narrowing policy and the
+  native sync result currency
+- `ir_execution.h` can stay focused on orchestration, field frames, and
+  writer consumption
+- future widening work can target family-specific narrow paths directly,
+  without first refactoring result-boundary plumbing again

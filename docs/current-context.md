@@ -2300,3 +2300,41 @@ Interpretation:
 - the important architectural gain is that future `OBJECT/LIST/ABSTRACT`
   widening can happen without another interface reshuffle between
   `execution.h` and `ir_execution.h`
+
+Follow-up after making the family-owned native outcome APIs the primary
+implementation (not just adapters):
+
+- `OBJECT`, `LIST`, and `ABSTRACT` family contracts now construct native sync
+  outcomes directly inside `execution.h`
+- tuple-style `data/errors/completed` exports are now secondary adapters over
+  that family-owned native currency
+- this keeps `ir_execution.h` on a single boundary while letting family
+  widening happen entirely inside execution-side APIs
+
+Verification status for this widened family-owned outcome checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after moving family implementations fully onto native sync
+outcomes (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 83036/s`
+  - `houtou_xs_ast 77554/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58477/s`
+  - `houtou_xs_ast 58941/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41683/s`
+  - `houtou_xs_ast 42102/s`
+
+Interpretation:
+
+- this batch is the first one where all three completion families are native
+  outcome owners in the execution layer, not just boundary adapters
+- `nested` improved materially, which suggests the narrower family-owned
+  currency is helping the strongest compiled-IR path already
+- `list` and `abstract` are still roughly tied with `xs_ast`, so the next
+  wins still need to come from widening family-specific narrow paths rather
+  than from more boundary cleanup alone

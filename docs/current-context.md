@@ -2419,3 +2419,71 @@ Interpretation:
   no longer list-family boundary translation
 - `abstract` is still slightly behind, so the next likely wins are still in
   reducing how often `COMPLETE_ABSTRACT` reaches generic completion at all
+
+Current `COMPLETE_ABSTRACT` sync path, simplified:
+
+```mermaid
+flowchart TD
+  A[COMPLETE_ABSTRACT op] --> B[execution-side abstract family API]
+  B --> C[resolve_type]
+  C --> D{runtime type object?}
+  D -- no --> Z[shared no-direct-data fallback]
+  D -- yes --> E[possible_type match]
+  E -- no --> Z
+  E -- yes --> F{lowered table hit or exact plan found?}
+  F -- yes --> G[native child outcome]
+  F -- no --> H[object family narrow path]
+  G --> I[raw object HV sync outcome]
+  H --> I
+  I --> J[field frame -> writer]
+  Z --> K[generic completed envelope]
+  K --> J
+```
+
+What still matters most:
+
+- object/list are now mostly limited by how often they still need generic
+  completion
+- abstract is still limited by the `resolve_type -> possible_type -> exact
+  plan/object-head` corridor
+- because that corridor repeats the same runtime type often, the next
+  reasonable step is a tiny inline cache on lowered abstract child-plan
+  tables
+
+Follow-up after adding an inline cache to lowered abstract child-plan tables:
+
+- lowered abstract child tables now remember the last
+  `runtime_type -> native_field_plan` hit
+- repeated abstract completions with the same runtime type can skip the
+  linear table walk before reaching the exact child-plan success path
+- exact child-plan success still returns through raw object/native child
+  outcomes, so this cache compounds with the previous boundary cleanup rather
+  than replacing it
+
+Verification status for this abstract inline-cache checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after adding the lowered abstract child-plan inline cache
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 78900/s`
+  - `houtou_xs_ast 76154/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57053/s`
+  - `houtou_xs_ast 56388/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 40064/s`
+  - `houtou_xs_ast 41356/s`
+
+Interpretation:
+
+- the cache is structurally correct and does not regress the stronger object
+  and list paths
+- `abstract` remains behind, so table lookup alone is still not the dominant
+  cost
+- the remaining opportunity is still to keep `COMPLETE_ABSTRACT` on the
+  native/object-family side more often, rather than spending much more effort
+  on lookup micro-optimizations

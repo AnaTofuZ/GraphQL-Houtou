@@ -4157,12 +4157,21 @@ gql_execution_lookup_lowered_abstract_child_native_field_plan(
     return NULL;
   }
 
+  if (table->cached_possible_type_sv
+      && table->cached_native_field_plan
+      && SvROK(table->cached_possible_type_sv)
+      && SvRV(table->cached_possible_type_sv) == SvRV(object_type)) {
+    return table->cached_native_field_plan;
+  }
+
   for (i = 0; i < table->count; i++) {
     gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
     if (!entry->possible_type_sv || !entry->native_field_plan || !SvROK(entry->possible_type_sv)) {
       continue;
     }
     if (SvRV(entry->possible_type_sv) == SvRV(object_type)) {
+      table->cached_possible_type_sv = entry->possible_type_sv;
+      table->cached_native_field_plan = entry->native_field_plan;
       return entry->native_field_plan;
     }
   }

@@ -1148,3 +1148,56 @@ This matters because it shifts the next optimization target again:
 - `ABSTRACT` remains the main lagging family, which confirms that future
   widening should focus on reducing `resolve_type -> generic completion`
   frequency rather than on more generic result-shape cleanup
+
+Current `COMPLETE_ABSTRACT` sync flow in the compiled-IR runtime:
+
+```mermaid
+flowchart TD
+  A[COMPLETE_ABSTRACT op in ir_execution.h] --> B[abstract family API in execution.h]
+  B --> C{abstract return type valid?}
+  C -- no --> Z[shared no-direct-data fallback]
+  C -- yes --> D[resolve_type callback]
+  D --> E{runtime type resolved to object?}
+  E -- no --> Z
+  E -- yes --> F{possible_type match?}
+  F -- no --> Z
+  F -- yes --> G{lowered abstract child table hit?}
+  G -- yes --> H[exact native child plan]
+  G -- no --> I[collect exact concrete native plan]
+  I --> J{exact plan available?}
+  H --> J
+  J -- yes --> K[native child outcome]
+  J -- no --> L[object family narrow path]
+  K --> M[raw object HV / errors in sync outcome]
+  L --> M
+  M --> N[field frame]
+  N --> O[writer consume]
+  Z --> P[completed envelope / generic path]
+  P --> N
+```
+
+Two practical observations from this flow:
+
+- the hot path is already cleaner than earlier checkpoints, because exact
+  native child-plan success can now stay in raw object/native-child outcome
+  shapes longer
+- the remaining weak point is still the `resolve_type -> possible_type match
+  -> fallback` corridor, which means `COMPLETE_ABSTRACT` needs better
+  hit-rate on the native side rather than more generic result-shape cleanup
+
+The next inline-cache step now targets that corridor:
+
+- lowered abstract child-plan tables now carry a tiny cache of the last
+  `runtime_type -> native_field_plan` hit
+- repeated abstract completions with the same runtime type can skip the linear
+  table walk and keep pointer-chasing lower on the hot path
+
+Checkpoint result after landing that cache:
+
+- the cache is cheap and composes cleanly with the raw object/native child
+  outcome work
+- object-heavy and list-heavy checkpoints stay healthy, which means the cache
+  is not perturbing the stronger compiled-IR families
+- abstract completion still trails `xs_ast`, so the main remaining problem is
+  not table-walk overhead by itself; it is still the overall frequency of
+  falling from `resolve_type` back toward generic completion

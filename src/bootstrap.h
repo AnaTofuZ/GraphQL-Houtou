@@ -330,6 +330,8 @@ struct gql_ir_lowered_abstract_child_entry {
 struct gql_ir_lowered_abstract_child_plan_table {
   UV count;
   gql_ir_lowered_abstract_child_entry_t *entries;
+  SV *cached_possible_type_sv;
+  gql_ir_compiled_root_field_plan_t *cached_native_field_plan;
 };
 
 struct gql_ir_compiled_concrete_plan_entry {

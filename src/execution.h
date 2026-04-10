@@ -7000,52 +7000,24 @@ gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_o
                 aTHX_ abstract_child_plan_table,
                 runtime_type
               )
-            : gql_execution_collect_single_node_concrete_native_field_plan(aTHX_ runtime_type, nodes);
-          if (!native_field_plan) {
-            native_field_plan = gql_execution_collect_single_node_concrete_native_field_plan(
-              aTHX_ runtime_type,
-              nodes
-            );
-          }
+            : NULL;
 
-          if (native_field_plan) {
-            SV *path_sv = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
-            gql_ir_native_child_outcome_t child_outcome;
-            Zero(&child_outcome, 1, gql_ir_native_child_outcome_t);
-            SvREFCNT_dec(runtime_type_or_name);
-            if (gql_ir_execute_native_field_plan_sync_to_child_outcome(
-                  aTHX_
-                  context,
-                  runtime_type,
-                  result,
-                  path_sv,
-                  native_field_plan,
-                  &child_outcome
-                )) {
-              outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
-              outcome->data_sv = (SV *)child_outcome.data_hv;
-              outcome->errors_av = child_outcome.errors_av;
-              return 1;
-            }
-            goto abstract_fallback;
-          } else {
-            SvREFCNT_dec(runtime_type_or_name);
-            if (gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_plan(
-                  aTHX_
-                  context,
-                  parent_type,
-                  field_def,
-                  runtime_type,
-                  nodes,
-                  lazy_info,
-                  result,
-                  NULL,
-                  outcome
-                )) {
-              return 1;
-            }
-            goto abstract_fallback;
+          SvREFCNT_dec(runtime_type_or_name);
+          if (gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_plan(
+                aTHX_
+                context,
+                parent_type,
+                field_def,
+                runtime_type,
+                nodes,
+                lazy_info,
+                result,
+                native_field_plan,
+                outcome
+              )) {
+            return 1;
           }
+          goto abstract_fallback;
         }
       }
 

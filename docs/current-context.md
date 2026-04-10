@@ -2487,3 +2487,43 @@ Interpretation:
 - the remaining opportunity is still to keep `COMPLETE_ABSTRACT` on the
   native/object-family side more often, rather than spending much more effort
   on lookup micro-optimizations
+
+Follow-up after routing more of `COMPLETE_ABSTRACT` through the object-family
+contract:
+
+- once `resolve_type` and `possible_type` succeed, the abstract family now
+  delegates to the object-family native outcome API instead of trying to own
+  the exact-plan/object-head split itself
+- this keeps exact native child plan, object-head, and no-direct-data
+  fallback under a single execution-side family contract
+- the lowered abstract child-plan inline cache compounds with that change,
+  because repeated runtime types now reach the same object-family path with
+  less table-walk overhead
+
+Verification status for this abstract-family delegation checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after delegating more abstract completion into the object
+family contract (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80677/s`
+  - `houtou_xs_ast 77042/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57982/s`
+  - `houtou_xs_ast 58333/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 42575/s`
+  - `houtou_xs_ast 42712/s`
+
+Interpretation:
+
+- this is the first abstract-focused batch in a while that gets `abstract`
+  back to near-parity without sacrificing the stronger object-heavy path
+- the remaining gap is now very small, which suggests the broad family-owned
+  shape is finally right
+- the next wins should come from continuing to reduce native-to-generic
+  fallback frequency inside the abstract/object contracts, not from more
+  isolated lookup tricks

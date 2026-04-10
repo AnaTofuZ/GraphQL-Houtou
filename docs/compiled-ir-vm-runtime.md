@@ -1201,3 +1201,24 @@ Checkpoint result after landing that cache:
 - abstract completion still trails `xs_ast`, so the main remaining problem is
   not table-walk overhead by itself; it is still the overall frequency of
   falling from `resolve_type` back toward generic completion
+
+The next abstract-family widening step now builds on that cache:
+
+- after `resolve_type` and `possible_type` succeed, the abstract family no
+  longer tries to own a bespoke split between exact native child plans,
+  object-head, and no-direct-data fallback
+- instead, it delegates that whole corridor into the object-family sync
+  outcome contract
+- this keeps the abstract family narrower and pushes more success-path
+  ownership behind one execution-side family API
+
+Architecturally this is important because it removes another mixed boundary:
+
+- `COMPLETE_ABSTRACT` now decides "can I stay native?" and then hands off to
+  the object-family contract, instead of re-implementing part of object
+  completion locally
+- exact child plan success, object-head success, and no-direct-data fallback
+  now live under one family-owned contract more often
+- this is much closer to the future VM shape, where abstract completion should
+  mostly be "resolve + dispatch to object completion family" rather than a
+  separate mini-runtime

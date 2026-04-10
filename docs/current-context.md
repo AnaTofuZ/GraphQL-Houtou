@@ -1843,3 +1843,28 @@ Interpretation:
 - `abstract_with_fragment` remains in the same competitive band, which keeps
   the path open for a larger compiled-IR-native object/abstract completion
   replacement next
+
+Follow-up after splitting native execution env into hot/cold access paths:
+
+- `compiled_ir` runtime now groups `context`, `parent_type`, `root_value`,
+  `base_path`, and `promise_code` into a hot execution-env view
+- child-plan runners and completion-family helpers now read those values
+  through the hot env accessors instead of scattering full env field loads
+- cold env state remains `context_value`, `variable_values`, `empty_args`, and
+  `field_resolver`, which are still needed but are less central to the
+  completion/write hot path
+
+Verification status for the env hot/cold split:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- no spot benchmark yet by design; this is being accumulated as part of the
+  broader compiled-IR runtime reshaping before the next measurement round
+
+Interpretation:
+
+- this continues the cache-locality direction without changing public behavior
+- the main value is reducing env scatter in child-plan execution and
+  completion-family dispatch, not an isolated one-step benchmark gain
+- the next natural follow-up is to keep using these hot env accesses while
+  removing more generic-completion fallback from `COMPLETE_OBJECT/LIST/ABSTRACT`

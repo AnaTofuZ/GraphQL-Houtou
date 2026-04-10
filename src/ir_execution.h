@@ -249,6 +249,12 @@ static gql_ir_vm_field_hot_t *gql_ir_native_field_hot(gql_ir_compiled_root_field
 static void gql_ir_native_field_hot_refresh(gql_ir_compiled_root_field_plan_entry_t *entry);
 static gql_ir_vm_field_cold_t *gql_ir_native_field_cold(gql_ir_compiled_root_field_plan_entry_t *entry);
 static void gql_ir_native_field_cold_refresh(gql_ir_compiled_root_field_plan_entry_t *entry);
+static gql_ir_vm_exec_hot_t *gql_ir_native_exec_hot(gql_ir_native_exec_env_t *env);
+static SV *gql_ir_native_env_context(gql_ir_native_exec_env_t *env);
+static SV *gql_ir_native_env_parent_type(gql_ir_native_exec_env_t *env);
+static SV *gql_ir_native_env_root_value(gql_ir_native_exec_env_t *env);
+static SV *gql_ir_native_env_base_path(gql_ir_native_exec_env_t *env);
+static SV *gql_ir_native_env_promise_code(gql_ir_native_exec_env_t *env);
 static int gql_ir_native_result_writer_push_pending(
   pTHX_ gql_ir_native_result_writer_t *writer,
   SV *key_sv,
@@ -511,7 +517,7 @@ gql_ir_try_complete_abstract_sync_into(
   HV *context_hv;
   SV **schema_svp = NULL;
 
-  context = env ? env->context_sv : NULL;
+  context = gql_ir_native_env_context(env);
   context_hv = (SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV) ? (HV *)SvRV(context) : NULL;
   schema_svp = context_hv ? hv_fetch(context_hv, "schema", 6, 0) : NULL;
 
@@ -652,14 +658,14 @@ gql_ir_execute_native_child_field_plan_sync_to_outcome(
       || !field_plan
       || !data_out
       || !errors_out
-      || (parent_env->promise_code_sv && SvOK(parent_env->promise_code_sv))) {
+      || (gql_ir_native_env_promise_code(parent_env) && SvOK(gql_ir_native_env_promise_code(parent_env)))) {
     return 0;
   }
 
   child_env = *parent_env;
-  child_env.parent_type_sv = child_parent_type_sv;
-  child_env.root_value_sv = root_value;
-  child_env.base_path_sv = path_sv;
+  gql_ir_native_exec_hot(&child_env)->parent_type_sv = child_parent_type_sv;
+  gql_ir_native_exec_hot(&child_env)->root_value_sv = root_value;
+  gql_ir_native_exec_hot(&child_env)->base_path_sv = path_sv;
 
   gql_ir_init_native_result_writer(&writer);
   if (!gql_ir_run_native_field_plan_loop_into_writer(
@@ -714,14 +720,14 @@ gql_ir_execute_native_child_field_plan_sync_to_direct_hv(
       || !field_plan
       || !data_hv_out
       || !errors_out
-      || (parent_env->promise_code_sv && SvOK(parent_env->promise_code_sv))) {
+      || (gql_ir_native_env_promise_code(parent_env) && SvOK(gql_ir_native_env_promise_code(parent_env)))) {
     return 0;
   }
 
   child_env = *parent_env;
-  child_env.parent_type_sv = child_parent_type_sv;
-  child_env.root_value_sv = root_value;
-  child_env.base_path_sv = path_sv;
+  gql_ir_native_exec_hot(&child_env)->parent_type_sv = child_parent_type_sv;
+  gql_ir_native_exec_hot(&child_env)->root_value_sv = root_value;
+  gql_ir_native_exec_hot(&child_env)->base_path_sv = path_sv;
 
   gql_ir_init_native_result_writer(&writer);
   if (!gql_ir_run_native_field_plan_loop_into_writer(
@@ -1018,6 +1024,47 @@ gql_ir_native_field_cold(gql_ir_compiled_root_field_plan_entry_t *entry) {
   return entry ? entry->cold : NULL;
 }
 
+static gql_ir_vm_exec_hot_t *
+gql_ir_native_exec_hot(gql_ir_native_exec_env_t *env) {
+  if (!env) {
+    return NULL;
+  }
+  if (!env->hot) {
+    env->hot = &env->hot_inline;
+  }
+  return env->hot;
+}
+
+static SV *
+gql_ir_native_env_context(gql_ir_native_exec_env_t *env) {
+  gql_ir_vm_exec_hot_t *hot = gql_ir_native_exec_hot(env);
+  return hot ? hot->context_sv : NULL;
+}
+
+static SV *
+gql_ir_native_env_parent_type(gql_ir_native_exec_env_t *env) {
+  gql_ir_vm_exec_hot_t *hot = gql_ir_native_exec_hot(env);
+  return hot ? hot->parent_type_sv : NULL;
+}
+
+static SV *
+gql_ir_native_env_root_value(gql_ir_native_exec_env_t *env) {
+  gql_ir_vm_exec_hot_t *hot = gql_ir_native_exec_hot(env);
+  return hot ? hot->root_value_sv : NULL;
+}
+
+static SV *
+gql_ir_native_env_base_path(gql_ir_native_exec_env_t *env) {
+  gql_ir_vm_exec_hot_t *hot = gql_ir_native_exec_hot(env);
+  return hot ? hot->base_path_sv : NULL;
+}
+
+static SV *
+gql_ir_native_env_promise_code(gql_ir_native_exec_env_t *env) {
+  gql_ir_vm_exec_hot_t *hot = gql_ir_native_exec_hot(env);
+  return hot ? hot->promise_code_sv : NULL;
+}
+
 static int
 gql_ir_native_result_writer_push_pending(
   pTHX_ gql_ir_native_result_writer_t *writer,
@@ -1199,15 +1246,16 @@ gql_ir_init_native_exec_env(
   }
 
   Zero(env_out, 1, gql_ir_native_exec_env_t);
-  env_out->context_sv = context_sv;
-  env_out->parent_type_sv = parent_type_sv;
-  env_out->root_value_sv = root_value_sv;
-  env_out->base_path_sv = base_path_sv;
+  env_out->hot = &env_out->hot_inline;
+  env_out->hot_inline.context_sv = context_sv;
+  env_out->hot_inline.parent_type_sv = parent_type_sv;
+  env_out->hot_inline.root_value_sv = root_value_sv;
+  env_out->hot_inline.base_path_sv = base_path_sv;
+  env_out->hot_inline.promise_code_sv = promise_code_sv;
   env_out->context_value_sv = (context_value_svp && SvOK(*context_value_svp)) ? *context_value_svp : &PL_sv_undef;
   env_out->variable_values_sv = (variable_values_svp && SvOK(*variable_values_svp)) ? *variable_values_svp : &PL_sv_undef;
   env_out->empty_args_sv = (empty_args_svp && SvOK(*empty_args_svp)) ? *empty_args_svp : &PL_sv_undef;
   env_out->field_resolver_sv = (field_resolver_svp && SvOK(*field_resolver_svp)) ? *field_resolver_svp : &PL_sv_undef;
-  env_out->promise_code_sv = promise_code_sv;
 
   if (promise_code_out) {
     *promise_code_out = promise_code_sv;
@@ -1289,12 +1337,12 @@ gql_ir_native_field_try_meta_dispatch(
     return 0;
   }
 
-  if (gql_execution_try_typename_meta_field_data_fast(aTHX_ env->parent_type_sv, meta->field_name_sv, type_sv, &direct_data_sv)) {
+  if (gql_execution_try_typename_meta_field_data_fast(aTHX_ gql_ir_native_env_parent_type(env), meta->field_name_sv, type_sv, &direct_data_sv)) {
     frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
     frame->outcome_sv = direct_data_sv;
     return 1;
   }
-  if (gql_execution_try_typename_meta_field_fast(aTHX_ env->parent_type_sv, meta->field_name_sv, type_sv, &frame->outcome_sv)) {
+  if (gql_execution_try_typename_meta_field_fast(aTHX_ gql_ir_native_env_parent_type(env), meta->field_name_sv, type_sv, &frame->outcome_sv)) {
     frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
     return 1;
   }
@@ -1378,7 +1426,7 @@ gql_ir_native_field_call_resolver_empty_args(
   *result_out = gql_execution_call_resolver(
     aTHX_
     resolve_sv,
-    env->root_value_sv,
+    gql_ir_native_env_root_value(env),
     args_sv,
     (env->context_value_sv && SvOK(env->context_value_sv)) ? env->context_value_sv : &PL_sv_undef,
     lazy_info->info_sv
@@ -1432,7 +1480,7 @@ gql_ir_native_field_call_resolver_build_args(
   *result_out = gql_execution_call_resolver(
     aTHX_
     resolve_sv,
-    env->root_value_sv,
+    gql_ir_native_env_root_value(env),
     args_sv,
     (env->context_value_sv && SvOK(env->context_value_sv)) ? env->context_value_sv : &PL_sv_undef,
     lazy_info->info_sv
@@ -1461,7 +1509,7 @@ gql_ir_native_field_try_trivial_completion(
   }
 
   if (!result_sv && resolve_is_default
-      && gql_execution_try_default_field_resolve_borrowed_fast(aTHX_ env->root_value_sv, meta->field_name_sv, &result_sv)) {
+      && gql_execution_try_default_field_resolve_borrowed_fast(aTHX_ gql_ir_native_env_root_value(env), meta->field_name_sv, &result_sv)) {
     *result_io = result_sv;
     if (gql_execution_try_complete_trivial_value_with_metadata_data_fast(
           aTHX_ meta->completion_type_sv,
@@ -1563,7 +1611,7 @@ gql_ir_try_complete_sync_object_into_outcome(
       || !result_sv
       || !SvOK(result_sv)
       || !frame
-      || (env->promise_code_sv && SvOK(env->promise_code_sv))) {
+      || (gql_ir_native_env_promise_code(env) && SvOK(gql_ir_native_env_promise_code(env)))) {
     return 0;
   }
 
@@ -1618,7 +1666,7 @@ gql_ir_try_complete_sync_list_into_outcome(
       || !return_type
       || !lazy_info
       || !frame
-      || (env->promise_code_sv && SvOK(env->promise_code_sv))
+      || (gql_ir_native_env_promise_code(env) && SvOK(gql_ir_native_env_promise_code(env)))
       || !(sv_derived_from(return_type, "GraphQL::Houtou::Type::List")
            || sv_derived_from(return_type, "GraphQL::Type::List"))
       || !result_sv
@@ -1664,7 +1712,7 @@ gql_ir_try_complete_sync_list_into_outcome(
     if (!item_data_sv
         && !gql_execution_complete_value_catching_error_xs_lazy_data_fast(
              aTHX_
-             env->context_sv,
+             gql_ir_native_env_context(env),
              item_type,
              &item_lazy_info,
              item_svp ? *item_svp : &PL_sv_undef,
@@ -1748,12 +1796,12 @@ gql_ir_native_field_complete_generic_fallback_result(
     return 0;
   }
 
-  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))) {
+  if ((!gql_ir_native_env_promise_code(env) || !SvOK(gql_ir_native_env_promise_code(env)))) {
     SV *direct_data_sv = NULL;
     AV *direct_errors_av = NULL;
     if (gql_execution_complete_value_catching_error_xs_lazy_data_fast(
           aTHX_
-          env->context_sv,
+          gql_ir_native_env_context(env),
           return_type_sv,
           lazy_info,
           result_sv,
@@ -1769,15 +1817,15 @@ gql_ir_native_field_complete_generic_fallback_result(
 
   frame->outcome_sv = gql_execution_complete_field_value_catching_error_xs_impl(
     aTHX_
-    env->context_sv,
-    env->parent_type_sv,
+    gql_ir_native_env_context(env),
+    gql_ir_native_env_parent_type(env),
     field_def_sv,
     return_type_sv,
     nodes_sv,
     lazy_info,
     result_sv
   );
-  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
+  if ((!gql_ir_native_env_promise_code(env) || !SvOK(gql_ir_native_env_promise_code(env)))
       && gql_ir_extract_completed_outcome(
            aTHX_
            frame->outcome_sv,
@@ -1825,15 +1873,15 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
 
   frame->outcome_sv = gql_execution_complete_field_value_catching_error_xs_impl(
     aTHX_
-    env->context_sv,
-    env->parent_type_sv,
+    gql_ir_native_env_context(env),
+    gql_ir_native_env_parent_type(env),
     field_def_sv,
     return_type_sv,
     nodes_sv,
     lazy_info,
     result_sv
   );
-  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
+  if ((!gql_ir_native_env_promise_code(env) || !SvOK(gql_ir_native_env_promise_code(env)))
       && gql_ir_extract_completed_outcome(
            aTHX_
            frame->outcome_sv,
@@ -1870,7 +1918,7 @@ gql_ir_native_field_complete_generic_result(
     return 0;
   }
 
-  if (!env->promise_code_sv || !SvOK(env->promise_code_sv)) {
+  if (!gql_ir_native_env_promise_code(env) || !SvOK(gql_ir_native_env_promise_code(env))) {
     switch (meta ? meta->completion_dispatch_kind : GQL_IR_NATIVE_COMPLETION_GENERIC) {
       case GQL_IR_NATIVE_COMPLETION_ABSTRACT:
         if (gql_ir_try_complete_abstract_sync_into(
@@ -1950,7 +1998,7 @@ gql_ir_native_field_complete_object_result(
     return 0;
   }
 
-  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
+  if ((!gql_ir_native_env_promise_code(env) || !SvOK(gql_ir_native_env_promise_code(env)))
       && gql_ir_try_complete_sync_object_into_outcome(
            aTHX_
            env,
@@ -1996,7 +2044,7 @@ gql_ir_native_field_complete_list_result(
     return 0;
   }
 
-  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
+  if ((!gql_ir_native_env_promise_code(env) || !SvOK(gql_ir_native_env_promise_code(env)))
       && gql_ir_try_complete_sync_list_into_outcome(
            aTHX_
            env,
@@ -2042,7 +2090,7 @@ gql_ir_native_field_complete_abstract_result(
     return 0;
   }
 
-  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
+  if ((!gql_ir_native_env_promise_code(env) || !SvOK(gql_ir_native_env_promise_code(env)))
       && gql_ir_try_complete_abstract_sync_into(
            aTHX_
            env,
@@ -2139,8 +2187,8 @@ gql_ir_native_field_consume_completed(
   }
   completed_sv = frame->outcome_sv;
 
-  if (env->promise_code_sv && SvOK(env->promise_code_sv) && SvROK(completed_sv)) {
-    SV *is_completed_promise_sv = gql_promise_call_is_promise(aTHX_ env->promise_code_sv, completed_sv);
+  if (gql_ir_native_env_promise_code(env) && SvOK(gql_ir_native_env_promise_code(env)) && SvROK(completed_sv)) {
+    SV *is_completed_promise_sv = gql_promise_call_is_promise(aTHX_ gql_ir_native_env_promise_code(env), completed_sv);
     is_completed_promise = SvTRUE(is_completed_promise_sv);
     SvREFCNT_dec(is_completed_promise_sv);
     if (is_completed_promise) {
@@ -2393,8 +2441,8 @@ gql_ir_init_native_field_frame(
 
   Zero(frame, 1, gql_ir_native_field_frame_t);
   frame->meta = meta;
-  frame->lazy_info.context_sv = env->context_sv;
-  frame->lazy_info.parent_type_sv = env->parent_type_sv;
+  frame->lazy_info.context_sv = gql_ir_native_env_context(env);
+  frame->lazy_info.parent_type_sv = gql_ir_native_env_parent_type(env);
   frame->lazy_info.field_def_sv = field_def_sv;
   frame->lazy_info.return_type_sv = return_type_sv;
   frame->lazy_info.field_name_sv = gql_ir_native_field_name(entry);
@@ -2402,7 +2450,7 @@ gql_ir_init_native_field_frame(
   if (cold && cold->path_sv && SvOK(cold->path_sv)) {
     frame->lazy_info.path_sv = cold->path_sv;
   } else {
-    frame->lazy_info.base_path_sv = env->base_path_sv;
+    frame->lazy_info.base_path_sv = gql_ir_native_env_base_path(env);
     frame->lazy_info.result_name_sv = gql_ir_native_field_result_name(entry);
   }
 }
@@ -2579,7 +2627,7 @@ op_trivial_context:
   }
 
   if (frame.resolve_is_default
-      && gql_execution_try_default_field_resolve_fast(aTHX_ env->root_value_sv, meta->field_name_sv, &frame.result_sv)) {
+      && gql_execution_try_default_field_resolve_fast(aTHX_ gql_ir_native_env_root_value(env), meta->field_name_sv, &frame.result_sv)) {
     frame.used_fast_default_resolve = 1;
     if (gql_ir_native_field_try_trivial_completion(
           aTHX_

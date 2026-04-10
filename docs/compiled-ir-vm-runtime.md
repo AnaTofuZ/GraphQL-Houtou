@@ -786,3 +786,22 @@ cleanup:
 - future compiled-IR-native `COMPLETE_OBJECT/LIST/ABSTRACT` implementations
   can replace those specialized families without first disentangling duplicate
   retry behavior
+
+The same hot/cold split is now being applied to execution state, not just field
+metadata:
+
+- the native exec env now groups `context`, `parent_type`, `root_value`,
+  `base_path`, and `promise_code` into a hot view used by child-plan runners
+  and completion-family helpers
+- resolver-support state such as `context_value`, `variable_values`,
+  `empty_args`, and `field_resolver` remains outside that hot cluster
+- this keeps the hottest runtime reads closer together and prepares the
+  eventual VM/runtime loop to operate on a tighter execution-frame working set
+
+This is primarily a memory-locality and responsibility-boundary change:
+
+- it reduces full-env scatter in the completion and child-runner hot paths
+- it complements the earlier field `meta/hot/cold` split with an equivalent
+  `env hot/cold` split
+- it gives the later VM/runtime a cleaner model: immutable lowered program,
+  mutable field frame, native writer, and compact hot execution env

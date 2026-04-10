@@ -1994,3 +1994,42 @@ Interpretation:
   current priority: widen `COMPLETE_OBJECT`/`COMPLETE_ABSTRACT` further before
   the next benchmark round instead of spending more effort on list-specific
   micro-optimizations
+
+Follow-up after adding a sync object-head helper for compiled IR:
+
+- `execution.h` now exposes `gql_execution_execute_fields_sync_head(...)` as a
+  narrow sync/no-promise helper that returns `HV *data + AV *errors` directly
+  for already-collected simple object field sets
+- `gql_execution_try_complete_object_sync_head_fast(...)` builds on that helper
+  and is now used by compiled IR `COMPLETE_OBJECT` after exact native child-plan
+  dispatch misses
+- this does not try to widen generic `execute_fields()` reuse; it is scoped to
+  the compiled IR object family only
+
+Verification status for the sync object-head helper round:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after this object-head round (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79712/s`
+  - `houtou_xs_ast 78156/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 59581/s`
+  - `houtou_xs_ast 59901/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 42040/s`
+  - `houtou_xs_ast 42842/s`
+
+Interpretation:
+
+- relative to the previous checkpoint, all three tracked cases moved up on the
+  compiled IR side, including `abstract_with_fragment`
+- `abstract_with_fragment` is still slightly behind `xs_ast`, so the next
+  priority remains widening specialized `COMPLETE_OBJECT`/`COMPLETE_ABSTRACT`
+  paths rather than chasing narrower list-specific tricks
+- the important architectural effect is that compiled IR now has an additional
+  object-family boundary that returns native head data directly instead of
+  forcing a top-level `{ data, errors }` envelope

@@ -892,3 +892,22 @@ That matches the intended strategy:
   narrowing
 - further progress is more likely to come from reducing specialized-family
   fallback than from more list-specific micro-layout tweaks
+
+The latest object-family step extends that same idea at the execution boundary:
+
+- `execution.h` now provides `gql_execution_execute_fields_sync_head(...)` as a
+  narrow sync/no-promise helper that returns `HV *data + AV *errors` directly
+  for already-collected simple object field sets
+- compiled IR uses that helper through
+  `gql_execution_try_complete_object_sync_head_fast(...)` after exact native
+  child-plan dispatch misses inside `COMPLETE_OBJECT`
+- this is intentionally limited to the compiled IR object family; broader
+  reuse of `execute_fields()`-style helpers previously caused regressions
+
+This is useful even before full VM op lowering:
+
+- object-family fallback can stay on a native head representation longer
+- compiled IR avoids forcing a top-level completed `{ data, errors }` envelope
+  for this narrow sync path
+- future `COMPLETE_OBJECT` / `COMPLETE_ABSTRACT` work can widen around this
+  head helper instead of rediscovering object fallback shapes from scratch

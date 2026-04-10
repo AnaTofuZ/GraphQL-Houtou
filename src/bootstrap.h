@@ -270,6 +270,20 @@ struct gql_ir_native_child_outcome {
   AV *errors_av;
 };
 
+typedef enum {
+  GQL_EXECUTION_SYNC_OUTCOME_NONE = 0,
+  GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE = 1,
+  GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV = 2
+} gql_execution_sync_outcome_kind_t;
+
+struct gql_execution_sync_outcome {
+  gql_execution_sync_outcome_kind_t kind;
+  SV *data_sv;
+  AV *errors_av;
+  SV *completed_sv;
+};
+typedef struct gql_execution_sync_outcome gql_execution_sync_outcome_t;
+
 struct gql_ir_compiled_root_field_plan_entry {
   gql_ir_vm_field_meta_t *meta;
   gql_ir_vm_field_meta_t meta_inline;

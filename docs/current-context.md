@@ -2219,3 +2219,43 @@ Interpretation:
 - `abstract_with_fragment` also moves back ahead of `xs_ast`, which supports
   the current strategy: reduce family fallback frequency by moving narrowing
   policy behind family-owned APIs, not by piling up more local micro-opts
+
+Follow-up after unifying execution-side sync outcomes with compiled IR field
+frames:
+
+- `execution.h` now exposes native sync-outcome wrappers for generic/object/
+  list/abstract family contracts
+- `ir_execution.h` family fallbacks no longer pass around local
+  `SV *direct_data_sv`, `AV *direct_errors_av`, `SV *completed_sv` triples;
+  they consume a single `gql_execution_sync_outcome_t`
+- this does not widen runtime behavior yet; it narrows the boundary so the
+  next step can make family-owned fallbacks return native outcomes directly
+  without another interface reshuffle
+
+Verification status for this sync-outcome boundary checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after unifying family fallbacks on
+`gql_execution_sync_outcome_t` (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 82779/s`
+  - `houtou_xs_ast 79377/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57098/s`
+  - `houtou_xs_ast 57415/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41687/s`
+  - `houtou_xs_ast 42514/s`
+
+Interpretation:
+
+- the boundary cleanup clearly helps `nested`, which is the strongest existing
+  compiled-IR path
+- `list` and `abstract` remain in the same overall band, but this checkpoint
+  is primarily about replacing tuple-shaped fallback plumbing with one native
+  outcome currency
+- the next widening work should happen inside the execution-side family APIs,
+  not by adding more ad-hoc result tuples in `ir_execution.h`

@@ -1045,3 +1045,24 @@ That alignment is more important than any single micro-optimization. It means
 future widening can happen inside one family contract at a time while
 `ir_execution.h` stays focused on field-family orchestration and VM/runtime
 dispatch.
+
+The next boundary cleanup has now landed as well:
+
+- `execution.h` exposes native sync-outcome wrappers for generic/object/list/
+  abstract family fallbacks
+- `ir_execution.h` no longer carries raw `(direct_data, direct_errors,
+  completed_sv)` tuples across the family boundary
+- instead, field-family orchestration now receives one
+  `gql_execution_sync_outcome_t`, which matches the direction of
+  `field frame -> native outcome -> writer`
+
+This matters more than the immediate benchmark delta because it removes one
+more mixed boundary:
+
+- future widening of `COMPLETE_OBJECT/LIST/ABSTRACT` can return richer native
+  outcomes without rewriting every compiled-IR caller
+- the execution-side family contracts now own both narrowing policy and the
+  sync outcome currency
+- `ir_execution.h` becomes closer to a VM/runtime dispatcher that consumes
+  immutable plan metadata and mutable frame state, rather than manually
+  translating between several fallback result shapes

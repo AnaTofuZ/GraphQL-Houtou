@@ -166,6 +166,21 @@ static int gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_o
   AV **errors_out,
   SV **completed_out
 );
+static int gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_outcome_with_items(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  struct gql_execution_lazy_resolve_info *lazy_info,
+  SV *result,
+  SV *item_type,
+  gql_ir_compiled_root_field_plan_t *item_native_field_plan,
+  gql_ir_lowered_abstract_child_plan_table_t *item_abstract_child_plan_table,
+  SV **data_out,
+  AV **errors_out,
+  SV **completed_out
+);
 static int gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_outcome(
   pTHX_ SV *context,
   SV *parent_type,
@@ -6284,6 +6299,209 @@ gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_outcome(
   AV **errors_out,
   SV **completed_out
 ) {
+  return gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_outcome_with_items(
+    aTHX_
+    context,
+    parent_type,
+    field_def,
+    return_type,
+    nodes,
+    lazy_info,
+    result,
+    NULL,
+    NULL,
+    NULL,
+    data_out,
+    errors_out,
+    completed_out
+  );
+}
+
+static int
+gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_outcome_with_items(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  SV *item_type,
+  gql_ir_compiled_root_field_plan_t *item_native_field_plan,
+  gql_ir_lowered_abstract_child_plan_table_t *item_abstract_child_plan_table,
+  SV **data_out,
+  AV **errors_out,
+  SV **completed_out
+) {
+  AV *result_av;
+  AV *data_av = NULL;
+  AV *all_errors_av = NULL;
+  SV *owned_item_type = NULL;
+  SV *promise_code = NULL;
+  I32 result_len;
+  I32 i;
+
+  if (data_out) {
+    *data_out = NULL;
+  }
+  if (errors_out) {
+    *errors_out = NULL;
+  }
+  if (completed_out) {
+    *completed_out = NULL;
+  }
+
+  promise_code = context ? gql_execution_context_promise_code(context) : NULL;
+  if (!context
+      || !return_type
+      || !lazy_info
+      || (promise_code && SvOK(promise_code))
+      || !(sv_derived_from(return_type, "GraphQL::Houtou::Type::List")
+           || sv_derived_from(return_type, "GraphQL::Type::List"))
+      || !result
+      || !SvROK(result)
+      || SvTYPE(SvRV(result)) != SVt_PVAV) {
+    goto list_fallback;
+  }
+
+  owned_item_type = item_type
+    ? gql_execution_share_or_copy_sv(item_type)
+    : gql_execution_call_type_of(aTHX_ return_type);
+  if (!owned_item_type || !SvOK(owned_item_type)) {
+    goto list_fallback;
+  }
+
+  result_av = (AV *)SvRV(result);
+  result_len = av_len(result_av);
+  data_av = newAV();
+
+  for (i = 0; i <= result_len; i++) {
+    SV **item_svp = av_fetch(result_av, i, 0);
+    SV *item_data_sv = NULL;
+    SV *item_completed_sv = NULL;
+    AV *item_errors_av = NULL;
+    SV *base_path_sv = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
+    SV *item_path_sv = gql_execution_path_with_index(aTHX_ base_path_sv, (IV)i);
+    gql_execution_lazy_resolve_info_t item_lazy_info = *lazy_info;
+
+    item_lazy_info.base_path_sv = NULL;
+    item_lazy_info.result_name_sv = NULL;
+    item_lazy_info.path_sv = item_path_sv;
+    item_lazy_info.info_sv = NULL;
+
+    if (item_native_field_plan) {
+      if (!gql_ir_execute_native_field_plan_sync_to_outcome(
+            aTHX_
+            context,
+            owned_item_type,
+            item_svp ? *item_svp : &PL_sv_undef,
+            item_path_sv,
+            item_native_field_plan,
+            &item_data_sv,
+            &item_errors_av
+          )) {
+        SvREFCNT_dec(item_path_sv);
+        goto list_fallback;
+      }
+    } else if (item_abstract_child_plan_table) {
+      if (!gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_outcome_with_table(
+            aTHX_
+            context,
+            item_lazy_info.parent_type_sv,
+            item_lazy_info.field_def_sv,
+            owned_item_type,
+            item_lazy_info.nodes_sv,
+            &item_lazy_info,
+            item_svp ? *item_svp : &PL_sv_undef,
+            item_abstract_child_plan_table,
+            &item_data_sv,
+            &item_errors_av,
+            &item_completed_sv
+          )) {
+        SvREFCNT_dec(item_path_sv);
+        goto list_fallback;
+      }
+    } else if (!gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome(
+                 aTHX_
+                 context,
+                 item_lazy_info.parent_type_sv,
+                 item_lazy_info.field_def_sv,
+                 owned_item_type,
+                 item_lazy_info.nodes_sv,
+                 &item_lazy_info,
+                 item_svp ? *item_svp : &PL_sv_undef,
+                 &item_data_sv,
+                 &item_errors_av,
+                 &item_completed_sv
+               )) {
+      SvREFCNT_dec(item_path_sv);
+      goto list_fallback;
+    }
+
+    if (item_completed_sv) {
+      if (SvROK(item_completed_sv) && SvTYPE(SvRV(item_completed_sv)) == SVt_PVHV) {
+        gql_execution_accumulate_completed_list_item_into_head(
+          aTHX_ data_av,
+          all_errors_av ? all_errors_av : (all_errors_av = newAV()),
+          i,
+          item_completed_sv
+        );
+        SvREFCNT_dec(item_completed_sv);
+        item_completed_sv = NULL;
+      } else {
+        SvREFCNT_dec(item_completed_sv);
+        SvREFCNT_dec(item_path_sv);
+        if (item_errors_av) {
+          SvREFCNT_dec((SV *)item_errors_av);
+        }
+        goto list_fallback;
+      }
+    } else {
+      av_fill(data_av, i);
+      (void)av_store(data_av, i, item_data_sv ? item_data_sv : newSV(0));
+
+      if (item_errors_av && av_len(item_errors_av) >= 0) {
+        I32 err_len = av_len(item_errors_av);
+        I32 err_i;
+        if (!all_errors_av) {
+          all_errors_av = newAV();
+        }
+        for (err_i = 0; err_i <= err_len; err_i++) {
+          SV **err_svp = av_fetch(item_errors_av, err_i, 0);
+          if (err_svp) {
+            av_push(all_errors_av, SvREFCNT_inc_simple_NN(*err_svp));
+          }
+        }
+      }
+    }
+
+    if (item_errors_av) {
+      SvREFCNT_dec((SV *)item_errors_av);
+    }
+    SvREFCNT_dec(item_path_sv);
+  }
+
+  if (data_out) {
+    *data_out = newRV_noinc((SV *)data_av);
+    data_av = NULL;
+  }
+  if (errors_out) {
+    *errors_out = all_errors_av;
+    all_errors_av = NULL;
+  }
+  SvREFCNT_dec(owned_item_type);
+  return 1;
+
+list_fallback:
+  if (owned_item_type) {
+    SvREFCNT_dec(owned_item_type);
+  }
+  if (data_av) {
+    SvREFCNT_dec((SV *)data_av);
+  }
+  if (all_errors_av) {
+    SvREFCNT_dec((SV *)all_errors_av);
+  }
   return gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome_no_direct_data(
     aTHX_
     context,

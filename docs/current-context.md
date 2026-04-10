@@ -2175,3 +2175,47 @@ Verification status for this abstract-family ownership move:
 
 - `minil test t/11_execution.t`
 - `minil test t/12_promise.t`
+
+Follow-up after moving list-family narrowing behind the execution-side API:
+
+- `execution.h` now exposes an internal list-family sync outcome helper that
+  can receive lowered list-item metadata:
+  `item_type`, exact item native plan, and abstract item child-plan table
+- `COMPLETE_LIST` no longer owns its own early list narrow path in
+  `ir_execution.h`; the list-family contract in `execution.h` now owns the
+  sync chain for exact item plans, abstract item plans, and the no-direct-data
+  fallback
+- object/list/abstract are now aligned around the same high-level runtime
+  shape:
+  family op -> family-owned sync contract -> native outcome / writer
+
+Verification status for this family-owned completion checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after moving object/abstract/list narrowing behind family-owned
+execution APIs (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 81261/s`
+  - `houtou_xs_ast 78946/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58897/s`
+  - `houtou_xs_ast 58525/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 42593/s`
+  - `houtou_xs_ast 41908/s`
+
+Interpretation:
+
+- this is the first checkpoint where all three specialized completion
+  families are owned by execution-side family contracts rather than by mixed
+  `ir_execution.h` early branches
+- `nested` remains comfortably ahead, which means the ownership refactor did
+  not break the strongest compiled-IR path
+- `list` is now slightly ahead again without reintroducing item-level special
+  cases in `ir_execution.h`
+- `abstract_with_fragment` also moves back ahead of `xs_ast`, which supports
+  the current strategy: reduce family fallback frequency by moving narrowing
+  policy behind family-owned APIs, not by piling up more local micro-opts

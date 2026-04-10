@@ -1023,3 +1023,25 @@ This matters for the VM/runtime split because:
   contract, just like object completion
 - future widening of abstract completion can happen in one execution-side
   family API instead of reintroducing mixed ownership in the runtime loop
+
+The same ownership model now also applies to list completion:
+
+- the list-family API in `execution.h` can now receive lowered list-item
+  metadata directly:
+  exact item type, exact item native plan, and abstract item child-plan table
+- `COMPLETE_LIST` no longer owns an early list-narrowing branch in
+  `ir_execution.h`
+- the list-family contract now owns the sync chain:
+  exact item plan / abstract item plan -> no-direct-data fallback
+
+This is important because it gives all three completion families the same
+structural runtime shape:
+
+- `COMPLETE_OBJECT` -> object-family contract
+- `COMPLETE_ABSTRACT` -> abstract-family contract
+- `COMPLETE_LIST` -> list-family contract
+
+That alignment is more important than any single micro-optimization. It means
+future widening can happen inside one family contract at a time while
+`ir_execution.h` stays focused on field-family orchestration and VM/runtime
+dispatch.

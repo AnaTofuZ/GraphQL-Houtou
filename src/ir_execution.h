@@ -1855,6 +1855,11 @@ gql_ir_native_field_complete_generic_fallback_result(
     (hot && hot->abstract_child_plan_table)
       ? hot->abstract_child_plan_table
       : (entry ? entry->abstract_child_plan_table : NULL);
+  SV *list_item_type_sv = meta ? meta->list_item_type_sv : NULL;
+  gql_ir_lowered_abstract_child_plan_table_t *list_item_abstract_child_plan_table =
+    (hot && hot->list_item_abstract_child_plan_table)
+      ? hot->list_item_abstract_child_plan_table
+      : NULL;
   gql_ir_compiled_root_field_plan_t *native_field_plan = (hot && hot->native_field_plan)
     ? hot->native_field_plan
     : NULL;
@@ -1922,6 +1927,11 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
     (hot && hot->abstract_child_plan_table)
       ? hot->abstract_child_plan_table
       : (entry ? entry->abstract_child_plan_table : NULL);
+  SV *list_item_type_sv = (meta && meta->list_item_type_sv) ? meta->list_item_type_sv : NULL;
+  gql_ir_lowered_abstract_child_plan_table_t *list_item_abstract_child_plan_table =
+    (hot && hot->list_item_abstract_child_plan_table)
+      ? hot->list_item_abstract_child_plan_table
+      : NULL;
   gql_ir_compiled_root_field_plan_t *native_field_plan = (hot && hot->native_field_plan)
     ? hot->native_field_plan
     : NULL;
@@ -1991,6 +2001,11 @@ gql_ir_native_field_complete_family_fallback_result(
     (hot && hot->abstract_child_plan_table)
       ? hot->abstract_child_plan_table
       : (entry ? entry->abstract_child_plan_table : NULL);
+  SV *list_item_type_sv = (meta && meta->list_item_type_sv) ? meta->list_item_type_sv : NULL;
+  gql_ir_lowered_abstract_child_plan_table_t *list_item_abstract_child_plan_table =
+    (hot && hot->list_item_abstract_child_plan_table)
+      ? hot->list_item_abstract_child_plan_table
+      : NULL;
   gql_ir_compiled_root_field_plan_t *native_field_plan = (hot && hot->native_field_plan)
     ? hot->native_field_plan
     : NULL;
@@ -2033,7 +2048,7 @@ gql_ir_native_field_complete_family_fallback_result(
       }
       return 0;
     case GQL_IR_NATIVE_COMPLETION_LIST:
-      if (gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_outcome(
+      if (gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_outcome_with_items(
             aTHX_
             gql_ir_native_env_context(env),
             gql_ir_native_env_parent_type(env),
@@ -2042,6 +2057,9 @@ gql_ir_native_field_complete_family_fallback_result(
             nodes_sv,
             lazy_info,
             result_sv,
+            list_item_type_sv,
+            native_field_plan,
+            list_item_abstract_child_plan_table,
             &direct_data_sv,
             &direct_errors_av,
             &completed_sv
@@ -2233,19 +2251,6 @@ gql_ir_native_field_complete_list_result(
   }
   if (!env || !writer || !entry || !field_def_sv || !nodes_sv || !return_type_sv || !lazy_info || !frame) {
     return 0;
-  }
-
-  if ((!gql_ir_native_env_promise_code(env) || !SvOK(gql_ir_native_env_promise_code(env)))
-      && gql_ir_try_complete_sync_list_into_outcome(
-           aTHX_
-           env,
-           entry,
-           return_type_sv,
-           lazy_info,
-           result_sv,
-           frame
-         )) {
-    return 1;
   }
 
   return gql_ir_native_field_complete_family_fallback_result(

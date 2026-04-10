@@ -1688,7 +1688,7 @@ fallback:
 }
 
 static int
-gql_ir_native_field_complete_generic_result(
+gql_ir_native_field_complete_generic_fallback_result(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
   gql_ir_compiled_root_field_plan_entry_t *entry,
@@ -1714,51 +1714,6 @@ gql_ir_native_field_complete_generic_result(
       || !lazy_info
       || !frame) {
     return 0;
-  }
-
-  if (!env->promise_code_sv || !SvOK(env->promise_code_sv)) {
-    switch (meta ? meta->completion_dispatch_kind : GQL_IR_NATIVE_COMPLETION_GENERIC) {
-      case GQL_IR_NATIVE_COMPLETION_ABSTRACT:
-        if (gql_ir_try_complete_abstract_sync_into(
-              aTHX_
-              env,
-              return_type_sv,
-              nodes_sv,
-              lazy_info,
-              result_sv,
-              frame,
-              entry
-            )) {
-          return 1;
-        }
-        break;
-      case GQL_IR_NATIVE_COMPLETION_OBJECT:
-        if (gql_ir_try_complete_sync_object_into_outcome(
-              aTHX_
-              env,
-              return_type_sv,
-              lazy_info,
-              result_sv,
-              frame
-            )) {
-          return 1;
-        }
-        break;
-      case GQL_IR_NATIVE_COMPLETION_LIST:
-        if (gql_ir_try_complete_sync_list_into_outcome(
-              aTHX_
-              env,
-              return_type_sv,
-              lazy_info,
-              result_sv,
-              frame
-            )) {
-          return 1;
-        }
-        break;
-      default:
-        break;
-    }
   }
 
   if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))) {
@@ -1807,6 +1762,83 @@ gql_ir_native_field_complete_generic_result(
 }
 
 static int
+gql_ir_native_field_complete_generic_result(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result_sv,
+  gql_ir_native_field_frame_t *frame
+) {
+  gql_ir_vm_field_hot_t *hot = gql_ir_native_field_hot(entry);
+  gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
+  SV *nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
+  SV *return_type_sv = (hot && hot->return_type_sv) ? hot->return_type_sv : (meta ? meta->return_type_sv : NULL);
+
+  if (!return_type_sv || !SvOK(return_type_sv)) {
+    return_type_sv = (hot && hot->type_sv) ? hot->type_sv : entry->type_sv;
+  }
+  if (!env || !entry || !return_type_sv || !lazy_info || !frame) {
+    return 0;
+  }
+
+  if (!env->promise_code_sv || !SvOK(env->promise_code_sv)) {
+    switch (meta ? meta->completion_dispatch_kind : GQL_IR_NATIVE_COMPLETION_GENERIC) {
+      case GQL_IR_NATIVE_COMPLETION_ABSTRACT:
+        if (gql_ir_try_complete_abstract_sync_into(
+              aTHX_
+              env,
+              return_type_sv,
+              nodes_sv,
+              lazy_info,
+              result_sv,
+              frame,
+              entry
+            )) {
+          return 1;
+        }
+        break;
+      case GQL_IR_NATIVE_COMPLETION_OBJECT:
+        if (gql_ir_try_complete_sync_object_into_outcome(
+              aTHX_
+              env,
+              return_type_sv,
+              lazy_info,
+              result_sv,
+              frame
+            )) {
+          return 1;
+        }
+        break;
+      case GQL_IR_NATIVE_COMPLETION_LIST:
+        if (gql_ir_try_complete_sync_list_into_outcome(
+              aTHX_
+              env,
+              return_type_sv,
+              lazy_info,
+              result_sv,
+              frame
+            )) {
+          return 1;
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  return gql_ir_native_field_complete_generic_fallback_result(
+    aTHX_
+    env,
+    writer,
+    entry,
+    lazy_info,
+    result_sv,
+    frame
+  );
+}
+
+static int
 gql_ir_native_field_complete_object_result(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
@@ -1840,7 +1872,7 @@ gql_ir_native_field_complete_object_result(
     return 1;
   }
 
-  return gql_ir_native_field_complete_generic_result(
+  return gql_ir_native_field_complete_generic_fallback_result(
     aTHX_
     env,
     writer,
@@ -1885,7 +1917,7 @@ gql_ir_native_field_complete_list_result(
     return 1;
   }
 
-  return gql_ir_native_field_complete_generic_result(
+  return gql_ir_native_field_complete_generic_fallback_result(
     aTHX_
     env,
     writer,
@@ -1932,7 +1964,7 @@ gql_ir_native_field_complete_abstract_result(
     return 1;
   }
 
-  return gql_ir_native_field_complete_generic_result(
+  return gql_ir_native_field_complete_generic_fallback_result(
     aTHX_
     env,
     writer,

@@ -1677,3 +1677,34 @@ Interpretation:
   band while the runtime shape moves closer to a true VM dispatch family
 - the next real wins are still expected to come from shrinking generic
   completion fallback frequency rather than from more dispatcher-local tweaks
+
+Follow-up after removing duplicate narrow completion retries:
+
+- `COMPLETE_OBJECT`, `COMPLETE_LIST`, and `COMPLETE_ABSTRACT` no longer retry
+  their narrow sync path twice on miss
+- the specialized op now tries its narrow helper once, then falls straight to
+  the generic completion fallback path
+- this reduces redundant re-dispatch work without changing public semantics
+
+Latest spot verification after removing the duplicate retries:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+- `nested_variable_object` (`--count=-3`)
+  - `houtou_compiled_ir 81790/s`
+  - `houtou_xs_ast 80926/s`
+- `list_of_objects` (`--count=-3`)
+  - `houtou_compiled_ir 59208/s`
+  - `houtou_xs_ast 59024/s`
+- `abstract_with_fragment` (`--count=-3`)
+  - `houtou_compiled_ir 42173/s`
+  - `houtou_xs_ast 42504/s`
+
+Interpretation:
+
+- `nested_variable_object` and `list_of_objects` benefit slightly from cutting
+  the duplicate retry
+- `abstract_with_fragment` remains in the same noise band, so this is mostly
+  a structural cleanup rather than a target-case win
+- the next likely gains still require shrinking the generic completion
+  fallback itself, not just removing control-flow duplication around it

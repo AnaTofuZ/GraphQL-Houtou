@@ -698,3 +698,19 @@ cleaner:
 3. keep pushing native outcome / writer handling across child-plan boundaries
 4. only then consider further dispatch tightening or more specialized op
    families
+
+One small cleanup in that direction is now in place:
+
+- specialized completion ops no longer retry their narrow sync helper after a
+  miss by flowing back through `COMPLETE_GENERIC`
+- instead, `COMPLETE_OBJECT`, `COMPLETE_LIST`, and `COMPLETE_ABSTRACT` try
+  their narrow path once and then jump directly into the generic fallback-only
+  helper
+
+This does not remove the generic fallback itself yet, but it does improve the
+shape of the runtime:
+
+- fewer redundant control-flow edges between completion families
+- clearer ownership of "specialized op first, generic fallback second"
+- a better foundation for teaching those completion-family ops to own more of
+  the sync happy path without duplicating retry logic

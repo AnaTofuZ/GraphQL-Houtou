@@ -574,6 +574,24 @@ gql_ir_try_complete_abstract_sync_to_child_outcome(
                 )) {
               return 1;
             }
+          } else {
+            HV *direct_data_hv = NULL;
+            AV *direct_errors_av = NULL;
+
+            if (gql_execution_try_complete_object_sync_head_fast(
+                  aTHX_
+                  context,
+                  runtime_type,
+                  lazy_info,
+                  result,
+                  &direct_data_hv,
+                  &direct_errors_av
+                )) {
+              outcome->data_hv = direct_data_hv;
+              outcome->errors_av = direct_errors_av;
+              SvREFCNT_dec(runtime_type_or_name);
+              return 1;
+            }
           }
         }
       }

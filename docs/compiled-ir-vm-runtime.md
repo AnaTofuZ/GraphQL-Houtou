@@ -911,3 +911,21 @@ This is useful even before full VM op lowering:
   for this narrow sync path
 - future `COMPLETE_OBJECT` / `COMPLETE_ABSTRACT` work can widen around this
   head helper instead of rediscovering object fallback shapes from scratch
+
+That same narrow head boundary now extends one step into abstract completion:
+
+- after `resolve_type`, if compiled IR cannot jump directly into an exact native
+  child plan, it now tries the object-head sync helper before using the shared
+  sync outcome fallback
+- this means the specialized `COMPLETE_ABSTRACT` family can keep the
+  `resolve_type -> concrete object child` path on `HV *data + AV *errors`
+  longer, instead of immediately recreating a completed envelope
+
+Architecturally this is an important confirmation:
+
+- narrowing specialized families pays off more than reusing broader generic
+  execution loops
+- the right boundary is still `specialized family -> native child outcome /
+  native head -> shared fallback`, not `specialized family -> generic helper`
+- future VM work should keep lowering these family-specific boundaries instead
+  of trying to fold them back into legacy completion APIs

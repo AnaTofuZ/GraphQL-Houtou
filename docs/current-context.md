@@ -2033,3 +2033,39 @@ Interpretation:
 - the important architectural effect is that compiled IR now has an additional
   object-family boundary that returns native head data directly instead of
   forcing a top-level `{ data, errors }` envelope
+
+Follow-up after extending that head boundary into `COMPLETE_ABSTRACT`:
+
+- when `resolve_type` succeeds but there is no exact native child plan, compiled
+  IR now tries the same object-head sync helper before falling back to the
+  shared sync outcome boundary
+- this keeps the `resolve_type -> object child execution` path on
+  `HV *data + AV *errors` longer and avoids rebuilding a top-level completed
+  envelope for this narrow sync case
+
+Verification status for the abstract-head widening:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after this abstract-head round (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 78156/s`
+  - `houtou_xs_ast 74722/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57597/s`
+  - `houtou_xs_ast 57494/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41647/s`
+  - `houtou_xs_ast 41285/s`
+
+Interpretation:
+
+- this is the first recent checkpoint where the same object-head narrowing
+  improved all three tracked cases together
+- `abstract_with_fragment` is now slightly ahead of `xs_ast`, which suggests
+  the right direction is still "remove completed-envelope round-trips from
+  specialized families" rather than micro-optimizing `resolve_type` itself
+- the next natural step is to widen the same family-specific narrowing on the
+  list/object/item boundaries without reintroducing broad generic-helper reuse

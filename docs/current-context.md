@@ -93,28 +93,28 @@ Hot-path interpretation:
   - `f0c09b1`, `305f2f4`, and `3c64710` widened abstract runtime-object
     ownership and shared it with generic execution
   - the latest batch makes plain object completion use the same object-family
-    contract and removes the old generic object branch duplication by giving
-    object family APIs their own non-recursive fallback implementation
+    contract and plain list completion use the same list-family contract;
+    both now rely on family-owned non-recursive fallback implementations
 - validation:
   - `minil test t/11_execution.t`
   - `minil test t/12_promise.t`
 - benchmark (`--count=-3`):
   - `nested_variable_object`
-    - `houtou_compiled_ir 80382/s`
-    - `houtou_xs_ast 75837/s`
+    - `houtou_compiled_ir 77291/s`
+    - `houtou_xs_ast 74475/s`
   - `list_of_objects`
-    - `houtou_compiled_ir 60026/s`
-    - `houtou_xs_ast 58379/s`
+    - `houtou_compiled_ir 57803/s`
+    - `houtou_xs_ast 56581/s`
   - `abstract_with_fragment`
-    - `houtou_compiled_ir 41619/s`
-    - `houtou_xs_ast 42504/s`
+    - `houtou_compiled_ir 40706/s`
+    - `houtou_xs_ast 39442/s`
 - reading:
-  - plain object completion is now family-owned too, so object and abstract
-    success paths share a much larger contract
-  - `nested` and `list` remain healthy after the refactor
-  - `abstract` is still competitive but remains the main lagging family
-  - the next win should come from widening execution-side family corridors and
-    shrinking generic fallback frequency, not from `resolve_type`
+  - plain object and plain list completion now both run through family-owned
+    contracts instead of duplicating generic branches
+  - `nested`, `list`, and `abstract` all remain in a healthy range, with
+    `compiled_ir` slightly ahead in this checkpoint
+  - the next win should still come from widening execution-side family
+    corridors and shrinking generic fallback frequency, not from `resolve_type`
     micro-optimizations
 
 ## April 2026 VM Reset

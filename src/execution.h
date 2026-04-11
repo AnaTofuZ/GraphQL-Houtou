@@ -410,6 +410,16 @@ static int gql_execution_complete_object_field_value_catching_error_xs_lazy_sync
   int assume_runtime_object,
   gql_execution_sync_outcome_t *outcome
 );
+static int gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outcome_fallback_impl(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  struct gql_execution_lazy_resolve_info *lazy_info,
+  SV *result,
+  gql_execution_sync_outcome_t *outcome
+);
 static int gql_execution_try_complete_single_node_object_data_fast(
   pTHX_ SV *context,
   SV *return_type,
@@ -4817,107 +4827,41 @@ gql_execution_complete_value_catching_error_xs_lazy_impl(
 
   if (sv_derived_from(return_type, "GraphQL::Houtou::Type::List")
       || sv_derived_from(return_type, "GraphQL::Type::List")) {
-    SV *item_type = gql_execution_call_type_of(aTHX_ return_type);
+    gql_execution_sync_outcome_t outcome;
+    SV *data_sv = NULL;
+    AV *errors_av = NULL;
+    SV *completed_sv = NULL;
 
-    if (SvROK(result) && SvTYPE(SvRV(result)) == SVt_PVAV) {
-      AV *result_av = (AV *)SvRV(result);
-      I32 result_len = av_len(result_av);
-      AV *pending_indexes_av = newAV();
-      AV *pending_values_av = newAV();
-      AV *data_av = newAV();
-      AV *errors_av = newAV();
-      I32 i;
-      int promise_present = 0;
-
-      for (i = 0; i <= result_len; i++) {
-        SV **item_svp = av_fetch(result_av, i, 0);
-        SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
-        SV *item_path_sv = gql_execution_path_with_index(aTHX_ path, (IV)i);
-        gql_execution_lazy_resolve_info_t item_lazy_info = *lazy_info;
-        SV *completed;
-        item_lazy_info.base_path_sv = NULL;
-        item_lazy_info.result_name_sv = NULL;
-        item_lazy_info.path_sv = item_path_sv;
-        completed = gql_execution_complete_value_catching_error_xs_lazy_impl(
-          aTHX_ context,
+    gql_execution_sync_outcome_reset(&outcome);
+    if (gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outcome_with_items(
+          aTHX_
+          context,
           parent_type,
           field_def,
-          item_type,
+          return_type,
           nodes,
-          &item_lazy_info,
-          item_svp ? *item_svp : &PL_sv_undef
-        );
-
-        if (SvOK(promise_code) && completed && SvROK(completed)) {
-          SV *is_completed_promise_sv = gql_promise_call_is_promise(aTHX_ promise_code, completed);
-          int is_completed_promise = SvTRUE(is_completed_promise_sv);
-
-          SvREFCNT_dec(is_completed_promise_sv);
-          if (is_completed_promise) {
-            promise_present = 1;
-            av_fill(data_av, i);
-            av_push(pending_indexes_av, newSViv(i));
-            av_push(pending_values_av, completed);
-            completed = NULL;
-          }
-        }
-
-        if (completed && SvROK(completed) && SvTYPE(SvRV(completed)) == SVt_PVHV) {
-          gql_execution_accumulate_completed_list_item_into_head(
-            aTHX_ data_av,
-            errors_av,
-            i,
-            completed
-          );
-          SvREFCNT_dec(completed);
-          completed = NULL;
-        } else if (!promise_present) {
-          SV *info = gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
-          SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
-          SvREFCNT_dec(item_path_sv);
-          SvREFCNT_dec((SV *)pending_indexes_av);
-          SvREFCNT_dec((SV *)pending_values_av);
-          if (completed) {
-            SvREFCNT_dec(completed);
-          }
-          SvREFCNT_dec(item_type);
-          SvREFCNT_dec((SV *)data_av);
-          SvREFCNT_dec((SV *)errors_av);
-          return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
-        } else if (completed) {
-          SvREFCNT_dec(completed);
-        }
-
-        SvREFCNT_dec(item_path_sv);
+          lazy_info,
+          result,
+          NULL,
+          NULL,
+          NULL,
+          &outcome
+        )
+        && gql_execution_sync_outcome_export(
+             aTHX_
+             &outcome,
+             &data_sv,
+             &errors_av,
+             &completed_sv
+           )) {
+      if (data_sv) {
+        return gql_execution_build_sync_result_from_parts(aTHX_ data_sv, errors_av);
       }
-
-      if (promise_present) {
-        SV *aggregate = gql_promise_call_all(aTHX_ promise_code, pending_values_av);
-        SV *ret = gql_execution_call_xs_then_merge_completed_list_with_head(
-          aTHX_
-          promise_code,
-          data_av,
-          pending_indexes_av,
-          aggregate,
-          errors_av
-        );
-
-        SvREFCNT_dec(aggregate);
-        SvREFCNT_dec(item_type);
-        SvREFCNT_dec((SV *)pending_indexes_av);
-        SvREFCNT_dec((SV *)pending_values_av);
-        SvREFCNT_dec((SV *)data_av);
-        SvREFCNT_dec((SV *)errors_av);
-        return ret;
+      if (completed_sv) {
+        return completed_sv;
       }
-
-      SvREFCNT_dec(item_type);
-      SvREFCNT_dec((SV *)pending_indexes_av);
-      SvREFCNT_dec((SV *)pending_values_av);
-      return gql_execution_build_list_result_from_head(aTHX_ data_av, errors_av);
     }
 
-    SvREFCNT_dec(item_type);
     {
       SV *info = gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
       SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
@@ -7032,8 +6976,7 @@ gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outco
   SV *result,
   gql_execution_sync_outcome_t *outcome
 ) {
-  gql_execution_sync_outcome_reset(outcome);
-  return gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
+  return gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outcome_fallback_impl(
     aTHX_
     context,
     parent_type,
@@ -7336,6 +7279,158 @@ list_fallback:
     result,
     outcome
   );
+}
+
+static int
+gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outcome_fallback_impl(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  gql_execution_sync_outcome_t *outcome
+) {
+  SV *item_type;
+  SV *promise_code;
+
+  gql_execution_sync_outcome_reset(outcome);
+  if (!context || !return_type || !nodes || !lazy_info) {
+    return 0;
+  }
+
+  item_type = gql_execution_call_type_of(aTHX_ return_type);
+  promise_code = gql_execution_context_promise_code(context);
+
+  if (SvROK(result) && SvTYPE(SvRV(result)) == SVt_PVAV) {
+    AV *result_av = (AV *)SvRV(result);
+    I32 result_len = av_len(result_av);
+    AV *pending_indexes_av = newAV();
+    AV *pending_values_av = newAV();
+    AV *data_av = newAV();
+    AV *errors_av = newAV();
+    I32 i;
+    int promise_present = 0;
+
+    for (i = 0; i <= result_len; i++) {
+      SV **item_svp = av_fetch(result_av, i, 0);
+      SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
+      SV *item_path_sv = gql_execution_path_with_index(aTHX_ path, (IV)i);
+      gql_execution_lazy_resolve_info_t item_lazy_info = *lazy_info;
+      SV *completed;
+
+      item_lazy_info.base_path_sv = NULL;
+      item_lazy_info.result_name_sv = NULL;
+      item_lazy_info.path_sv = item_path_sv;
+      completed = gql_execution_complete_value_catching_error_xs_lazy_impl(
+        aTHX_
+        context,
+        parent_type,
+        field_def,
+        item_type,
+        nodes,
+        &item_lazy_info,
+        item_svp ? *item_svp : &PL_sv_undef
+      );
+
+      if (SvOK(promise_code) && completed && SvROK(completed)) {
+        SV *is_completed_promise_sv = gql_promise_call_is_promise(aTHX_ promise_code, completed);
+        int is_completed_promise = SvTRUE(is_completed_promise_sv);
+
+        SvREFCNT_dec(is_completed_promise_sv);
+        if (is_completed_promise) {
+          promise_present = 1;
+          av_fill(data_av, i);
+          av_push(pending_indexes_av, newSViv(i));
+          av_push(pending_values_av, completed);
+          completed = NULL;
+        }
+      }
+
+      if (completed && SvROK(completed) && SvTYPE(SvRV(completed)) == SVt_PVHV) {
+        gql_execution_accumulate_completed_list_item_into_head(
+          aTHX_
+          data_av,
+          errors_av,
+          i,
+          completed
+        );
+        SvREFCNT_dec(completed);
+        completed = NULL;
+      } else if (!promise_present) {
+        SV *info = gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
+        SV *path_sv = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
+        SvREFCNT_dec(item_path_sv);
+        SvREFCNT_dec((SV *)pending_indexes_av);
+        SvREFCNT_dec((SV *)pending_values_av);
+        if (completed) {
+          SvREFCNT_dec(completed);
+        }
+        SvREFCNT_dec(item_type);
+        SvREFCNT_dec((SV *)data_av);
+        SvREFCNT_dec((SV *)errors_av);
+        outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV;
+        outcome->completed_sv = gql_execution_call_pp_complete_value_catching_error(
+          aTHX_
+          context,
+          return_type,
+          nodes,
+          info,
+          path_sv,
+          result
+        );
+        return 1;
+      } else if (completed) {
+        SvREFCNT_dec(completed);
+      }
+
+      SvREFCNT_dec(item_path_sv);
+    }
+
+    if (promise_present) {
+      SV *aggregate = gql_promise_call_all(aTHX_ promise_code, pending_values_av);
+      SV *ret = gql_execution_call_xs_then_merge_completed_list_with_head(
+        aTHX_
+        promise_code,
+        data_av,
+        pending_indexes_av,
+        aggregate,
+        errors_av
+      );
+
+      SvREFCNT_dec(aggregate);
+      SvREFCNT_dec(item_type);
+      SvREFCNT_dec((SV *)pending_indexes_av);
+      SvREFCNT_dec((SV *)pending_values_av);
+      SvREFCNT_dec((SV *)data_av);
+      SvREFCNT_dec((SV *)errors_av);
+      outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV;
+      outcome->completed_sv = ret;
+      return 1;
+    }
+
+    SvREFCNT_dec(item_type);
+    SvREFCNT_dec((SV *)pending_indexes_av);
+    SvREFCNT_dec((SV *)pending_values_av);
+    outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE;
+    outcome->data_sv = newRV_noinc((SV *)data_av);
+    outcome->errors_av = errors_av;
+    return 1;
+  }
+
+  SvREFCNT_dec(item_type);
+  outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV;
+  outcome->completed_sv = gql_execution_call_pp_complete_value_catching_error(
+    aTHX_
+    context,
+    return_type,
+    nodes,
+    gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info),
+    gql_execution_lazy_path_materialize(aTHX_ lazy_info),
+    result
+  );
+  return 1;
 }
 
 static int

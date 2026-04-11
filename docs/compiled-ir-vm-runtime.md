@@ -97,6 +97,10 @@ Latest kept runtime checkpoint on `proj/compiled-ir-vm-runtime`:
     of its own duplicated branch in generic completion
   - object family fallbacks no longer recurse through the generic object
     branch; they own a non-recursive fallback implementation directly
+- list family ownership has now been widened in the same way:
+  - plain list completion also routes through the list-family contract
+  - list-family fallbacks no longer recurse through the generic list branch
+    and instead own their own non-recursive fallback implementation
 - abstract family ownership remains widened:
   - lowered abstract child-plan hit:
     go directly to the known-object object-family path with the exact native
@@ -107,14 +111,14 @@ Latest kept runtime checkpoint on `proj/compiled-ir-vm-runtime`:
   - verified runtime-object handling is also shared with the no-`resolve_type`
     `possible_types + is_type_of` path
 - checkpoint benchmark (`--count=-3`):
-  - `nested_variable_object`: `houtou_compiled_ir 80382/s`
-  - `list_of_objects`: `houtou_compiled_ir 60026/s`
-  - `abstract_with_fragment`: `houtou_compiled_ir 41619/s`
+  - `nested_variable_object`: `houtou_compiled_ir 77291/s`
+  - `list_of_objects`: `houtou_compiled_ir 57803/s`
+  - `abstract_with_fragment`: `houtou_compiled_ir 40706/s`
 - interpretation:
-  - object/list-heavy paths remain healthy after moving more ownership into
-    execution-side family APIs
-  - abstract is still the main lagging family, but the object-family contract
-    it depends on is now much cleaner
+  - object/list-heavy paths remain healthy after moving both plain object and
+    plain list completion behind family-owned contracts
+  - abstract also remains healthy in this checkpoint and benefits from the
+    cleaner object-family contract it hands off into
   - further wins should come from widening family-owned completion corridors
     and shrinking generic fallback frequency, not from `resolve_type`
     micro-optimizations

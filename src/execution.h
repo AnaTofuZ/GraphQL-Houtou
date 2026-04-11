@@ -254,6 +254,17 @@ static int gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy
   gql_execution_sync_outcome_t *outcome,
   int runtime_type_verified
 );
+static int gql_execution_try_complete_abstract_resolve_type_sync_native_outcome(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *declared_return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
+  gql_execution_sync_outcome_t *outcome
+);
 static int gql_execution_try_complete_abstract_runtime_type_or_name_sync_native_outcome(
   pTHX_ SV *context,
   SV *parent_type,
@@ -7540,7 +7551,6 @@ gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_o
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
   gql_execution_sync_outcome_t *outcome
 ) {
-  SV *resolve_type_sv;
   gql_execution_sync_outcome_reset(outcome);
 
   if (!context
@@ -7552,53 +7562,20 @@ gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_o
     goto abstract_fallback;
   }
 
-  resolve_type_sv = gql_execution_get_abstract_resolve_type_sv(aTHX_ context, return_type);
-  if (SvOK(resolve_type_sv)) {
-    int ok = 0;
-    SV *resolve_error = NULL;
-    SV *info = gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
-    SV *runtime_type_or_name = gql_execution_call_abstract_resolve_type_cb(
-      aTHX_ resolve_type_sv,
-      result,
-      context,
-      info,
-      return_type,
-      &ok,
-      &resolve_error
-    );
-
-    SvREFCNT_dec(resolve_type_sv);
-    if (ok && SvOK(runtime_type_or_name)) {
-      if (gql_execution_try_complete_abstract_runtime_type_or_name_sync_native_outcome(
-            aTHX_
-            context,
-            parent_type,
-            field_def,
-            return_type,
-            runtime_type_or_name,
-            nodes,
-            lazy_info,
-            result,
-            abstract_child_plan_table,
-            outcome
-          )) {
-        SvREFCNT_dec(runtime_type_or_name);
-        return 1;
-      }
-
-      SvREFCNT_dec(runtime_type_or_name);
-      goto abstract_fallback;
-    } else if (ok) {
-      SvREFCNT_dec(runtime_type_or_name);
-      goto abstract_fallback;
-    } else if (resolve_error) {
-      SvREFCNT_dec(resolve_error);
-      goto abstract_fallback;
-    }
-    goto abstract_fallback;
+  if (gql_execution_try_complete_abstract_resolve_type_sync_native_outcome(
+        aTHX_
+        context,
+        parent_type,
+        field_def,
+        return_type,
+        nodes,
+        lazy_info,
+        result,
+        abstract_child_plan_table,
+        outcome
+      )) {
+    return 1;
   }
-
-  SvREFCNT_dec(resolve_type_sv);
 abstract_fallback:
   return gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
     aTHX_
@@ -7611,6 +7588,73 @@ abstract_fallback:
     result,
     outcome
   );
+}
+
+static int
+gql_execution_try_complete_abstract_resolve_type_sync_native_outcome(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *declared_return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
+  gql_execution_sync_outcome_t *outcome
+) {
+  SV *resolve_type_sv;
+  int ok = 0;
+  SV *resolve_error = NULL;
+  SV *runtime_type_or_name;
+
+  if (!context || !declared_return_type || !lazy_info || !outcome) {
+    return 0;
+  }
+
+  resolve_type_sv = gql_execution_get_abstract_resolve_type_sv(aTHX_ context, declared_return_type);
+  if (!SvOK(resolve_type_sv)) {
+    SvREFCNT_dec(resolve_type_sv);
+    return 0;
+  }
+
+  runtime_type_or_name = gql_execution_call_abstract_resolve_type_cb(
+    aTHX_ resolve_type_sv,
+    result,
+    context,
+    gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info),
+    declared_return_type,
+    &ok,
+    &resolve_error
+  );
+  SvREFCNT_dec(resolve_type_sv);
+
+  if (ok && SvOK(runtime_type_or_name)) {
+    int done = gql_execution_try_complete_abstract_runtime_type_or_name_sync_native_outcome(
+      aTHX_
+      context,
+      parent_type,
+      field_def,
+      declared_return_type,
+      runtime_type_or_name,
+      nodes,
+      lazy_info,
+      result,
+      abstract_child_plan_table,
+      outcome
+    );
+    SvREFCNT_dec(runtime_type_or_name);
+    return done;
+  }
+
+  if (ok) {
+    SvREFCNT_dec(runtime_type_or_name);
+    return 0;
+  }
+
+  if (resolve_error) {
+    SvREFCNT_dec(resolve_error);
+  }
+  return 0;
 }
 
 static int

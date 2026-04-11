@@ -2738,3 +2738,38 @@ Notes:
 - the intent is structural: reduce abstract family orchestration in
   `with_table(...)` and move name/object resolution ownership into the
   execution-side contract before widening the corridor further
+
+Checkpoint after moving resolve-type ownership behind the abstract family:
+
+- `with_table(...)` now delegates the `resolve_type` callback corridor to
+  `gql_execution_try_complete_abstract_resolve_type_sync_native_outcome(...)`
+- the abstract family therefore owns:
+  - `resolve_type` callback execution
+  - runtime type-or-name normalization
+  - verified/unverified runtime-object handling
+- `with_table(...)` is now mostly orchestration plus fallback dispatch
+
+Verification status for this abstract-family checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Checkpoint benchmark after the helper consolidation (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 81153/s`
+  - `houtou_xs_ast 77917/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 56719/s`
+  - `houtou_xs_ast 56520/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41356/s`
+  - `houtou_xs_ast 40841/s`
+
+Interpretation:
+
+- `nested` improves clearly, so the additional abstract-family ownership does
+  not hurt the hot object-heavy path
+- `list` remains effectively tied
+- `abstract` moves slightly ahead of `xs_ast`, which is a good sign for the
+  current direction even though the margin is still small

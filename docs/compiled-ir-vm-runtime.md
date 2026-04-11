@@ -1363,3 +1363,23 @@ This is mainly a VM/runtime shaping step:
 - it gives future widening work exactly one execution-side corridor to grow
 - it makes the eventual `RESOLVE_ABSTRACT` / `COMPLETE_OBJECT_KNOWN` opcode
   split easier to express without re-embedding schema/name resolution logic
+
+The next consolidation then moves `resolve_type` callback ownership itself
+behind the abstract family contract:
+
+- `with_table(...)` no longer performs the callback and corridor handoff inline
+- execution now owns that through
+  `try_complete_abstract_resolve_type_sync_native_outcome(...)`
+- this means the abstract family contract now spans:
+  - callback execution
+  - runtime type-or-name normalization
+  - runtime-object verification
+  - known-object handoff
+
+That is a useful checkpoint for the VM/runtime path:
+
+- the abstract family entrypoint is now mostly orchestration plus fallback
+- the actual hot abstract corridor is execution-owned and can be widened
+  without touching the IR orchestration layer again
+- the current benchmark shape is acceptable: `nested` stays strong, `list`
+  stays tied, and `abstract_with_fragment` edges slightly ahead of `xs_ast`

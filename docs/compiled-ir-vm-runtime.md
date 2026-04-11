@@ -1345,3 +1345,21 @@ Architecturally this is a good VM-oriented trade:
   more generic fast-path branching
 - it also confirms that the remaining gap is now mostly about fallback
   frequency, not about the object-family internal currency
+
+The next structural cleanup then moves ownership of `runtime_type_or_name`
+resolution fully behind the abstract family contract:
+
+- `with_table(...)` no longer needs to inline the "name -> type -> runtime
+  object corridor" logic
+- execution now owns that through a dedicated
+  `try_complete_abstract_runtime_type_or_name...` helper plus a shared
+  `...runtime_object..._impl`
+- verified and unverified runtime-object paths therefore become two modes of
+  one helper instead of two partially duplicated corridors
+
+This is mainly a VM/runtime shaping step:
+
+- it shortens the orchestration surface in the abstract family entrypoint
+- it gives future widening work exactly one execution-side corridor to grow
+- it makes the eventual `RESOLVE_ABSTRACT` / `COMPLETE_OBJECT_KNOWN` opcode
+  split easier to express without re-embedding schema/name resolution logic

@@ -2714,3 +2714,27 @@ Interpretation:
 - `list` also stays healthy
 - `abstract` is still narrowly behind, but the gap remains very small and the
   corridor is now structurally closer to the desired VM/runtime shape
+
+Checkpoint after consolidating abstract runtime-type ownership:
+
+- `gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_outcome_with_table(...)`
+  no longer resolves `runtime_type_or_name` inline
+- the execution side now owns that corridor through
+  `gql_execution_try_complete_abstract_runtime_type_or_name_sync_native_outcome(...)`
+  and the shared
+  `gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_native_outcome_impl(...)`
+- verified and unverified runtime-object paths now share one execution-side
+  implementation, so the next widening step only needs to touch a single
+  helper
+
+Verification status for this corridor-consolidation batch:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Notes:
+
+- no checkpoint benchmark has been taken yet for this batch
+- the intent is structural: reduce abstract family orchestration in
+  `with_table(...)` and move name/object resolution ownership into the
+  execution-side contract before widening the corridor further

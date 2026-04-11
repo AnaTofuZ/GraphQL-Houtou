@@ -1284,3 +1284,22 @@ jump:
 - it also suggests the remaining abstract gap is increasingly about how often
   the abstract/object family corridor still falls to generic completion, not
   about how object results are represented once they stay native
+
+The next abstract-focused widening step then specializes the
+`ABSTRACT -> OBJECT` handoff itself:
+
+- once `resolve_type` has already resolved a concrete object runtime type, the
+  execution-side handoff uses a known-object object-family path
+- that path skips the repeated object-role check and the `is_type_of` probe in
+  the object-head fast helper
+- plain object completion keeps the conservative path; only the resolved
+  abstract corridor gets the lighter contract
+
+Architecturally this is a good VM-oriented trade:
+
+- it makes the abstract family look more like `RESOLVE_ABSTRACT` followed by
+  `COMPLETE_OBJECT_KNOWN`, which is much closer to a real opcode family split
+- it keeps the specialization local to the proven corridor instead of adding
+  more generic fast-path branching
+- it also confirms that the remaining gap is now mostly about fallback
+  frequency, not about the object-family internal currency

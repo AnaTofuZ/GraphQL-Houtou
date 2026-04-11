@@ -2644,3 +2644,38 @@ Interpretation:
 - `abstract` improves versus the immediately previous family-owned checkpoint,
   which suggests the centralized raw-object path is helping the abstract/object
   handoff more than it hurts the generic path
+
+Checkpoint after adding a known-object corridor for abstract handoff:
+
+- once `resolve_type` has already produced a concrete object runtime type,
+  abstract completion now enters a known-object object-family path
+- that path skips the repeated object-role check and the `is_type_of` probe
+  inside the object-head fast helper
+- the widening is scoped to the abstract-to-object corridor, so plain object
+  completion keeps the conservative checks
+
+Verification status for this known-object abstract checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after introducing the known-object abstract corridor
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80430/s`
+  - `houtou_xs_ast 78443/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 59394/s`
+  - `houtou_xs_ast 58941/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 42593/s`
+  - `houtou_xs_ast 42793/s`
+
+Interpretation:
+
+- `nested` remains strong, so the specialized abstract widening is not
+  perturbing the object-heavy path
+- `list` also stays healthy
+- `abstract` is still narrowly behind, but the gap remains very small and the
+  corridor is now structurally closer to the desired VM/runtime shape

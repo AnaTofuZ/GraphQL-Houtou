@@ -2606,3 +2606,41 @@ Interpretation:
 - `abstract` is still just behind, but the gap is now small enough that the
   next wins should come from widening family-owned narrow paths further rather
   than from more `resolve_type`-local tricks
+
+Follow-up after lifting raw-object normalization into the generic sync outcome
+helper:
+
+- generic sync outcome helpers now normalize object-like direct values into raw
+  object outcomes themselves
+- `OBJECT` and `ABSTRACT` family-owned wrappers remain as naming/ownership
+  boundaries, but the object-shape normalization is centralized
+- this reduces duplicated logic inside the family wrappers and makes future
+  widening easier without adding more per-family shape code
+
+Verification status for this generic-normalization checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after lifting raw-object normalization into generic sync
+outcome helpers (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79784/s`
+  - `houtou_xs_ast 78126/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58526/s`
+  - `houtou_xs_ast 59273/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 42173/s`
+  - `houtou_xs_ast 42440/s`
+
+Interpretation:
+
+- `nested` remains strong, so broadening the generic sync outcome currency is
+  not perturbing the object-heavy path
+- `list` gives back a little, but stays close enough that the change still
+  looks acceptable as a structural simplification
+- `abstract` improves versus the immediately previous family-owned checkpoint,
+  which suggests the centralized raw-object path is helping the abstract/object
+  handoff more than it hurts the generic path

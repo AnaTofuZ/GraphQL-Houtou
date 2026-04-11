@@ -1263,3 +1263,24 @@ This is strategically useful for the VM path:
 - it also clarifies the next task: widen `OBJECT` and `ABSTRACT` family-owned
   narrow paths further so the generic completion fallback is reached even less
   often
+
+The next cleanup step then lifts raw-object normalization into the generic sync
+outcome helper itself:
+
+- object-like direct values are normalized once, centrally, before any family
+  wrapper consumes them
+- `OBJECT` and `ABSTRACT` family wrappers stay in place as ownership and
+  widening boundaries, but they no longer need to duplicate object-shape
+  normalization logic
+- that keeps the execution-family API surface stable while shrinking the amount
+  of repeated outcome-shape code
+
+This is a useful trade in the VM/runtime plan even without a dramatic benchmark
+jump:
+
+- it makes the native sync outcome contract more canonical
+- it keeps future widening work focused on family-specific control flow rather
+  than on repeated shape conversions
+- it also suggests the remaining abstract gap is increasingly about how often
+  the abstract/object family corridor still falls to generic completion, not
+  about how object results are represented once they stay native

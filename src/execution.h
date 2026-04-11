@@ -6372,6 +6372,7 @@ gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome(
     outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE;
     outcome->data_sv = data_sv;
     outcome->errors_av = errors_av;
+    (void)gql_execution_sync_outcome_try_normalize_direct_object_hv(aTHX_ outcome);
     return 1;
   }
   if (completed_sv) {
@@ -6419,6 +6420,7 @@ gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome_no
     outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE;
     outcome->data_sv = data_sv;
     outcome->errors_av = errors_av;
+    (void)gql_execution_sync_outcome_try_normalize_direct_object_hv(aTHX_ outcome);
     return 1;
   }
   if (completed_sv) {
@@ -6441,23 +6443,17 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
   SV *result,
   gql_execution_sync_outcome_t *outcome
 ) {
-  gql_execution_sync_outcome_reset(outcome);
-  if (!gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
-        aTHX_
-        context,
-        parent_type,
-        field_def,
-        return_type,
-        nodes,
-        lazy_info,
-        result,
-        outcome
-      )) {
-    return 0;
-  }
-
-  (void)gql_execution_sync_outcome_try_normalize_direct_object_hv(aTHX_ outcome);
-  return 1;
+  return gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
+    aTHX_
+    context,
+    parent_type,
+    field_def,
+    return_type,
+    nodes,
+    lazy_info,
+    result,
+    outcome
+  );
 }
 
 static int
@@ -6471,23 +6467,17 @@ gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_o
   SV *result,
   gql_execution_sync_outcome_t *outcome
 ) {
-  gql_execution_sync_outcome_reset(outcome);
-  if (!gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
-        aTHX_
-        context,
-        parent_type,
-        field_def,
-        return_type,
-        nodes,
-        lazy_info,
-        result,
-        outcome
-      )) {
-    return 0;
-  }
-
-  (void)gql_execution_sync_outcome_try_normalize_direct_object_hv(aTHX_ outcome);
-  return 1;
+  return gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
+    aTHX_
+    context,
+    parent_type,
+    field_def,
+    return_type,
+    nodes,
+    lazy_info,
+    result,
+    outcome
+  );
 }
 
 static int

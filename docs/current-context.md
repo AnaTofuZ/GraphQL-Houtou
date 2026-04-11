@@ -2569,3 +2569,40 @@ Interpretation:
 - the next likely wins still come from reducing how often the abstract/object
   family contracts fall back to generic completion, rather than from more
   isolated type-check micro-optimizations
+
+Checkpoint after making no-direct-data fallbacks family-owned all the way down:
+
+- `OBJECT`, `LIST`, and `ABSTRACT` now each have their own execution-side
+  no-direct-data sync outcome helpers
+- `OBJECT` and `ABSTRACT` normalize object-like direct values (`RV(HV)`) into
+  raw object outcomes before the writer sees them
+- this means `ir_execution.h` continues to consume one native outcome currency,
+  while widening remains fully inside the family-owned contract in
+  `execution.h`
+
+Verification status for this family-owned no-direct-data checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Spot benchmark after aligning family-owned no-direct-data boundaries
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79696/s`
+  - `houtou_xs_ast 77538/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 59581/s`
+  - `houtou_xs_ast 59208/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41777/s`
+  - `houtou_xs_ast 42073/s`
+
+Interpretation:
+
+- `nested` remains clearly ahead, which suggests the object-family narrowing is
+  compounding well with the VM/runtime refactor
+- `list` is effectively at parity with a slight compiled-IR edge in this run
+- `abstract` is still just behind, but the gap is now small enough that the
+  next wins should come from widening family-owned narrow paths further rather
+  than from more `resolve_type`-local tricks

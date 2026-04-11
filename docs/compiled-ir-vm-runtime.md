@@ -1241,3 +1241,25 @@ Operationally, this is a good sign for the larger VM plan:
 - the remaining performance gap is therefore less about abstract-specific table
   lookup trivia and more about how often the family contracts still need to
   materialize generic completion state
+
+The next family-owned step now pushes that ownership all the way through the
+no-direct-data boundary:
+
+- `OBJECT`, `LIST`, and `ABSTRACT` each own their execution-side
+  no-direct-data sync outcome helper
+- `OBJECT` and `ABSTRACT` normalize object-like direct values into raw object
+  outcomes before writer consumption, so the orchestration layer does not need
+  to rediscover object shape late
+- `ir_execution.h` continues to consume a single sync outcome contract, which
+  keeps the runtime side thin while making future widening entirely an
+  execution-family concern
+
+This is strategically useful for the VM path:
+
+- it removes another generic/shared boundary from the hot path without creating
+  new family-local code in `ir_execution.h`
+- it makes the family contract look more like a proper VM completion opcode:
+  "return a native outcome, not a half-generic Perl shape"
+- it also clarifies the next task: widen `OBJECT` and `ABSTRACT` family-owned
+  narrow paths further so the generic completion fallback is reached even less
+  often

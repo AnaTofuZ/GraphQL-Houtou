@@ -5029,61 +5029,42 @@ gql_execution_complete_value_catching_error_xs_lazy_impl(
             && schema_svp
             && SvROK(*schema_svp)
             && SvTYPE(SvRV(*schema_svp)) == SVt_PVHV) {
-          int possible_ok = 0;
-          SV *condition_name_sv = gql_execution_type_name_sv(aTHX_ return_type);
-          SV *runtime_name_sv = gql_execution_type_name_sv(aTHX_ runtime_type);
-          int possible_match = gql_execution_possible_type_match_simple(
-            aTHX_
-            context,
-            *schema_svp,
-            return_type,
-            condition_name_sv,
-            runtime_type,
-            runtime_name_sv,
-            &possible_ok
-          );
-          SvREFCNT_dec(runtime_name_sv);
-          SvREFCNT_dec(condition_name_sv);
-
-          if (possible_ok && possible_match) {
-            gql_ir_compiled_root_field_plan_t *native_field_plan
-              = gql_execution_collect_single_node_concrete_native_field_plan(aTHX_ runtime_type, nodes);
-            int plan_ok = 0;
-            if (native_field_plan) {
-              SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
-              SV *completed = gql_ir_execute_native_field_plan(aTHX_ context, runtime_type, result, path, native_field_plan);
-              SvREFCNT_dec(runtime_type_or_name);
-              if (completed != &PL_sv_undef) {
-                return completed;
-              }
-            } else {
-              SV *field_plan_sv = gql_execution_collect_single_node_concrete_field_plan(aTHX_ runtime_type, nodes, &plan_ok);
-              if (plan_ok) {
-                SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
-                SV *completed = gql_execution_execute_field_plan(aTHX_ context, runtime_type, result, path, field_plan_sv);
-                SvREFCNT_dec(field_plan_sv);
-                SvREFCNT_dec(runtime_type_or_name);
-                if (completed != &PL_sv_undef) {
-                  return completed;
-                }
-              }
-            }
-            {
-              int object_ok = 0;
-              SV *subfields = gql_execution_collect_simple_object_fields(aTHX_ context, runtime_type, nodes, &object_ok);
-              if (object_ok) {
-                SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
-                SV *completed = gql_execution_execute_fields(aTHX_ context, runtime_type, result, path, subfields);
-                SvREFCNT_dec(subfields);
-                SvREFCNT_dec(runtime_type_or_name);
-                return completed;
-              }
-            }
-
+          gql_execution_sync_outcome_t outcome;
+          SV *data_sv = NULL;
+          AV *errors_av = NULL;
+          SV *completed_sv = NULL;
+          gql_execution_sync_outcome_reset(&outcome);
+          if (gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_native_outcome(
+                aTHX_
+                context,
+                parent_type,
+                field_def,
+                return_type,
+                runtime_type,
+                nodes,
+                lazy_info,
+                result,
+                NULL,
+                &outcome
+              )) {
             SvREFCNT_dec(runtime_type_or_name);
+            if (gql_execution_sync_outcome_export(
+                  aTHX_
+                  &outcome,
+                  &data_sv,
+                  &errors_av,
+                  &completed_sv
+                )) {
+              if (data_sv) {
+                return gql_execution_build_sync_result_from_parts(aTHX_ data_sv, errors_av);
+              }
+              if (completed_sv) {
+                return completed_sv;
+              }
+            }
             {
               SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
-            return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
+              return gql_execution_call_pp_complete_value_catching_error(aTHX_ context, return_type, nodes, info, path, result);
             }
           }
         }

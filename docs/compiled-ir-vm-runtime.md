@@ -96,12 +96,15 @@ Latest kept runtime checkpoint on `proj/compiled-ir-vm-runtime`:
 - verified runtime-object handling is also now shared with the no-`resolve_type`
   `possible_types + is_type_of` path, so abstract family ownership extends
   beyond the resolve-type corridor
+- generic execution also now routes abstract runtime-object handling through
+  the same family-owned contract, reducing duplication between compiled-IR and
+  legacy abstract/object handoff logic
 - this keeps the `ABSTRACT -> OBJECT` handoff inside execution-side family
   APIs and avoids immediately falling into the generic sync fallback
 - checkpoint benchmark (`--count=-3`):
-  - `nested_variable_object`: `houtou_compiled_ir 79877/s`
-  - `list_of_objects`: `houtou_compiled_ir 57965/s`
-  - `abstract_with_fragment`: `houtou_compiled_ir 41518/s`
+  - `nested_variable_object`: `houtou_compiled_ir 79377/s`
+  - `list_of_objects`: `houtou_compiled_ir 58709/s`
+  - `abstract_with_fragment`: `houtou_compiled_ir 41647/s`
 - interpretation:
   - object/list-heavy paths remain healthy
   - abstract is still in the same competitive band and no longer depends only

@@ -89,25 +89,28 @@ Hot-path interpretation:
   - `f0c09b1` widened the abstract known-object miss path so it enters a
     head-first object-family corridor before exact concrete child-plan
     recollection
-  - current unification batch then pushed verified runtime-object handling
-    further into the abstract family contract, including the no-`resolve_type`
-    `is_type_of` path
+  - `305f2f4` then pushed verified runtime-object handling further into the
+    abstract family contract, including the no-`resolve_type` `is_type_of`
+    path
+  - the latest batch also removes duplicated generic-execution abstract/object
+    handling by routing it through the same abstract family runtime-object
+    contract
 - validation:
   - `minil test t/11_execution.t`
   - `minil test t/12_promise.t`
 - benchmark (`--count=-3`):
   - `nested_variable_object`
-    - `houtou_compiled_ir 79877/s`
-    - `houtou_xs_ast 76731/s`
+    - `houtou_compiled_ir 79377/s`
+    - `houtou_xs_ast 76143/s`
   - `list_of_objects`
-    - `houtou_compiled_ir 57965/s`
-    - `houtou_xs_ast 57764/s`
+    - `houtou_compiled_ir 58709/s`
+    - `houtou_xs_ast 57780/s`
   - `abstract_with_fragment`
-    - `houtou_compiled_ir 41518/s`
-    - `houtou_xs_ast 40969/s`
+    - `houtou_compiled_ir 41647/s`
+    - `houtou_xs_ast 40766/s`
 - reading:
-  - the new abstract contract widening did not regress `nested` or `list`
-  - `abstract` is now again slightly ahead in this checkpoint
+  - the new generic-execution routing still keeps `nested` and `list` healthy
+  - `abstract` remains slightly ahead in this checkpoint
   - the next win should still come from widening family-owned narrow paths
     rather than revisiting `resolve_type` micro-optimizations
 

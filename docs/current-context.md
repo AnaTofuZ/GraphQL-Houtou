@@ -86,33 +86,36 @@ Hot-path interpretation:
 
 - branch: `proj/compiled-ir-vm-runtime`
 - latest kept checkpoint:
-  - `f0c09b1` widened the abstract known-object miss path so it enters a
-    head-first object-family corridor before exact concrete child-plan
-    recollection
-  - `305f2f4` then pushed verified runtime-object handling further into the
-    abstract family contract, including the no-`resolve_type` `is_type_of`
-    path
-  - the latest batch also removes duplicated generic-execution abstract/object
-    handling by routing it through the same abstract family runtime-object
-    contract
+  - `365066a` and `403ec14` moved sync outcomes behind execution-side
+    family-owned APIs
+  - `bf959d3` carried raw object `HV*` through those family APIs so object
+    success paths can delay `RV` materialization
+  - `f0c09b1`, `305f2f4`, and `3c64710` widened abstract runtime-object
+    ownership and shared it with generic execution
+  - the latest batch makes plain object completion use the same object-family
+    contract and removes the old generic object branch duplication by giving
+    object family APIs their own non-recursive fallback implementation
 - validation:
   - `minil test t/11_execution.t`
   - `minil test t/12_promise.t`
 - benchmark (`--count=-3`):
   - `nested_variable_object`
-    - `houtou_compiled_ir 79377/s`
-    - `houtou_xs_ast 76143/s`
+    - `houtou_compiled_ir 80382/s`
+    - `houtou_xs_ast 75837/s`
   - `list_of_objects`
-    - `houtou_compiled_ir 58709/s`
-    - `houtou_xs_ast 57780/s`
+    - `houtou_compiled_ir 60026/s`
+    - `houtou_xs_ast 58379/s`
   - `abstract_with_fragment`
-    - `houtou_compiled_ir 41647/s`
-    - `houtou_xs_ast 40766/s`
+    - `houtou_compiled_ir 41619/s`
+    - `houtou_xs_ast 42504/s`
 - reading:
-  - the new generic-execution routing still keeps `nested` and `list` healthy
-  - `abstract` remains slightly ahead in this checkpoint
-  - the next win should still come from widening family-owned narrow paths
-    rather than revisiting `resolve_type` micro-optimizations
+  - plain object completion is now family-owned too, so object and abstract
+    success paths share a much larger contract
+  - `nested` and `list` remain healthy after the refactor
+  - `abstract` is still competitive but remains the main lagging family
+  - the next win should come from widening execution-side family corridors and
+    shrinking generic fallback frequency, not from `resolve_type`
+    micro-optimizations
 
 ## April 2026 VM Reset
 

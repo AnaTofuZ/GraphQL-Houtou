@@ -1383,3 +1383,20 @@ That is a useful checkpoint for the VM/runtime path:
   without touching the IR orchestration layer again
 - the current benchmark shape is acceptable: `nested` stays strong, `list`
   stays tied, and `abstract_with_fragment` edges slightly ahead of `xs_ast`
+
+The immediate follow-up cleanup then moves `resolve_type` callback ownership
+itself behind that same execution-side contract:
+
+- `with_table(...)` no longer runs the callback inline
+- execution now owns callback execution through
+  `try_complete_abstract_resolve_type_sync_native_outcome(...)`
+- this makes the abstract family entrypoint even more orchestration-like,
+  while the execution-side abstract corridor becomes the single place where
+  future widening should happen
+
+This is useful even without a fresh benchmark:
+
+- the next abstract-family widening no longer needs to touch callback
+  orchestration code
+- the corridor shape is closer to a proper
+  `RESOLVE_ABSTRACT -> COMPLETE_OBJECT_KNOWN` VM split

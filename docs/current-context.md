@@ -2773,3 +2773,27 @@ Interpretation:
 - `list` remains effectively tied
 - `abstract` moves slightly ahead of `xs_ast`, which is a good sign for the
   current direction even though the margin is still small
+
+Follow-up cleanup after this checkpoint:
+
+- `with_table(...)` no longer runs the `resolve_type` callback inline
+- execution now owns that via
+  `gql_execution_try_complete_abstract_resolve_type_sync_native_outcome(...)`
+- the abstract family entrypoint is therefore thinner still:
+  - callback execution
+  - runtime type-or-name normalization
+  - runtime-object verification
+  - known-object handoff
+  all now live behind execution-side helpers
+
+Verification status for this follow-up cleanup:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Notes:
+
+- no new benchmark yet; this batch is a structural cleanup on top of the
+  previous checkpoint
+- the next widening step can now focus on one execution-side abstract helper
+  instead of touching `with_table(...)` again

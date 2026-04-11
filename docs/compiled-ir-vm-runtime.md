@@ -85,22 +85,28 @@ template engine or SQL VM, but because they all separate:
 
 Latest kept runtime checkpoint on `proj/compiled-ir-vm-runtime`:
 
-- abstract known-object completion now has two distinct corridors:
+- abstract family ownership has been widened in two steps:
+  - abstract known-object completion now has two distinct corridors:
   - lowered abstract child-plan hit:
     go directly to the known-object object-family path with the exact native
     child plan
   - lowered miss but `possible_type_match` success:
     go through a head-first known-object object-family path before attempting
     exact concrete child-plan recollection
+- verified runtime-object handling is also now shared with the no-`resolve_type`
+  `possible_types + is_type_of` path, so abstract family ownership extends
+  beyond the resolve-type corridor
 - this keeps the `ABSTRACT -> OBJECT` handoff inside execution-side family
   APIs and avoids immediately falling into the generic sync fallback
 - checkpoint benchmark (`--count=-3`):
-  - `nested_variable_object`: `houtou_compiled_ir 80493/s`
-  - `list_of_objects`: `houtou_compiled_ir 59266/s`
-  - `abstract_with_fragment`: `houtou_compiled_ir 42040/s`
+  - `nested_variable_object`: `houtou_compiled_ir 79877/s`
+  - `list_of_objects`: `houtou_compiled_ir 57965/s`
+  - `abstract_with_fragment`: `houtou_compiled_ir 41518/s`
 - interpretation:
-  - object/list-heavy paths benefit or stay clearly healthy
-  - abstract is now close enough that further wins should come from widening
+  - object/list-heavy paths remain healthy
+  - abstract is still in the same competitive band and no longer depends only
+    on `resolve_type`-specific widening
+  - further wins should come from widening
     family-owned completion corridors, not from more `resolve_type`
     micro-optimizations
 

@@ -85,30 +85,31 @@ Hot-path interpretation:
 ## Latest Checkpoint
 
 - branch: `proj/compiled-ir-vm-runtime`
-- latest kept commit: `9e0a90a`
-- latest batch after that:
-  - abstract known-object miss path now enters a head-first object-family
-    corridor before exact concrete child-plan recollection
-  - the goal is to keep `ABSTRACT -> OBJECT` handoff inside family-owned
-    execution APIs and delay any drop into generic fallback
+- latest kept checkpoint:
+  - `f0c09b1` widened the abstract known-object miss path so it enters a
+    head-first object-family corridor before exact concrete child-plan
+    recollection
+  - current unification batch then pushed verified runtime-object handling
+    further into the abstract family contract, including the no-`resolve_type`
+    `is_type_of` path
 - validation:
   - `minil test t/11_execution.t`
   - `minil test t/12_promise.t`
 - benchmark (`--count=-3`):
   - `nested_variable_object`
-    - `houtou_compiled_ir 80493/s`
-    - `houtou_xs_ast 77311/s`
+    - `houtou_compiled_ir 79877/s`
+    - `houtou_xs_ast 76731/s`
   - `list_of_objects`
-    - `houtou_compiled_ir 59266/s`
-    - `houtou_xs_ast 58119/s`
+    - `houtou_compiled_ir 57965/s`
+    - `houtou_xs_ast 57764/s`
   - `abstract_with_fragment`
-    - `houtou_compiled_ir 42040/s`
-    - `houtou_xs_ast 42365/s`
+    - `houtou_compiled_ir 41518/s`
+    - `houtou_xs_ast 40969/s`
 - reading:
-  - `nested` and `list` remain healthy
-  - `abstract` is still slightly behind `xs_ast`
-  - the next win should come from widening family-owned narrow paths rather
-    than revisiting `resolve_type` micro-optimizations
+  - the new abstract contract widening did not regress `nested` or `list`
+  - `abstract` is now again slightly ahead in this checkpoint
+  - the next win should still come from widening family-owned narrow paths
+    rather than revisiting `resolve_type` micro-optimizations
 
 ## April 2026 VM Reset
 

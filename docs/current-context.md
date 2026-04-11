@@ -82,6 +82,34 @@ Hot-path interpretation:
   outcome extraction -> writer`
 - next optimization target is to shrink that second path further
 
+## Latest Checkpoint
+
+- branch: `proj/compiled-ir-vm-runtime`
+- latest kept commit: `9e0a90a`
+- latest batch after that:
+  - abstract known-object miss path now enters a head-first object-family
+    corridor before exact concrete child-plan recollection
+  - the goal is to keep `ABSTRACT -> OBJECT` handoff inside family-owned
+    execution APIs and delay any drop into generic fallback
+- validation:
+  - `minil test t/11_execution.t`
+  - `minil test t/12_promise.t`
+- benchmark (`--count=-3`):
+  - `nested_variable_object`
+    - `houtou_compiled_ir 80493/s`
+    - `houtou_xs_ast 77311/s`
+  - `list_of_objects`
+    - `houtou_compiled_ir 59266/s`
+    - `houtou_xs_ast 58119/s`
+  - `abstract_with_fragment`
+    - `houtou_compiled_ir 42040/s`
+    - `houtou_xs_ast 42365/s`
+- reading:
+  - `nested` and `list` remain healthy
+  - `abstract` is still slightly behind `xs_ast`
+  - the next win should come from widening family-owned narrow paths rather
+    than revisiting `resolve_type` micro-optimizations
+
 ## April 2026 VM Reset
 
 The active branch for the next phase is `proj/compiled-ir-vm-runtime`.

@@ -81,6 +81,29 @@ template engine or SQL VM, but because they all separate:
 - specialization metadata
 - delayed host-language object materialization
 
+## Current Checkpoint
+
+Latest kept runtime checkpoint on `proj/compiled-ir-vm-runtime`:
+
+- abstract known-object completion now has two distinct corridors:
+  - lowered abstract child-plan hit:
+    go directly to the known-object object-family path with the exact native
+    child plan
+  - lowered miss but `possible_type_match` success:
+    go through a head-first known-object object-family path before attempting
+    exact concrete child-plan recollection
+- this keeps the `ABSTRACT -> OBJECT` handoff inside execution-side family
+  APIs and avoids immediately falling into the generic sync fallback
+- checkpoint benchmark (`--count=-3`):
+  - `nested_variable_object`: `houtou_compiled_ir 80493/s`
+  - `list_of_objects`: `houtou_compiled_ir 59266/s`
+  - `abstract_with_fragment`: `houtou_compiled_ir 42040/s`
+- interpretation:
+  - object/list-heavy paths benefit or stay clearly healthy
+  - abstract is now close enough that further wins should come from widening
+    family-owned completion corridors, not from more `resolve_type`
+    micro-optimizations
+
 ## Target Architecture
 
 Planned stages:

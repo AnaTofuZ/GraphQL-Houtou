@@ -1400,3 +1400,47 @@ This is useful even without a fresh benchmark:
   orchestration code
 - the corridor shape is closer to a proper
   `RESOLVE_ABSTRACT -> COMPLETE_OBJECT_KNOWN` VM split
+
+The next checkpoint then moves sync generic completion itself onto those
+family-owned contracts:
+
+- `gql_execution_complete_value_catching_error_xs_lazy_impl(...)` no longer
+  open-codes the sync `LIST`, `OBJECT`, and `ABSTRACT` family corridors
+- instead, those branches now call the family-owned sync outcome APIs and only
+  perform the final `data/errors/completed` export at the outer boundary
+- abstract resolve-type errors are now also represented as a sync outcome
+  within the abstract family corridor, which removes another one-off branch
+  from the generic sync completion path
+- the execution-side `known object` corridor is now shared by:
+  - plain object family completion
+  - abstract runtime-object handoff
+  - list-item object completion
+
+This is strategically useful for the VM/runtime direction:
+
+- it further reduces duplicated orchestration logic in the generic sync path
+- it makes the family APIs look more like actual completion op families rather
+  than helper wrappers around a generic implementation
+- it means future widening work can focus on family-local narrow paths without
+  re-editing the generic sync completion loop
+
+Checkpoint benchmark after this family-owned sync-completion routing
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80677/s`
+  - `houtou_xs_ast 73559/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58119/s`
+  - `houtou_xs_ast 57780/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41619/s`
+  - `houtou_xs_ast 42040/s`
+
+So the direction still looks sound:
+
+- `nested` remains clearly strong
+- `list` stays slightly ahead
+- `abstract` is still close but not yet ahead, so the next wins are more
+  likely to come from widening the execution-owned abstract/object corridor
+  than from further resolve-type micro-tuning

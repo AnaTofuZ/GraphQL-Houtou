@@ -2797,3 +2797,43 @@ Notes:
   previous checkpoint
 - the next widening step can now focus on one execution-side abstract helper
   instead of touching `with_table(...)` again
+
+Checkpoint after moving generic sync completion onto family-owned APIs:
+
+- `execution.h` sync completion now routes `LIST`, `OBJECT`, and `ABSTRACT`
+  through their family-owned sync outcome APIs instead of open-coding those
+  corridors in `gql_execution_complete_value_catching_error_xs_lazy_impl(...)`
+- abstract resolve-type errors are now turned into a sync outcome inside the
+  abstract family corridor, so the generic sync completion path no longer needs
+  to special-case that branch
+- the execution-side `known object` corridor is now shared by:
+  - plain object family completion
+  - abstract runtime-object handoff
+  - list-item object completion
+
+Verification status for this checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Checkpoint benchmark after the family-owned sync-completion routing (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80677/s`
+  - `houtou_xs_ast 73559/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58119/s`
+  - `houtou_xs_ast 57780/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41619/s`
+  - `houtou_xs_ast 42040/s`
+
+Interpretation:
+
+- `nested` remains clearly ahead, so the extra family ownership in
+  `execution.h` is not hurting the object-heavy fast path
+- `list` stays slightly ahead, which suggests the family contract is not
+  regressing common sync list execution
+- `abstract` is still slightly behind, so the next work should keep focusing
+  on reducing how often `ABSTRACT` falls through to generic/shared fallback,
+  not on more resolve-type micro-optimizations

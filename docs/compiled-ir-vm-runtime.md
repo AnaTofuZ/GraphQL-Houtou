@@ -1444,3 +1444,46 @@ So the direction still looks sound:
 - `abstract` is still close but not yet ahead, so the next wins are more
   likely to come from widening the execution-owned abstract/object corridor
   than from further resolve-type micro-tuning
+
+The next checkpoint then unifies the execution-side `known object` fallback
+corridor itself:
+
+- generic sync completion no longer keeps separate inline `LIST`, `OBJECT`,
+  and `ABSTRACT` sync branches; it routes them all through the execution-side
+  family contracts
+- the execution-side `known object` corridor is now shared by:
+  - plain object family completion
+  - abstract runtime-object handoff
+  - list-item object completion
+- object field execution inside that corridor now goes through one shared
+  `execute_fields -> sync outcome` helper, instead of repeating
+  `execute_fields -> completed -> outcome-extract` glue in multiple places
+
+This is a useful VM/runtime step:
+
+- it turns `known object` into a more explicit execution-family primitive
+- it reduces duplicated Perl-shape glue inside execution-side specialized
+  families
+- it keeps the widening work focused on one corridor that can later become a
+  dedicated completion opcode family
+
+Checkpoint benchmark after this known-object corridor unification (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79378/s`
+  - `houtou_xs_ast 76022/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57982/s`
+  - `houtou_xs_ast 57233/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 40706/s`
+  - `houtou_xs_ast 39938/s`
+
+So this checkpoint is healthy:
+
+- `nested` remains clearly ahead
+- `list` remains slightly ahead
+- `abstract` also comes out ahead again
+
+That is a good sign that the execution-owned `ABSTRACT -> OBJECT` corridor is
+becoming structurally simpler without sacrificing throughput.

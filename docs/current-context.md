@@ -2837,3 +2837,42 @@ Interpretation:
 - `abstract` is still slightly behind, so the next work should keep focusing
   on reducing how often `ABSTRACT` falls through to generic/shared fallback,
   not on more resolve-type micro-optimizations
+
+Checkpoint after unifying the execution-side known-object fallback corridor:
+
+- generic sync completion now routes `LIST`, `OBJECT`, and `ABSTRACT` through
+  the execution-side family contracts rather than carrying separate inline
+  object/list/abstract sync branches
+- the execution-side `known object` corridor is now shared by:
+  - plain object family completion
+  - abstract runtime-object handoff
+  - list-item object completion
+- object field execution within that corridor now goes through one shared
+  `execute_fields -> sync outcome` helper instead of repeating
+  `execute_fields -> completed -> extract_outcome` glue in multiple places
+
+Verification status for this checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Checkpoint benchmark after the known-object corridor unification (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79378/s`
+  - `houtou_xs_ast 76022/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57982/s`
+  - `houtou_xs_ast 57233/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 40706/s`
+  - `houtou_xs_ast 39938/s`
+
+Interpretation:
+
+- `nested` stays clearly ahead, so the extra corridor unification is not
+  harming the common object-heavy path
+- `list` remains slightly ahead, which suggests the shared known-object
+  corridor is viable for list item object completion
+- `abstract` is again ahead of `xs_ast`, so centralizing `ABSTRACT -> OBJECT`
+  ownership in `execution.h` continues to look like the right direction

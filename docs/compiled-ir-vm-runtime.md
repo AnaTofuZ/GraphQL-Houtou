@@ -1487,3 +1487,42 @@ So this checkpoint is healthy:
 
 That is a good sign that the execution-owned `ABSTRACT -> OBJECT` corridor is
 becoming structurally simpler without sacrificing throughput.
+
+The next checkpoint makes the generic `no_direct_data` sync outcome dispatcher
+family-aware:
+
+- `OBJECT`, `LIST`, and `ABSTRACT` now route through their own
+  `...sync_native_outcome_no_direct_data(...)` family contracts
+- only a cold fallback-only helper still calls the generic
+  `...sync_outcome_impl(..., 0)` path
+- `ABSTRACT` no longer re-enters the generic no-direct-data dispatcher after
+  a family-owned miss
+
+This is useful for the VM/runtime direction because:
+
+- it keeps the family-owned completion contracts structurally consistent even
+  on cold sync paths
+- it removes another generic detour from the abstract/object corridor
+- it makes future widening work target one execution-side family API per
+  completion family
+
+Checkpoint benchmark after the family-aware no-direct-data dispatcher
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 78640/s`
+  - `houtou_xs_ast 77872/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58162/s`
+  - `houtou_xs_ast 58477/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41812/s`
+  - `houtou_xs_ast 42102/s`
+
+So this checkpoint is still structurally healthy:
+
+- `nested` improves slightly
+- `list` remains tied
+- `abstract` stays close but still slightly behind, which means the next wins
+  should still come from widening the execution-owned abstract/object
+  corridor rather than from more generic dispatcher cleanup

@@ -2876,3 +2876,43 @@ Interpretation:
   corridor is viable for list item object completion
 - `abstract` is again ahead of `xs_ast`, so centralizing `ABSTRACT -> OBJECT`
   ownership in `execution.h` continues to look like the right direction
+
+Checkpoint after the family-aware `no_direct_data` sync dispatcher:
+
+- `gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome_no_direct_data(...)`
+  now dispatches by family:
+  - `OBJECT`
+  - `LIST`
+  - `ABSTRACT`
+- only a cold fallback-only helper still calls the generic
+  `...sync_outcome_impl(..., 0)` path
+- `ABSTRACT` no longer re-enters the generic no-direct-data dispatcher and now
+  falls straight to that fallback-only helper when its family-owned corridor
+  misses
+
+Verification status for this checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Checkpoint benchmark after the family-aware no-direct-data dispatcher
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 78640/s`
+  - `houtou_xs_ast 77872/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58162/s`
+  - `houtou_xs_ast 58477/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41812/s`
+  - `houtou_xs_ast 42102/s`
+
+Interpretation:
+
+- `nested` improves slightly, so the family-aware dispatch is not harming the
+  hot object path
+- `list` remains effectively tied
+- `abstract` is still close but slightly behind, so the next wins are still
+  more likely to come from widening the abstract/object family corridor than
+  from more generic dispatch cleanup

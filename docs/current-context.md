@@ -3142,3 +3142,38 @@ Interpretation:
 - `abstract` is still slightly behind, but the gap is now small enough that
   the next work should stay focused on reducing fallback frequency rather than
   on micro-optimizing lookup details
+
+Another healthy checkpoint comes from flattening the abstract runtime corridor
+and making the compiled-ir no-direct-data fallback family-aware:
+
+- `resolve_type -> runtime_type_or_name -> known object` now stays in one
+  execution-owned corridor instead of bouncing through the older
+  runtime-object wrapper layer
+- compiled-ir no longer asks the generic no-direct-data helper to rediscover
+  whether the miss came from `OBJECT`, `LIST`, or `ABSTRACT`; it calls the
+  family-owned no-direct-data API directly
+- this removes one layer of generic branch selection from the hot compiled-ir
+  completion path while keeping ownership concentrated inside `execution.h`
+
+Checkpoint benchmark after flattening the abstract corridor and making
+no-direct-data family-aware (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 76533/s`
+  - `houtou_xs_ast 73797/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 54807/s`
+  - `houtou_xs_ast 55483/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 40841/s`
+  - `houtou_xs_ast 40841/s`
+
+This is acceptable for the current stage:
+
+- `nested` remains clearly ahead, so the family-aware no-direct-data dispatch
+  is not hurting the strongest object-heavy sync path
+- `list` stays close enough that the corridor simplification is not materially
+  regressing the list family
+- `abstract` reaches parity, which is a stronger signal than the earlier
+  lookup-only experiments because it comes from reducing generic corridor
+  selection rather than shaving a single lookup

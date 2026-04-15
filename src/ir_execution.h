@@ -1851,6 +1851,8 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
     ? hot->native_field_plan
     : NULL;
   gql_execution_sync_outcome_t outcome;
+  gql_ir_native_completion_dispatch_kind_t family_kind =
+    meta ? meta->completion_dispatch_kind : GQL_IR_NATIVE_COMPLETION_GENERIC;
 
   if (!return_type_sv || !SvOK(return_type_sv)) {
     return_type_sv = (hot && hot->type_sv) ? hot->type_sv : entry->type_sv;
@@ -1868,7 +1870,9 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
   }
 
   gql_execution_sync_outcome_reset(&outcome);
-  if (gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
+  switch (family_kind) {
+    case GQL_IR_NATIVE_COMPLETION_OBJECT:
+      (void)gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
         aTHX_
         gql_ir_native_env_context(env),
         gql_ir_native_env_parent_type(env),
@@ -1878,7 +1882,50 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
         lazy_info,
         result_sv,
         &outcome
-      )) {
+      );
+      break;
+    case GQL_IR_NATIVE_COMPLETION_LIST:
+      (void)gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
+        aTHX_
+        gql_ir_native_env_context(env),
+        gql_ir_native_env_parent_type(env),
+        field_def_sv,
+        return_type_sv,
+        nodes_sv,
+        lazy_info,
+        result_sv,
+        &outcome
+      );
+      break;
+    case GQL_IR_NATIVE_COMPLETION_ABSTRACT:
+      (void)gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data_with_table(
+        aTHX_
+        gql_ir_native_env_context(env),
+        gql_ir_native_env_parent_type(env),
+        field_def_sv,
+        return_type_sv,
+        nodes_sv,
+        lazy_info,
+        result_sv,
+        abstract_child_plan_table,
+        &outcome
+      );
+      break;
+    default:
+      (void)gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
+        aTHX_
+        gql_ir_native_env_context(env),
+        gql_ir_native_env_parent_type(env),
+        field_def_sv,
+        return_type_sv,
+        nodes_sv,
+        lazy_info,
+        result_sv,
+        &outcome
+      );
+      break;
+  }
+  if (outcome.kind != GQL_EXECUTION_SYNC_OUTCOME_NONE) {
     if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE) {
       frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
       frame->outcome_sv = outcome.value_sv;

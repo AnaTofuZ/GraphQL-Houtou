@@ -1718,3 +1718,39 @@ This is a useful signal:
 - list also benefits because item object completions reuse the same corridor
 - abstract is still slightly behind, which means the next work should continue
   reducing generic fallback frequency inside the execution-owned abstract path
+
+Another healthy checkpoint comes from flattening the abstract runtime corridor
+and making the compiled-ir no-direct-data fallback family-aware:
+
+- `resolve_type -> runtime_type_or_name -> known object` now stays in one
+  execution-owned corridor instead of bouncing through the older
+  runtime-object wrapper layer
+- compiled-ir no longer asks the generic no-direct-data helper to rediscover
+  whether the miss came from `OBJECT`, `LIST`, or `ABSTRACT`; it calls the
+  family-owned no-direct-data API directly
+- this keeps the completion-family ownership aligned all the way down to the
+  runtime loop, instead of reintroducing a generic branch at the no-direct-data
+  boundary
+
+Checkpoint benchmark after flattening the abstract corridor and making
+no-direct-data family-aware (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 76533/s`
+  - `houtou_xs_ast 73797/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 54807/s`
+  - `houtou_xs_ast 55483/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 40841/s`
+  - `houtou_xs_ast 40841/s`
+
+This confirms the design direction:
+
+- `nested` remains well ahead, so the family-aware dispatch does not damage
+  the strongest object-heavy path
+- `list` remains close enough that the simplification is acceptable at this
+  ownership stage
+- `abstract` reaches parity without adding new lookup-oriented shortcuts,
+  which reinforces the current strategy of reducing generic corridor selection
+  instead of shaving individual lookups

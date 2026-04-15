@@ -1622,3 +1622,36 @@ This remains consistent with the broader strategy:
 - `abstract` still trails slightly, so the next gains should continue to come
   from widening the execution-owned `ABSTRACT -> OBJECT` corridor rather than
   from abstract-side micro-optimizations
+
+Another meaningful checkpoint removes a remaining compiled-ir-local duplicate
+abstract corridor:
+
+- `ir_execution.h` no longer keeps its own sync `resolve_type -> object child`
+  corridor for compiled IR
+- compiled IR now calls the execution-owned `ABSTRACT` family API and moves the
+  resulting `gql_execution_sync_outcome_t` directly into the field frame
+- list-item abstract completion also uses the same execution-owned abstract
+  family contract, so widening work can stay concentrated inside
+  `execution.h`
+
+Checkpoint benchmark after this ownership shift (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80430/s`
+  - `houtou_xs_ast 78193/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57597/s`
+  - `houtou_xs_ast 59208/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41647/s`
+  - `houtou_xs_ast 42440/s`
+
+This is acceptable as an ownership checkpoint:
+
+- `nested` remains clearly ahead, so the structural simplification did not
+  break the strongest sync object wins
+- `list` softens somewhat, which suggests list-family widening still needs more
+  work inside the shared execution corridor
+- `abstract` remains close but behind, reinforcing the current plan to keep
+  widening the execution-owned `ABSTRACT -> OBJECT` corridor instead of adding
+  new compiled-ir-local shortcuts

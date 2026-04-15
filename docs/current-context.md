@@ -3026,3 +3026,42 @@ Interpretation:
 - `abstract` is still a little behind, which reinforces the current strategy:
   keep widening the execution-owned `ABSTRACT -> OBJECT` corridor instead of
   chasing secondary lookup optimizations
+
+Checkpoint after removing the compiled-ir-local abstract child corridor:
+
+- `ir_execution.h` no longer keeps a separate `resolve_type -> object child`
+  sync path for compiled IR
+- abstract completion in compiled IR now routes through the execution-owned
+  `ABSTRACT` family API and carries the resulting sync outcome directly into
+  the field frame
+- list-item abstract completion uses the same execution-owned abstract family
+  contract instead of a local child-outcome-only helper
+
+Verification status for this checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Checkpoint benchmark after routing compiled IR through the execution-owned
+abstract corridor (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80430/s`
+  - `houtou_xs_ast 78193/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57597/s`
+  - `houtou_xs_ast 59208/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41647/s`
+  - `houtou_xs_ast 42440/s`
+
+Interpretation:
+
+- `nested` stays clearly ahead even after removing the compiled-ir-local
+  abstract duplicate path
+- `list` softens a bit, but remains in the same broad band as earlier healthy
+  checkpoints
+- `abstract` is still slightly behind, but this is now happening with the
+  ownership model we actually want: widening should continue inside the
+  execution-owned abstract/object family corridor rather than in IR-local
+  duplicated logic

@@ -354,6 +354,15 @@ static int gql_execution_try_complete_object_sync_head_fast_impl(
   AV **errors_out,
   int assume_runtime_object
 );
+static int gql_execution_try_complete_known_object_sync_head_with_subfields(
+  pTHX_ SV *context,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *return_type,
+  SV *result,
+  SV *subfields,
+  HV **data_out,
+  AV **errors_out
+);
 static int gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome(
   pTHX_ SV *context,
   SV *parent_type,
@@ -476,6 +485,7 @@ static int gql_execution_complete_object_field_value_catching_error_xs_lazy_sync
   struct gql_execution_lazy_resolve_info *lazy_info,
   SV *result,
   int assume_runtime_object,
+  SV *known_subfields,
   gql_execution_sync_outcome_t *outcome
 );
 static int gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_native_outcome_fallback_impl(
@@ -486,6 +496,7 @@ static int gql_execution_complete_known_object_field_value_catching_error_xs_laz
   SV *nodes,
   struct gql_execution_lazy_resolve_info *lazy_info,
   SV *result,
+  SV *known_subfields,
   gql_execution_sync_outcome_t *outcome
 );
 static int gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outcome_fallback_impl(
@@ -5292,6 +5303,40 @@ gql_execution_try_complete_object_sync_head_fast_impl(
 }
 
 static int
+gql_execution_try_complete_known_object_sync_head_with_subfields(
+  pTHX_ SV *context,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *return_type,
+  SV *result,
+  SV *subfields,
+  HV **data_out,
+  AV **errors_out
+) {
+  SV *path_sv = NULL;
+
+  if (!context
+      || !lazy_info
+      || !return_type
+      || !subfields
+      || subfields == &PL_sv_undef
+      || !SvOK(subfields)) {
+    return 0;
+  }
+
+  path_sv = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
+  return gql_execution_execute_fields_sync_head(
+    aTHX_
+    context,
+    return_type,
+    result,
+    path_sv,
+    subfields,
+    data_out,
+    errors_out
+  );
+}
+
+static int
 gql_execution_execute_fields_sync_head(
   pTHX_ SV *context,
   SV *parent_type,
@@ -6502,6 +6547,7 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
     lazy_info,
     result,
     0,
+    NULL,
     outcome
   );
 }
@@ -6762,34 +6808,40 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
   AV *direct_errors_av = NULL;
   SV *promise_code = NULL;
   gql_ir_compiled_root_field_plan_t *exact_native_field_plan = native_field_plan;
+  SV *known_subfields = NULL;
+  int known_subfields_ok = 0;
 
   gql_execution_sync_outcome_reset(outcome);
   promise_code = context ? gql_execution_context_promise_code(context) : NULL;
   if ((!promise_code || !SvOK(promise_code))
       && prefer_head_first
-      && (assume_runtime_object
-          ? gql_execution_try_complete_known_object_sync_head_fast(
-              aTHX_
-              context,
-              return_type,
-              lazy_info,
-              result,
-              &direct_data_hv,
-              &direct_errors_av
-            )
-          : gql_execution_try_complete_object_sync_head_fast(
-              aTHX_
-              context,
-              return_type,
-              lazy_info,
-              result,
-              &direct_data_hv,
-              &direct_errors_av
-            ))) {
-    outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
-    outcome->data_sv = (SV *)direct_data_hv;
-    outcome->errors_av = direct_errors_av;
-    return 1;
+      && lazy_info) {
+    known_subfields = gql_execution_collect_simple_object_fields(
+      aTHX_ context,
+      return_type,
+      nodes,
+      &known_subfields_ok
+    );
+    if (known_subfields_ok
+        && known_subfields
+        && known_subfields != &PL_sv_undef
+        && SvOK(known_subfields)
+        && gql_execution_try_complete_known_object_sync_head_with_subfields(
+             aTHX_
+             context,
+             lazy_info,
+             return_type,
+             result,
+             known_subfields,
+             &direct_data_hv,
+             &direct_errors_av
+           )) {
+      outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
+      outcome->data_sv = (SV *)direct_data_hv;
+      outcome->errors_av = direct_errors_av;
+      SvREFCNT_dec(known_subfields);
+      return 1;
+    }
   }
   if ((!promise_code || !SvOK(promise_code))
       && lazy_info) {
@@ -6822,43 +6874,56 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
     }
   }
 
-  if ((assume_runtime_object
-       ? gql_execution_try_complete_known_object_sync_head_fast(
-           aTHX_
-           context,
-           return_type,
-           lazy_info,
-           result,
-           &direct_data_hv,
-           &direct_errors_av
-         )
-       : gql_execution_try_complete_object_sync_head_fast(
-           aTHX_
-           context,
-           return_type,
-           lazy_info,
-           result,
-           &direct_data_hv,
-           &direct_errors_av
-         ))) {
-    outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
-    outcome->data_sv = (SV *)direct_data_hv;
-    outcome->errors_av = direct_errors_av;
-    return 1;
+  if ((!promise_code || !SvOK(promise_code)) && lazy_info) {
+    if (!known_subfields) {
+      known_subfields = gql_execution_collect_simple_object_fields(
+        aTHX_ context,
+        return_type,
+        nodes,
+        &known_subfields_ok
+      );
+    }
+    if (known_subfields_ok
+        && known_subfields
+        && known_subfields != &PL_sv_undef
+        && SvOK(known_subfields)
+        && gql_execution_try_complete_known_object_sync_head_with_subfields(
+             aTHX_
+             context,
+             lazy_info,
+             return_type,
+             result,
+             known_subfields,
+             &direct_data_hv,
+             &direct_errors_av
+           )) {
+      outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
+      outcome->data_sv = (SV *)direct_data_hv;
+      outcome->errors_av = direct_errors_av;
+      SvREFCNT_dec(known_subfields);
+      return 1;
+    }
   }
 
-  return gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_fallback_impl(
-    aTHX_
-    context,
-    parent_type,
-    field_def,
-    return_type,
-    nodes,
-    lazy_info,
-    result,
-    assume_runtime_object,
-    outcome
-  );
+  {
+    int fallback_ok = gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_fallback_impl(
+      aTHX_
+      context,
+      parent_type,
+      field_def,
+      return_type,
+      nodes,
+      lazy_info,
+      result,
+      assume_runtime_object,
+      known_subfields_ok ? known_subfields : NULL,
+      outcome
+    );
+    if (known_subfields) {
+      SvREFCNT_dec(known_subfields);
+    }
+    return fallback_ok;
+  }
 }
 
 static int
@@ -6871,6 +6936,7 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result,
   int assume_runtime_object,
+  SV *known_subfields,
   gql_execution_sync_outcome_t *outcome
 ) {
   SV *is_type_of_sv = NULL;
@@ -6963,6 +7029,7 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
     nodes,
     lazy_info,
     result,
+    known_subfields,
     outcome
   );
 }
@@ -7017,11 +7084,15 @@ gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_nati
   SV *nodes,
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result,
+  SV *known_subfields,
   gql_execution_sync_outcome_t *outcome
 ) {
   {
-    int ok = 0;
-    SV *subfields = gql_execution_collect_simple_object_fields(aTHX_ context, return_type, nodes, &ok);
+    int ok = known_subfields ? 1 : 0;
+    SV *subfields = known_subfields;
+    if (!subfields) {
+      subfields = gql_execution_collect_simple_object_fields(aTHX_ context, return_type, nodes, &ok);
+    }
     if (ok) {
       int exec_ok = gql_execution_execute_fields_sync_native_outcome(
         aTHX_
@@ -7032,10 +7103,14 @@ gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_nati
         subfields,
         outcome
       );
-      SvREFCNT_dec(subfields);
+      if (!known_subfields) {
+        SvREFCNT_dec(subfields);
+      }
       if (exec_ok) {
         return 1;
       }
+    } else if (subfields && !known_subfields) {
+      SvREFCNT_dec(subfields);
     }
   }
 

@@ -2990,3 +2990,40 @@ Interpretation:
 - `abstract` returns to parity, which is a better signal than the earlier
   lookup-only micro-opts because this change widens the execution-owned
   corridor instead of just shuffling secondary work
+
+Checkpoint after reusing known-object subfields across head/fallback paths:
+
+- object-family completion now collects `subfields` once and can reuse them
+  across:
+  - the head-fast object corridor
+  - the known-object fallback corridor
+- this removes one class of duplicated object-field collection work after
+  exact native child-plan misses
+- the change stays entirely inside the execution-owned object corridor, which
+  is where the current wins are actually coming from
+
+Verification status for this checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Checkpoint benchmark after the known-object subfields reuse (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79784/s`
+  - `houtou_xs_ast 76971/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 59024/s`
+  - `houtou_xs_ast 59394/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41777/s`
+  - `houtou_xs_ast 42462/s`
+
+Interpretation:
+
+- `nested` improves again, which is exactly where duplicated object corridor
+  work should matter most
+- `list` remains effectively tied
+- `abstract` is still a little behind, which reinforces the current strategy:
+  keep widening the execution-owned `ABSTRACT -> OBJECT` corridor instead of
+  chasing secondary lookup optimizations

@@ -1601,3 +1601,36 @@ experiments:
 - the improvement comes from widening the family-owned `ABSTRACT -> OBJECT`
   corridor, which aligns with the long-term VM/runtime plan better than
   secondary lookup shaving
+
+The next healthy checkpoint keeps working inside the execution-owned object
+corridor rather than chasing more abstract-side lookup shortcuts:
+
+- when exact native child plans miss, object-family completion no longer needs
+  to recollect `subfields` for the known-object fallback
+- the same collected `subfields` can now feed both:
+  - the head-fast object corridor
+  - the known-object fallback corridor
+- this removes duplicated object-field collection work without reintroducing
+  more generic helper detours
+
+Checkpoint benchmark after reusing known-object subfields (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79784/s`
+  - `houtou_xs_ast 76971/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 59024/s`
+  - `houtou_xs_ast 59394/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41777/s`
+  - `houtou_xs_ast 42462/s`
+
+This remains consistent with the broader strategy:
+
+- `nested` improves, which is where duplicated object-corridor work should
+  matter most
+- `list` stays close enough that the object-corridor cleanup is not harming
+  the broader sync path
+- `abstract` still trails slightly, so the next gains should continue to come
+  from widening the execution-owned `ABSTRACT -> OBJECT` corridor rather than
+  from abstract-side micro-optimizations

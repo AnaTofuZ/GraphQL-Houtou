@@ -182,6 +182,17 @@ static int gql_execution_complete_known_object_field_value_catching_error_xs_laz
   gql_ir_compiled_root_field_plan_t *native_field_plan,
   gql_execution_sync_outcome_t *outcome
 );
+static int gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_known_plan(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  gql_ir_compiled_root_field_plan_t *native_field_plan,
+  gql_execution_sync_outcome_t *outcome
+);
 static int gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_plan_impl(
   pTHX_ SV *context,
   SV *parent_type,
@@ -6776,6 +6787,21 @@ gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_nati
   gql_ir_compiled_root_field_plan_t *native_field_plan,
   gql_execution_sync_outcome_t *outcome
 ) {
+  if (native_field_plan) {
+    return gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_known_plan(
+      aTHX_
+      context,
+      parent_type,
+      field_def,
+      return_type,
+      nodes,
+      lazy_info,
+      result,
+      native_field_plan,
+      outcome
+    );
+  }
+
   return gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_plan_impl(
     aTHX_
     context,
@@ -6788,8 +6814,84 @@ gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_nati
     native_field_plan,
     outcome,
     1,
-    native_field_plan ? 0 : 1
+    1
   );
+}
+
+static int
+gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_known_plan(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  gql_ir_compiled_root_field_plan_t *native_field_plan,
+  gql_execution_sync_outcome_t *outcome
+) {
+  SV *promise_code = NULL;
+  SV *known_subfields = NULL;
+  int known_subfields_ok = 0;
+
+  gql_execution_sync_outcome_reset(outcome);
+  if (!context
+      || !return_type
+      || !nodes
+      || !lazy_info
+      || !native_field_plan
+      || !outcome) {
+    return 0;
+  }
+
+  promise_code = gql_execution_context_promise_code(context);
+  if ((!promise_code || !SvOK(promise_code)) && lazy_info) {
+    SV *path_sv = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
+    gql_ir_native_child_outcome_t child_outcome;
+    Zero(&child_outcome, 1, gql_ir_native_child_outcome_t);
+    if (gql_ir_execute_native_field_plan_sync_to_child_outcome(
+          aTHX_
+          context,
+          return_type,
+          result,
+          path_sv,
+          native_field_plan,
+          &child_outcome
+        )) {
+      outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
+      outcome->object_hv = child_outcome.data_hv;
+      outcome->errors_av = child_outcome.errors_av;
+      return 1;
+    }
+  }
+
+  if ((!promise_code || !SvOK(promise_code)) && lazy_info) {
+    known_subfields = gql_execution_collect_simple_object_fields(
+      aTHX_ context,
+      return_type,
+      nodes,
+      &known_subfields_ok
+    );
+  }
+
+  {
+    int fallback_ok = gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_native_outcome_fallback_impl(
+      aTHX_
+      context,
+      parent_type,
+      field_def,
+      return_type,
+      nodes,
+      lazy_info,
+      result,
+      known_subfields_ok ? known_subfields : NULL,
+      outcome
+    );
+    if (known_subfields) {
+      SvREFCNT_dec(known_subfields);
+    }
+    return fallback_ok;
+  }
 }
 
 static int
@@ -8033,7 +8135,7 @@ gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_nativ
       runtime_type
     );
     if (native_field_plan) {
-      return gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_native_outcome(
+      return gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_known_plan(
         aTHX_
         context,
         parent_type,

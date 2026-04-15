@@ -1689,3 +1689,32 @@ This is the right kind of result for the current stage:
 - `abstract` reaches practical parity
 - the next gains should come from widening the `ABSTRACT -> OBJECT` corridor
   itself, not from more payload-slot micro-optimizations
+
+Another healthy checkpoint comes from widening the known-plan object corridor:
+
+- when a concrete native child plan is already known, the execution-owned
+  object family corridor now uses a dedicated known-plan path instead of
+  falling back through the more general object completion helper
+- the same narrower corridor is now shared by:
+  - exact object child-plan hits
+  - abstract table hits that resolved to a concrete object plan
+  - list item object completions with a pre-lowered exact plan
+
+Checkpoint benchmark after widening the known-plan corridor (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79377/s`
+  - `houtou_xs_ast 76731/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57467/s`
+  - `houtou_xs_ast 55483/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41777/s`
+  - `houtou_xs_ast 42040/s`
+
+This is a useful signal:
+
+- exact-plan-heavy object paths improve the most
+- list also benefits because item object completions reuse the same corridor
+- abstract is still slightly behind, which means the next work should continue
+  reducing generic fallback frequency inside the execution-owned abstract path

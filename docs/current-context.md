@@ -3106,3 +3106,39 @@ Interpretation:
 - the next wins should keep focusing on reducing generic fallback frequency
   inside the execution-owned `ABSTRACT -> OBJECT` path, not on adding more
   tiny lookup shortcuts
+
+Checkpoint after widening the known-plan object corridor:
+
+- exact native child plans now take a dedicated known-plan path inside the
+  execution-owned object family corridor
+- `ABSTRACT -> OBJECT` handoff uses the same corridor directly when the lowered
+  abstract child-plan table already resolved a concrete child plan
+- known-object completion no longer has to go through the more general
+  `with_plan_impl(...)` path when the plan is already known up front
+
+Verification status for this checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Checkpoint benchmark after widening the known-plan corridor (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79377/s`
+  - `houtou_xs_ast 76731/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57467/s`
+  - `houtou_xs_ast 55483/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41777/s`
+  - `houtou_xs_ast 42040/s`
+
+Interpretation:
+
+- `nested` clearly benefits, which matches the expectation that exact object
+  child-plan paths are where this corridor matters most
+- `list` also improves, because list item object completions now share the same
+  narrower known-plan path
+- `abstract` is still slightly behind, but the gap is now small enough that
+  the next work should stay focused on reducing fallback frequency rather than
+  on micro-optimizing lookup details

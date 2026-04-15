@@ -6151,7 +6151,8 @@ gql_execution_sync_outcome_reset(gql_execution_sync_outcome_t *outcome) {
     return;
   }
   outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_NONE;
-  outcome->data_sv = NULL;
+  outcome->value_sv = NULL;
+  outcome->object_hv = NULL;
   outcome->errors_av = NULL;
   outcome->completed_sv = NULL;
 }
@@ -6180,7 +6181,7 @@ gql_execution_sync_outcome_export(
   switch (outcome->kind) {
     case GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE:
       if (data_out) {
-        *data_out = outcome->data_sv;
+        *data_out = outcome->value_sv;
       }
       if (errors_out) {
         *errors_out = outcome->errors_av;
@@ -6188,7 +6189,7 @@ gql_execution_sync_outcome_export(
       break;
     case GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV:
       if (data_out) {
-        *data_out = outcome->data_sv ? newRV_noinc(outcome->data_sv) : newSV(0);
+        *data_out = outcome->object_hv ? newRV_noinc((SV *)outcome->object_hv) : newSV(0);
       }
       if (errors_out) {
         *errors_out = outcome->errors_av;
@@ -6464,7 +6465,7 @@ gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome(
 
   if (data_sv) {
     outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE;
-    outcome->data_sv = data_sv;
+    outcome->value_sv = data_sv;
     outcome->errors_av = errors_av;
     (void)gql_execution_sync_outcome_try_normalize_direct_object_hv(aTHX_ outcome);
     return 1;
@@ -6512,7 +6513,7 @@ gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome_no
 
   if (data_sv) {
     outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE;
-    outcome->data_sv = data_sv;
+    outcome->value_sv = data_sv;
     outcome->errors_av = errors_av;
     (void)gql_execution_sync_outcome_try_normalize_direct_object_hv(aTHX_ outcome);
     return 1;
@@ -6627,7 +6628,7 @@ gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_o
 
   if (data_sv) {
     outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE;
-    outcome->data_sv = data_sv;
+    outcome->value_sv = data_sv;
     outcome->errors_av = errors_av;
     (void)gql_execution_sync_outcome_try_normalize_direct_object_hv(aTHX_ outcome);
     return 1;
@@ -6649,17 +6650,18 @@ gql_execution_sync_outcome_try_normalize_direct_object_hv(
 
   if (!outcome
       || outcome->kind != GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE
-      || !outcome->data_sv) {
+      || !outcome->value_sv) {
     return 0;
   }
 
-  direct_sv = outcome->data_sv;
+  direct_sv = outcome->value_sv;
   if (!SvROK(direct_sv) || SvTYPE(SvRV(direct_sv)) != SVt_PVHV) {
     return 0;
   }
 
   outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
-  outcome->data_sv = (SV *)SvREFCNT_inc_simple_NN(SvRV(direct_sv));
+  outcome->object_hv = (HV *)SvREFCNT_inc_simple_NN(SvRV(direct_sv));
+  outcome->value_sv = NULL;
   SvREFCNT_dec(direct_sv);
   return 1;
 }
@@ -6837,7 +6839,7 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
              &direct_errors_av
            )) {
       outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
-      outcome->data_sv = (SV *)direct_data_hv;
+      outcome->object_hv = direct_data_hv;
       outcome->errors_av = direct_errors_av;
       SvREFCNT_dec(known_subfields);
       return 1;
@@ -6868,7 +6870,7 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
           &child_outcome
         )) {
       outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
-      outcome->data_sv = (SV *)child_outcome.data_hv;
+      outcome->object_hv = child_outcome.data_hv;
       outcome->errors_av = child_outcome.errors_av;
       return 1;
     }
@@ -6898,7 +6900,7 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
              &direct_errors_av
            )) {
       outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
-      outcome->data_sv = (SV *)direct_data_hv;
+      outcome->object_hv = direct_data_hv;
       outcome->errors_av = direct_errors_av;
       SvREFCNT_dec(known_subfields);
       return 1;
@@ -7064,7 +7066,7 @@ gql_execution_execute_fields_sync_native_outcome(
         &errors_av
       )) {
     outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
-    outcome->data_sv = (SV *)data_hv;
+    outcome->object_hv = data_hv;
     outcome->errors_av = errors_av;
     return 1;
   }
@@ -7080,7 +7082,7 @@ gql_execution_execute_fields_sync_native_outcome(
 
   if (gql_execution_extract_completed_outcome(aTHX_ ret, &data_sv, &errors_av)) {
     outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE;
-    outcome->data_sv = data_sv;
+    outcome->value_sv = data_sv;
     outcome->errors_av = errors_av;
     (void)gql_execution_sync_outcome_try_normalize_direct_object_hv(aTHX_ outcome);
     SvREFCNT_dec(ret);
@@ -7329,7 +7331,7 @@ gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outco
         goto list_fallback;
       }
       item_outcome.kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
-      item_outcome.data_sv = (SV *)child_outcome.data_hv;
+      item_outcome.object_hv = child_outcome.data_hv;
       item_outcome.errors_av = child_outcome.errors_av;
     } else if (item_abstract_child_plan_table) {
       if (!gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_outcome_with_table(
@@ -7398,10 +7400,10 @@ gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outco
         goto list_fallback;
       }
     } else {
-      SV *item_data_sv = item_outcome.data_sv;
+      SV *item_data_sv = item_outcome.value_sv;
       AV *item_errors_av = item_outcome.errors_av;
       if (item_outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV) {
-        item_data_sv = item_data_sv ? newRV_noinc(item_data_sv) : newSV(0);
+        item_data_sv = item_outcome.object_hv ? newRV_noinc((SV *)item_outcome.object_hv) : newSV(0);
       }
       av_fill(data_av, i);
       (void)av_store(data_av, i, item_data_sv ? item_data_sv : newSV(0));
@@ -7430,7 +7432,7 @@ gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outco
   }
 
   outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE;
-  outcome->data_sv = newRV_noinc((SV *)data_av);
+  outcome->value_sv = newRV_noinc((SV *)data_av);
   outcome->errors_av = all_errors_av;
   data_av = NULL;
   all_errors_av = NULL;
@@ -7593,7 +7595,7 @@ gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outco
     SvREFCNT_dec((SV *)pending_indexes_av);
     SvREFCNT_dec((SV *)pending_values_av);
     outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE;
-    outcome->data_sv = newRV_noinc((SV *)data_av);
+    outcome->value_sv = newRV_noinc((SV *)data_av);
     outcome->errors_av = errors_av;
     return 1;
   }

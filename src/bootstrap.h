@@ -279,7 +279,8 @@ typedef enum {
 
 struct gql_execution_sync_outcome {
   gql_execution_sync_outcome_kind_t kind;
-  SV *data_sv;
+  SV *value_sv;
+  HV *object_hv;
   AV *errors_av;
   SV *completed_sv;
 };

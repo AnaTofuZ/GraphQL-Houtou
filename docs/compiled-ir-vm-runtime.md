@@ -1655,3 +1655,37 @@ This is acceptable as an ownership checkpoint:
 - `abstract` remains close but behind, reinforcing the current plan to keep
   widening the execution-owned `ABSTRACT -> OBJECT` corridor instead of adding
   new compiled-ir-local shortcuts
+
+Another healthy checkpoint comes from simplifying the execution-owned sync
+outcome payload itself:
+
+- `gql_execution_sync_outcome_t` now separates
+  - `value_sv`
+  - `object_hv`
+  - `errors_av`
+  - `completed_sv`
+  instead of overloading one payload slot for both wrapped values and raw
+  object heads
+- this keeps the execution-owned family corridor closer to the real runtime
+  shapes used by compiled IR
+- `ir_execution.h` can now move object-vs-value outcomes into field frames
+  explicitly, with less normalization/export ambiguity
+
+Checkpoint benchmark after the sync outcome payload split (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 77118/s`
+  - `houtou_xs_ast 75178/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57628/s`
+  - `houtou_xs_ast 54807/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41417/s`
+  - `houtou_xs_ast 41487/s`
+
+This is the right kind of result for the current stage:
+
+- `nested` and `list` both benefit from the cleaner family-owned payload model
+- `abstract` reaches practical parity
+- the next gains should come from widening the `ABSTRACT -> OBJECT` corridor
+  itself, not from more payload-slot micro-optimizations

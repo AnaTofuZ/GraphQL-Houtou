@@ -3065,3 +3065,44 @@ Interpretation:
   ownership model we actually want: widening should continue inside the
   execution-owned abstract/object family corridor rather than in IR-local
   duplicated logic
+
+Checkpoint after splitting sync outcome payloads by shape:
+
+- `gql_execution_sync_outcome_t` no longer overloads one payload slot for both
+  plain direct values and raw object heads
+- the execution-owned family corridor now keeps:
+  - `value_sv` for direct scalar/list-like values
+  - `object_hv` for raw object heads
+  - `errors_av`
+  - `completed_sv`
+- `ir_execution.h` consumes these payloads explicitly when moving outcomes into
+  field frames, which removes one layer of shape ambiguity between execution
+  families and the compiled-ir runtime
+
+Verification status for this checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Checkpoint benchmark after the sync outcome payload split (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 77118/s`
+  - `houtou_xs_ast 75178/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57628/s`
+  - `houtou_xs_ast 54807/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41417/s`
+  - `houtou_xs_ast 41487/s`
+
+Interpretation:
+
+- `nested` and `list` both move in the right direction with the cleaner
+  execution-owned payload shape
+- `abstract` reaches practical parity, which is a stronger signal than the
+  earlier lookup-shaving experiments because the gain comes from simplifying
+  the family-owned corridor itself
+- the next wins should keep focusing on reducing generic fallback frequency
+  inside the execution-owned `ABSTRACT -> OBJECT` path, not on adding more
+  tiny lookup shortcuts

@@ -660,16 +660,16 @@ gql_ir_sync_outcome_move_to_frame(
   switch (outcome->kind) {
     case GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV:
       frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV;
-      frame->outcome_sv = outcome->data_sv;
+      frame->outcome_sv = (SV *)outcome->object_hv;
       frame->outcome_errors_av = outcome->errors_av;
-      outcome->data_sv = NULL;
+      outcome->object_hv = NULL;
       outcome->errors_av = NULL;
       break;
     case GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE:
       frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
-      frame->outcome_sv = outcome->data_sv;
+      frame->outcome_sv = outcome->value_sv;
       frame->outcome_errors_av = outcome->errors_av;
-      outcome->data_sv = NULL;
+      outcome->value_sv = NULL;
       outcome->errors_av = NULL;
       break;
     case GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV:
@@ -1653,13 +1653,13 @@ gql_ir_try_complete_sync_list_into_outcome(
             &item_sync_outcome
           )) {
         if (item_sync_outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV) {
-          item_data_sv = item_sync_outcome.data_sv ? newRV_noinc(item_sync_outcome.data_sv) : newSV(0);
-          item_sync_outcome.data_sv = NULL;
+          item_data_sv = item_sync_outcome.object_hv ? newRV_noinc((SV *)item_sync_outcome.object_hv) : newSV(0);
+          item_sync_outcome.object_hv = NULL;
           item_errors_av = item_sync_outcome.errors_av;
           item_sync_outcome.errors_av = NULL;
         } else if (item_sync_outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE) {
-          item_data_sv = item_sync_outcome.data_sv;
-          item_sync_outcome.data_sv = NULL;
+          item_data_sv = item_sync_outcome.value_sv;
+          item_sync_outcome.value_sv = NULL;
           item_errors_av = item_sync_outcome.errors_av;
           item_sync_outcome.errors_av = NULL;
         } else if (item_sync_outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV) {
@@ -1881,14 +1881,14 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
       )) {
     if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE) {
       frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
-      frame->outcome_sv = outcome.data_sv;
+      frame->outcome_sv = outcome.value_sv;
       frame->outcome_errors_av = outcome.errors_av;
       gql_execution_sync_outcome_reset(&outcome);
       return 1;
     }
     if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV) {
       frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV;
-      frame->outcome_sv = outcome.data_sv;
+      frame->outcome_sv = (SV *)outcome.object_hv;
       frame->outcome_errors_av = outcome.errors_av;
       gql_execution_sync_outcome_reset(&outcome);
       return 1;
@@ -2018,14 +2018,14 @@ gql_ir_native_field_complete_family_fallback_result(
 
     if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE) {
       frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
-      frame->outcome_sv = outcome.data_sv;
+      frame->outcome_sv = outcome.value_sv;
       frame->outcome_errors_av = outcome.errors_av;
       gql_execution_sync_outcome_reset(&outcome);
       return 1;
     }
     if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV) {
       frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV;
-      frame->outcome_sv = outcome.data_sv;
+      frame->outcome_sv = (SV *)outcome.object_hv;
       frame->outcome_errors_av = outcome.errors_av;
       gql_execution_sync_outcome_reset(&outcome);
       return 1;

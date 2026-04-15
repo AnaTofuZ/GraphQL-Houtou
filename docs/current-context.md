@@ -2952,3 +2952,41 @@ Interpretation:
 - `list` now clearly edges ahead
 - `abstract` remains slightly behind, but the corridor ownership is more
   complete and the family-local fallback is now doing useful work
+
+Checkpoint after routing lowered-table hits directly into the known-object
+corridor:
+
+- when `ABSTRACT -> OBJECT` has a lowered abstract child-plan table hit,
+  execution now enters the known-object family corridor before running
+  `possible_type_match`
+- this treats the lowered table as proof that the runtime object can use the
+  object family contract, instead of paying the generic possible-type path
+  first
+- the change keeps the win localized to the execution-owned abstract/object
+  corridor rather than adding more generic helper detours
+
+Verification status for this checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Checkpoint benchmark after the lowered-table known-object shortcut
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79082/s`
+  - `houtou_xs_ast 76557/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58906/s`
+  - `houtou_xs_ast 57628/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41777/s`
+  - `houtou_xs_ast 41777/s`
+
+Interpretation:
+
+- `nested` stays clearly ahead
+- `list` remains ahead
+- `abstract` returns to parity, which is a better signal than the earlier
+  lookup-only micro-opts because this change widens the execution-owned
+  corridor instead of just shuffling secondary work

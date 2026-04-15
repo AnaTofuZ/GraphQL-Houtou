@@ -1567,3 +1567,37 @@ So this checkpoint remains structurally healthy:
 - `list` now clearly edges ahead
 - `abstract` is still slightly behind, but the execution-owned abstract
   corridor is more complete and now owns useful default-resolution work too
+
+The next checkpoint keeps working inside that same family-owned corridor,
+but moves one more hot success case away from the generic possible-type path:
+
+- if the lowered abstract child-plan table already has an entry for the
+  runtime object, execution now routes straight into the known-object family
+  corridor
+- the table hit is treated as enough proof to enter the object-family path,
+  instead of first paying `possible_type_match_simple(...)`
+- this is intentionally a corridor-widening change, not a narrow lookup
+  micro-opt: the goal is to reduce how often abstract completion leaves the
+  execution-owned family path
+
+Checkpoint benchmark after the lowered-table known-object shortcut
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79082/s`
+  - `houtou_xs_ast 76557/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58906/s`
+  - `houtou_xs_ast 57628/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41777/s`
+  - `houtou_xs_ast 41777/s`
+
+This is a healthier result than the earlier "remove one extra lookup" style
+experiments:
+
+- `nested` and `list` stay ahead
+- `abstract` returns to parity
+- the improvement comes from widening the family-owned `ABSTRACT -> OBJECT`
+  corridor, which aligns with the long-term VM/runtime plan better than
+  secondary lookup shaving

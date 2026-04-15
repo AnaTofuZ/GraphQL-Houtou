@@ -7922,10 +7922,6 @@ gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_nativ
 ) {
   HV *context_hv;
   SV **schema_svp;
-  int possible_ok = 0;
-  int possible_match = 0;
-  SV *condition_name_sv = NULL;
-  SV *runtime_name_sv = NULL;
   gql_ir_compiled_root_field_plan_t *native_field_plan = NULL;
 
   if (!context
@@ -7937,15 +7933,41 @@ gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_nativ
     return 0;
   }
 
-  context_hv = (SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV)
-    ? (HV *)SvRV(context)
-    : NULL;
-  schema_svp = context_hv ? hv_fetch(context_hv, "schema", 6, 0) : NULL;
-  if (!schema_svp || !SvROK(*schema_svp) || SvTYPE(SvRV(*schema_svp)) != SVt_PVHV) {
-    return 0;
+  if (abstract_child_plan_table) {
+    native_field_plan = gql_execution_lookup_lowered_abstract_child_native_field_plan(
+      aTHX_ abstract_child_plan_table,
+      runtime_type
+    );
+    if (native_field_plan) {
+      return gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_native_outcome(
+        aTHX_
+        context,
+        parent_type,
+        field_def,
+        runtime_type,
+        nodes,
+        lazy_info,
+        result,
+        native_field_plan,
+        outcome
+      );
+    }
   }
 
   if (!runtime_type_verified) {
+    int possible_ok = 0;
+    int possible_match = 0;
+    SV *condition_name_sv = NULL;
+    SV *runtime_name_sv = NULL;
+
+    context_hv = (SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV)
+      ? (HV *)SvRV(context)
+      : NULL;
+    schema_svp = context_hv ? hv_fetch(context_hv, "schema", 6, 0) : NULL;
+    if (!schema_svp || !SvROK(*schema_svp) || SvTYPE(SvRV(*schema_svp)) != SVt_PVHV) {
+      return 0;
+    }
+
     condition_name_sv = gql_execution_type_name_sv(aTHX_ declared_return_type);
     runtime_name_sv = gql_execution_type_name_sv(aTHX_ runtime_type);
     possible_match = gql_execution_possible_type_match_simple(
@@ -7965,13 +7987,6 @@ gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_nativ
       return 0;
     }
   }
-
-  native_field_plan = abstract_child_plan_table
-    ? gql_execution_lookup_lowered_abstract_child_native_field_plan(
-        aTHX_ abstract_child_plan_table,
-        runtime_type
-      )
-    : NULL;
 
   return gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_native_outcome(
     aTHX_

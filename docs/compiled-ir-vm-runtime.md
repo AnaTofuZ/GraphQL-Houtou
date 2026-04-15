@@ -85,43 +85,31 @@ template engine or SQL VM, but because they all separate:
 
 Latest kept runtime checkpoint on `proj/compiled-ir-vm-runtime`:
 
-- sync outcomes are now fully family-owned on the execution side:
-  - object/list/abstract families all build `gql_execution_sync_outcome_t`
-    inside `execution.h`
-  - `ir_execution.h` now mostly orchestrates frames, writer consumption, and
-    lowered plan traversal
-- object family ownership has been widened further:
-  - exact native child-plan hits can keep raw object `HV*` until writer
-    consumption
-  - plain object completion now uses the same object-family contract instead
-    of its own duplicated branch in generic completion
-  - object family fallbacks no longer recurse through the generic object
-    branch; they own a non-recursive fallback implementation directly
-- list family ownership has now been widened in the same way:
-  - plain list completion also routes through the list-family contract
-  - list-family fallbacks no longer recurse through the generic list branch
-    and instead own their own non-recursive fallback implementation
-- abstract family ownership remains widened:
-  - lowered abstract child-plan hit:
-    go directly to the known-object object-family path with the exact native
-    child plan
-  - lowered miss but `possible_type_match` success:
-    go through a head-first known-object object-family path before attempting
-    exact concrete child-plan recollection
-  - verified runtime-object handling is also shared with the no-`resolve_type`
-    `possible_types + is_type_of` path
+- `OBJECT`, `LIST`, and `ABSTRACT` all already own their sync outcome
+  contracts inside `execution.h`
+- together with the earlier kept checkpoints:
+  - `7f25ce2` routes lowered abstract child-plan hits into the object corridor
+  - `64c1484` reuses collected known-object subfields across head-fast and
+    fallback paths
+- the newest widening keeps object-family fallback inside sync-head shape for
+  longer:
+  - `gql_execution_execute_fields_sync_native_outcome(...)` now tries
+    `gql_execution_execute_fields_sync_head(...)` first
+  - only if that fails does it rebuild a completed envelope through the older
+    `execute_fields(...)` + extraction path
 - checkpoint benchmark (`--count=-3`):
-  - `nested_variable_object`: `houtou_compiled_ir 77291/s`
-  - `list_of_objects`: `houtou_compiled_ir 57803/s`
-  - `abstract_with_fragment`: `houtou_compiled_ir 40706/s`
+  - `nested_variable_object`: `houtou_compiled_ir 81023/s`
+  - `list_of_objects`: `houtou_compiled_ir 59935/s`
+  - `abstract_with_fragment`: `houtou_compiled_ir 41818/s`
 - interpretation:
-  - object/list-heavy paths remain healthy after moving both plain object and
-    plain list completion behind family-owned contracts
-  - abstract also remains healthy in this checkpoint and benefits from the
-    cleaner object-family contract it hands off into
-  - further wins should come from widening family-owned completion corridors
-    and shrinking generic fallback frequency, not from `resolve_type`
-    micro-optimizations
+  - keeping known-object fallback inside the sync-head loop is a clean win for
+    object/list-heavy paths
+  - `abstract_with_fragment` still trails, which suggests the remaining cost
+    is not the outer object/list family boundary but the inner
+    `ABSTRACT -> OBJECT` corridor and the number of times it still exits to
+    generic completion
+  - secondary lookup shaving remains lower priority than further ownership
+    widening inside execution-side family APIs
 
 ## Target Architecture
 

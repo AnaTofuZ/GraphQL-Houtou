@@ -86,33 +86,32 @@ Hot-path interpretation:
 
 - branch: `proj/compiled-ir-vm-runtime`
 - latest kept checkpoint:
-  - `365066a` and `403ec14` moved sync outcomes behind execution-side
-    family-owned APIs
-  - `bf959d3` carried raw object `HV*` through those family APIs so object
-    success paths can delay `RV` materialization
-  - `f0c09b1`, `305f2f4`, and `3c64710` widened abstract runtime-object
-    ownership and shared it with generic execution
-  - the latest batch makes plain object completion use the same object-family
-    contract and plain list completion use the same list-family contract;
-    both now rely on family-owned non-recursive fallback implementations
+  - `7f25ce2` routes lowered abstract child-plan hits into the object corridor
+    before generic fallback
+  - `64c1484` reuses collected known-object subfields across object-family
+    head-fast and fallback paths
+  - the newest batch makes `known object fallback -> execute_fields ->
+    completed envelope -> extract` try `execute_fields_sync_head(...)` first,
+    so object-family corridors can stay in native sync outcome form longer
 - validation:
   - `minil test t/11_execution.t`
   - `minil test t/12_promise.t`
 - benchmark (`--count=-3`):
   - `nested_variable_object`
-    - `houtou_compiled_ir 77291/s`
-    - `houtou_xs_ast 74475/s`
+    - `houtou_compiled_ir 81023/s`
+    - `houtou_xs_ast 77456/s`
   - `list_of_objects`
-    - `houtou_compiled_ir 57803/s`
-    - `houtou_xs_ast 56581/s`
+    - `houtou_compiled_ir 59935/s`
+    - `houtou_xs_ast 59458/s`
   - `abstract_with_fragment`
-    - `houtou_compiled_ir 40706/s`
-    - `houtou_xs_ast 39442/s`
+    - `houtou_compiled_ir 41818/s`
+    - `houtou_xs_ast 42848/s`
 - reading:
-  - plain object and plain list completion now both run through family-owned
-    contracts instead of duplicating generic branches
-  - `nested`, `list`, and `abstract` all remain in a healthy range, with
-    `compiled_ir` slightly ahead in this checkpoint
+  - `nested` and `list` both improved after letting known-object fallback try
+    the sync-head loop before rebuilding a completed envelope
+  - `abstract_with_fragment` remains the laggard, which reinforces that the
+    remaining cost sits inside the `ABSTRACT -> OBJECT` corridor rather than
+    in the outer family-owned object/list boundaries
   - the next win should still come from widening execution-side family
     corridors and shrinking generic fallback frequency, not from `resolve_type`
     micro-optimizations

@@ -7043,15 +7043,32 @@ gql_execution_execute_fields_sync_native_outcome(
   SV *subfields,
   gql_execution_sync_outcome_t *outcome
 ) {
+  HV *data_hv = NULL;
+  AV *errors_av = NULL;
   SV *ret;
   SV *data_sv = NULL;
-  AV *errors_av = NULL;
 
   if (!context || !runtime_type || !path_sv || !subfields || !outcome) {
     return 0;
   }
 
   gql_execution_sync_outcome_reset(outcome);
+  if (gql_execution_execute_fields_sync_head(
+        aTHX_
+        context,
+        runtime_type,
+        result,
+        path_sv,
+        subfields,
+        &data_hv,
+        &errors_av
+      )) {
+    outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
+    outcome->data_sv = (SV *)data_hv;
+    outcome->errors_av = errors_av;
+    return 1;
+  }
+
   ret = gql_execution_execute_fields(
     aTHX_
     context,

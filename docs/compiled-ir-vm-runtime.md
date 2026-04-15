@@ -1526,3 +1526,44 @@ So this checkpoint is still structurally healthy:
 - `abstract` stays close but still slightly behind, which means the next wins
   should still come from widening the execution-owned abstract/object
   corridor rather than from more generic dispatcher cleanup
+
+The next checkpoint extends that same execution-owned abstract corridor with a
+default path behind lowered abstract child-plan tables:
+
+- the abstract family now has an internal `...no_direct_data_with_table(...)`
+  path
+- if `resolve_type` does not yield a usable runtime type, but a lowered table
+  exists, execution can now try `possible_types + is_type_of` inside the same
+  abstract family contract
+- successful `is_type_of` matches flow directly into the verified runtime
+  object corridor instead of immediately dropping to the generic fallback-only
+  path
+
+This is useful for the VM/runtime direction because:
+
+- it removes another reason for abstract execution to escape back to generic
+  completion too early
+- it keeps both `resolve_type` and default abstract resolution inside one
+  execution-owned family corridor
+- it makes the abstract family contract more self-contained, which is closer
+  to the eventual completion-op family model
+
+Checkpoint benchmark after the lowered-table default abstract corridor
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 78946/s`
+  - `houtou_xs_ast 77140/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 59079/s`
+  - `houtou_xs_ast 57625/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41738/s`
+  - `houtou_xs_ast 42202/s`
+
+So this checkpoint remains structurally healthy:
+
+- `nested` improves again
+- `list` now clearly edges ahead
+- `abstract` is still slightly behind, but the execution-owned abstract
+  corridor is more complete and now owns useful default-resolution work too

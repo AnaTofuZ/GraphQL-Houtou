@@ -2916,3 +2916,39 @@ Interpretation:
 - `abstract` is still close but slightly behind, so the next wins are still
   more likely to come from widening the abstract/object family corridor than
   from more generic dispatch cleanup
+
+Checkpoint after adding a default abstract corridor behind lowered tables:
+
+- `ABSTRACT` family no-direct-data execution now has an internal
+  `with_table(...)` path
+- when a lowered abstract child-plan table exists and `resolve_type` does not
+  produce a usable runtime type, execution can now try
+  `possible_types + is_type_of` inside the execution-owned abstract corridor
+- successful `is_type_of` hits now flow straight into the verified runtime
+  object corridor instead of immediately dropping to the generic fallback-only
+  path
+
+Verification status for this checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Checkpoint benchmark after the lowered-table default abstract corridor
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 78946/s`
+  - `houtou_xs_ast 77140/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 59079/s`
+  - `houtou_xs_ast 57625/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41738/s`
+  - `houtou_xs_ast 42202/s`
+
+Interpretation:
+
+- `nested` improves again
+- `list` now clearly edges ahead
+- `abstract` remains slightly behind, but the corridor ownership is more
+  complete and the family-local fallback is now doing useful work

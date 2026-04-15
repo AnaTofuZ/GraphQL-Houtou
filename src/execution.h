@@ -261,6 +261,20 @@ static int gql_execution_complete_abstract_verified_runtime_object_catching_erro
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
   gql_execution_sync_outcome_t *outcome
 );
+static int gql_execution_complete_abstract_known_runtime_object_catching_error_xs_lazy_sync_native_outcome(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *declared_return_type,
+  SV *runtime_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
+  gql_ir_compiled_root_field_plan_t *known_native_field_plan,
+  int runtime_type_verified,
+  gql_execution_sync_outcome_t *outcome
+);
 static int gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_native_outcome_impl(
   pTHX_ SV *context,
   SV *parent_type,
@@ -7981,16 +7995,19 @@ gql_execution_try_complete_abstract_possible_types_sync_native_outcome(
 
     if (SvTRUE(type_match)) {
       SvREFCNT_dec(type_match);
-      return gql_execution_complete_abstract_verified_runtime_object_catching_error_xs_lazy_sync_native_outcome(
+      return gql_execution_complete_abstract_known_runtime_object_catching_error_xs_lazy_sync_native_outcome(
         aTHX_
         context,
         parent_type,
         field_def,
         entry->possible_type_sv,
+        entry->possible_type_sv,
         nodes,
         lazy_info,
         result,
         abstract_child_plan_table,
+        entry->native_field_plan,
+        1,
         outcome
       );
     }
@@ -8064,66 +8081,20 @@ gql_execution_try_complete_abstract_runtime_type_or_name_sync_native_outcome(
       aTHX_ abstract_child_plan_table,
       runtime_type
     );
-    if (native_field_plan) {
-      return gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_known_plan(
-        aTHX_
-        context,
-        parent_type,
-        field_def,
-        runtime_type,
-        nodes,
-        lazy_info,
-        result,
-        native_field_plan,
-        outcome
-      );
-    }
   }
-
-  {
-    int possible_ok = 0;
-    int possible_match = 0;
-    SV *condition_name_sv;
-    SV *runtime_name_sv;
-
-    context_hv = (SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV)
-      ? (HV *)SvRV(context)
-      : NULL;
-    schema_svp = context_hv ? hv_fetch(context_hv, "schema", 6, 0) : NULL;
-    if (!schema_svp || !SvROK(*schema_svp) || SvTYPE(SvRV(*schema_svp)) != SVt_PVHV) {
-      return 0;
-    }
-
-    condition_name_sv = gql_execution_type_name_sv(aTHX_ declared_return_type);
-    runtime_name_sv = gql_execution_type_name_sv(aTHX_ runtime_type);
-    possible_match = gql_execution_possible_type_match_simple(
-      aTHX_
-      context,
-      *schema_svp,
-      declared_return_type,
-      condition_name_sv,
-      runtime_type,
-      runtime_name_sv,
-      &possible_ok
-    );
-    SvREFCNT_dec(runtime_name_sv);
-    SvREFCNT_dec(condition_name_sv);
-
-    if (!possible_ok || !possible_match) {
-      return 0;
-    }
-  }
-
-  return gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_native_outcome(
+  return gql_execution_complete_abstract_known_runtime_object_catching_error_xs_lazy_sync_native_outcome(
     aTHX_
     context,
     parent_type,
     field_def,
+    declared_return_type,
     runtime_type,
     nodes,
     lazy_info,
     result,
+    abstract_child_plan_table,
     native_field_plan,
+    0,
     outcome
   );
 }
@@ -8141,7 +8112,7 @@ gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_nativ
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
   gql_execution_sync_outcome_t *outcome
 ) {
-  return gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_native_outcome_impl(
+  return gql_execution_complete_abstract_known_runtime_object_catching_error_xs_lazy_sync_native_outcome(
     aTHX_
     context,
     parent_type,
@@ -8152,13 +8123,14 @@ gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_nativ
     lazy_info,
     result,
     abstract_child_plan_table,
-    outcome,
-    0
+    NULL,
+    0,
+    outcome
   );
 }
 
 static int
-gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_native_outcome_impl(
+gql_execution_complete_abstract_known_runtime_object_catching_error_xs_lazy_sync_native_outcome(
   pTHX_ SV *context,
   SV *parent_type,
   SV *field_def,
@@ -8168,12 +8140,13 @@ gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_nativ
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result,
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
-  gql_execution_sync_outcome_t *outcome,
-  int runtime_type_verified
+  gql_ir_compiled_root_field_plan_t *known_native_field_plan,
+  int runtime_type_verified,
+  gql_execution_sync_outcome_t *outcome
 ) {
   HV *context_hv;
   SV **schema_svp;
-  gql_ir_compiled_root_field_plan_t *native_field_plan = NULL;
+  gql_ir_compiled_root_field_plan_t *native_field_plan = known_native_field_plan;
 
   if (!context
       || !declared_return_type
@@ -8184,7 +8157,7 @@ gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_nativ
     return 0;
   }
 
-  if (abstract_child_plan_table) {
+  if (!native_field_plan && abstract_child_plan_table) {
     native_field_plan = gql_execution_lookup_lowered_abstract_child_native_field_plan(
       aTHX_ abstract_child_plan_table,
       runtime_type
@@ -8265,7 +8238,7 @@ gql_execution_complete_abstract_verified_runtime_object_catching_error_xs_lazy_s
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
   gql_execution_sync_outcome_t *outcome
 ) {
-  return gql_execution_complete_abstract_runtime_object_catching_error_xs_lazy_sync_native_outcome_impl(
+  return gql_execution_complete_abstract_known_runtime_object_catching_error_xs_lazy_sync_native_outcome(
     aTHX_
     context,
     parent_type,
@@ -8276,8 +8249,9 @@ gql_execution_complete_abstract_verified_runtime_object_catching_error_xs_lazy_s
     lazy_info,
     result,
     abstract_child_plan_table,
-    outcome,
-    1
+    NULL,
+    1,
+    outcome
   );
 }
 

@@ -3177,3 +3177,39 @@ This is acceptable for the current stage:
 - `abstract` reaches parity, which is a stronger signal than the earlier
   lookup-only experiments because it comes from reducing generic corridor
   selection rather than shaving a single lookup
+
+Another healthy checkpoint comes from unifying the verified-runtime-object and
+runtime-type-or-name branches behind one execution-owned abstract/object
+corridor:
+
+- both `resolve_type -> runtime_type_or_name` and
+  `possible_types + is_type_of -> verified runtime object` now enter the same
+  helper that owns:
+  - lowered abstract child-plan lookup
+  - optional possible-type validation
+  - known-plan / known-object completion handoff
+- the `possible_types` path can pass the entry-owned native child plan directly
+  into that corridor, so abstract ownership no longer forks on the verified vs
+  unverified runtime-object distinction
+
+Checkpoint benchmark after unifying the abstract known-runtime-object corridor
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80129/s`
+  - `houtou_xs_ast 78736/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57288/s`
+  - `houtou_xs_ast 57597/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41647/s`
+  - `houtou_xs_ast 42040/s`
+
+Interpretation:
+
+- `nested` moves further ahead, which is consistent with corridor ownership
+  becoming simpler and more direct
+- `list` stays essentially in the same range, so the abstract-side ownership
+  cleanup is not harming the broader sync runtime
+- `abstract` is still slightly behind, but the gap remains small and the
+  corridor is now much easier to widen from one execution-owned helper

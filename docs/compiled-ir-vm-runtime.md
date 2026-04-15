@@ -1754,3 +1754,42 @@ This confirms the design direction:
 - `abstract` reaches parity without adding new lookup-oriented shortcuts,
   which reinforces the current strategy of reducing generic corridor selection
   instead of shaving individual lookups
+
+Another healthy checkpoint comes from unifying the abstract known-runtime-object
+corridor:
+
+- both
+  - `resolve_type -> runtime_type_or_name`
+  - `possible_types + is_type_of -> verified runtime object`
+  now enter the same execution-owned helper
+- that helper owns:
+  - lowered abstract child-plan lookup
+  - optional possible-type validation
+  - known-plan handoff
+  - known-object corridor fallback
+- this means the abstract family no longer has separate verified/unverified
+  runtime-object wrapper layers, which keeps widening work concentrated in one
+  corridor instead of two similar code paths
+
+Checkpoint benchmark after unifying the abstract known-runtime-object corridor
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80129/s`
+  - `houtou_xs_ast 78736/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57288/s`
+  - `houtou_xs_ast 57597/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41647/s`
+  - `houtou_xs_ast 42040/s`
+
+This is a good ownership checkpoint:
+
+- `nested` improves, which matches the expectation that simpler runtime
+  corridors help object-heavy paths first
+- `list` remains near parity, so abstract corridor unification is not
+  destabilizing the wider sync completion families
+- `abstract` is still slightly behind, but the remaining work is now clearly
+  about widening one execution-owned corridor rather than juggling multiple
+  wrapper variants

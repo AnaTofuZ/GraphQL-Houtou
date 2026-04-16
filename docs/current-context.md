@@ -3312,3 +3312,35 @@ Interpretation:
   paying off beyond the exact known-plan path
 - `abstract` finally edges ahead again, which is the strongest sign so far
   that widening the execution-owned `ABSTRACT -> OBJECT` corridor is working
+
+Another healthy checkpoint comes from letting the lowered abstract child-plan
+table own possible-type names as well as possible-type objects:
+
+- each lowered abstract entry now stores both
+  - `possible_type_sv`
+  - `possible_type_name_sv`
+- when `resolve_type` returns a concrete type *name* such as `"User"`, the
+  abstract corridor can now resolve that name directly through the lowered
+  table instead of going through schema `name2type` lookup first
+- this keeps the hot `resolve_type -> known runtime object -> known object`
+  corridor inside execution-owned data that compiled_ir already carries
+
+Checkpoint benchmark after adding lowered abstract name lookup (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 81704/s`
+  - `houtou_xs_ast 79130/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 59024/s`
+  - `houtou_xs_ast 58565/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41953/s`
+  - `houtou_xs_ast 42440/s`
+
+Interpretation:
+
+- `nested` moves further ahead, so the broader object corridor remains healthy
+- `list` also stays ahead, which means the lowered-table name ownership is not
+  destabilizing other completion families
+- `abstract` gains back some of the remaining gap without touching the Perl
+  callback itself, which is exactly the intended strategy for this target

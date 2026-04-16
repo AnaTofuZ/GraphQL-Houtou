@@ -4296,6 +4296,9 @@ gql_ir_lowered_abstract_child_plan_table_clone(
     if (src->possible_type_sv) {
       dst->possible_type_sv = gql_execution_share_or_copy_sv(src->possible_type_sv);
     }
+    if (src->possible_type_name_sv) {
+      dst->possible_type_name_sv = gql_execution_share_or_copy_sv(src->possible_type_name_sv);
+    }
     if (src->native_field_plan) {
       dst->native_field_plan = gql_ir_compiled_root_field_plan_clone(aTHX_ src->native_field_plan);
     }
@@ -4342,6 +4345,7 @@ gql_ir_lowered_abstract_child_plan_table_from_concrete_table(
 
     dst = &lowered->entries[count++];
     dst->possible_type_sv = gql_execution_share_or_copy_sv(entry->possible_type_sv);
+    dst->possible_type_name_sv = gql_execution_type_name_sv(aTHX_ entry->possible_type_sv);
     dst->native_field_plan = gql_ir_compiled_root_field_plan_clone(aTHX_ entry->native_field_plan);
   }
 
@@ -4362,6 +4366,10 @@ gql_ir_lowered_abstract_child_plan_table_destroy(gql_ir_lowered_abstract_child_p
       if (entry->possible_type_sv) {
         SvREFCNT_dec(entry->possible_type_sv);
         entry->possible_type_sv = NULL;
+      }
+      if (entry->possible_type_name_sv) {
+        SvREFCNT_dec(entry->possible_type_name_sv);
+        entry->possible_type_name_sv = NULL;
       }
       if (entry->native_field_plan) {
         gql_ir_compiled_root_field_plan_destroy(entry->native_field_plan);

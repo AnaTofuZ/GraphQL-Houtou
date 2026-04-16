@@ -1892,3 +1892,36 @@ This is a healthy checkpoint:
 - `abstract` edges ahead again, reinforcing the strategy of widening the
   execution-owned `ABSTRACT -> OBJECT` corridor instead of chasing callback
   micro-optimizations
+
+Another healthy checkpoint comes from letting the lowered abstract child-plan
+table own possible-type names as well as possible-type objects:
+
+- each lowered abstract entry now stores both
+  - `possible_type_sv`
+  - `possible_type_name_sv`
+- when `resolve_type` returns a concrete type *name* such as `"User"`, the
+  abstract corridor can now resolve that name directly through the lowered
+  table instead of bouncing through schema `name2type` first
+- this keeps more of the hot `resolve_type -> known runtime object -> known
+  object` corridor inside execution-owned lowered data
+
+Checkpoint benchmark after adding lowered abstract name lookup (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 81704/s`
+  - `houtou_xs_ast 79130/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 59024/s`
+  - `houtou_xs_ast 58565/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41953/s`
+  - `houtou_xs_ast 42440/s`
+
+This is another healthy checkpoint:
+
+- `nested` improves further, so the broader object corridor is still moving in
+  the right direction
+- `list` remains ahead, which means the extra lowered-table metadata is not
+  destabilizing the list family
+- `abstract` closes more of the remaining gap without touching the Perl
+  callback itself, which is exactly the right kind of progress for this target

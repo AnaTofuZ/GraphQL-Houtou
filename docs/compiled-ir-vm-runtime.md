@@ -1925,3 +1925,22 @@ This is another healthy checkpoint:
   destabilizing the list family
 - `abstract` closes more of the remaining gap without touching the Perl
   callback itself, which is exactly the right kind of progress for this target
+
+The next structural checkpoint then backs out a weak table-local cache tweak
+and instead makes abstract runtime state explicit:
+
+- the extra lowered-table `cached_entry` pointer was removed after repeat
+  checkpoint evaluation showed no clear win
+- `ABSTRACT` family now carries a single
+  `gql_execution_abstract_runtime_resolution_t`
+  through
+  - `resolve_type -> runtime_type_or_name`
+  - `possible_types + is_type_of`
+  - verified/unverified runtime-object completion
+- this keeps widening work focused on one execution-owned state shape instead
+  of several helper-specific wrappers
+
+Verification status for this abstract-resolution-state checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`

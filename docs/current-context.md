@@ -3348,3 +3348,21 @@ Interpretation:
   destabilizing other completion families
 - `abstract` gains back some of the remaining gap without touching the Perl
   callback itself, which is exactly the intended strategy for this target
+
+Follow-up after discarding the weak `cached_entry` table tweak and moving
+abstract runtime state into a single native resolution struct:
+
+- the lowered abstract table no longer carries an extra `cached_entry` pointer;
+  the repeat checkpoint did not justify keeping it
+- `ABSTRACT` family now threads a single
+  `gql_execution_abstract_runtime_resolution_t` through
+  - `resolve_type -> runtime_type_or_name`
+  - `possible_types + is_type_of`
+  - verified/unverified runtime object corridors
+- this means future widening work can target one execution-owned state shape
+  instead of separate verified/unverified wrappers
+
+Verification status for this abstract-resolution-state checkpoint:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`

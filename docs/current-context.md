@@ -3213,3 +3213,39 @@ Interpretation:
   cleanup is not harming the broader sync runtime
 - `abstract` is still slightly behind, but the gap remains small and the
   corridor is now much easier to widen from one execution-owned helper
+
+Another healthy checkpoint comes from collapsing the abstract verified and
+unverified runtime-object branches into one execution-owned corridor:
+
+- both
+  - `resolve_type -> runtime_type_or_name`
+  - `possible_types + is_type_of -> verified runtime object`
+  now enter the same `known runtime object` helper
+- that helper owns:
+  - lowered abstract child-plan lookup
+  - optional possible-type validation
+  - known-plan handoff
+  - known-object corridor fallback
+- this removes one more layer of verified/unverified wrapper indirection from
+  the abstract family without reintroducing generic branch selection
+
+Checkpoint benchmark after unifying the abstract known-runtime-object helper
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 82779/s`
+  - `houtou_xs_ast 79576/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58659/s`
+  - `houtou_xs_ast 58151/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 40714/s`
+  - `houtou_xs_ast 42073/s`
+
+Interpretation:
+
+- `nested` strengthens further, which is exactly where corridor simplification
+  tends to pay off first
+- `list` stays in a healthy range and slightly ahead in this run
+- `abstract` still trails, so the next work should stay focused on widening
+  the object-family fallback that this unified helper now feeds

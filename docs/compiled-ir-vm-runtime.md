@@ -1793,3 +1793,38 @@ This is a good ownership checkpoint:
 - `abstract` is still slightly behind, but the remaining work is now clearly
   about widening one execution-owned corridor rather than juggling multiple
   wrapper variants
+
+Another healthy checkpoint comes from collapsing the abstract verified and
+unverified runtime-object branches into one execution-owned helper:
+
+- both
+  - `resolve_type -> runtime_type_or_name`
+  - `possible_types + is_type_of -> verified runtime object`
+  now flow through the same `known runtime object` corridor
+- that helper owns:
+  - lowered child-plan lookup
+  - optional possible-type validation
+  - known-plan handoff
+  - known-object fallback
+- this removes one more wrapper layer from the abstract family while keeping
+  ownership concentrated inside `execution.h`
+
+Checkpoint benchmark after unifying the abstract known-runtime-object helper
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 82779/s`
+  - `houtou_xs_ast 79576/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58659/s`
+  - `houtou_xs_ast 58151/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 40714/s`
+  - `houtou_xs_ast 42073/s`
+
+This reinforces the current strategy:
+
+- corridor simplification is helping the broad object-heavy cases
+- list remains healthy enough that the ownership cleanup is acceptable
+- abstract still needs more widening inside the object-family fallback, but it
+  is now one clear corridor problem rather than multiple wrapper-shape issues

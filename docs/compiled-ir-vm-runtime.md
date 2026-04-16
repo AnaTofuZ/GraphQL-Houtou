@@ -216,6 +216,27 @@ Expected responsibilities:
 The key point is that runtime branching should be moved into lowering whenever
 possible.
 
+## Current VM Ownership Checkpoint
+
+The current kept VM checkpoint is no longer root-only.
+
+- `compiled_ir` still lowers into `program -> root_block`
+- exact object child plans now also keep owned `gql_ir_vm_block`
+- lowered abstract child-plan entries keep owned `gql_ir_vm_block`
+- sync child execution can therefore move through `block` ownership instead of
+  inventing temporary wrapper blocks on the stack
+
+This matters more than the immediate throughput delta because it aligns root
+and child execution around the same runtime unit:
+
+- immutable block/program ownership
+- mutable execution env/frame/writer
+- delayed Perl materialization at the family corridor boundary
+
+The remaining throughput gap, especially on `abstract_with_fragment`, is now
+best understood as a corridor-width problem inside `ABSTRACT -> OBJECT`, not a
+missing root/child ownership model.
+
 ### 3. Runtime Core
 
 The runtime core should be split into:

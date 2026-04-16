@@ -256,6 +256,7 @@ struct gql_ir_vm_field_hot {
   SV *nodes_sv;
   SV *first_node_sv;
   gql_ir_compiled_root_field_plan_t *native_field_plan;
+  gql_ir_vm_block_t *native_block;
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
   gql_ir_lowered_abstract_child_plan_table_t *list_item_abstract_child_plan_table;
 };
@@ -300,6 +301,7 @@ struct gql_ir_compiled_root_field_plan_entry {
   SV *first_node_sv;
   U8 operands_ready;
   gql_ir_compiled_root_field_plan_t *native_field_plan;
+  gql_ir_vm_block_t *native_block;
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
   gql_ir_lowered_abstract_child_plan_table_t *list_item_abstract_child_plan_table;
 };
@@ -313,6 +315,7 @@ struct gql_ir_compiled_root_field_plan {
 
 struct gql_ir_vm_block {
   gql_ir_compiled_root_field_plan_t *field_plan;
+  U8 owns_field_plan;
 };
 
 struct gql_ir_vm_program {
@@ -328,6 +331,7 @@ struct gql_ir_lowered_abstract_child_entry {
   SV *possible_type_sv;
   SV *possible_type_name_sv;
   gql_ir_compiled_root_field_plan_t *native_field_plan;
+  gql_ir_vm_block_t *native_block;
 };
 
 struct gql_ir_lowered_abstract_child_plan_table {
@@ -336,6 +340,7 @@ struct gql_ir_lowered_abstract_child_plan_table {
   SV *cached_possible_type_sv;
   SV *cached_possible_type_name_sv;
   gql_ir_compiled_root_field_plan_t *cached_native_field_plan;
+  gql_ir_vm_block_t *cached_native_block;
 };
 
 struct gql_ir_compiled_concrete_plan_entry {
@@ -343,6 +348,7 @@ struct gql_ir_compiled_concrete_plan_entry {
   SV *compiled_fields_sv;
   SV *field_plan_sv;
   gql_ir_compiled_root_field_plan_t *native_field_plan;
+  gql_ir_vm_block_t *native_block;
 };
 
 struct gql_ir_compiled_concrete_plan_table {

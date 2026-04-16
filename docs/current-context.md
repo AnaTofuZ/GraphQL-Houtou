@@ -120,6 +120,46 @@ Hot-path interpretation:
     corridors and shrinking generic fallback frequency, not from `resolve_type`
     micro-optimizations
 
+## Latest VM Checkpoint
+
+Latest kept VM/runtime checkpoint:
+
+- root execution already entered through `program -> root_block -> writer`
+- child exact plans and lowered abstract child entries now also own
+  `gql_ir_vm_block`
+- sync object/list child paths can consume those owned blocks directly instead
+  of treating child execution as `field_plan`-only orchestration
+- this does not yet create a large throughput jump, but it is the first kept
+  step where root and child execution units are shaped around the same
+  VM/block ownership model
+
+Validation:
+
+- `minil test t/11_execution.t`
+- `minil test t/12_promise.t`
+
+Checkpoint benchmark (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `75837/s`
+  - `houtou_xs_ast` median `76022/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `57526/s`
+  - `houtou_xs_ast` median `56345/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `40191/s`
+  - `houtou_xs_ast` median `40841/s`
+
+Reading:
+
+- `nested` remains effectively in the same band
+- `list` stays slightly ahead
+- `abstract` still trails, so the next profitable work remains inside the
+  `ABSTRACT -> OBJECT` family corridor rather than in outer wrapper cleanup
+- despite the small throughput movement, this is worth keeping because
+  `compiled_ir` is now able to treat child execution as block-owned runtime
+  state instead of root-only VM state
+
 ## April 2026 VM Reset
 
 The active branch for the next phase is `proj/compiled-ir-vm-runtime`.

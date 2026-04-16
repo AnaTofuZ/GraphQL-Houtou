@@ -3281,3 +3281,34 @@ Interpretation:
   list family
 - `abstract` regains some ground without touching `resolve_type`, which keeps
   the focus on widening the execution-owned `ABSTRACT -> OBJECT` corridor
+
+Another healthy checkpoint comes from widening that cache across the broader
+object corridor and removing a duplicate `sync head` retry in the
+`prefer_head_first` path:
+
+- exact-plan fallback subfields caching now applies not only to the explicit
+  known-plan helper but also to the wider object family corridor
+- the `prefer_head_first` path no longer retries the same `execute_fields`
+  sync-head probe after an exact-plan miss, so the known-object corridor does
+  not pay for the same narrow probe twice
+
+Checkpoint benchmark after widening exact-plan fallback caching and removing
+the duplicate head retry (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 77795/s`
+  - `houtou_xs_ast 77700/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58841/s`
+  - `houtou_xs_ast 57637/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41647/s`
+  - `houtou_xs_ast 41134/s`
+
+Interpretation:
+
+- `nested` holds parity while keeping the broader object corridor simpler
+- `list` moves clearly ahead, which is a good signal that the widened cache is
+  paying off beyond the exact known-plan path
+- `abstract` finally edges ahead again, which is the strongest sign so far
+  that widening the execution-owned `ABSTRACT -> OBJECT` corridor is working

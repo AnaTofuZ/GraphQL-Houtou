@@ -6922,6 +6922,52 @@ gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_nati
   }
 }
 
+static SV *
+gql_execution_get_cached_or_collect_exact_plan_subfields(
+  pTHX_ SV *context,
+  SV *return_type,
+  SV *nodes,
+  gql_ir_compiled_root_field_plan_t *native_field_plan,
+  int *ok_out
+) {
+  SV *subfields = NULL;
+  int ok = 0;
+
+  if (ok_out) {
+    *ok_out = 0;
+  }
+
+  if (!context || !return_type || !nodes || !native_field_plan) {
+    return NULL;
+  }
+
+  if (native_field_plan->fallback_subfields_sv
+      && native_field_plan->fallback_subfields_sv != &PL_sv_undef
+      && SvOK(native_field_plan->fallback_subfields_sv)) {
+    subfields = gql_execution_share_or_copy_sv(native_field_plan->fallback_subfields_sv);
+    ok = 1;
+  } else {
+    subfields = gql_execution_collect_simple_object_fields(
+      aTHX_ context,
+      return_type,
+      nodes,
+      &ok
+    );
+    if (ok
+        && subfields
+        && subfields != &PL_sv_undef
+        && SvOK(subfields)
+        && !native_field_plan->fallback_subfields_sv) {
+      native_field_plan->fallback_subfields_sv = gql_execution_share_or_copy_sv(subfields);
+    }
+  }
+
+  if (ok_out) {
+    *ok_out = ok;
+  }
+  return subfields;
+}
+
 static int
 gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_plan_impl(
   pTHX_ SV *context,
@@ -6942,18 +6988,30 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
   gql_ir_compiled_root_field_plan_t *exact_native_field_plan = native_field_plan;
   SV *known_subfields = NULL;
   int known_subfields_ok = 0;
+  int head_tried = 0;
 
   gql_execution_sync_outcome_reset(outcome);
   promise_code = context ? gql_execution_context_promise_code(context) : NULL;
   if ((!promise_code || !SvOK(promise_code))
       && prefer_head_first
       && lazy_info) {
-    known_subfields = gql_execution_collect_simple_object_fields(
-      aTHX_ context,
-      return_type,
-      nodes,
-      &known_subfields_ok
-    );
+    head_tried = 1;
+    if (exact_native_field_plan) {
+      known_subfields = gql_execution_get_cached_or_collect_exact_plan_subfields(
+        aTHX_ context,
+        return_type,
+        nodes,
+        exact_native_field_plan,
+        &known_subfields_ok
+      );
+    } else {
+      known_subfields = gql_execution_collect_simple_object_fields(
+        aTHX_ context,
+        return_type,
+        nodes,
+        &known_subfields_ok
+      );
+    }
     if (known_subfields_ok
         && known_subfields
         && known_subfields != &PL_sv_undef
@@ -7008,14 +7066,25 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
 
   if ((!promise_code || !SvOK(promise_code)) && lazy_info) {
     if (!known_subfields) {
-      known_subfields = gql_execution_collect_simple_object_fields(
-        aTHX_ context,
-        return_type,
-        nodes,
-        &known_subfields_ok
-      );
+      if (exact_native_field_plan) {
+        known_subfields = gql_execution_get_cached_or_collect_exact_plan_subfields(
+          aTHX_ context,
+          return_type,
+          nodes,
+          exact_native_field_plan,
+          &known_subfields_ok
+        );
+      } else {
+        known_subfields = gql_execution_collect_simple_object_fields(
+          aTHX_ context,
+          return_type,
+          nodes,
+          &known_subfields_ok
+        );
+      }
     }
-    if (known_subfields_ok
+    if (!head_tried
+        && known_subfields_ok
         && known_subfields
         && known_subfields != &PL_sv_undef
         && SvOK(known_subfields)

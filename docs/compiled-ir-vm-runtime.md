@@ -1861,3 +1861,34 @@ This is another healthy ownership checkpoint:
 - `abstract` regains some ground without touching `resolve_type`, reinforcing
   the current strategy of widening the execution-owned corridor instead of
   chasing callback-side micro-optimizations
+
+Another healthy checkpoint comes from widening that cache across the broader
+object corridor and removing a duplicate `sync head` retry from the
+`prefer_head_first` path:
+
+- exact-plan fallback subfields caching now applies across the wider object
+  family corridor rather than only the explicit known-plan helper
+- after an exact-plan miss, the `prefer_head_first` path no longer pays for the
+  same `execute_fields` sync-head probe twice
+
+Checkpoint benchmark after widening exact-plan fallback caching and removing
+the duplicate head retry (`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 77795/s`
+  - `houtou_xs_ast 77700/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 58841/s`
+  - `houtou_xs_ast 57637/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41647/s`
+  - `houtou_xs_ast 41134/s`
+
+This is a healthy checkpoint:
+
+- `nested` stays at parity while the object corridor becomes simpler
+- `list` moves clearly ahead, which suggests the widened cache is paying off
+  outside the exact known-plan path
+- `abstract` edges ahead again, reinforcing the strategy of widening the
+  execution-owned `ABSTRACT -> OBJECT` corridor instead of chasing callback
+  micro-optimizations

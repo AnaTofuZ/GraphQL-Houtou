@@ -3249,3 +3249,35 @@ Interpretation:
 - `list` stays in a healthy range and slightly ahead in this run
 - `abstract` still trails, so the next work should stay focused on widening
   the object-family fallback that this unified helper now feeds
+
+Another healthy checkpoint comes from caching exact-plan fallback subfields
+inside owned lowered plans:
+
+- `gql_ir_compiled_root_field_plan_t` now owns a lazy `fallback_subfields_sv`
+- when an exact native child plan misses and must fall back to known-object
+  completion, the object-field collection can be reused instead of rebuilt on
+  every execution
+- this cache remains runtime-owned and is not cloned when lowered plans are
+  recursively duplicated
+
+Checkpoint benchmark after adding exact-plan fallback subfields caching
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79939/s`
+  - `houtou_xs_ast 77678/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57764/s`
+  - `houtou_xs_ast 58477/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41134/s`
+  - `houtou_xs_ast 41647/s`
+
+Interpretation:
+
+- `nested` benefits clearly, which matches the expectation that exact-plan
+  misses in object-heavy paths should stop recollecting the same subfields
+- `list` stays in the same broad range, so the cache does not destabilize the
+  list family
+- `abstract` regains some ground without touching `resolve_type`, which keeps
+  the focus on widening the execution-owned `ABSTRACT -> OBJECT` corridor

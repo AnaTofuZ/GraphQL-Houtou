@@ -4102,6 +4102,11 @@ gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan)
     plan->entries = NULL;
   }
 
+  if (plan->fallback_subfields_sv) {
+    SvREFCNT_dec(plan->fallback_subfields_sv);
+    plan->fallback_subfields_sv = NULL;
+  }
+
   Safefree(plan);
 }
 
@@ -4231,6 +4236,7 @@ gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *p
   Newxz(clone, 1, gql_ir_compiled_root_field_plan_t);
   clone->field_count = plan->field_count;
   clone->requires_runtime_operand_fill = plan->requires_runtime_operand_fill;
+  clone->fallback_subfields_sv = NULL;
   if (clone->field_count > 0) {
     Newxz(clone->entries, clone->field_count, gql_ir_compiled_root_field_plan_entry_t);
   }

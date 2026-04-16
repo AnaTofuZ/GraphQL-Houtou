@@ -1828,3 +1828,36 @@ This reinforces the current strategy:
 - list remains healthy enough that the ownership cleanup is acceptable
 - abstract still needs more widening inside the object-family fallback, but it
   is now one clear corridor problem rather than multiple wrapper-shape issues
+
+Another healthy checkpoint comes from caching exact-plan fallback subfields
+inside owned lowered plans:
+
+- `gql_ir_compiled_root_field_plan_t` now owns a lazy `fallback_subfields_sv`
+- when an exact native child plan misses and must fall back to known-object
+  completion, the object-field collection can be reused instead of rebuilt on
+  every execution
+- this cache stays runtime-owned and is intentionally not cloned when lowered
+  plans are recursively duplicated
+
+Checkpoint benchmark after adding exact-plan fallback subfields caching
+(`--count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79939/s`
+  - `houtou_xs_ast 77678/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57764/s`
+  - `houtou_xs_ast 58477/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41134/s`
+  - `houtou_xs_ast 41647/s`
+
+This is another healthy ownership checkpoint:
+
+- `nested` improves clearly, which matches the expectation that object-heavy
+  exact-plan misses should stop recollecting the same subfields
+- `list` stays in the same broad band, so the lazy cache does not undermine
+  the list-family runtime shape
+- `abstract` regains some ground without touching `resolve_type`, reinforcing
+  the current strategy of widening the execution-owned corridor instead of
+  chasing callback-side micro-optimizations

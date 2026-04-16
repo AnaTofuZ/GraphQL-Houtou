@@ -85,6 +85,10 @@ Hot-path interpretation:
 ## Latest Checkpoint
 
 - branch: `proj/compiled-ir-vm-runtime`
+- checkpoint evaluation should now prefer
+  `util/execution-benchmark-checkpoint.pl --repeat=5 --count=-3`
+  over single-run throughput snapshots when judging whether a batch is worth
+  keeping
 - latest kept checkpoint:
   - `7f25ce2` routes lowered abstract child-plan hits into the object corridor
     before generic fallback

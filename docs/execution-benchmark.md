@@ -19,6 +19,7 @@ realistic `execute(...)` usage patterns:
 The benchmark driver is:
 
 - `util/execution-benchmark.pl`
+- `util/execution-benchmark-checkpoint.pl`
 
 ## Measurement Setup
 
@@ -26,6 +27,9 @@ Command used:
 
 ```sh
 perl util/execution-benchmark.pl --count=-3
+
+# checkpoint-oriented repeated sampling with median/min/max summary
+perl util/execution-benchmark-checkpoint.pl --repeat=5 --count=-3
 ```
 
 Compared implementations:

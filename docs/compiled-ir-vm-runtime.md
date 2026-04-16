@@ -479,6 +479,36 @@ main currency:
 That is good enough for shaping experiments, but not yet a clean VM runtime
 boundary. The next design step should split these roles more explicitly.
 
+Recent kept checkpoint:
+
+- `gql_ir_vm_block` is no longer just a wrapper around
+  `gql_ir_compiled_root_field_plan_t`
+- blocks now carry the hot loop view directly:
+  - `entries`
+  - `field_count`
+  - `requires_runtime_operand_fill`
+- root and child execution can therefore enter the same block-owned loop
+  without first re-reading the enclosing field-plan wrapper
+- `field_plan`-only sync runners now build a stack `vm_block` view and reuse
+  the same block executor, which removes one more parallel loop family from the
+  runtime
+
+This is still a transitional VM runtime, but it moves ownership one step
+closer to a true block/op executor where the block itself is the primary
+execution unit.
+
+Checkpoint benchmark (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `77554/s`
+  - `houtou_xs_ast` median `74915/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `58162/s`
+  - `houtou_xs_ast` median `58142/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `40463/s`
+  - `houtou_xs_ast` median `39938/s`
+
 ### 1. Lowered Program
 
 Introduce a new owned lowered program type for `compiled_ir`, separate from

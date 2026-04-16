@@ -28,6 +28,7 @@ static gql_ir_vm_program_t *gql_ir_execution_lowered_program(gql_ir_compiled_exe
 static gql_ir_vm_block_t *gql_ir_vm_program_root_block(gql_ir_vm_program_t *program);
 static gql_ir_compiled_root_field_plan_t *gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *plan);
 static void gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan);
+static void gql_ir_vm_block_init_view(gql_ir_vm_block_t *block, gql_ir_compiled_root_field_plan_t *field_plan, int owns_field_plan);
 static gql_ir_vm_block_t *gql_ir_vm_block_new(gql_ir_compiled_root_field_plan_t *field_plan, int owns_field_plan);
 static gql_ir_vm_block_t *gql_ir_vm_block_clone(pTHX_ gql_ir_vm_block_t *block);
 static void gql_ir_vm_block_destroy(gql_ir_vm_block_t *block);
@@ -95,6 +96,20 @@ gql_ir_vm_program_root_block(gql_ir_vm_program_t *program) {
   return program->root_block;
 }
 
+static void
+gql_ir_vm_block_init_view(gql_ir_vm_block_t *block, gql_ir_compiled_root_field_plan_t *field_plan, int owns_field_plan) {
+  if (!block) {
+    return;
+  }
+
+  Zero(block, 1, gql_ir_vm_block_t);
+  block->field_plan = field_plan;
+  block->entries = field_plan ? field_plan->entries : NULL;
+  block->field_count = field_plan ? field_plan->field_count : 0;
+  block->requires_runtime_operand_fill = field_plan ? field_plan->requires_runtime_operand_fill : 0;
+  block->owns_field_plan = owns_field_plan ? 1 : 0;
+}
+
 static gql_ir_vm_block_t *
 gql_ir_vm_block_new(gql_ir_compiled_root_field_plan_t *field_plan, int owns_field_plan) {
   gql_ir_vm_block_t *block;
@@ -104,8 +119,7 @@ gql_ir_vm_block_new(gql_ir_compiled_root_field_plan_t *field_plan, int owns_fiel
   }
 
   Newxz(block, 1, gql_ir_vm_block_t);
-  block->field_plan = field_plan;
-  block->owns_field_plan = owns_field_plan ? 1 : 0;
+  gql_ir_vm_block_init_view(block, field_plan, owns_field_plan);
   return block;
 }
 
@@ -317,6 +331,14 @@ static int gql_ir_run_native_field_plan_loop(
 static int gql_ir_run_native_field_plan_loop_into_writer(
   pTHX_ gql_ir_compiled_exec_t *compiled,
   gql_ir_compiled_root_field_plan_t *field_plan,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  int *promise_present,
+  int require_runtime_operand_fill
+);
+static int gql_ir_run_vm_block_loop_into_writer(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_vm_block_t *block,
   gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
   int *promise_present,
@@ -676,6 +698,7 @@ gql_ir_execute_native_child_field_plan_sync_to_child_outcome(
   gql_ir_compiled_root_field_plan_t *field_plan,
   gql_ir_native_child_outcome_t *outcome
 ) {
+  gql_ir_vm_block_t block_view;
   gql_ir_native_exec_env_t child_env;
   gql_ir_native_result_writer_t writer;
   int promise_present = 0;
@@ -695,12 +718,13 @@ gql_ir_execute_native_child_field_plan_sync_to_child_outcome(
   gql_ir_native_exec_hot(&child_env)->parent_type_sv = child_parent_type_sv;
   gql_ir_native_exec_hot(&child_env)->root_value_sv = root_value;
   gql_ir_native_exec_hot(&child_env)->base_path_sv = path_sv;
+  gql_ir_vm_block_init_view(&block_view, field_plan, 0);
 
   gql_ir_init_native_result_writer(&writer);
-  if (!gql_ir_run_native_field_plan_loop_into_writer(
+  if (!gql_ir_run_vm_block_into_writer(
         aTHX_
         NULL,
-        field_plan,
+        &block_view,
         &child_env,
         &writer,
         &promise_present,
@@ -1070,6 +1094,59 @@ gql_ir_run_native_field_plan_loop_into_writer(
 }
 
 static int
+gql_ir_run_vm_block_loop_into_writer(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_vm_block_t *block,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  int *promise_present,
+  int require_runtime_operand_fill
+) {
+  UV field_i;
+  int fill_runtime_operands;
+
+  if (!block || !block->field_plan || !block->entries || !env || !writer || !promise_present) {
+    return 0;
+  }
+
+  fill_runtime_operands = require_runtime_operand_fill && block->requires_runtime_operand_fill;
+
+  for (field_i = 0; field_i < block->field_count; field_i++) {
+    gql_ir_compiled_root_field_plan_entry_t *entry = &block->entries[field_i];
+    gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
+
+    if (!meta || !meta->result_name_sv || !SvOK(meta->result_name_sv)) {
+      continue;
+    }
+
+    if (!meta->field_name_sv || !SvOK(meta->field_name_sv)) {
+      return 0;
+    }
+
+    if (fill_runtime_operands) {
+      if (!entry->operands_ready
+          && (!compiled || !gql_ir_ensure_native_field_entry_operands(aTHX_ compiled, entry))) {
+        continue;
+      }
+    } else if (!entry->operands_ready && !gql_ir_native_field_entry_has_operands(entry)) {
+      return 0;
+    }
+
+    if (!gql_ir_execute_native_field_entry_into(
+          aTHX_
+          env,
+          writer,
+          promise_present,
+          entry
+        )) {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+static int
 gql_ir_run_vm_block_into_writer(
   pTHX_ gql_ir_compiled_exec_t *compiled,
   gql_ir_vm_block_t *block,
@@ -1078,14 +1155,10 @@ gql_ir_run_vm_block_into_writer(
   int *promise_present,
   int require_runtime_operand_fill
 ) {
-  if (!block || !block->field_plan) {
-    return 0;
-  }
-
-  return gql_ir_run_native_field_plan_loop_into_writer(
+  return gql_ir_run_vm_block_loop_into_writer(
     aTHX_
     compiled,
-    block->field_plan,
+    block,
     env,
     writer,
     promise_present,
@@ -6794,6 +6867,7 @@ gql_ir_execute_native_field_plan_sync_to_outcome(
   SV **data_out,
   AV **errors_out
 ) {
+  gql_ir_vm_block_t block_view;
   SV *promise_code_sv = &PL_sv_undef;
   gql_ir_native_exec_env_t exec_env;
   gql_ir_native_result_writer_t writer;
@@ -6825,11 +6899,12 @@ gql_ir_execute_native_field_plan_sync_to_outcome(
     goto fallback;
   }
 
+  gql_ir_vm_block_init_view(&block_view, field_plan, 0);
   gql_ir_init_native_result_writer(&writer);
-  if (!gql_ir_run_native_field_plan_loop_into_writer(
+  if (!gql_ir_run_vm_block_into_writer(
         aTHX_
         NULL,
-        field_plan,
+        &block_view,
         &exec_env,
         &writer,
         &promise_present,
@@ -6865,6 +6940,7 @@ gql_ir_execute_native_field_plan_sync_to_child_outcome(
   gql_ir_compiled_root_field_plan_t *field_plan,
   gql_ir_native_child_outcome_t *outcome
 ) {
+  gql_ir_vm_block_t block_view;
   SV *promise_code_sv = &PL_sv_undef;
   gql_ir_native_exec_env_t exec_env;
   gql_ir_native_result_writer_t writer;
@@ -6899,11 +6975,12 @@ gql_ir_execute_native_field_plan_sync_to_child_outcome(
     goto fallback;
   }
 
+  gql_ir_vm_block_init_view(&block_view, field_plan, 0);
   gql_ir_init_native_result_writer(&writer);
-  if (!gql_ir_run_native_field_plan_loop_into_writer(
+  if (!gql_ir_run_vm_block_into_writer(
         aTHX_
         NULL,
-        field_plan,
+        &block_view,
         &exec_env,
         &writer,
         &promise_present,

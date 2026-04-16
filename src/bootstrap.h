@@ -315,6 +315,9 @@ struct gql_ir_compiled_root_field_plan {
 
 struct gql_ir_vm_block {
   gql_ir_compiled_root_field_plan_t *field_plan;
+  gql_ir_compiled_root_field_plan_entry_t *entries;
+  UV field_count;
+  U8 requires_runtime_operand_fill;
   U8 owns_field_plan;
 };
 

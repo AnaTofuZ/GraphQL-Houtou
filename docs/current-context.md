@@ -129,6 +129,13 @@ Latest kept VM/runtime checkpoint:
   `gql_ir_vm_block`
 - sync object/list child paths can consume those owned blocks directly instead
   of treating child execution as `field_plan`-only orchestration
+- `gql_ir_vm_block` now also owns the hot loop view
+  (`entries`, `field_count`, `requires_runtime_operand_fill`), so block
+  execution no longer has to bounce through `field_plan` metadata just to start
+  iterating fields
+- even `field_plan`-based sync runners now create a stack `vm_block` view and
+  enter the same block loop, so root/child sync execution is converging on one
+  block executor instead of two parallel loop implementations
 - this does not yet create a large throughput jump, but it is the first kept
   step where root and child execution units are shaped around the same
   VM/block ownership model
@@ -141,21 +148,22 @@ Validation:
 Checkpoint benchmark (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
 
 - `nested_variable_object`
-  - `houtou_compiled_ir` median `75837/s`
-  - `houtou_xs_ast` median `76022/s`
+  - `houtou_compiled_ir` median `77554/s`
+  - `houtou_xs_ast` median `74915/s`
 - `list_of_objects`
-  - `houtou_compiled_ir` median `57526/s`
-  - `houtou_xs_ast` median `56345/s`
+  - `houtou_compiled_ir` median `58162/s`
+  - `houtou_xs_ast` median `58142/s`
 - `abstract_with_fragment`
-  - `houtou_compiled_ir` median `40191/s`
-  - `houtou_xs_ast` median `40841/s`
+  - `houtou_compiled_ir` median `40463/s`
+  - `houtou_xs_ast` median `39938/s`
 
 Reading:
 
-- `nested` remains effectively in the same band
-- `list` stays slightly ahead
-- `abstract` still trails, so the next profitable work remains inside the
-  `ABSTRACT -> OBJECT` family corridor rather than in outer wrapper cleanup
+- `nested` is now clearly healthy again after the block-owned loop change
+- `list` stays in the same band while sharing the same block-owned runner
+- `abstract` is still only slightly ahead, which means the remaining profitable
+  work is still inside the `ABSTRACT -> OBJECT` family corridor rather than in
+  outer block ownership
 - despite the small throughput movement, this is worth keeping because
   `compiled_ir` is now able to treat child execution as block-owned runtime
   state instead of root-only VM state

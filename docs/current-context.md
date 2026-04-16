@@ -3366,3 +3366,39 @@ Verification status for this abstract-resolution-state checkpoint:
 
 - `minil test t/11_execution.t`
 - `minil test t/12_promise.t`
+
+Another VM-oriented checkpoint makes the lowered runtime own a visible
+`program -> root_block -> field_plan` execution boundary instead of treating
+the lowered root field plan as the direct execution unit everywhere:
+
+- `gql_ir_execute_compiled_root_field_plan(...)` now enters through
+  - `gql_ir_execution_lowered_program(...)`
+  - `gql_ir_vm_program_root_block(...)`
+  - `gql_ir_run_vm_program_root_into_writer(...)`
+- the new block/program runners are still thin wrappers over the existing
+  native field-plan loop, but they fix the ownership boundary in code before
+  further VM work starts moving execution state and op dispatch onto blocks
+- this is primarily an architectural checkpoint for the VM runtime rather than
+  a short-term speed play
+
+Repeat checkpoint benchmark after introducing the explicit program/root-block
+runner (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `75600/s`
+  - `houtou_xs_ast` median `75671/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `56875/s`
+  - `houtou_xs_ast` median `57467/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `40714/s`
+  - `houtou_xs_ast` median `41369/s`
+
+Interpretation:
+
+- absolute throughput is a bit softer than the earlier best corridor-focused
+  checkpoints, but the ratios stay close enough that this is acceptable as a
+  VM-architecture checkpoint
+- `compiled_ir` is now entering execution through program/block ownership that
+  can be widened into a real block/opcode runtime without first undoing more
+  field-plan-centric assumptions

@@ -24,6 +24,9 @@ enum {
   GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV = 3
 };
 
+static gql_ir_vm_program_t *gql_ir_execution_lowered_program(gql_ir_compiled_exec_t *compiled);
+static gql_ir_vm_block_t *gql_ir_vm_program_root_block(gql_ir_vm_program_t *program);
+
 static void
 gql_ir_prepared_exec_destroy(gql_ir_prepared_exec_t *prepared) {
   if (!prepared) {
@@ -60,12 +63,31 @@ gql_ir_prepared_exec_destroy(gql_ir_prepared_exec_t *prepared) {
 
 static gql_ir_compiled_root_field_plan_t *
 gql_ir_execution_lowered_root_field_plan(gql_ir_compiled_exec_t *compiled) {
-  if (!compiled || !compiled->lowered_plan || !compiled->lowered_plan->program
-      || !compiled->lowered_plan->program->root_block) {
+  gql_ir_vm_block_t *root_block = gql_ir_vm_program_root_block(gql_ir_execution_lowered_program(compiled));
+
+  if (!root_block) {
     return NULL;
   }
 
-  return compiled->lowered_plan->program->root_block->field_plan;
+  return root_block->field_plan;
+}
+
+static gql_ir_vm_program_t *
+gql_ir_execution_lowered_program(gql_ir_compiled_exec_t *compiled) {
+  if (!compiled || !compiled->lowered_plan) {
+    return NULL;
+  }
+
+  return compiled->lowered_plan->program;
+}
+
+static gql_ir_vm_block_t *
+gql_ir_vm_program_root_block(gql_ir_vm_program_t *program) {
+  if (!program) {
+    return NULL;
+  }
+
+  return program->root_block;
 }
 
 static const char *gql_ir_operation_kind_name(gql_ir_operation_kind_t kind);
@@ -226,6 +248,22 @@ static int gql_ir_run_native_field_plan_loop(
 static int gql_ir_run_native_field_plan_loop_into_writer(
   pTHX_ gql_ir_compiled_exec_t *compiled,
   gql_ir_compiled_root_field_plan_t *field_plan,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  int *promise_present,
+  int require_runtime_operand_fill
+);
+static int gql_ir_run_vm_block_into_writer(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_vm_block_t *block,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  int *promise_present,
+  int require_runtime_operand_fill
+);
+static int gql_ir_run_vm_program_root_into_writer(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_vm_program_t *program,
   gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
   int *promise_present,
@@ -871,6 +909,50 @@ gql_ir_run_native_field_plan_loop_into_writer(
   }
 
   return 1;
+}
+
+static int
+gql_ir_run_vm_block_into_writer(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_vm_block_t *block,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  int *promise_present,
+  int require_runtime_operand_fill
+) {
+  if (!block || !block->field_plan) {
+    return 0;
+  }
+
+  return gql_ir_run_native_field_plan_loop_into_writer(
+    aTHX_
+    compiled,
+    block->field_plan,
+    env,
+    writer,
+    promise_present,
+    require_runtime_operand_fill
+  );
+}
+
+static int
+gql_ir_run_vm_program_root_into_writer(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_vm_program_t *program,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  int *promise_present,
+  int require_runtime_operand_fill
+) {
+  return gql_ir_run_vm_block_into_writer(
+    aTHX_
+    compiled,
+    gql_ir_vm_program_root_block(program),
+    env,
+    writer,
+    promise_present,
+    require_runtime_operand_fill
+  );
 }
 
 static int
@@ -6384,7 +6466,7 @@ gql_ir_build_execution_context_from_compiled_sv(
 
 static SV *
 gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, SV *context_sv, SV *root_value, SV *path_sv) {
-  gql_ir_compiled_root_field_plan_t *root_field_plan;
+  gql_ir_vm_program_t *program;
   SV *promise_code_sv = &PL_sv_undef;
   gql_ir_native_exec_env_t exec_env;
   gql_ir_native_exec_accum_t exec_accum;
@@ -6392,14 +6474,14 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
   Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
 
   if (!compiled
-      || !gql_ir_execution_lowered_root_field_plan(compiled)
+      || !(program = gql_ir_execution_lowered_program(compiled))
+      || !gql_ir_vm_program_root_block(program)
       || !context_sv
       || !SvROK(context_sv)
       || SvTYPE(SvRV(context_sv)) != SVt_PVHV) {
     goto fallback;
   }
 
-  root_field_plan = gql_ir_execution_lowered_root_field_plan(compiled);
   if (!gql_ir_init_native_exec_env(
         aTHX_
         context_sv,
@@ -6412,12 +6494,13 @@ gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, 
     goto fallback;
   }
   gql_ir_init_native_exec_accum(&exec_accum);
-  if (!gql_ir_run_native_field_plan_loop(
+  if (!gql_ir_run_vm_program_root_into_writer(
         aTHX_
         compiled,
-        root_field_plan,
+        program,
         &exec_env,
-        &exec_accum,
+        &exec_accum.writer,
+        &exec_accum.promise_present,
         1
       )) {
     goto fallback;

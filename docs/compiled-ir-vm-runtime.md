@@ -1944,3 +1944,41 @@ Verification status for this abstract-resolution-state checkpoint:
 
 - `minil test t/11_execution.t`
 - `minil test t/12_promise.t`
+
+The next VM checkpoint is to stop treating the lowered root field plan as the
+direct top-level execution unit and instead expose the intended ownership
+boundary in code:
+
+- `gql_ir_execute_compiled_root_field_plan(...)` now enters through
+  `gql_ir_execution_lowered_program(...)`
+- the lowered program yields a `root_block`
+- execution then goes through `gql_ir_run_vm_program_root_into_writer(...)`
+  before reaching the native field-plan loop
+
+At this stage the block/program runners are intentionally thin wrappers over
+the existing field-plan loop. The important change is architectural: future VM
+work can move dispatch, registers/frames, and block-local inline caches onto
+`program`/`block` ownership without first unwinding a root entrypoint that is
+still hard-wired to `gql_ir_compiled_root_field_plan_t`.
+
+Repeat checkpoint benchmark after introducing the explicit program/root-block
+runner (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `75600/s`
+  - `houtou_xs_ast` median `75671/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `56875/s`
+  - `houtou_xs_ast` median `57467/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `40714/s`
+  - `houtou_xs_ast` median `41369/s`
+
+This is not a throughput peak, but it is an acceptable architectural
+checkpoint because:
+
+- the ratios stay close enough to `xs_ast`
+- the lowered runtime now has a real `program -> block -> writer` entry
+  surface
+- the next VMization steps can target block-level dispatch instead of
+  field-plan-only orchestration

@@ -492,6 +492,9 @@ Recent kept checkpoint:
 - `field_plan`-only sync runners now build a stack `vm_block` view and reuse
   the same block executor, which removes one more parallel loop family from the
   runtime
+- the old `gql_ir_run_native_field_plan_loop*` family is gone, so sync entry
+  points now converge on `gql_ir_execute_vm_block(...)` /
+  `gql_ir_run_vm_block_into_writer(...)`
 
 This is still a transitional VM runtime, but it moves ownership one step
 closer to a true block/op executor where the block itself is the primary
@@ -500,14 +503,14 @@ execution unit.
 Checkpoint benchmark (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
 
 - `nested_variable_object`
-  - `houtou_compiled_ir` median `77554/s`
-  - `houtou_xs_ast` median `74915/s`
+  - `houtou_compiled_ir` median `76557/s`
+  - `houtou_xs_ast` median `76379/s`
 - `list_of_objects`
-  - `houtou_compiled_ir` median `58162/s`
-  - `houtou_xs_ast` median `58142/s`
+  - `houtou_compiled_ir` median `56875/s`
+  - `houtou_xs_ast` median `57872/s`
 - `abstract_with_fragment`
-  - `houtou_compiled_ir` median `40463/s`
-  - `houtou_xs_ast` median `39938/s`
+  - `houtou_compiled_ir` median `40841/s`
+  - `houtou_xs_ast` median `41389/s`
 
 ### 1. Lowered Program
 

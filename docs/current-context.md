@@ -136,6 +136,9 @@ Latest kept VM/runtime checkpoint:
 - even `field_plan`-based sync runners now create a stack `vm_block` view and
   enter the same block loop, so root/child sync execution is converging on one
   block executor instead of two parallel loop implementations
+- `gql_ir_execute_native_field_plan(...)` and its sync outcome wrappers now
+  fully delegate into `vm_block` wrappers, and the old
+  `gql_ir_run_native_field_plan_loop*` family is gone
 - this does not yet create a large throughput jump, but it is the first kept
   step where root and child execution units are shaped around the same
   VM/block ownership model
@@ -148,25 +151,26 @@ Validation:
 Checkpoint benchmark (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
 
 - `nested_variable_object`
-  - `houtou_compiled_ir` median `77554/s`
-  - `houtou_xs_ast` median `74915/s`
+  - `houtou_compiled_ir` median `76557/s`
+  - `houtou_xs_ast` median `76379/s`
 - `list_of_objects`
-  - `houtou_compiled_ir` median `58162/s`
-  - `houtou_xs_ast` median `58142/s`
+  - `houtou_compiled_ir` median `56875/s`
+  - `houtou_xs_ast` median `57872/s`
 - `abstract_with_fragment`
-  - `houtou_compiled_ir` median `40463/s`
-  - `houtou_xs_ast` median `39938/s`
+  - `houtou_compiled_ir` median `40841/s`
+  - `houtou_xs_ast` median `41389/s`
 
 Reading:
 
-- `nested` is now clearly healthy again after the block-owned loop change
-- `list` stays in the same band while sharing the same block-owned runner
-- `abstract` is still only slightly ahead, which means the remaining profitable
-  work is still inside the `ABSTRACT -> OBJECT` family corridor rather than in
-  outer block ownership
+- `nested` stays effectively in the same band even after deleting the old
+  `field_plan` loop family
+- `list` softens a little, which suggests wrapper convergence alone is not the
+  next performance win
+- `abstract` also stays close, so the profitable work still sits inside the
+  `ABSTRACT -> OBJECT` family corridor and future block-owned op/state work
 - despite the small throughput movement, this is worth keeping because
-  `compiled_ir` is now able to treat child execution as block-owned runtime
-  state instead of root-only VM state
+  `compiled_ir` now treats root and child sync execution as the same
+  block-owned runtime shape, with no separate `field_plan` loop family left
 
 ## April 2026 VM Reset
 

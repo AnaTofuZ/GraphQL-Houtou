@@ -2003,3 +2003,36 @@ checkpoint because:
   surface
 - the next VMization steps can target block-level dispatch instead of
   field-plan-only orchestration
+
+The next ownership checkpoint is to thread that same `block` identity through
+the execution-owned `ABSTRACT -> OBJECT` family corridor:
+
+- abstract runtime resolution now carries both `native_field_plan` and
+  `native_block`
+- lowered abstract child-plan lookup in `execution.h` can resolve both from
+  object types and concrete type names
+- the known-object exact child corridor now prefers block-owned execution when
+  the block is already known, instead of always dropping back to a
+  field-plan-only helper
+
+Repeat checkpoint benchmark after threading `native_block` through the
+execution-owned abstract/object corridor
+(`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `79130/s`
+  - `houtou_xs_ast` median `76072/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `59030/s`
+  - `houtou_xs_ast` median `58477/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `41279/s`
+  - `houtou_xs_ast` median `42440/s`
+
+This is a useful VM/runtime checkpoint because:
+
+- root and child execution now share block ownership not only in
+  `ir_execution.h` but also inside the execution-owned family contracts
+- object-heavy workloads benefit immediately
+- the remaining abstract gap is now concentrated in the family corridor logic
+  itself, which is the right place for the next widening work

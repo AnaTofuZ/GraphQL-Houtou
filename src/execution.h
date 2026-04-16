@@ -20,6 +20,7 @@ typedef struct gql_execution_lazy_resolve_info {
 typedef struct gql_execution_abstract_runtime_resolution {
   SV *runtime_type_sv;
   gql_ir_compiled_root_field_plan_t *native_field_plan;
+  gql_ir_vm_block_t *native_block;
   int runtime_type_verified;
 } gql_execution_abstract_runtime_resolution_t;
 
@@ -57,6 +58,14 @@ static int gql_ir_execute_native_field_plan_sync_to_child_outcome(
   SV *root_value,
   SV *path_sv,
   gql_ir_compiled_root_field_plan_t *field_plan,
+  gql_ir_native_child_outcome_t *outcome
+);
+static int gql_ir_execute_native_block_sync_to_child_outcome(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_vm_block_t *block,
   gql_ir_native_child_outcome_t *outcome
 );
 static SV *gql_execution_build_field_plan_from_compiled_fields(pTHX_ SV *schema, SV *parent_type, SV *compiled_fields_sv);
@@ -186,6 +195,7 @@ static int gql_execution_complete_known_object_field_value_catching_error_xs_laz
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result,
   gql_ir_compiled_root_field_plan_t *native_field_plan,
+  gql_ir_vm_block_t *native_block,
   gql_execution_sync_outcome_t *outcome
 );
 static int gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_known_plan(
@@ -197,6 +207,7 @@ static int gql_execution_complete_known_object_field_value_catching_error_xs_laz
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result,
   gql_ir_compiled_root_field_plan_t *native_field_plan,
+  gql_ir_vm_block_t *native_block,
   gql_execution_sync_outcome_t *outcome
 );
 static int gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_plan_impl(
@@ -208,6 +219,7 @@ static int gql_execution_complete_object_field_value_catching_error_xs_lazy_sync
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result,
   gql_ir_compiled_root_field_plan_t *native_field_plan,
+  gql_ir_vm_block_t *native_block,
   gql_execution_sync_outcome_t *outcome,
   int assume_runtime_object,
   int prefer_head_first
@@ -278,6 +290,7 @@ static int gql_execution_complete_abstract_known_runtime_object_catching_error_x
   SV *result,
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
   gql_ir_compiled_root_field_plan_t *known_native_field_plan,
+  gql_ir_vm_block_t *known_native_block,
   int runtime_type_verified,
   gql_execution_sync_outcome_t *outcome
 );
@@ -4450,7 +4463,43 @@ gql_execution_lookup_lowered_abstract_child_native_field_plan(
       table->cached_possible_type_sv = entry->possible_type_sv;
       table->cached_possible_type_name_sv = entry->possible_type_name_sv;
       table->cached_native_field_plan = entry->native_field_plan;
+      table->cached_native_block = entry->native_block;
       return entry->native_field_plan;
+    }
+  }
+
+  return NULL;
+}
+
+static gql_ir_vm_block_t *
+gql_execution_lookup_lowered_abstract_child_native_block(
+  pTHX_ gql_ir_lowered_abstract_child_plan_table_t *table,
+  SV *object_type
+) {
+  UV i;
+
+  if (!table || !object_type || !SvROK(object_type)) {
+    return NULL;
+  }
+
+  if (table->cached_possible_type_sv
+      && table->cached_native_block
+      && SvROK(table->cached_possible_type_sv)
+      && SvRV(table->cached_possible_type_sv) == SvRV(object_type)) {
+    return table->cached_native_block;
+  }
+
+  for (i = 0; i < table->count; i++) {
+    gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
+    if (!entry->possible_type_sv || !entry->native_block || !SvROK(entry->possible_type_sv)) {
+      continue;
+    }
+    if (SvRV(entry->possible_type_sv) == SvRV(object_type)) {
+      table->cached_possible_type_sv = entry->possible_type_sv;
+      table->cached_possible_type_name_sv = entry->possible_type_name_sv;
+      table->cached_native_field_plan = entry->native_field_plan;
+      table->cached_native_block = entry->native_block;
+      return entry->native_block;
     }
   }
 
@@ -4491,6 +4540,7 @@ gql_execution_lookup_lowered_abstract_child_entry_by_name(
       table->cached_possible_type_sv = entry->possible_type_sv;
       table->cached_possible_type_name_sv = entry->possible_type_name_sv;
       table->cached_native_field_plan = entry->native_field_plan;
+      table->cached_native_block = entry->native_block;
       return entry;
     }
   }
@@ -6856,6 +6906,7 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
     lazy_info,
     result,
     native_field_plan,
+    NULL,
     outcome,
     0,
     0
@@ -6872,6 +6923,7 @@ gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_nati
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result,
   gql_ir_compiled_root_field_plan_t *native_field_plan,
+  gql_ir_vm_block_t *native_block,
   gql_execution_sync_outcome_t *outcome
 ) {
   if (native_field_plan) {
@@ -6885,6 +6937,7 @@ gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_nati
       lazy_info,
       result,
       native_field_plan,
+      native_block,
       outcome
     );
   }
@@ -6899,6 +6952,7 @@ gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_nati
     lazy_info,
     result,
     native_field_plan,
+    native_block,
     outcome,
     1,
     1
@@ -6915,6 +6969,7 @@ gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_nati
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result,
   gql_ir_compiled_root_field_plan_t *native_field_plan,
+  gql_ir_vm_block_t *native_block,
   gql_execution_sync_outcome_t *outcome
 ) {
   SV *promise_code = NULL;
@@ -6936,15 +6991,25 @@ gql_execution_complete_known_object_field_value_catching_error_xs_lazy_sync_nati
     SV *path_sv = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
     gql_ir_native_child_outcome_t child_outcome;
     Zero(&child_outcome, 1, gql_ir_native_child_outcome_t);
-    if (gql_ir_execute_native_field_plan_sync_to_child_outcome(
-          aTHX_
-          context,
-          return_type,
-          result,
-          path_sv,
-          native_field_plan,
-          &child_outcome
-        )) {
+    if (((native_block && native_block->field_plan == native_field_plan)
+          && gql_ir_execute_native_block_sync_to_child_outcome(
+               aTHX_
+               context,
+               return_type,
+               result,
+               path_sv,
+               native_block,
+               &child_outcome
+             ))
+        || gql_ir_execute_native_field_plan_sync_to_child_outcome(
+             aTHX_
+             context,
+             return_type,
+             result,
+             path_sv,
+             native_field_plan,
+             &child_outcome
+           )) {
       outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
       outcome->object_hv = child_outcome.data_hv;
       outcome->errors_av = child_outcome.errors_av;
@@ -7051,6 +7116,7 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
   gql_execution_lazy_resolve_info_t *lazy_info,
   SV *result,
   gql_ir_compiled_root_field_plan_t *native_field_plan,
+  gql_ir_vm_block_t *native_block,
   gql_execution_sync_outcome_t *outcome,
   int assume_runtime_object,
   int prefer_head_first
@@ -7121,15 +7187,25 @@ gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_out
     SV *path_sv = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
     gql_ir_native_child_outcome_t child_outcome;
     Zero(&child_outcome, 1, gql_ir_native_child_outcome_t);
-    if (gql_ir_execute_native_field_plan_sync_to_child_outcome(
-          aTHX_
-          context,
-          return_type,
-          result,
-          path_sv,
-          exact_native_field_plan,
-          &child_outcome
-        )) {
+    if (((native_block && native_block->field_plan == exact_native_field_plan)
+          && gql_ir_execute_native_block_sync_to_child_outcome(
+               aTHX_
+               context,
+               return_type,
+               result,
+               path_sv,
+               native_block,
+               &child_outcome
+             ))
+        || gql_ir_execute_native_field_plan_sync_to_child_outcome(
+             aTHX_
+             context,
+             return_type,
+             result,
+             path_sv,
+             exact_native_field_plan,
+             &child_outcome
+           )) {
       outcome->kind = GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV;
       outcome->object_hv = child_outcome.data_hv;
       outcome->errors_av = child_outcome.errors_av;
@@ -7635,6 +7711,7 @@ gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outco
           &item_lazy_info,
           item_svp ? *item_svp : &PL_sv_undef,
           exact_item_native_field_plan,
+          NULL,
           &item_outcome
         );
       } else {
@@ -8211,6 +8288,7 @@ gql_execution_try_resolve_abstract_runtime_type_or_name_sync(
       if (known_entry && known_entry->possible_type_sv && known_entry->native_field_plan) {
         resolution->runtime_type_sv = known_entry->possible_type_sv;
         resolution->native_field_plan = known_entry->native_field_plan;
+        resolution->native_block = known_entry->native_block;
         resolution->runtime_type_verified = 1;
         return 1;
       }
@@ -8248,6 +8326,10 @@ gql_execution_try_resolve_abstract_runtime_type_or_name_sync(
   resolution->runtime_type_sv = runtime_type;
   if (abstract_child_plan_table) {
     resolution->native_field_plan = gql_execution_lookup_lowered_abstract_child_native_field_plan(
+      aTHX_ abstract_child_plan_table,
+      runtime_type
+    );
+    resolution->native_block = gql_execution_lookup_lowered_abstract_child_native_block(
       aTHX_ abstract_child_plan_table,
       runtime_type
     );
@@ -8293,6 +8375,7 @@ gql_execution_complete_abstract_runtime_resolution_catching_error_xs_lazy_sync_n
     lazy_info,
     result,
     resolution->native_field_plan,
+    resolution->native_block,
     outcome
   );
 }
@@ -8394,6 +8477,12 @@ gql_execution_try_verify_abstract_runtime_resolution_sync(
       resolution->runtime_type_sv
     );
   }
+  if (!resolution->native_block && abstract_child_plan_table) {
+    resolution->native_block = gql_execution_lookup_lowered_abstract_child_native_block(
+      aTHX_ abstract_child_plan_table,
+      resolution->runtime_type_sv
+    );
+  }
 
   if (!resolution->runtime_type_verified) {
     int possible_ok = 0;
@@ -8445,6 +8534,7 @@ gql_execution_complete_abstract_known_runtime_object_catching_error_xs_lazy_sync
   SV *result,
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
   gql_ir_compiled_root_field_plan_t *known_native_field_plan,
+  gql_ir_vm_block_t *known_native_block,
   int runtime_type_verified,
   gql_execution_sync_outcome_t *outcome
 ) {
@@ -8452,6 +8542,7 @@ gql_execution_complete_abstract_known_runtime_object_catching_error_xs_lazy_sync
   Zero(&resolution, 1, gql_execution_abstract_runtime_resolution_t);
   resolution.runtime_type_sv = runtime_type;
   resolution.native_field_plan = known_native_field_plan;
+  resolution.native_block = known_native_block;
   resolution.runtime_type_verified = runtime_type_verified;
 
   return gql_execution_complete_abstract_runtime_resolution_catching_error_xs_lazy_sync_native_outcome(

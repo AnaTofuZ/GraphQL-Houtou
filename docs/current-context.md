@@ -3442,3 +3442,42 @@ Interpretation:
 - `compiled_ir` is now entering execution through program/block ownership that
   can be widened into a real block/opcode runtime without first undoing more
   field-plan-centric assumptions
+
+The next checkpoint pushes that VM ownership into the execution-owned
+`ABSTRACT -> OBJECT` corridor as well:
+
+- `gql_execution_abstract_runtime_resolution_t` now carries both
+  - `native_field_plan`
+  - `native_block`
+- lowered abstract child-plan lookup in `execution.h` can resolve
+  - concrete object type -> `native_field_plan`
+  - concrete object type -> `native_block`
+  - concrete type name -> lowered entry that also carries `native_block`
+- exact child execution inside the execution-owned known-object corridor now
+  prefers `gql_ir_execute_native_block_sync_to_child_outcome(...)` when the
+  block is already known, instead of forcing everything back through the
+  field-plan-only helper
+
+Repeat checkpoint benchmark after threading `native_block` through the
+execution-owned abstract/object corridor
+(`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `79130/s`
+  - `houtou_xs_ast` median `76072/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `59030/s`
+  - `houtou_xs_ast` median `58477/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `41279/s`
+  - `houtou_xs_ast` median `42440/s`
+
+Interpretation:
+
+- `nested` improves again, which suggests the block-owned child execution path
+  is healthy for object-heavy workloads
+- `list` also stays ahead, so threading block ownership through family APIs is
+  not destabilizing adjacent families
+- `abstract` is still a little behind, but the remaining gap is now more
+  clearly inside the execution-owned corridor itself rather than in plan/block
+  ownership plumbing

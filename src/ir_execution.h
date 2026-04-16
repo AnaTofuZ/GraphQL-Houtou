@@ -285,6 +285,14 @@ static int gql_ir_execute_native_field_plan_sync_to_child_outcome(
   gql_ir_compiled_root_field_plan_t *field_plan,
   gql_ir_native_child_outcome_t *outcome
 );
+static int gql_ir_execute_native_block_sync_to_child_outcome(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_vm_block_t *block,
+  gql_ir_native_child_outcome_t *outcome
+);
 static void gql_ir_sync_outcome_move_to_frame(
   gql_execution_sync_outcome_t *outcome,
   gql_ir_native_field_frame_t *frame
@@ -6896,6 +6904,81 @@ gql_ir_execute_native_field_plan_sync_to_child_outcome(
         aTHX_
         NULL,
         field_plan,
+        &exec_env,
+        &writer,
+        &promise_present,
+        0
+      )) {
+    goto fallback;
+  }
+  if (promise_present
+      || writer.pending_count > 0
+      || !writer.direct_data_hv) {
+    goto fallback;
+  }
+
+  outcome->data_hv = writer.direct_data_hv;
+  writer.direct_data_hv = NULL;
+  outcome->errors_av = writer.all_errors_av;
+  writer.all_errors_av = NULL;
+
+  gql_ir_cleanup_native_result_writer(&writer);
+  return 1;
+
+fallback:
+  gql_ir_cleanup_native_result_writer(&writer);
+  return 0;
+}
+
+static int
+gql_ir_execute_native_block_sync_to_child_outcome(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_vm_block_t *block,
+  gql_ir_native_child_outcome_t *outcome
+) {
+  SV *promise_code_sv = &PL_sv_undef;
+  gql_ir_native_exec_env_t exec_env;
+  gql_ir_native_result_writer_t writer;
+  int promise_present = 0;
+
+  if (outcome) {
+    Zero(outcome, 1, gql_ir_native_child_outcome_t);
+  }
+
+  Zero(&writer, 1, gql_ir_native_result_writer_t);
+
+  if (!block
+      || !block->field_plan
+      || !outcome
+      || !context_sv
+      || !SvROK(context_sv)
+      || SvTYPE(SvRV(context_sv)) != SVt_PVHV) {
+    goto fallback;
+  }
+
+  if (!gql_ir_init_native_exec_env(
+        aTHX_
+        context_sv,
+        parent_type_sv,
+        root_value,
+        path_sv,
+        &exec_env,
+        &promise_code_sv
+      )) {
+    goto fallback;
+  }
+  if (promise_code_sv && SvOK(promise_code_sv)) {
+    goto fallback;
+  }
+
+  gql_ir_init_native_result_writer(&writer);
+  if (!gql_ir_run_vm_block_into_writer(
+        aTHX_
+        NULL,
+        block,
         &exec_env,
         &writer,
         &promise_present,

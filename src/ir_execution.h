@@ -380,7 +380,11 @@ static int gql_ir_execute_native_field_entry_into(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
   int *promise_present,
-  gql_ir_compiled_root_field_plan_entry_t *entry
+  gql_ir_vm_exec_state_t *state
+);
+static int gql_ir_vm_exec_state_prepare_field(
+  pTHX_ gql_ir_vm_exec_state_t *state,
+  UV field_index
 );
 static void gql_ir_init_native_field_frame(
   gql_ir_native_field_frame_t *frame,
@@ -1018,12 +1022,58 @@ gql_ir_finish_native_exec_result(
 }
 
 static int
+gql_ir_vm_exec_state_prepare_field(
+  pTHX_ gql_ir_vm_exec_state_t *state,
+  UV field_index
+) {
+  gql_ir_compiled_exec_t *compiled;
+  gql_ir_vm_block_t *block;
+  gql_ir_compiled_root_field_plan_entry_t *entry;
+  gql_ir_vm_field_meta_t *meta;
+  int fill_runtime_operands;
+
+  if (!state || !state->block || !state->block->entries) {
+    return 0;
+  }
+
+  block = state->block;
+  if (field_index >= block->field_count) {
+    return 0;
+  }
+
+  compiled = state->compiled;
+  entry = &block->entries[field_index];
+  meta = gql_ir_native_field_meta(entry);
+  if (!meta || !meta->field_name_sv || !SvOK(meta->field_name_sv)) {
+    return 0;
+  }
+  if (!meta->result_name_sv || !SvOK(meta->result_name_sv)) {
+    return 0;
+  }
+
+  fill_runtime_operands = state->require_runtime_operand_fill && block->requires_runtime_operand_fill;
+  if (fill_runtime_operands) {
+    if (!entry->operands_ready
+        && (!compiled || !gql_ir_ensure_native_field_entry_operands(aTHX_ compiled, entry))) {
+      return 0;
+    }
+  } else if (!entry->operands_ready && !gql_ir_native_field_entry_has_operands(entry)) {
+    return 0;
+  }
+
+  state->cursor.field_index = field_index;
+  state->cursor.pc = 0;
+  state->cursor.entry = entry;
+  state->cursor.meta = meta;
+  state->cursor.hot = gql_ir_native_field_hot(entry);
+  return 1;
+}
+
+static int
 gql_ir_run_vm_block_loop(
   pTHX_ gql_ir_vm_exec_state_t *state
 ) {
   UV field_i;
-  int fill_runtime_operands;
-  gql_ir_compiled_exec_t *compiled;
   gql_ir_vm_block_t *block;
   gql_ir_native_exec_env_t *env;
   gql_ir_native_result_writer_t *writer;
@@ -1033,7 +1083,6 @@ gql_ir_run_vm_block_loop(
     return 0;
   }
 
-  compiled = state->compiled;
   block = state->block;
   env = state->env;
   writer = state->writer;
@@ -1043,27 +1092,9 @@ gql_ir_run_vm_block_loop(
     return 0;
   }
 
-  fill_runtime_operands = state->require_runtime_operand_fill && block->requires_runtime_operand_fill;
-
   for (field_i = 0; field_i < block->field_count; field_i++) {
-    gql_ir_compiled_root_field_plan_entry_t *entry = &block->entries[field_i];
-    gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
-
-    if (!meta || !meta->result_name_sv || !SvOK(meta->result_name_sv)) {
+    if (!gql_ir_vm_exec_state_prepare_field(aTHX_ state, field_i)) {
       continue;
-    }
-
-    if (!meta->field_name_sv || !SvOK(meta->field_name_sv)) {
-      return 0;
-    }
-
-    if (fill_runtime_operands) {
-      if (!entry->operands_ready
-          && (!compiled || !gql_ir_ensure_native_field_entry_operands(aTHX_ compiled, entry))) {
-        continue;
-      }
-    } else if (!entry->operands_ready && !gql_ir_native_field_entry_has_operands(entry)) {
-      return 0;
     }
 
     if (!gql_ir_execute_native_field_entry_into(
@@ -1071,7 +1102,7 @@ gql_ir_run_vm_block_loop(
           env,
           writer,
           promise_present,
-          entry
+          state
         )) {
       return 0;
     }
@@ -2908,15 +2939,15 @@ gql_ir_execute_native_field_entry_into(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
   int *promise_present,
-  gql_ir_compiled_root_field_plan_entry_t *entry
+  gql_ir_vm_exec_state_t *state
 ) {
   gql_ir_native_field_frame_t frame;
-  gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
-  gql_ir_vm_field_hot_t *hot = gql_ir_native_field_hot(entry);
+  gql_ir_compiled_root_field_plan_entry_t *entry;
+  gql_ir_vm_field_meta_t *meta;
+  gql_ir_vm_field_hot_t *hot;
   SV *type_sv;
   SV *nodes_sv;
   SV *field_def_sv;
-  U8 pc = 0;
   gql_ir_native_field_op_t op;
 
   /* Mirrors one field iteration of gql_execution_execute_field_plan(), but the
@@ -2925,7 +2956,14 @@ gql_ir_execute_native_field_entry_into(
   if (!env
       || !writer
       || !promise_present
-      || !entry
+      || !state) {
+    return 0;
+  }
+
+  entry = state->cursor.entry;
+  meta = state->cursor.meta;
+  hot = state->cursor.hot;
+  if (!entry
       || !meta
       || meta->op_count == 0) {
     return 0;
@@ -2966,17 +3004,17 @@ dispatch:
       &&op_complete_abstract,
       &&op_consume
     };
-    if (pc >= meta->op_count) {
+    if (state->cursor.pc >= meta->op_count) {
       goto op_done;
     }
-    op = meta->ops[pc];
+    op = meta->ops[state->cursor.pc];
     goto *dispatch_table[op];
   }
 #else
-  if (pc >= meta->op_count) {
+  if (state->cursor.pc >= meta->op_count) {
     goto op_done;
   }
-  op = meta->ops[pc];
+  op = meta->ops[state->cursor.pc];
   switch (op) {
     case GQL_IR_NATIVE_FIELD_OP_META: goto op_meta;
     case GQL_IR_NATIVE_FIELD_OP_TRIVIAL_CONTEXT: goto op_trivial_context;
@@ -3004,12 +3042,12 @@ op_meta:
         &frame
       )) {
     if (frame.outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
-      pc = meta->consume_op_index;
+      state->cursor.pc = meta->consume_op_index;
       goto dispatch;
     }
     goto op_done;
   }
-  pc++;
+  state->cursor.pc++;
   goto dispatch;
 
 op_trivial_context:
@@ -3027,7 +3065,7 @@ op_trivial_context:
         &frame.result_sv
       )) {
     if (frame.outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
-      pc = meta->consume_op_index;
+      state->cursor.pc = meta->consume_op_index;
       goto dispatch;
     }
     goto op_done;
@@ -3046,7 +3084,7 @@ op_trivial_context:
           &frame.result_sv
         )) {
       if (frame.outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
-        pc = meta->consume_op_index;
+        state->cursor.pc = meta->consume_op_index;
         goto dispatch;
       }
       goto op_done;
@@ -3055,12 +3093,12 @@ op_trivial_context:
         && gql_execution_try_complete_trivial_value_fast(aTHX_ type_sv, frame.result_sv, &frame.outcome_sv)) {
       frame.outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
       (void)gql_ir_native_field_normalize_sync_completed_outcome(aTHX_ &frame);
-      pc = meta->consume_op_index;
+      state->cursor.pc = meta->consume_op_index;
       goto dispatch;
     }
   }
 
-  pc++;
+  state->cursor.pc++;
   goto dispatch;
 
 op_call_fixed_empty_args:
@@ -3077,7 +3115,7 @@ op_call_fixed_empty_args:
       )) {
     goto op_fail;
   }
-  pc++;
+  state->cursor.pc++;
   goto dispatch;
 
 op_call_fixed_build_args:
@@ -3095,7 +3133,7 @@ op_call_fixed_build_args:
       )) {
     goto op_fail;
   }
-  pc++;
+  state->cursor.pc++;
   goto dispatch;
 
 op_call_context_empty_args:
@@ -3115,7 +3153,7 @@ op_call_context_empty_args:
          )) {
     goto op_fail;
   }
-  pc++;
+  state->cursor.pc++;
   goto dispatch;
 
 op_call_context_build_args:
@@ -3136,7 +3174,7 @@ op_call_context_build_args:
          )) {
     goto op_fail;
   }
-  pc++;
+  state->cursor.pc++;
   goto dispatch;
 
 op_complete_trivial:
@@ -3152,7 +3190,7 @@ op_complete_trivial:
   if (frame.outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
     goto op_done;
   }
-  pc++;
+  state->cursor.pc++;
   goto dispatch;
 
 op_complete_generic:
@@ -3170,7 +3208,7 @@ op_complete_generic:
   if (frame.outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
     goto op_done;
   }
-  pc++;
+  state->cursor.pc++;
   goto dispatch;
 
 op_complete_object:
@@ -3188,7 +3226,7 @@ op_complete_object:
   if (frame.outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
     goto op_done;
   }
-  pc++;
+  state->cursor.pc++;
   goto dispatch;
 
 op_complete_list:
@@ -3206,7 +3244,7 @@ op_complete_list:
   if (frame.outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
     goto op_done;
   }
-  pc++;
+  state->cursor.pc++;
   goto dispatch;
 
 op_complete_abstract:
@@ -3224,7 +3262,7 @@ op_complete_abstract:
   if (frame.outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
     goto op_done;
   }
-  pc++;
+  state->cursor.pc++;
   goto dispatch;
 
 op_consume:
@@ -3238,7 +3276,7 @@ op_consume:
       )) {
     goto op_fail;
   }
-  pc++;
+  state->cursor.pc++;
   goto dispatch;
 
 op_done:

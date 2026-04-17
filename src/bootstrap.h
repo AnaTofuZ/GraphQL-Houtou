@@ -322,12 +322,21 @@ struct gql_ir_vm_block {
   U8 owns_field_plan;
 };
 
+typedef struct {
+  UV field_index;
+  U8 pc;
+  gql_ir_compiled_root_field_plan_entry_t *entry;
+  gql_ir_vm_field_meta_t *meta;
+  gql_ir_vm_field_hot_t *hot;
+} gql_ir_vm_exec_cursor_t;
+
 struct gql_ir_vm_exec_state {
   gql_ir_compiled_exec_t *compiled;
   gql_ir_vm_block_t *block;
   gql_ir_native_exec_env_t *env;
   gql_ir_native_result_writer_t *writer;
   int *promise_present;
+  gql_ir_vm_exec_cursor_t cursor;
   U8 require_runtime_operand_fill;
 };
 

@@ -498,22 +498,26 @@ Recent kept checkpoint:
 - the block executor now consumes a single `gql_ir_vm_exec_state_t`, so the
   mutable runtime state already looks like VM state rather than an ad-hoc
   argument bundle
+- the block executor now also owns a cursor (`field_index`, `entry`, `meta`,
+  `hot`, `pc`), so per-field direct-threaded dispatch reads its current op
+  from VM state rather than loop-local scratch variables
 
 This is still a transitional VM runtime, but it moves ownership one step
 closer to a true block/op executor where the block itself is the primary
 execution unit.
 
-Checkpoint benchmark (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+Checkpoint benchmark (`execution-benchmark.pl` repeated 3 times, median of the
+three runs):
 
 - `nested_variable_object`
-  - `houtou_compiled_ir` median `77792/s`
-  - `houtou_xs_ast` median `77213/s`
+  - `houtou_compiled_ir` median `77795/s`
+  - `houtou_xs_ast` median `77455/s`
 - `list_of_objects`
-  - `houtou_compiled_ir` median `58256/s`
-  - `houtou_xs_ast` median `58906/s`
+  - `houtou_compiled_ir` median `58162/s`
+  - `houtou_xs_ast` median `59024/s`
 - `abstract_with_fragment`
-  - `houtou_compiled_ir` median `42040/s`
-  - `houtou_xs_ast` median `42440/s`
+  - `houtou_compiled_ir` median `42173/s`
+  - `houtou_xs_ast` median `42724/s`
 
 ### 1. Lowered Program
 

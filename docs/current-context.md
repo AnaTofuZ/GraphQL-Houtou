@@ -139,6 +139,9 @@ Latest kept VM/runtime checkpoint:
 - `gql_ir_execute_native_field_plan(...)` and its sync outcome wrappers now
   fully delegate into `vm_block` wrappers, and the old
   `gql_ir_run_native_field_plan_loop*` family is gone
+- the block executor itself now consumes a single `gql_ir_vm_exec_state_t`
+  instead of an ad-hoc `(compiled, block, env, writer, promise_present,
+  require_runtime_operand_fill)` argument bundle
 - this does not yet create a large throughput jump, but it is the first kept
   step where root and child execution units are shaped around the same
   VM/block ownership model
@@ -151,26 +154,27 @@ Validation:
 Checkpoint benchmark (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
 
 - `nested_variable_object`
-  - `houtou_compiled_ir` median `76557/s`
-  - `houtou_xs_ast` median `76379/s`
+  - `houtou_compiled_ir` median `77792/s`
+  - `houtou_xs_ast` median `77213/s`
 - `list_of_objects`
-  - `houtou_compiled_ir` median `56875/s`
-  - `houtou_xs_ast` median `57872/s`
+  - `houtou_compiled_ir` median `58256/s`
+  - `houtou_xs_ast` median `58906/s`
 - `abstract_with_fragment`
-  - `houtou_compiled_ir` median `40841/s`
-  - `houtou_xs_ast` median `41389/s`
+  - `houtou_compiled_ir` median `42040/s`
+  - `houtou_xs_ast` median `42440/s`
 
 Reading:
 
-- `nested` stays effectively in the same band even after deleting the old
-  `field_plan` loop family
-- `list` softens a little, which suggests wrapper convergence alone is not the
-  next performance win
-- `abstract` also stays close, so the profitable work still sits inside the
-  `ABSTRACT -> OBJECT` family corridor and future block-owned op/state work
+- `nested` improves again once the block executor and its mutable state become
+  a single owned shape
+- `list` is still slightly behind, so the next profitable work is not more
+  wrapper cleanup but more block-owned op/state specialization
+- `abstract` stays close to parity, which means the remaining profitable work
+  still sits inside the `ABSTRACT -> OBJECT` family corridor
 - despite the small throughput movement, this is worth keeping because
   `compiled_ir` now treats root and child sync execution as the same
-  block-owned runtime shape, with no separate `field_plan` loop family left
+  block-owned runtime shape, with a single `vm_exec_state` feeding the direct-
+  threaded block executor
 
 ## April 2026 VM Reset
 

@@ -149,6 +149,7 @@ typedef struct gql_ir_compiled_root_field_plan_entry gql_ir_compiled_root_field_
 typedef struct gql_ir_compiled_root_field_plan gql_ir_compiled_root_field_plan_t;
 typedef struct gql_ir_execution_lowered_plan gql_ir_execution_lowered_plan_t;
 typedef struct gql_ir_vm_block gql_ir_vm_block_t;
+typedef struct gql_ir_vm_exec_state gql_ir_vm_exec_state_t;
 typedef struct gql_ir_vm_field_meta gql_ir_vm_field_meta_t;
 typedef struct gql_ir_vm_field_hot gql_ir_vm_field_hot_t;
 typedef struct gql_ir_vm_field_cold gql_ir_vm_field_cold_t;
@@ -319,6 +320,15 @@ struct gql_ir_vm_block {
   UV field_count;
   U8 requires_runtime_operand_fill;
   U8 owns_field_plan;
+};
+
+struct gql_ir_vm_exec_state {
+  gql_ir_compiled_exec_t *compiled;
+  gql_ir_vm_block_t *block;
+  gql_ir_native_exec_env_t *env;
+  gql_ir_native_result_writer_t *writer;
+  int *promise_present;
+  U8 require_runtime_operand_fill;
 };
 
 struct gql_ir_vm_program {

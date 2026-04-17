@@ -495,6 +495,9 @@ Recent kept checkpoint:
 - the old `gql_ir_run_native_field_plan_loop*` family is gone, so sync entry
   points now converge on `gql_ir_execute_vm_block(...)` /
   `gql_ir_run_vm_block_into_writer(...)`
+- the block executor now consumes a single `gql_ir_vm_exec_state_t`, so the
+  mutable runtime state already looks like VM state rather than an ad-hoc
+  argument bundle
 
 This is still a transitional VM runtime, but it moves ownership one step
 closer to a true block/op executor where the block itself is the primary
@@ -503,14 +506,14 @@ execution unit.
 Checkpoint benchmark (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
 
 - `nested_variable_object`
-  - `houtou_compiled_ir` median `76557/s`
-  - `houtou_xs_ast` median `76379/s`
+  - `houtou_compiled_ir` median `77792/s`
+  - `houtou_xs_ast` median `77213/s`
 - `list_of_objects`
-  - `houtou_compiled_ir` median `56875/s`
-  - `houtou_xs_ast` median `57872/s`
+  - `houtou_compiled_ir` median `58256/s`
+  - `houtou_xs_ast` median `58906/s`
 - `abstract_with_fragment`
-  - `houtou_compiled_ir` median `40841/s`
-  - `houtou_xs_ast` median `41389/s`
+  - `houtou_compiled_ir` median `42040/s`
+  - `houtou_xs_ast` median `42440/s`
 
 ### 1. Lowered Program
 

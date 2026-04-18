@@ -272,7 +272,7 @@ static int gql_ir_native_field_normalize_sync_completed_outcome(
 );
 static int gql_ir_native_field_try_meta_dispatch(
   pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_ir_vm_field_meta_t *meta,
   SV *type_sv,
   gql_ir_native_field_frame_t *frame
 );
@@ -1292,7 +1292,7 @@ gql_ir_vm_exec_state_try_meta_dispatch(
   return gql_ir_native_field_try_meta_dispatch(
     aTHX_
     state->env,
-    state->cursor.entry,
+    state->cursor.meta,
     state->cursor.type_sv,
     &state->frame
   );
@@ -1838,17 +1838,16 @@ gql_ir_cleanup_native_exec_accum(gql_ir_native_exec_accum_t *accum) {
 static int
 gql_ir_native_field_try_meta_dispatch(
   pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_ir_vm_field_meta_t *meta,
   SV *type_sv,
   gql_ir_native_field_frame_t *frame
 ) {
-  gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
   SV *direct_data_sv = NULL;
 
-  if (!env || !entry || !type_sv || !SvOK(type_sv) || !frame) {
+  if (!env || !meta || !type_sv || !SvOK(type_sv) || !frame) {
     return 0;
   }
-  if (!meta || meta->meta_dispatch_kind != GQL_IR_NATIVE_META_DISPATCH_TYPENAME) {
+  if (meta->meta_dispatch_kind != GQL_IR_NATIVE_META_DISPATCH_TYPENAME) {
     return 0;
   }
 

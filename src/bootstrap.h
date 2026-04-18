@@ -365,6 +365,11 @@ struct gql_ir_vm_field_slot {
   gql_ir_compiled_root_field_plan_entry_t *entry;
   gql_ir_vm_field_meta_t *meta;
   gql_ir_vm_field_hot_t *hot;
+  SV *field_def_sv;
+  SV *resolve_sv;
+  SV *nodes_sv;
+  SV *first_node_sv;
+  SV *type_sv;
 };
 
 typedef struct {
@@ -376,7 +381,9 @@ typedef struct {
   gql_ir_vm_field_meta_t *meta;
   gql_ir_vm_field_hot_t *hot;
   SV *field_def_sv;
+  SV *resolve_sv;
   SV *nodes_sv;
+  SV *first_node_sv;
   SV *type_sv;
 } gql_ir_vm_exec_cursor_t;
 

@@ -3604,17 +3604,44 @@ with the cursor holding:
 - program counter
 - current opcode
 
-The next structural VM checkpoint makes `vm_block` own block-local field slot
-views:
+The latest structural VM checkpoint now makes `vm_block` own block-local field
+slot views:
 
-- owned `gql_ir_vm_block_t` instances now allocate `gql_ir_vm_field_slot_t[]`
-- each slot carries stable pointers for:
+- owned `gql_ir_vm_block_t` instances allocate `gql_ir_vm_field_slot_t[]`
+- each slot now carries stable operand pointers for:
   - `entry`
   - `meta`
   - `hot`
-- `gql_ir_vm_exec_cursor_t` now carries `slot` alongside `entry/meta/hot`
+  - `field_def_sv`
+  - `resolve_sv`
+  - `nodes_sv`
+  - `first_node_sv`
+  - `type_sv`
+- `gql_ir_vm_exec_cursor_t` carries `slot` plus the current operand snapshot,
+  and fixed resolver / build-args paths read from that snapshot rather than
+  rediscovering operands from `entry/hot`
 
-This does not aim at a short-term throughput jump. The purpose is to move the
-execution model closer to a real VM where the block owns immutable operand
+This still is not aimed at a short-term throughput jump. The purpose is to move
+the execution model closer to a real VM where the block owns immutable operand
 views and the cursor advances through those views rather than repeatedly
 discovering them from the raw lowered entry layout.
+
+The next structural step is to let more of the field lifecycle consume the slot
+snapshot directly so that `begin_field -> dispatch_current_field ->
+finish_field` needs fewer raw `entry/hot` lookups.
+
+Spot benchmark after this slot-operand checkpoint (`--count=-3`) was:
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 77314/s`
+  - `houtou_xs_ast 75127/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 57233/s`
+  - `houtou_xs_ast 58477/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41097/s`
+  - `houtou_xs_ast 41684/s`
+
+That is good enough to keep the checkpoint: `nested` clearly benefits, while
+`list` and `abstract` stay within the current same-band range for structural
+VM work.

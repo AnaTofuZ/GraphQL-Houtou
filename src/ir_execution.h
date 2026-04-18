@@ -226,6 +226,34 @@ static int gql_ir_consume_completed_result(pTHX_ HV *data_hv, AV **all_errors_av
 static int gql_ir_native_field_normalize_sync_completed_outcome(
   pTHX_ gql_ir_native_field_frame_t *frame
 );
+static int gql_ir_native_field_try_meta_dispatch(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  SV *type_sv,
+  gql_ir_native_field_frame_t *frame
+);
+static SV *gql_ir_native_field_get_resolver(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  int *owns_resolve_out
+);
+static int gql_ir_native_field_call_resolver_empty_args(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *resolve_sv,
+  SV **result_out,
+  SV **args_out,
+  int *owns_args_out
+);
+static int gql_ir_native_field_call_resolver_build_args(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *resolve_sv,
+  SV **result_out,
+  SV **args_out,
+  int *owns_args_out
+);
 static int gql_ir_native_field_complete_generic_result(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
@@ -389,6 +417,13 @@ static SV *gql_ir_finish_native_exec_result(
 static int gql_ir_run_vm_block_loop(pTHX_ gql_ir_vm_exec_state_t *state);
 static int gql_ir_run_vm_block(pTHX_ gql_ir_vm_exec_state_t *state);
 static int gql_ir_run_vm_program_root(pTHX_ gql_ir_vm_exec_state_t *state);
+static int gql_ir_vm_exec_state_try_meta_dispatch(
+  pTHX_ gql_ir_vm_exec_state_t *state
+);
+static int gql_ir_vm_exec_state_call_current_resolver(
+  pTHX_ gql_ir_vm_exec_state_t *state,
+  gql_ir_native_field_op_t op
+);
 static int gql_ir_vm_exec_state_complete_current_field(
   pTHX_ gql_ir_vm_exec_state_t *state,
   gql_ir_native_field_op_t op
@@ -1187,6 +1222,116 @@ gql_ir_run_vm_program_root(
   }
   state->block = state->compiled ? gql_ir_vm_program_root_block(gql_ir_execution_lowered_program(state->compiled)) : state->block;
   return gql_ir_run_vm_block(aTHX_ state);
+}
+
+static int
+gql_ir_vm_exec_state_try_meta_dispatch(
+  pTHX_ gql_ir_vm_exec_state_t *state
+) {
+  if (!state) {
+    return 0;
+  }
+
+  return gql_ir_native_field_try_meta_dispatch(
+    aTHX_
+    state->env,
+    state->cursor.entry,
+    state->cursor.type_sv,
+    &state->frame
+  );
+}
+
+static int
+gql_ir_vm_exec_state_call_current_resolver(
+  pTHX_ gql_ir_vm_exec_state_t *state,
+  gql_ir_native_field_op_t op
+) {
+  gql_ir_native_field_frame_t *frame;
+
+  if (!state || !state->env || !state->cursor.entry) {
+    return 0;
+  }
+
+  frame = &state->frame;
+
+  switch (op) {
+    case GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_EMPTY_ARGS:
+      frame->resolve_sv = (state->cursor.hot && state->cursor.hot->resolve_sv)
+        ? state->cursor.hot->resolve_sv
+        : state->cursor.entry->resolve_sv;
+      frame->resolve_is_default = 0;
+      return gql_ir_native_field_call_resolver_empty_args(
+        aTHX_
+        state->env,
+        &frame->lazy_info,
+        frame->resolve_sv,
+        &frame->result_sv,
+        &frame->args_sv,
+        &frame->owns_args_sv
+      );
+    case GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_BUILD_ARGS:
+      frame->resolve_sv = (state->cursor.hot && state->cursor.hot->resolve_sv)
+        ? state->cursor.hot->resolve_sv
+        : state->cursor.entry->resolve_sv;
+      frame->resolve_is_default = 0;
+      return gql_ir_native_field_call_resolver_build_args(
+        aTHX_
+        state->env,
+        state->cursor.entry,
+        &frame->lazy_info,
+        frame->resolve_sv,
+        &frame->result_sv,
+        &frame->args_sv,
+        &frame->owns_args_sv
+      );
+    case GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_EMPTY_ARGS:
+      if (!frame->resolve_sv) {
+        frame->resolve_sv = gql_ir_native_field_get_resolver(
+          aTHX_
+          state->env,
+          state->cursor.entry,
+          &frame->owns_resolve_sv
+        );
+        frame->resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame->resolve_sv);
+      }
+      if (frame->resolve_is_default && !frame->used_fast_default_resolve) {
+        return 1;
+      }
+      return gql_ir_native_field_call_resolver_empty_args(
+        aTHX_
+        state->env,
+        &frame->lazy_info,
+        frame->resolve_sv,
+        &frame->result_sv,
+        &frame->args_sv,
+        &frame->owns_args_sv
+      );
+    case GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_BUILD_ARGS:
+      if (!frame->resolve_sv) {
+        frame->resolve_sv = gql_ir_native_field_get_resolver(
+          aTHX_
+          state->env,
+          state->cursor.entry,
+          &frame->owns_resolve_sv
+        );
+        frame->resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame->resolve_sv);
+      }
+      if (frame->resolve_is_default && !frame->used_fast_default_resolve) {
+        return 1;
+      }
+      return gql_ir_native_field_call_resolver_build_args(
+        aTHX_
+        state->env,
+        state->cursor.entry,
+        &frame->lazy_info,
+        frame->resolve_sv,
+        &frame->result_sv,
+        &frame->args_sv,
+        &frame->owns_args_sv
+      );
+    default:
+      return 0;
+  }
 }
 
 static int
@@ -3165,12 +3310,8 @@ dispatch:
 #endif
 
 op_meta:
-  if (gql_ir_native_field_try_meta_dispatch(
-        aTHX_
-        env,
-        entry,
-        state->cursor.type_sv,
-        frame
+  if (gql_ir_vm_exec_state_try_meta_dispatch(
+        aTHX_ state
       )) {
     if (frame->outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
       state->cursor.pc = meta->consume_op_index;
@@ -3233,16 +3374,10 @@ op_trivial_context:
   goto dispatch;
 
 op_call_fixed_empty_args:
-  frame->resolve_sv = (hot && hot->resolve_sv) ? hot->resolve_sv : entry->resolve_sv;
-  frame->resolve_is_default = 0;
-  if (!gql_ir_native_field_call_resolver_empty_args(
+  if (!gql_ir_vm_exec_state_call_current_resolver(
         aTHX_
-        env,
-        &frame->lazy_info,
-        frame->resolve_sv,
-        &frame->result_sv,
-        &frame->args_sv,
-        &frame->owns_args_sv
+        state,
+        GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_EMPTY_ARGS
       )) {
     goto op_fail;
   }
@@ -3250,17 +3385,10 @@ op_call_fixed_empty_args:
   goto dispatch;
 
 op_call_fixed_build_args:
-  frame->resolve_sv = (hot && hot->resolve_sv) ? hot->resolve_sv : entry->resolve_sv;
-  frame->resolve_is_default = 0;
-  if (!gql_ir_native_field_call_resolver_build_args(
+  if (!gql_ir_vm_exec_state_call_current_resolver(
         aTHX_
-        env,
-        entry,
-        &frame->lazy_info,
-        frame->resolve_sv,
-        &frame->result_sv,
-        &frame->args_sv,
-        &frame->owns_args_sv
+        state,
+        GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_BUILD_ARGS
       )) {
     goto op_fail;
   }
@@ -3268,19 +3396,11 @@ op_call_fixed_build_args:
   goto dispatch;
 
 op_call_context_empty_args:
-  if (!frame->resolve_sv) {
-    frame->resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame->owns_resolve_sv);
-    frame->resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame->resolve_sv);
-  }
   if (!frame->used_fast_default_resolve
-      && !gql_ir_native_field_call_resolver_empty_args(
+      && !gql_ir_vm_exec_state_call_current_resolver(
            aTHX_
-           env,
-           &frame->lazy_info,
-           frame->resolve_sv,
-           &frame->result_sv,
-           &frame->args_sv,
-           &frame->owns_args_sv
+           state,
+           GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_EMPTY_ARGS
          )) {
     goto op_fail;
   }
@@ -3288,20 +3408,11 @@ op_call_context_empty_args:
   goto dispatch;
 
 op_call_context_build_args:
-  if (!frame->resolve_sv) {
-    frame->resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame->owns_resolve_sv);
-    frame->resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame->resolve_sv);
-  }
   if (!frame->used_fast_default_resolve
-      && !gql_ir_native_field_call_resolver_build_args(
+      && !gql_ir_vm_exec_state_call_current_resolver(
            aTHX_
-           env,
-           entry,
-           &frame->lazy_info,
-           frame->resolve_sv,
-           &frame->result_sv,
-           &frame->args_sv,
-           &frame->owns_args_sv
+           state,
+           GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_BUILD_ARGS
          )) {
     goto op_fail;
   }

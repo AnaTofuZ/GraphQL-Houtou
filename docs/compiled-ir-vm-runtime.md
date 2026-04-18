@@ -2130,3 +2130,40 @@ Interpretation:
 - list stays healthy
 - the remaining abstract gap is now clearly in the execution-owned family
   corridor, not in block/state ownership plumbing
+
+The following checkpoint moves the remaining hot opcode entrypoints behind the
+same VM state object:
+
+- `META` -> `gql_ir_vm_exec_state_try_meta_dispatch(...)`
+- fixed/context resolver calls ->
+  `gql_ir_vm_exec_state_call_current_resolver(...)`
+- `COMPLETE_*` -> `gql_ir_vm_exec_state_complete_current_field(...)`
+- `CONSUME` -> `gql_ir_vm_exec_state_consume_current_field(...)`
+
+At this point the direct-threaded field executor is much closer to the final
+shape of a real VM:
+
+- the block loop owns field begin/finish
+- the state owns cursor/frame/current operand views
+- the opcode dispatcher mostly just advances `pc` and jumps
+
+Repeat checkpoint benchmark after moving meta/resolve entrypoints into VM
+state (`execution-benchmark.pl --count=-3` run 3 times manually, median
+taken):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `76368/s`
+  - `houtou_xs_ast` median `76732/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `56520/s`
+  - `houtou_xs_ast` median `57053/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `41908/s`
+  - `houtou_xs_ast` median `41945/s`
+
+This is another structural VM checkpoint rather than a pure throughput win:
+
+- throughput is roughly in the same band
+- ownership is materially cleaner
+- future work can now focus on real VM block/state semantics instead of
+  helper-edge plumbing

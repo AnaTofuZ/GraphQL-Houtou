@@ -3541,3 +3541,41 @@ Interpretation:
 - `abstract` is still slightly behind; this reinforces that the remaining work
   is inside the execution-owned abstract/object corridor rather than in the
   block/state orchestration itself
+
+The next VM checkpoint moved even more opcode entrypoints behind
+`gql_ir_vm_exec_state_t`:
+
+- `META` now enters through `gql_ir_vm_exec_state_try_meta_dispatch(...)`
+- fixed/context resolver calls now enter through
+  `gql_ir_vm_exec_state_call_current_resolver(...)`
+- `COMPLETE_*` and `CONSUME` remain state-owned from the previous checkpoint
+
+This means the field executor is now much closer to a pure threaded dispatcher
+over:
+
+- `state->cursor`
+- `state->frame`
+- `state->writer`
+- current op family
+
+Repeat checkpoint benchmark after moving meta/resolve entrypoints into VM state
+(`execution-benchmark.pl --count=-3` run 3 times manually, median taken):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `76368/s`
+  - `houtou_xs_ast` median `76732/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `56520/s`
+  - `houtou_xs_ast` median `57053/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `41908/s`
+  - `houtou_xs_ast` median `41945/s`
+
+Interpretation:
+
+- this is not a throughput-maximizing checkpoint
+- but it materially improves VM shape because the hot dispatcher now owns
+  field begin, meta, resolve, complete, consume, and field finish through
+  state helpers
+- `abstract` is now effectively in the same band, which is acceptable for a
+  structural VM checkpoint

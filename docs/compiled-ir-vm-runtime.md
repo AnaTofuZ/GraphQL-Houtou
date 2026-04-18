@@ -2167,3 +2167,27 @@ This is another structural VM checkpoint rather than a pure throughput win:
 - ownership is materially cleaner
 - future work can now focus on real VM block/state semantics instead of
   helper-edge plumbing
+
+The next structural step pushes field dispatch itself behind the VM state
+object:
+
+- `gql_ir_run_vm_block_loop(...)` now advances fields through
+  `gql_ir_vm_exec_state_run_current_field(...)`
+- the threaded dispatcher entrypoint is now
+  `gql_ir_vm_exec_state_dispatch_current_field(...)`
+- `gql_ir_vm_exec_cursor_t` carries `current_op`, so the active opcode is
+  treated as part of VM state rather than only a dispatcher-local variable
+
+This does not yet change the performance envelope by itself, but it matters
+for a "real VM" endpoint because the block executor is now explicitly shaped
+as:
+
+- field begin
+- run current field
+- field finish
+
+with all live field execution state hanging off:
+
+- `state->cursor`
+- `state->frame`
+- `state->writer`

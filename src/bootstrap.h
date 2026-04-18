@@ -362,6 +362,7 @@ struct gql_ir_vm_block {
 typedef struct {
   UV field_index;
   U8 pc;
+  gql_ir_native_field_op_t current_op;
   gql_ir_compiled_root_field_plan_entry_t *entry;
   gql_ir_vm_field_meta_t *meta;
   gql_ir_vm_field_hot_t *hot;

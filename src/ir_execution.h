@@ -417,6 +417,9 @@ static SV *gql_ir_finish_native_exec_result(
 static int gql_ir_run_vm_block_loop(pTHX_ gql_ir_vm_exec_state_t *state);
 static int gql_ir_run_vm_block(pTHX_ gql_ir_vm_exec_state_t *state);
 static int gql_ir_run_vm_program_root(pTHX_ gql_ir_vm_exec_state_t *state);
+static int gql_ir_vm_exec_state_run_current_field(
+  pTHX_ gql_ir_vm_exec_state_t *state
+);
 static int gql_ir_vm_exec_state_try_meta_dispatch(
   pTHX_ gql_ir_vm_exec_state_t *state
 );
@@ -435,7 +438,7 @@ static int gql_ir_ensure_native_field_entry_operands(
   pTHX_ gql_ir_compiled_exec_t *compiled,
   gql_ir_compiled_root_field_plan_entry_t *entry
 );
-static int gql_ir_execute_native_field_entry_into(
+static int gql_ir_vm_exec_state_dispatch_current_field(
   gql_ir_vm_exec_state_t *state
 );
 static int gql_ir_vm_exec_state_prepare_field(
@@ -1126,6 +1129,7 @@ gql_ir_vm_exec_state_prepare_field(
 
   state->cursor.field_index = field_index;
   state->cursor.pc = 0;
+  state->cursor.current_op = GQL_IR_NATIVE_FIELD_OP_META;
   state->cursor.entry = entry;
   state->cursor.meta = meta;
   state->cursor.hot = gql_ir_native_field_hot(entry);
@@ -1194,7 +1198,7 @@ gql_ir_run_vm_block_loop(
       continue;
     }
 
-    if (!gql_ir_execute_native_field_entry_into(
+    if (!gql_ir_vm_exec_state_run_current_field(
           aTHX_ state
         )) {
       gql_ir_vm_exec_state_finish_field(aTHX_ state);
@@ -1204,6 +1208,13 @@ gql_ir_run_vm_block_loop(
   }
 
   return 1;
+}
+
+static int
+gql_ir_vm_exec_state_run_current_field(
+  pTHX_ gql_ir_vm_exec_state_t *state
+) {
+  return gql_ir_vm_exec_state_dispatch_current_field(aTHX_ state);
 }
 
 static int
@@ -3215,7 +3226,7 @@ gql_ir_cleanup_native_field_frame(
 }
 
 static int
-gql_ir_execute_native_field_entry_into(
+gql_ir_vm_exec_state_dispatch_current_field(
   gql_ir_vm_exec_state_t *state
 ) {
   gql_ir_native_field_frame_t *frame;
@@ -3283,14 +3294,16 @@ dispatch:
     if (state->cursor.pc >= meta->op_count) {
       goto op_done;
     }
-    op = meta->ops[state->cursor.pc];
+    state->cursor.current_op = meta->ops[state->cursor.pc];
+    op = state->cursor.current_op;
     goto *dispatch_table[op];
   }
 #else
   if (state->cursor.pc >= meta->op_count) {
     goto op_done;
   }
-  op = meta->ops[state->cursor.pc];
+  state->cursor.current_op = meta->ops[state->cursor.pc];
+  op = state->cursor.current_op;
   switch (op) {
     case GQL_IR_NATIVE_FIELD_OP_META: goto op_meta;
     case GQL_IR_NATIVE_FIELD_OP_TRIVIAL_CONTEXT: goto op_trivial_context;

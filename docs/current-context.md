@@ -3579,3 +3579,27 @@ Interpretation:
   state helpers
 - `abstract` is now effectively in the same band, which is acceptable for a
   structural VM checkpoint
+
+The next VM shape checkpoint pushes field dispatch itself behind
+`gql_ir_vm_exec_state_t`:
+
+- block execution now calls `gql_ir_vm_exec_state_run_current_field(...)`
+  instead of invoking the threaded field dispatcher directly
+- the dispatcher entrypoint itself is now
+  `gql_ir_vm_exec_state_dispatch_current_field(...)`
+- `gql_ir_vm_exec_cursor_t` now carries `current_op`, so the active opcode is
+  part of VM state rather than only a dispatcher-local temporary
+
+This checkpoint is intentionally structural rather than benchmark-driven. The
+goal is to make the hot loop look more like a true block-owned VM state
+machine:
+
+- `begin_field`
+- `run_current_field`
+- `finish_field`
+
+with the cursor holding:
+
+- current field operands
+- program counter
+- current opcode

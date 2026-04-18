@@ -278,7 +278,8 @@ static int gql_ir_native_field_try_meta_dispatch(
 );
 static SV *gql_ir_native_field_get_resolver(
   pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_ir_vm_field_meta_t *meta,
+  SV *resolve_sv,
   int *owns_resolve_out
 );
 static int gql_ir_native_field_call_resolver_empty_args(
@@ -1342,7 +1343,8 @@ gql_ir_vm_exec_state_call_current_resolver(
         frame->resolve_sv = gql_ir_native_field_get_resolver(
           aTHX_
           state->env,
-          state->cursor.entry,
+          state->cursor.meta,
+          state->cursor.resolve_sv,
           &frame->owns_resolve_sv
         );
         frame->resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame->resolve_sv);
@@ -1364,7 +1366,8 @@ gql_ir_vm_exec_state_call_current_resolver(
         frame->resolve_sv = gql_ir_native_field_get_resolver(
           aTHX_
           state->env,
-          state->cursor.entry,
+          state->cursor.meta,
+          state->cursor.resolve_sv,
           &frame->owns_resolve_sv
         );
         frame->resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame->resolve_sv);
@@ -1865,28 +1868,24 @@ gql_ir_native_field_try_meta_dispatch(
 static SV *
 gql_ir_native_field_get_resolver(
   pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_ir_vm_field_meta_t *meta,
+  SV *resolve_sv,
   int *owns_resolve_out
 ) {
-  gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
-  gql_ir_vm_field_hot_t *hot = gql_ir_native_field_hot(entry);
   if (owns_resolve_out) {
     *owns_resolve_out = 0;
   }
-  if (!env || !entry) {
+  if (!env) {
     return &PL_sv_undef;
   }
 
   switch (meta ? meta->resolve_dispatch_kind : GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT) {
     case GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED:
-      return (hot && hot->resolve_sv) ? hot->resolve_sv : entry->resolve_sv;
+      return resolve_sv ? resolve_sv : &PL_sv_undef;
     case GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT:
     default:
-      if (hot && hot->resolve_sv && SvOK(hot->resolve_sv)) {
-        return hot->resolve_sv;
-      }
-      if (entry->resolve_sv && SvOK(entry->resolve_sv)) {
-        return entry->resolve_sv;
+      if (resolve_sv && SvOK(resolve_sv)) {
+        return resolve_sv;
       }
       if (env->field_resolver_sv && SvOK(env->field_resolver_sv)) {
         return env->field_resolver_sv;
@@ -3381,7 +3380,7 @@ op_meta:
 
 op_trivial_context:
   if (!frame->resolve_sv) {
-    frame->resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame->owns_resolve_sv);
+    frame->resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, meta, state->cursor.resolve_sv, &frame->owns_resolve_sv);
     frame->resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame->resolve_sv);
   }
   if (gql_ir_native_field_try_trivial_completion(

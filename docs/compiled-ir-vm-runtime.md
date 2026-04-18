@@ -2232,3 +2232,24 @@ This matters because the hot path is no longer only "dispatch reads slot
 operands"; completion-family helpers also run against the same VM-owned operand
 snapshot. That reduces pointer chasing and makes the VM cursor the single
 source of truth for both dispatch and completion.
+
+The next ownership step is now also in place:
+
+- `gql_ir_vm_field_slot_t` / `gql_ir_vm_exec_cursor_t` carry `cold` and
+  `path_sv`
+- `gql_ir_init_native_field_frame(...)` and
+  `gql_ir_cleanup_native_field_frame(...)` consume the cursor snapshot rather
+  than rediscovering path/name/type from the lowered entry
+- `gql_ir_native_field_consume_completed(...)` now takes `meta` directly, so
+  result-name ownership also stays inside `cursor/frame/meta`
+
+At this point the VM runtime is much closer to a real state machine:
+
+- immutable block-owned slot operands
+- mutable cursor-owned current field view
+- mutable frame-owned resolver/result/outcome state
+- writer-owned result aggregation
+
+The next speed-oriented step should keep moving fallback logic inward so these
+VM-owned states do more of the work before the runtime escapes back toward
+generic completion helpers.

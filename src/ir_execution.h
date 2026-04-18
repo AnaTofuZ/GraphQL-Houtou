@@ -89,6 +89,7 @@ gql_ir_vm_program_root_block(gql_ir_vm_program_t *program) {
 static void
 gql_ir_vm_field_slot_refresh(gql_ir_vm_field_slot_t *slot, gql_ir_compiled_root_field_plan_entry_t *entry) {
   gql_ir_vm_field_hot_t *hot;
+  gql_ir_vm_field_cold_t *cold;
 
   if (!slot) {
     return;
@@ -100,14 +101,20 @@ gql_ir_vm_field_slot_refresh(gql_ir_vm_field_slot_t *slot, gql_ir_compiled_root_
   }
 
   hot = gql_ir_native_field_hot(entry);
+  cold = entry ? entry->cold : NULL;
+  if (!cold && entry) {
+    cold = &entry->cold_inline;
+  }
   slot->entry = entry;
   slot->meta = gql_ir_native_field_meta(entry);
   slot->hot = hot;
+  slot->cold = cold;
   slot->field_def_sv = (hot && hot->field_def_sv) ? hot->field_def_sv : entry->field_def_sv;
   slot->resolve_sv = (hot && hot->resolve_sv) ? hot->resolve_sv : entry->resolve_sv;
   slot->nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
   slot->first_node_sv = (hot && hot->first_node_sv) ? hot->first_node_sv : entry->first_node_sv;
   slot->type_sv = (hot && hot->type_sv) ? hot->type_sv : entry->type_sv;
+  slot->path_sv = (cold && cold->path_sv && SvOK(cold->path_sv)) ? cold->path_sv : NULL;
   slot->native_field_plan = (hot && hot->native_field_plan) ? hot->native_field_plan : entry->native_field_plan;
   slot->native_block = (hot && hot->native_block) ? hot->native_block : entry->native_block;
   slot->abstract_child_plan_table =
@@ -344,7 +351,7 @@ static int gql_ir_native_field_consume_completed(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
   int *promise_present,
-  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_ir_vm_field_meta_t *meta,
   gql_ir_native_field_frame_t *frame
 );
 static int gql_ir_try_complete_sync_list_into_outcome(
@@ -502,11 +509,11 @@ static int gql_ir_vm_exec_state_prepare_field(
 static void gql_ir_init_native_field_frame(
   gql_ir_native_field_frame_t *frame,
   gql_ir_native_exec_env_t *env,
-  gql_ir_compiled_root_field_plan_entry_t *entry
+  gql_ir_vm_exec_cursor_t *cursor
 );
 static void gql_ir_cleanup_native_field_frame(
   pTHX_ gql_ir_native_field_frame_t *frame,
-  gql_ir_compiled_root_field_plan_entry_t *entry
+  gql_ir_vm_exec_cursor_t *cursor
 );
 static int gql_ir_vm_exec_state_begin_field(
   pTHX_ gql_ir_vm_exec_state_t *state,
@@ -1194,11 +1201,13 @@ gql_ir_vm_exec_state_prepare_field(
   state->cursor.entry = entry;
   state->cursor.meta = slot ? slot->meta : meta;
   state->cursor.hot = slot ? slot->hot : gql_ir_native_field_hot(entry);
+  state->cursor.cold = slot ? slot->cold : gql_ir_native_field_cold(entry);
   state->cursor.field_def_sv = slot ? slot->field_def_sv : ((state->cursor.hot && state->cursor.hot->field_def_sv) ? state->cursor.hot->field_def_sv : entry->field_def_sv);
   state->cursor.resolve_sv = slot ? slot->resolve_sv : ((state->cursor.hot && state->cursor.hot->resolve_sv) ? state->cursor.hot->resolve_sv : entry->resolve_sv);
   state->cursor.nodes_sv = slot ? slot->nodes_sv : ((state->cursor.hot && state->cursor.hot->nodes_sv) ? state->cursor.hot->nodes_sv : entry->nodes_sv);
   state->cursor.first_node_sv = slot ? slot->first_node_sv : ((state->cursor.hot && state->cursor.hot->first_node_sv) ? state->cursor.hot->first_node_sv : entry->first_node_sv);
   state->cursor.type_sv = slot ? slot->type_sv : ((state->cursor.hot && state->cursor.hot->type_sv) ? state->cursor.hot->type_sv : entry->type_sv);
+  state->cursor.path_sv = slot ? slot->path_sv : ((state->cursor.cold && state->cursor.cold->path_sv && SvOK(state->cursor.cold->path_sv)) ? state->cursor.cold->path_sv : NULL);
   state->cursor.native_field_plan = slot ? slot->native_field_plan : ((state->cursor.hot && state->cursor.hot->native_field_plan) ? state->cursor.hot->native_field_plan : entry->native_field_plan);
   state->cursor.native_block = slot ? slot->native_block : ((state->cursor.hot && state->cursor.hot->native_block) ? state->cursor.hot->native_block : entry->native_block);
   state->cursor.abstract_child_plan_table =
@@ -1224,7 +1233,7 @@ gql_ir_vm_exec_state_begin_field(
   if (!gql_ir_vm_exec_state_prepare_field(aTHX_ state, field_index)) {
     return 0;
   }
-  gql_ir_init_native_field_frame(&state->frame, state->env, state->cursor.entry);
+  gql_ir_init_native_field_frame(&state->frame, state->env, &state->cursor);
   return 1;
 }
 
@@ -1235,7 +1244,7 @@ gql_ir_vm_exec_state_finish_field(
   if (!state || !state->cursor.entry) {
     return;
   }
-  gql_ir_cleanup_native_field_frame(aTHX_ &state->frame, state->cursor.entry);
+  gql_ir_cleanup_native_field_frame(aTHX_ &state->frame, &state->cursor);
 }
 
 static int
@@ -1481,7 +1490,7 @@ gql_ir_vm_exec_state_consume_current_field(
     state->env,
     state->writer,
     state->promise_present,
-    state->cursor.entry,
+    state->cursor.meta,
     &state->frame
   );
 }
@@ -2877,14 +2886,13 @@ gql_ir_native_field_consume_completed(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
   int *promise_present,
-  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_ir_vm_field_meta_t *meta,
   gql_ir_native_field_frame_t *frame
 ) {
-  gql_ir_vm_field_meta_t *meta = frame ? frame->meta : gql_ir_native_field_meta(entry);
   SV *completed_sv = NULL;
   int is_completed_promise = 0;
 
-  if (!env || !writer || !promise_present || !entry || !frame || !meta) {
+  if (!env || !writer || !promise_present || !frame || !meta) {
     return 0;
   }
 
@@ -3181,18 +3189,16 @@ static void
 gql_ir_init_native_field_frame(
   gql_ir_native_field_frame_t *frame,
   gql_ir_native_exec_env_t *env,
-  gql_ir_compiled_root_field_plan_entry_t *entry
+  gql_ir_vm_exec_cursor_t *cursor
 ) {
-  gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
-  gql_ir_vm_field_hot_t *hot = gql_ir_native_field_hot(entry);
-  gql_ir_vm_field_cold_t *cold = gql_ir_native_field_cold(entry);
-  SV *field_def_sv = (hot && hot->field_def_sv) ? hot->field_def_sv : entry->field_def_sv;
+  gql_ir_vm_field_meta_t *meta = cursor ? cursor->meta : NULL;
+  SV *field_def_sv = cursor ? cursor->field_def_sv : NULL;
   SV *return_type_sv = (meta && meta->return_type_sv)
     ? meta->return_type_sv
-    : ((hot && hot->type_sv) ? hot->type_sv : entry->type_sv);
-  SV *nodes_sv = (hot && hot->nodes_sv) ? hot->nodes_sv : entry->nodes_sv;
+    : (cursor ? cursor->type_sv : NULL);
+  SV *nodes_sv = cursor ? cursor->nodes_sv : NULL;
 
-  if (!frame || !env || !entry) {
+  if (!frame || !env || !cursor) {
     return;
   }
 
@@ -3202,23 +3208,22 @@ gql_ir_init_native_field_frame(
   frame->lazy_info.parent_type_sv = gql_ir_native_env_parent_type(env);
   frame->lazy_info.field_def_sv = field_def_sv;
   frame->lazy_info.return_type_sv = return_type_sv;
-  frame->lazy_info.field_name_sv = gql_ir_native_field_name(entry);
+  frame->lazy_info.field_name_sv = meta ? meta->field_name_sv : NULL;
   frame->lazy_info.nodes_sv = nodes_sv;
-  if (cold && cold->path_sv && SvOK(cold->path_sv)) {
-    frame->lazy_info.path_sv = cold->path_sv;
+  if (cursor->path_sv && SvOK(cursor->path_sv)) {
+    frame->lazy_info.path_sv = cursor->path_sv;
   } else {
     frame->lazy_info.base_path_sv = gql_ir_native_env_base_path(env);
-    frame->lazy_info.result_name_sv = gql_ir_native_field_result_name(entry);
+    frame->lazy_info.result_name_sv = meta ? meta->result_name_sv : NULL;
   }
 }
 
 static void
 gql_ir_cleanup_native_field_frame(
   pTHX_ gql_ir_native_field_frame_t *frame,
-  gql_ir_compiled_root_field_plan_entry_t *entry
+  gql_ir_vm_exec_cursor_t *cursor
 ) {
-  gql_ir_vm_field_cold_t *cold = gql_ir_native_field_cold(entry);
-  if (!frame || !entry) {
+  if (!frame || !cursor) {
     return;
   }
 
@@ -3238,7 +3243,7 @@ gql_ir_cleanup_native_field_frame(
     SvREFCNT_dec(frame->resolve_sv);
     frame->resolve_sv = NULL;
   }
-  if (frame->lazy_info.path_sv && (!cold || !cold->path_sv || !SvOK(cold->path_sv))) {
+  if (frame->lazy_info.path_sv && (!cursor->path_sv || !SvOK(cursor->path_sv))) {
     SvREFCNT_dec(frame->lazy_info.path_sv);
     frame->lazy_info.path_sv = NULL;
   }

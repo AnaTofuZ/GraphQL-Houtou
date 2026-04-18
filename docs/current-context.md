@@ -3678,3 +3678,35 @@ Interpretation:
 - `abstract` is still slightly behind, so the next speed-focused work should
   keep pushing completion-family narrow paths behind block-owned state instead
   of adding more abstract-specific wrapper layers
+
+The next VM-state checkpoint pushes that same ownership through `frame` and
+`consume` as well:
+
+- `gql_ir_vm_field_slot_t` / `gql_ir_vm_exec_cursor_t` now also carry `cold`
+  and `path_sv`
+- field begin / finish now initialize and clean up `frame->lazy_info` from the
+  cursor snapshot instead of re-deriving path/name/type from the lowered entry
+- `consume` now takes `meta` directly, so `result_name_sv` stays in cursor/meta
+  ownership and the final write path no longer needs the raw entry
+
+Spot benchmark after this `frame + consume through cursor` checkpoint
+(`--count=-3`) was:
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 80129/s`
+  - `houtou_xs_ast 77917/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 59581/s`
+  - `houtou_xs_ast 59752/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 42462/s`
+  - `houtou_xs_ast 42801/s`
+
+Interpretation:
+
+- `nested` stays clearly ahead and `list` returns to same-band
+- `abstract` remains only slightly behind, which is acceptable for a
+  state-ownership checkpoint
+- the next speed-focused work should push more completion-family fallback
+  logic behind the VM-owned cursor/frame state, rather than adding more outer
+  helper layers

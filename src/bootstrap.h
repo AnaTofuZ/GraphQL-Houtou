@@ -365,11 +365,13 @@ struct gql_ir_vm_field_slot {
   gql_ir_compiled_root_field_plan_entry_t *entry;
   gql_ir_vm_field_meta_t *meta;
   gql_ir_vm_field_hot_t *hot;
+  gql_ir_vm_field_cold_t *cold;
   SV *field_def_sv;
   SV *resolve_sv;
   SV *nodes_sv;
   SV *first_node_sv;
   SV *type_sv;
+  SV *path_sv;
   gql_ir_compiled_root_field_plan_t *native_field_plan;
   gql_ir_vm_block_t *native_block;
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
@@ -384,11 +386,13 @@ typedef struct {
   gql_ir_compiled_root_field_plan_entry_t *entry;
   gql_ir_vm_field_meta_t *meta;
   gql_ir_vm_field_hot_t *hot;
+  gql_ir_vm_field_cold_t *cold;
   SV *field_def_sv;
   SV *resolve_sv;
   SV *nodes_sv;
   SV *first_node_sv;
   SV *type_sv;
+  SV *path_sv;
   gql_ir_compiled_root_field_plan_t *native_field_plan;
   gql_ir_vm_block_t *native_block;
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;

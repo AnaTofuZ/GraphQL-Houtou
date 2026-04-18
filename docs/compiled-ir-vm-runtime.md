@@ -2191,3 +2191,19 @@ with all live field execution state hanging off:
 - `state->cursor`
 - `state->frame`
 - `state->writer`
+
+The next structural step makes `vm_block` own block-local field slot views:
+
+- owned `gql_ir_vm_block_t` instances allocate `gql_ir_vm_field_slot_t[]`
+- each slot carries stable pointers for:
+  - `entry`
+  - `meta`
+  - `hot`
+- `gql_ir_vm_exec_cursor_t` carries `slot` as part of current field state
+
+This is an explicit VM-shape change rather than a micro-optimization. It
+pushes the runtime toward:
+
+- immutable block-owned operand views
+- mutable cursor/frame state
+- direct-threaded dispatch over VM-owned field state

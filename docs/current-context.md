@@ -3603,3 +3603,18 @@ with the cursor holding:
 - current field operands
 - program counter
 - current opcode
+
+The next structural VM checkpoint makes `vm_block` own block-local field slot
+views:
+
+- owned `gql_ir_vm_block_t` instances now allocate `gql_ir_vm_field_slot_t[]`
+- each slot carries stable pointers for:
+  - `entry`
+  - `meta`
+  - `hot`
+- `gql_ir_vm_exec_cursor_t` now carries `slot` alongside `entry/meta/hot`
+
+This does not aim at a short-term throughput jump. The purpose is to move the
+execution model closer to a real VM where the block owns immutable operand
+views and the cursor advances through those views rather than repeatedly
+discovering them from the raw lowered entry layout.

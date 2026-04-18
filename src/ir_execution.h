@@ -6,6 +6,8 @@ static gql_ir_vm_program_t *gql_ir_execution_lowered_program(gql_ir_compiled_exe
 static gql_ir_vm_block_t *gql_ir_vm_program_root_block(gql_ir_vm_program_t *program);
 static gql_ir_compiled_root_field_plan_t *gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *plan);
 static void gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan);
+static gql_ir_vm_field_meta_t *gql_ir_native_field_meta(gql_ir_compiled_root_field_plan_entry_t *entry);
+static gql_ir_vm_field_hot_t *gql_ir_native_field_hot(gql_ir_compiled_root_field_plan_entry_t *entry);
 static void gql_ir_vm_block_init_view(gql_ir_vm_block_t *block, gql_ir_compiled_root_field_plan_t *field_plan, int owns_field_plan);
 static void gql_ir_vm_exec_state_init(
   gql_ir_vm_exec_state_t *state,
@@ -85,6 +87,8 @@ gql_ir_vm_program_root_block(gql_ir_vm_program_t *program) {
 
 static void
 gql_ir_vm_block_init_view(gql_ir_vm_block_t *block, gql_ir_compiled_root_field_plan_t *field_plan, int owns_field_plan) {
+  UV i;
+
   if (!block) {
     return;
   }
@@ -95,6 +99,18 @@ gql_ir_vm_block_init_view(gql_ir_vm_block_t *block, gql_ir_compiled_root_field_p
   block->field_count = field_plan ? field_plan->field_count : 0;
   block->requires_runtime_operand_fill = field_plan ? field_plan->requires_runtime_operand_fill : 0;
   block->owns_field_plan = owns_field_plan ? 1 : 0;
+
+  if (!block->entries || block->field_count == 0 || !owns_field_plan) {
+    return;
+  }
+
+  Newxz(block->slots, block->field_count, gql_ir_vm_field_slot_t);
+  for (i = 0; i < block->field_count; i++) {
+    gql_ir_compiled_root_field_plan_entry_t *entry = &block->entries[i];
+    block->slots[i].entry = entry;
+    block->slots[i].meta = gql_ir_native_field_meta(entry);
+    block->slots[i].hot = gql_ir_native_field_hot(entry);
+  }
 }
 
 static void
@@ -154,6 +170,11 @@ gql_ir_vm_block_destroy(gql_ir_vm_block_t *block) {
   if (block->field_plan && block->owns_field_plan) {
     gql_ir_compiled_root_field_plan_destroy(block->field_plan);
     block->field_plan = NULL;
+  }
+
+  if (block->slots) {
+    Safefree(block->slots);
+    block->slots = NULL;
   }
 
   Safefree(block);
@@ -1094,6 +1115,7 @@ gql_ir_vm_exec_state_prepare_field(
 ) {
   gql_ir_compiled_exec_t *compiled;
   gql_ir_vm_block_t *block;
+  gql_ir_vm_field_slot_t *slot;
   gql_ir_compiled_root_field_plan_entry_t *entry;
   gql_ir_vm_field_meta_t *meta;
   int fill_runtime_operands;
@@ -1108,8 +1130,9 @@ gql_ir_vm_exec_state_prepare_field(
   }
 
   compiled = state->compiled;
+  slot = block->slots ? &block->slots[field_index] : NULL;
   entry = &block->entries[field_index];
-  meta = gql_ir_native_field_meta(entry);
+  meta = slot ? slot->meta : gql_ir_native_field_meta(entry);
   if (!meta || !meta->field_name_sv || !SvOK(meta->field_name_sv)) {
     return 0;
   }
@@ -1130,9 +1153,10 @@ gql_ir_vm_exec_state_prepare_field(
   state->cursor.field_index = field_index;
   state->cursor.pc = 0;
   state->cursor.current_op = GQL_IR_NATIVE_FIELD_OP_META;
+  state->cursor.slot = slot;
   state->cursor.entry = entry;
   state->cursor.meta = meta;
-  state->cursor.hot = gql_ir_native_field_hot(entry);
+  state->cursor.hot = slot ? slot->hot : gql_ir_native_field_hot(entry);
   state->cursor.field_def_sv =
     (state->cursor.hot && state->cursor.hot->field_def_sv)
       ? state->cursor.hot->field_def_sv

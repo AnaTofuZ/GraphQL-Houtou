@@ -154,6 +154,7 @@ typedef struct gql_ir_vm_field_meta gql_ir_vm_field_meta_t;
 typedef struct gql_ir_vm_field_hot gql_ir_vm_field_hot_t;
 typedef struct gql_ir_vm_field_cold gql_ir_vm_field_cold_t;
 typedef struct gql_ir_vm_program gql_ir_vm_program_t;
+typedef struct gql_ir_vm_field_slot gql_ir_vm_field_slot_t;
 typedef struct gql_ir_lowered_abstract_child_entry gql_ir_lowered_abstract_child_entry_t;
 typedef struct gql_ir_lowered_abstract_child_plan_table gql_ir_lowered_abstract_child_plan_table_t;
 typedef struct gql_ir_compiled_concrete_plan_entry gql_ir_compiled_concrete_plan_entry_t;
@@ -354,15 +355,23 @@ struct gql_ir_compiled_root_field_plan {
 struct gql_ir_vm_block {
   gql_ir_compiled_root_field_plan_t *field_plan;
   gql_ir_compiled_root_field_plan_entry_t *entries;
+  gql_ir_vm_field_slot_t *slots;
   UV field_count;
   U8 requires_runtime_operand_fill;
   U8 owns_field_plan;
+};
+
+struct gql_ir_vm_field_slot {
+  gql_ir_compiled_root_field_plan_entry_t *entry;
+  gql_ir_vm_field_meta_t *meta;
+  gql_ir_vm_field_hot_t *hot;
 };
 
 typedef struct {
   UV field_index;
   U8 pc;
   gql_ir_native_field_op_t current_op;
+  gql_ir_vm_field_slot_t *slot;
   gql_ir_compiled_root_field_plan_entry_t *entry;
   gql_ir_vm_field_meta_t *meta;
   gql_ir_vm_field_hot_t *hot;

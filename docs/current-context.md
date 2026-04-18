@@ -3502,3 +3502,42 @@ Interpretation:
 - `abstract` is still a little behind, but the remaining gap is now more
   clearly inside the execution-owned corridor itself rather than in plan/block
   ownership plumbing
+
+The next VM checkpoint moved more of the field lifecycle itself under
+`gql_ir_vm_exec_state_t` ownership:
+
+- `gql_ir_run_vm_block_loop(...)` now owns
+  - field begin
+  - field finish
+  - frame cleanup
+- `gql_ir_execute_native_field_entry_into(...)` no longer allocates or cleans
+  up the per-field frame itself; it dispatches against the current
+  `state->cursor` and `state->frame`
+- `COMPLETE_GENERIC/OBJECT/LIST/ABSTRACT` and `CONSUME` now enter through
+  state-driven helpers
+  - `gql_ir_vm_exec_state_complete_current_field(...)`
+  - `gql_ir_vm_exec_state_consume_current_field(...)`
+
+Repeat checkpoint benchmark after moving begin/finish and
+complete/consume ownership into VM state
+(`execution-benchmark.pl --count=-3` run 3 times manually, median taken):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `78038/s`
+  - `houtou_xs_ast` median `76072/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `57803/s`
+  - `houtou_xs_ast` median `57625/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `41285/s`
+  - `houtou_xs_ast` median `41518/s`
+
+Interpretation:
+
+- `nested` still stays comfortably ahead, so field-lifecycle ownership moving
+  into `vm_exec_state` is not harming the object-heavy fast path
+- `list` stays in the same band, which is good enough for a structural VM
+  checkpoint
+- `abstract` is still slightly behind; this reinforces that the remaining work
+  is inside the execution-owned abstract/object corridor rather than in the
+  block/state orchestration itself

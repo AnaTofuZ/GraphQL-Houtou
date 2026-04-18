@@ -2078,3 +2078,55 @@ This is a useful VM/runtime checkpoint because:
 - object-heavy workloads benefit immediately
 - the remaining abstract gap is now concentrated in the family corridor logic
   itself, which is the right place for the next widening work
+
+The next VM-specific checkpoint is to move more of the *field lifecycle* under
+block-owned execution state instead of leaving it inside the field executor:
+
+- `gql_ir_vm_exec_state_t` owns
+  - the current cursor
+  - the current field frame
+  - field begin / finish
+  - complete / consume entrypoints
+- `gql_ir_execute_native_field_entry_into(...)` becomes closer to a pure
+  dispatcher over
+  - `state->cursor`
+  - `state->frame`
+  - `state->writer`
+
+In practical terms:
+
+- `gql_ir_run_vm_block_loop(...)` is now responsible for field begin/finish
+- `gql_ir_vm_exec_state_complete_current_field(...)` dispatches
+  `COMPLETE_GENERIC/OBJECT/LIST/ABSTRACT`
+- `gql_ir_vm_exec_state_consume_current_field(...)` dispatches `CONSUME`
+
+This is important for the eventual fully threaded VM because the long-term
+shape is no longer
+
+- loop local entry/meta/frame + helper calls
+
+but instead
+
+- block-owned state + cursor + frame + op dispatch
+
+Repeat checkpoint benchmark after moving begin/finish and
+complete/consume ownership into VM state
+(`execution-benchmark.pl --count=-3` run 3 times manually, median taken):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `78038/s`
+  - `houtou_xs_ast` median `76072/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `57803/s`
+  - `houtou_xs_ast` median `57625/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `41285/s`
+  - `houtou_xs_ast` median `41518/s`
+
+Interpretation:
+
+- this is a structural VM checkpoint rather than a throughput peak
+- object-heavy execution remains ahead
+- list stays healthy
+- the remaining abstract gap is now clearly in the execution-owned family
+  corridor, not in block/state ownership plumbing

@@ -226,6 +226,45 @@ static int gql_ir_consume_completed_result(pTHX_ HV *data_hv, AV **all_errors_av
 static int gql_ir_native_field_normalize_sync_completed_outcome(
   pTHX_ gql_ir_native_field_frame_t *frame
 );
+static int gql_ir_native_field_complete_generic_result(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result_sv,
+  gql_ir_native_field_frame_t *frame
+);
+static int gql_ir_native_field_complete_object_result(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result_sv,
+  gql_ir_native_field_frame_t *frame
+);
+static int gql_ir_native_field_complete_list_result(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result_sv,
+  gql_ir_native_field_frame_t *frame
+);
+static int gql_ir_native_field_complete_abstract_result(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result_sv,
+  gql_ir_native_field_frame_t *frame
+);
+static int gql_ir_native_field_consume_completed(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_result_writer_t *writer,
+  int *promise_present,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_ir_native_field_frame_t *frame
+);
 static int gql_ir_try_complete_sync_list_into_outcome(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_compiled_root_field_plan_entry_t *entry,
@@ -350,6 +389,13 @@ static SV *gql_ir_finish_native_exec_result(
 static int gql_ir_run_vm_block_loop(pTHX_ gql_ir_vm_exec_state_t *state);
 static int gql_ir_run_vm_block(pTHX_ gql_ir_vm_exec_state_t *state);
 static int gql_ir_run_vm_program_root(pTHX_ gql_ir_vm_exec_state_t *state);
+static int gql_ir_vm_exec_state_complete_current_field(
+  pTHX_ gql_ir_vm_exec_state_t *state,
+  gql_ir_native_field_op_t op
+);
+static int gql_ir_vm_exec_state_consume_current_field(
+  pTHX_ gql_ir_vm_exec_state_t *state
+);
 static int gql_ir_ensure_native_field_entry_operands(
   pTHX_ gql_ir_compiled_exec_t *compiled,
   gql_ir_compiled_root_field_plan_entry_t *entry
@@ -369,6 +415,13 @@ static void gql_ir_init_native_field_frame(
 static void gql_ir_cleanup_native_field_frame(
   pTHX_ gql_ir_native_field_frame_t *frame,
   gql_ir_compiled_root_field_plan_entry_t *entry
+);
+static int gql_ir_vm_exec_state_begin_field(
+  pTHX_ gql_ir_vm_exec_state_t *state,
+  UV field_index
+);
+static void gql_ir_vm_exec_state_finish_field(
+  pTHX_ gql_ir_vm_exec_state_t *state
 );
 static int gql_ir_native_field_entry_has_operands(
   gql_ir_compiled_root_field_plan_entry_t *entry
@@ -1057,6 +1110,28 @@ gql_ir_vm_exec_state_prepare_field(
 }
 
 static int
+gql_ir_vm_exec_state_begin_field(
+  pTHX_ gql_ir_vm_exec_state_t *state,
+  UV field_index
+) {
+  if (!gql_ir_vm_exec_state_prepare_field(aTHX_ state, field_index)) {
+    return 0;
+  }
+  gql_ir_init_native_field_frame(&state->frame, state->env, state->cursor.entry);
+  return 1;
+}
+
+static void
+gql_ir_vm_exec_state_finish_field(
+  pTHX_ gql_ir_vm_exec_state_t *state
+) {
+  if (!state || !state->cursor.entry) {
+    return;
+  }
+  gql_ir_cleanup_native_field_frame(aTHX_ &state->frame, state->cursor.entry);
+}
+
+static int
 gql_ir_run_vm_block_loop(
   pTHX_ gql_ir_vm_exec_state_t *state
 ) {
@@ -1080,15 +1155,17 @@ gql_ir_run_vm_block_loop(
   }
 
   for (field_i = 0; field_i < block->field_count; field_i++) {
-    if (!gql_ir_vm_exec_state_prepare_field(aTHX_ state, field_i)) {
+    if (!gql_ir_vm_exec_state_begin_field(aTHX_ state, field_i)) {
       continue;
     }
 
     if (!gql_ir_execute_native_field_entry_into(
           aTHX_ state
         )) {
+      gql_ir_vm_exec_state_finish_field(aTHX_ state);
       return 0;
     }
+    gql_ir_vm_exec_state_finish_field(aTHX_ state);
   }
 
   return 1;
@@ -1110,6 +1187,81 @@ gql_ir_run_vm_program_root(
   }
   state->block = state->compiled ? gql_ir_vm_program_root_block(gql_ir_execution_lowered_program(state->compiled)) : state->block;
   return gql_ir_run_vm_block(aTHX_ state);
+}
+
+static int
+gql_ir_vm_exec_state_complete_current_field(
+  pTHX_ gql_ir_vm_exec_state_t *state,
+  gql_ir_native_field_op_t op
+) {
+  gql_ir_native_field_frame_t *frame;
+  gql_ir_compiled_root_field_plan_entry_t *entry;
+
+  if (!state || !state->env || !state->writer || !state->cursor.entry) {
+    return 0;
+  }
+
+  frame = &state->frame;
+  entry = state->cursor.entry;
+
+  switch (op) {
+    case GQL_IR_NATIVE_FIELD_OP_COMPLETE_GENERIC:
+      return gql_ir_native_field_complete_generic_result(
+        aTHX_ state->env,
+        state->writer,
+        entry,
+        &frame->lazy_info,
+        frame->result_sv,
+        frame
+      );
+    case GQL_IR_NATIVE_FIELD_OP_COMPLETE_OBJECT:
+      return gql_ir_native_field_complete_object_result(
+        aTHX_ state->env,
+        state->writer,
+        entry,
+        &frame->lazy_info,
+        frame->result_sv,
+        frame
+      );
+    case GQL_IR_NATIVE_FIELD_OP_COMPLETE_LIST:
+      return gql_ir_native_field_complete_list_result(
+        aTHX_ state->env,
+        state->writer,
+        entry,
+        &frame->lazy_info,
+        frame->result_sv,
+        frame
+      );
+    case GQL_IR_NATIVE_FIELD_OP_COMPLETE_ABSTRACT:
+      return gql_ir_native_field_complete_abstract_result(
+        aTHX_ state->env,
+        state->writer,
+        entry,
+        &frame->lazy_info,
+        frame->result_sv,
+        frame
+      );
+    default:
+      return 0;
+  }
+}
+
+static int
+gql_ir_vm_exec_state_consume_current_field(
+  pTHX_ gql_ir_vm_exec_state_t *state
+) {
+  if (!state) {
+    return 0;
+  }
+
+  return gql_ir_native_field_consume_completed(
+    aTHX_
+    state->env,
+    state->writer,
+    state->promise_present,
+    state->cursor.entry,
+    &state->frame
+  );
 }
 
 static int
@@ -2966,8 +3118,6 @@ gql_ir_execute_native_field_entry_into(
     return 0;
   }
 
-  gql_ir_init_native_field_frame(frame, env, entry);
-
 dispatch:
 #if defined(__GNUC__) || defined(__clang__)
   {
@@ -3175,14 +3325,10 @@ op_complete_trivial:
   goto dispatch;
 
 op_complete_generic:
-  if (!gql_ir_native_field_complete_generic_result(
+  if (!gql_ir_vm_exec_state_complete_current_field(
         aTHX_
-        env,
-        writer,
-        entry,
-        &frame->lazy_info,
-        frame->result_sv,
-        frame
+        state,
+        GQL_IR_NATIVE_FIELD_OP_COMPLETE_GENERIC
       )) {
     goto op_fail;
   }
@@ -3193,14 +3339,10 @@ op_complete_generic:
   goto dispatch;
 
 op_complete_object:
-  if (!gql_ir_native_field_complete_object_result(
+  if (!gql_ir_vm_exec_state_complete_current_field(
         aTHX_
-        env,
-        writer,
-        entry,
-        &frame->lazy_info,
-        frame->result_sv,
-        frame
+        state,
+        GQL_IR_NATIVE_FIELD_OP_COMPLETE_OBJECT
       )) {
     goto op_fail;
   }
@@ -3211,14 +3353,10 @@ op_complete_object:
   goto dispatch;
 
 op_complete_list:
-  if (!gql_ir_native_field_complete_list_result(
+  if (!gql_ir_vm_exec_state_complete_current_field(
         aTHX_
-        env,
-        writer,
-        entry,
-        &frame->lazy_info,
-        frame->result_sv,
-        frame
+        state,
+        GQL_IR_NATIVE_FIELD_OP_COMPLETE_LIST
       )) {
     goto op_fail;
   }
@@ -3229,14 +3367,10 @@ op_complete_list:
   goto dispatch;
 
 op_complete_abstract:
-  if (!gql_ir_native_field_complete_abstract_result(
+  if (!gql_ir_vm_exec_state_complete_current_field(
         aTHX_
-        env,
-        writer,
-        entry,
-        &frame->lazy_info,
-        frame->result_sv,
-        frame
+        state,
+        GQL_IR_NATIVE_FIELD_OP_COMPLETE_ABSTRACT
       )) {
     goto op_fail;
   }
@@ -3247,13 +3381,8 @@ op_complete_abstract:
   goto dispatch;
 
 op_consume:
-  if (!gql_ir_native_field_consume_completed(
-        aTHX_
-        env,
-        writer,
-        promise_present,
-        entry,
-        frame
+  if (!gql_ir_vm_exec_state_consume_current_field(
+        aTHX_ state
       )) {
     goto op_fail;
   }
@@ -3261,11 +3390,9 @@ op_consume:
   goto dispatch;
 
 op_done:
-  gql_ir_cleanup_native_field_frame(aTHX_ frame, entry);
   return 1;
 
 op_fail:
-  gql_ir_cleanup_native_field_frame(aTHX_ frame, entry);
   return 0;
 }
 

@@ -2002,17 +2002,16 @@ gql_ir_native_field_call_resolver_build_args(
 static int
 gql_ir_native_field_try_trivial_completion(
   pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_ir_vm_field_meta_t *meta,
   gql_ir_native_field_frame_t *frame,
   SV *type_sv,
   int resolve_is_default,
   SV **result_io
 ) {
-  gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
   SV *direct_data_sv = NULL;
   SV *result_sv = result_io ? *result_io : NULL;
 
-  if (!env || !entry || !frame || !result_io || !type_sv || !SvOK(type_sv) || !meta) {
+  if (!env || !frame || !result_io || !type_sv || !SvOK(type_sv) || !meta) {
     return 0;
   }
   if (meta->completion_dispatch_kind != GQL_IR_NATIVE_COMPLETION_TRIVIAL) {
@@ -2065,14 +2064,13 @@ gql_ir_native_field_try_trivial_completion(
 static int
 gql_ir_native_field_complete_trivial_result(
   pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_ir_vm_field_meta_t *meta,
   gql_ir_native_field_frame_t *frame,
   SV *result_sv
 ) {
-  gql_ir_vm_field_meta_t *meta = gql_ir_native_field_meta(entry);
   SV *direct_data_sv = NULL;
 
-  if (!env || !entry || !frame || !meta || !meta->completion_type_sv || !result_sv) {
+  if (!env || !frame || !meta || !meta->completion_type_sv || !result_sv) {
     return 0;
   }
 
@@ -3385,7 +3383,7 @@ op_trivial_context:
   if (gql_ir_native_field_try_trivial_completion(
         aTHX_
         env,
-        entry,
+        meta,
         frame,
         state->cursor.type_sv,
         frame->resolve_is_default,
@@ -3404,7 +3402,7 @@ op_trivial_context:
     if (gql_ir_native_field_try_trivial_completion(
           aTHX_
           env,
-          entry,
+          meta,
           frame,
           state->cursor.type_sv,
           0,
@@ -3478,7 +3476,7 @@ op_complete_trivial:
   if (!gql_ir_native_field_complete_trivial_result(
         aTHX_
         env,
-        entry,
+        meta,
         frame,
         frame->result_sv
       )) {

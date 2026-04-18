@@ -370,6 +370,10 @@ struct gql_ir_vm_field_slot {
   SV *nodes_sv;
   SV *first_node_sv;
   SV *type_sv;
+  gql_ir_compiled_root_field_plan_t *native_field_plan;
+  gql_ir_vm_block_t *native_block;
+  gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
+  gql_ir_lowered_abstract_child_plan_table_t *list_item_abstract_child_plan_table;
 };
 
 typedef struct {
@@ -385,6 +389,10 @@ typedef struct {
   SV *nodes_sv;
   SV *first_node_sv;
   SV *type_sv;
+  gql_ir_compiled_root_field_plan_t *native_field_plan;
+  gql_ir_vm_block_t *native_block;
+  gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table;
+  gql_ir_lowered_abstract_child_plan_table_t *list_item_abstract_child_plan_table;
 } gql_ir_vm_exec_cursor_t;
 
 struct gql_ir_vm_exec_state {

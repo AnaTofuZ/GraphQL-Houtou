@@ -2219,3 +2219,16 @@ pushes the runtime toward:
 
 The next structural step is to make more of the field lifecycle consume the
 slot snapshot directly so the VM loop depends less on raw `entry/hot` access.
+
+That next step is now in place for completion-family helpers as well:
+
+- `gql_ir_vm_field_slot_t` and `gql_ir_vm_exec_cursor_t` now also own
+  `native_field_plan`, `native_block`, `abstract_child_plan_table`, and
+  `list_item_abstract_child_plan_table`
+- `COMPLETE_GENERIC/OBJECT/LIST/ABSTRACT` consume those cursor-owned operands
+  directly instead of rediscovering them from `entry/hot` inside each helper
+
+This matters because the hot path is no longer only "dispatch reads slot
+operands"; completion-family helpers also run against the same VM-owned operand
+snapshot. That reduces pointer chasing and makes the VM cursor the single
+source of truth for both dispatch and completion.

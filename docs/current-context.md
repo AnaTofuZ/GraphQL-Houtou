@@ -3645,3 +3645,36 @@ Spot benchmark after this slot-operand checkpoint (`--count=-3`) was:
 That is good enough to keep the checkpoint: `nested` clearly benefits, while
 `list` and `abstract` stay within the current same-band range for structural
 VM work.
+
+The latest speed-focused VM batch extends slot/cursor ownership further into
+completion-family helpers:
+
+- `gql_ir_vm_field_slot_t` and `gql_ir_vm_exec_cursor_t` now also carry
+  `native_field_plan`, `native_block`, `abstract_child_plan_table`, and
+  `list_item_abstract_child_plan_table`
+- `COMPLETE_GENERIC/OBJECT/LIST/ABSTRACT` consume those cursor-owned operands
+  directly instead of re-deriving them from `entry/hot` inside each helper
+
+This batch is explicitly about hot-path locality rather than feature shape:
+completion-family helpers now treat the VM cursor as the primary operand view.
+
+Spot benchmark after this cursor-owned completion-operand checkpoint
+(`--count=-3`) was:
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 81413/s`
+  - `houtou_xs_ast 77946/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 59208/s`
+  - `houtou_xs_ast 58395/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 41518/s`
+  - `houtou_xs_ast 42040/s`
+
+Interpretation:
+
+- `nested` and `list` benefit from moving more operand ownership into the VM
+  cursor
+- `abstract` is still slightly behind, so the next speed-focused work should
+  keep pushing completion-family narrow paths behind block-owned state instead
+  of adding more abstract-specific wrapper layers

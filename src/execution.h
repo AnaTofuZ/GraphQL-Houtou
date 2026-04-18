@@ -4,19 +4,6 @@
  * from PP to C incrementally.
  */
 
-typedef struct gql_execution_lazy_resolve_info {
-  SV *context_sv;
-  SV *parent_type_sv;
-  SV *field_def_sv;
-  SV *return_type_sv;
-  SV *field_name_sv;
-  SV *nodes_sv;
-  SV *base_path_sv;
-  SV *result_name_sv;
-  SV *path_sv;
-  SV *info_sv;
-} gql_execution_lazy_resolve_info_t;
-
 typedef struct gql_execution_abstract_runtime_resolution {
   SV *runtime_type_sv;
   gql_ir_compiled_root_field_plan_t *native_field_plan;

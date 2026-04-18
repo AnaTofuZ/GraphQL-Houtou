@@ -145,9 +145,11 @@ Latest kept VM/runtime checkpoint:
 - the block executor now also owns a `cursor` (`field_index`, `entry`, `meta`,
   `hot`, `pc`), so the direct-threaded field dispatcher reads its current op
   from VM state rather than from loop-local variables
-- this does not yet create a large throughput jump, but it is the first kept
-  step where root and child execution units are shaped around the same
-  VM/block ownership model
+- the VM state now also owns the current `gql_ir_native_field_frame_t`, so
+  block execution carries `cursor + frame + pc` as one mutable state bundle
+- this is the first kept step where root and child execution units are shaped
+  around the same VM/block ownership model *and* the current field frame
+  belongs to VM state instead of a stack-local helper frame
 
 Validation:
 
@@ -158,24 +160,22 @@ Checkpoint benchmark (`execution-benchmark.pl` repeated 3 times, median of the
 three runs):
 
 - `nested_variable_object`
-  - `houtou_compiled_ir` median `77795/s`
-  - `houtou_xs_ast` median `77455/s`
+  - `houtou_compiled_ir` median `80430/s`
+  - `houtou_xs_ast` median `79156/s`
 - `list_of_objects`
-  - `houtou_compiled_ir` median `58162/s`
-  - `houtou_xs_ast` median `59024/s`
+  - `houtou_compiled_ir` median `59958/s`
+  - `houtou_xs_ast` median `59752/s`
 - `abstract_with_fragment`
-  - `houtou_compiled_ir` median `42173/s`
-  - `houtou_xs_ast` median `42724/s`
+  - `houtou_compiled_ir` median `42593/s`
+  - `houtou_xs_ast` median `42870/s`
 
 Reading:
 
-- `nested` improves again once block execution carries both mutable state and
-  field cursor ownership in one VM state object
-- `list` stays in the same band, which is acceptable for a state-ownership
-  checkpoint
-- `abstract` stays close to parity, which means the remaining profitable work
-  still sits inside the `ABSTRACT -> OBJECT` family corridor rather than in
-  block-loop orchestration
+- `nested` improves again once the field frame also becomes part of VM state
+- `list` reaches the same band and edges slightly forward in the median
+- `abstract` remains slightly behind, which confirms the remaining profitable
+  work still sits inside the `ABSTRACT -> OBJECT` family corridor rather than
+  in block-loop orchestration
 - despite the small throughput movement, this is worth keeping because
   `compiled_ir` now treats root and child sync execution as the same
   block-owned runtime shape, with a single `vm_exec_state` plus field cursor

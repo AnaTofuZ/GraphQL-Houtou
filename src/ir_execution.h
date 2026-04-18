@@ -2,28 +2,6 @@
  * Responsibility: prepared executable IR handle ownership and small
  * introspection helpers used as groundwork for future IR-direct execution.
  */
-typedef struct gql_ir_native_field_frame {
-  gql_ir_vm_field_meta_t *meta;
-  gql_execution_lazy_resolve_info_t lazy_info;
-  SV *resolve_sv;
-  SV *args_sv;
-  SV *result_sv;
-  SV *outcome_sv;
-  AV *outcome_errors_av;
-  int used_fast_default_resolve;
-  int owns_resolve_sv;
-  int owns_args_sv;
-  int resolve_is_default;
-  U8 outcome_kind;
-} gql_ir_native_field_frame_t;
-
-enum {
-  GQL_IR_NATIVE_FIELD_OUTCOME_NONE = 0,
-  GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE = 1,
-  GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV = 2,
-  GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV = 3
-};
-
 static gql_ir_vm_program_t *gql_ir_execution_lowered_program(gql_ir_compiled_exec_t *compiled);
 static gql_ir_vm_block_t *gql_ir_vm_program_root_block(gql_ir_vm_program_t *program);
 static gql_ir_compiled_root_field_plan_t *gql_ir_compiled_root_field_plan_clone(pTHX_ gql_ir_compiled_root_field_plan_t *plan);
@@ -377,9 +355,6 @@ static int gql_ir_ensure_native_field_entry_operands(
   gql_ir_compiled_root_field_plan_entry_t *entry
 );
 static int gql_ir_execute_native_field_entry_into(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  int *promise_present,
   gql_ir_vm_exec_state_t *state
 );
 static int gql_ir_vm_exec_state_prepare_field(
@@ -1110,11 +1085,7 @@ gql_ir_run_vm_block_loop(
     }
 
     if (!gql_ir_execute_native_field_entry_into(
-          aTHX_
-          env,
-          writer,
-          promise_present,
-          state
+          aTHX_ state
         )) {
       return 0;
     }
@@ -2948,31 +2919,35 @@ gql_ir_cleanup_native_field_frame(
 
 static int
 gql_ir_execute_native_field_entry_into(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  int *promise_present,
   gql_ir_vm_exec_state_t *state
 ) {
-  gql_ir_native_field_frame_t frame;
+  gql_ir_native_field_frame_t *frame;
   gql_ir_compiled_root_field_plan_entry_t *entry;
   gql_ir_vm_field_meta_t *meta;
   gql_ir_vm_field_hot_t *hot;
+  gql_ir_native_exec_env_t *env;
+  gql_ir_native_result_writer_t *writer;
+  int *promise_present;
   gql_ir_native_field_op_t op;
 
   /* Mirrors one field iteration of gql_execution_execute_field_plan(), but the
    * compiled-IR executor treats this as the VM-ready "execute one field op"
    * unit and consumes native plan metadata directly. */
-  if (!env
-      || !writer
-      || !promise_present
-      || !state) {
+  if (!state) {
     return 0;
   }
 
+  env = state->env;
+  writer = state->writer;
+  promise_present = state->promise_present;
   entry = state->cursor.entry;
   meta = state->cursor.meta;
   hot = state->cursor.hot;
-  if (!entry
+  frame = &state->frame;
+  if (!env
+      || !writer
+      || !promise_present
+      || !entry
       || !meta
       || meta->op_count == 0) {
     return 0;
@@ -2991,7 +2966,7 @@ gql_ir_execute_native_field_entry_into(
     return 0;
   }
 
-  gql_ir_init_native_field_frame(&frame, env, entry);
+  gql_ir_init_native_field_frame(frame, env, entry);
 
 dispatch:
 #if defined(__GNUC__) || defined(__clang__)
@@ -3045,9 +3020,9 @@ op_meta:
         env,
         entry,
         state->cursor.type_sv,
-        &frame
+        frame
       )) {
-    if (frame.outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+    if (frame->outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
       state->cursor.pc = meta->consume_op_index;
       goto dispatch;
     }
@@ -3057,48 +3032,48 @@ op_meta:
   goto dispatch;
 
 op_trivial_context:
-  if (!frame.resolve_sv) {
-    frame.resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame.owns_resolve_sv);
-    frame.resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame.resolve_sv);
+  if (!frame->resolve_sv) {
+    frame->resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame->owns_resolve_sv);
+    frame->resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame->resolve_sv);
   }
   if (gql_ir_native_field_try_trivial_completion(
         aTHX_
         env,
         entry,
-        &frame,
+        frame,
         state->cursor.type_sv,
-        frame.resolve_is_default,
-        &frame.result_sv
+        frame->resolve_is_default,
+        &frame->result_sv
       )) {
-    if (frame.outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+    if (frame->outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
       state->cursor.pc = meta->consume_op_index;
       goto dispatch;
     }
     goto op_done;
   }
 
-  if (frame.resolve_is_default
-      && gql_execution_try_default_field_resolve_fast(aTHX_ gql_ir_native_env_root_value(env), meta->field_name_sv, &frame.result_sv)) {
-    frame.used_fast_default_resolve = 1;
+  if (frame->resolve_is_default
+      && gql_execution_try_default_field_resolve_fast(aTHX_ gql_ir_native_env_root_value(env), meta->field_name_sv, &frame->result_sv)) {
+    frame->used_fast_default_resolve = 1;
     if (gql_ir_native_field_try_trivial_completion(
           aTHX_
           env,
           entry,
-          &frame,
+          frame,
           state->cursor.type_sv,
           0,
-          &frame.result_sv
+          &frame->result_sv
         )) {
-      if (frame.outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+      if (frame->outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
         state->cursor.pc = meta->consume_op_index;
         goto dispatch;
       }
       goto op_done;
     }
     if (meta->completion_dispatch_kind == GQL_IR_NATIVE_COMPLETION_GENERIC
-        && gql_execution_try_complete_trivial_value_fast(aTHX_ state->cursor.type_sv, frame.result_sv, &frame.outcome_sv)) {
-      frame.outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
-      (void)gql_ir_native_field_normalize_sync_completed_outcome(aTHX_ &frame);
+        && gql_execution_try_complete_trivial_value_fast(aTHX_ state->cursor.type_sv, frame->result_sv, &frame->outcome_sv)) {
+      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+      (void)gql_ir_native_field_normalize_sync_completed_outcome(aTHX_ frame);
       state->cursor.pc = meta->consume_op_index;
       goto dispatch;
     }
@@ -3108,16 +3083,16 @@ op_trivial_context:
   goto dispatch;
 
 op_call_fixed_empty_args:
-  frame.resolve_sv = (hot && hot->resolve_sv) ? hot->resolve_sv : entry->resolve_sv;
-  frame.resolve_is_default = 0;
+  frame->resolve_sv = (hot && hot->resolve_sv) ? hot->resolve_sv : entry->resolve_sv;
+  frame->resolve_is_default = 0;
   if (!gql_ir_native_field_call_resolver_empty_args(
         aTHX_
         env,
-        &frame.lazy_info,
-        frame.resolve_sv,
-        &frame.result_sv,
-        &frame.args_sv,
-        &frame.owns_args_sv
+        &frame->lazy_info,
+        frame->resolve_sv,
+        &frame->result_sv,
+        &frame->args_sv,
+        &frame->owns_args_sv
       )) {
     goto op_fail;
   }
@@ -3125,17 +3100,17 @@ op_call_fixed_empty_args:
   goto dispatch;
 
 op_call_fixed_build_args:
-  frame.resolve_sv = (hot && hot->resolve_sv) ? hot->resolve_sv : entry->resolve_sv;
-  frame.resolve_is_default = 0;
+  frame->resolve_sv = (hot && hot->resolve_sv) ? hot->resolve_sv : entry->resolve_sv;
+  frame->resolve_is_default = 0;
   if (!gql_ir_native_field_call_resolver_build_args(
         aTHX_
         env,
         entry,
-        &frame.lazy_info,
-        frame.resolve_sv,
-        &frame.result_sv,
-        &frame.args_sv,
-        &frame.owns_args_sv
+        &frame->lazy_info,
+        frame->resolve_sv,
+        &frame->result_sv,
+        &frame->args_sv,
+        &frame->owns_args_sv
       )) {
     goto op_fail;
   }
@@ -3143,19 +3118,19 @@ op_call_fixed_build_args:
   goto dispatch;
 
 op_call_context_empty_args:
-  if (!frame.resolve_sv) {
-    frame.resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame.owns_resolve_sv);
-    frame.resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame.resolve_sv);
+  if (!frame->resolve_sv) {
+    frame->resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame->owns_resolve_sv);
+    frame->resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame->resolve_sv);
   }
-  if (!frame.used_fast_default_resolve
+  if (!frame->used_fast_default_resolve
       && !gql_ir_native_field_call_resolver_empty_args(
            aTHX_
            env,
-           &frame.lazy_info,
-           frame.resolve_sv,
-           &frame.result_sv,
-           &frame.args_sv,
-           &frame.owns_args_sv
+           &frame->lazy_info,
+           frame->resolve_sv,
+           &frame->result_sv,
+           &frame->args_sv,
+           &frame->owns_args_sv
          )) {
     goto op_fail;
   }
@@ -3163,20 +3138,20 @@ op_call_context_empty_args:
   goto dispatch;
 
 op_call_context_build_args:
-  if (!frame.resolve_sv) {
-    frame.resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame.owns_resolve_sv);
-    frame.resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame.resolve_sv);
+  if (!frame->resolve_sv) {
+    frame->resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame->owns_resolve_sv);
+    frame->resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame->resolve_sv);
   }
-  if (!frame.used_fast_default_resolve
+  if (!frame->used_fast_default_resolve
       && !gql_ir_native_field_call_resolver_build_args(
            aTHX_
            env,
            entry,
-           &frame.lazy_info,
-           frame.resolve_sv,
-           &frame.result_sv,
-           &frame.args_sv,
-           &frame.owns_args_sv
+           &frame->lazy_info,
+           frame->resolve_sv,
+           &frame->result_sv,
+           &frame->args_sv,
+           &frame->owns_args_sv
          )) {
     goto op_fail;
   }
@@ -3188,12 +3163,12 @@ op_complete_trivial:
         aTHX_
         env,
         entry,
-        &frame,
-        frame.result_sv
+        frame,
+        frame->result_sv
       )) {
     goto op_fail;
   }
-  if (frame.outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+  if (frame->outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
     goto op_done;
   }
   state->cursor.pc++;
@@ -3205,13 +3180,13 @@ op_complete_generic:
         env,
         writer,
         entry,
-        &frame.lazy_info,
-        frame.result_sv,
-        &frame
+        &frame->lazy_info,
+        frame->result_sv,
+        frame
       )) {
     goto op_fail;
   }
-  if (frame.outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+  if (frame->outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
     goto op_done;
   }
   state->cursor.pc++;
@@ -3223,13 +3198,13 @@ op_complete_object:
         env,
         writer,
         entry,
-        &frame.lazy_info,
-        frame.result_sv,
-        &frame
+        &frame->lazy_info,
+        frame->result_sv,
+        frame
       )) {
     goto op_fail;
   }
-  if (frame.outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+  if (frame->outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
     goto op_done;
   }
   state->cursor.pc++;
@@ -3241,13 +3216,13 @@ op_complete_list:
         env,
         writer,
         entry,
-        &frame.lazy_info,
-        frame.result_sv,
-        &frame
+        &frame->lazy_info,
+        frame->result_sv,
+        frame
       )) {
     goto op_fail;
   }
-  if (frame.outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+  if (frame->outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
     goto op_done;
   }
   state->cursor.pc++;
@@ -3259,13 +3234,13 @@ op_complete_abstract:
         env,
         writer,
         entry,
-        &frame.lazy_info,
-        frame.result_sv,
-        &frame
+        &frame->lazy_info,
+        frame->result_sv,
+        frame
       )) {
     goto op_fail;
   }
-  if (frame.outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+  if (frame->outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
     goto op_done;
   }
   state->cursor.pc++;
@@ -3278,7 +3253,7 @@ op_consume:
         writer,
         promise_present,
         entry,
-        &frame
+        frame
       )) {
     goto op_fail;
   }
@@ -3286,11 +3261,11 @@ op_consume:
   goto dispatch;
 
 op_done:
-  gql_ir_cleanup_native_field_frame(aTHX_ &frame, entry);
+  gql_ir_cleanup_native_field_frame(aTHX_ frame, entry);
   return 1;
 
 op_fail:
-  gql_ir_cleanup_native_field_frame(aTHX_ &frame, entry);
+  gql_ir_cleanup_native_field_frame(aTHX_ frame, entry);
   return 0;
 }
 

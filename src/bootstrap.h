@@ -167,6 +167,8 @@ typedef struct gql_ir_native_exec_accum gql_ir_native_exec_accum_t;
 typedef struct gql_ir_native_result_writer gql_ir_native_result_writer_t;
 typedef struct gql_ir_native_pending_entry gql_ir_native_pending_entry_t;
 typedef struct gql_ir_native_child_outcome gql_ir_native_child_outcome_t;
+typedef struct gql_execution_lazy_resolve_info gql_execution_lazy_resolve_info_t;
+typedef struct gql_ir_native_field_frame gql_ir_native_field_frame_t;
 typedef enum gql_ir_native_field_op gql_ir_native_field_op_t;
 typedef enum gql_ir_native_meta_dispatch_kind gql_ir_native_meta_dispatch_kind_t;
 typedef enum gql_ir_native_resolve_dispatch_kind gql_ir_native_resolve_dispatch_kind_t;
@@ -218,6 +220,41 @@ enum gql_ir_native_completion_dispatch_kind {
   GQL_IR_NATIVE_COMPLETION_OBJECT = 2,
   GQL_IR_NATIVE_COMPLETION_LIST = 3,
   GQL_IR_NATIVE_COMPLETION_ABSTRACT = 4
+};
+
+struct gql_execution_lazy_resolve_info {
+  SV *context_sv;
+  SV *parent_type_sv;
+  SV *field_def_sv;
+  SV *return_type_sv;
+  SV *field_name_sv;
+  SV *nodes_sv;
+  SV *base_path_sv;
+  SV *result_name_sv;
+  SV *path_sv;
+  SV *info_sv;
+};
+
+struct gql_ir_native_field_frame {
+  gql_ir_vm_field_meta_t *meta;
+  gql_execution_lazy_resolve_info_t lazy_info;
+  SV *resolve_sv;
+  SV *args_sv;
+  SV *result_sv;
+  SV *outcome_sv;
+  AV *outcome_errors_av;
+  int used_fast_default_resolve;
+  int owns_resolve_sv;
+  int owns_args_sv;
+  int resolve_is_default;
+  U8 outcome_kind;
+};
+
+enum {
+  GQL_IR_NATIVE_FIELD_OUTCOME_NONE = 0,
+  GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE = 1,
+  GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV = 2,
+  GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV = 3
 };
 
 struct gql_ir_prepared_exec {
@@ -340,6 +377,7 @@ struct gql_ir_vm_exec_state {
   gql_ir_native_result_writer_t *writer;
   int *promise_present;
   gql_ir_vm_exec_cursor_t cursor;
+  gql_ir_native_field_frame_t frame;
   U8 require_runtime_operand_fill;
 };
 

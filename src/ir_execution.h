@@ -1006,6 +1006,13 @@ gql_ir_sync_outcome_move_to_frame(
       outcome->object_hv = NULL;
       outcome->errors_av = NULL;
       break;
+    case GQL_EXECUTION_SYNC_OUTCOME_DIRECT_LIST_AV:
+      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_LIST_AV;
+      frame->outcome_sv = (SV *)outcome->list_av;
+      frame->outcome_errors_av = outcome->errors_av;
+      outcome->list_av = NULL;
+      outcome->errors_av = NULL;
+      break;
     case GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE:
       frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
       frame->outcome_sv = outcome->value_sv;
@@ -2265,6 +2272,11 @@ gql_ir_try_complete_sync_list_into_outcome(
           item_sync_outcome.object_hv = NULL;
           item_errors_av = item_sync_outcome.errors_av;
           item_sync_outcome.errors_av = NULL;
+        } else if (item_sync_outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_LIST_AV) {
+          item_data_sv = item_sync_outcome.list_av ? newRV_noinc((SV *)item_sync_outcome.list_av) : newSV(0);
+          item_sync_outcome.list_av = NULL;
+          item_errors_av = item_sync_outcome.errors_av;
+          item_sync_outcome.errors_av = NULL;
         } else if (item_sync_outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE) {
           item_data_sv = item_sync_outcome.value_sv;
           item_sync_outcome.value_sv = NULL;
@@ -2342,8 +2354,8 @@ gql_ir_try_complete_sync_list_into_outcome(
   }
 
   SvREFCNT_dec(item_type);
-  frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
-  frame->outcome_sv = newRV_noinc((SV *)data_av);
+  frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_LIST_AV;
+  frame->outcome_sv = (SV *)data_av;
   frame->outcome_errors_av = errors_av;
   return 1;
 
@@ -2522,6 +2534,13 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
       gql_execution_sync_outcome_reset(&outcome);
       return 1;
     }
+    if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_LIST_AV) {
+      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_LIST_AV;
+      frame->outcome_sv = (SV *)outcome.list_av;
+      frame->outcome_errors_av = outcome.errors_av;
+      gql_execution_sync_outcome_reset(&outcome);
+      return 1;
+    }
     if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV) {
       frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV;
       frame->outcome_sv = (SV *)outcome.object_hv;
@@ -2649,6 +2668,13 @@ gql_ir_native_field_complete_family_fallback_result(
     if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE) {
       frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
       frame->outcome_sv = outcome.value_sv;
+      frame->outcome_errors_av = outcome.errors_av;
+      gql_execution_sync_outcome_reset(&outcome);
+      return 1;
+    }
+    if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_LIST_AV) {
+      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_LIST_AV;
+      frame->outcome_sv = (SV *)outcome.list_av;
       frame->outcome_errors_av = outcome.errors_av;
       gql_execution_sync_outcome_reset(&outcome);
       return 1;
@@ -2865,6 +2891,34 @@ gql_ir_native_field_consume_completed(
   }
 
   if (frame->outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV) {
+    SV *child_value_sv;
+    AV *child_errors_av = frame->outcome_errors_av;
+
+    if (!frame->outcome_sv) {
+      return 0;
+    }
+
+    child_value_sv = newRV_noinc(frame->outcome_sv);
+    frame->outcome_sv = NULL;
+    if (!gql_ir_native_result_writer_write_direct(
+          aTHX_
+          writer,
+          meta->result_name_sv,
+          child_value_sv,
+          child_errors_av
+        )) {
+      SvREFCNT_dec(child_value_sv);
+      return 0;
+    }
+    if (child_errors_av) {
+      SvREFCNT_dec((SV *)child_errors_av);
+      frame->outcome_errors_av = NULL;
+    }
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_NONE;
+    return 1;
+  }
+
+  if (frame->outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_LIST_AV) {
     SV *child_value_sv;
     AV *child_errors_av = frame->outcome_errors_av;
 

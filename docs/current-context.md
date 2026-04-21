@@ -3720,3 +3720,46 @@ Interpretation:
 - the next speed-focused work should push more completion-family fallback
   logic behind the VM-owned cursor/frame state, rather than adding more outer
   helper layers
+
+The next speed-focused checkpoint pivots from corridor widening to internal
+currency cleanup:
+
+- `gql_execution_sync_outcome_t` now distinguishes raw list payloads from
+  ordinary `SV*` direct values
+- `gql_ir_native_field_frame_t` mirrors that distinction so the VM can carry a
+  list result as `AV*` until writer consumption
+- list-family sync paths no longer eagerly call `newRV_noinc(...)` for their
+  successful head payloads
+
+This follows the same design rule adopted from tokenizer-style optimization:
+
+- decide the payload *kind* first
+- keep the payload in its native form as long as possible
+- materialize Perl wrapper objects only at the final writer boundary
+
+Repeat checkpoint benchmark after introducing raw list payloads as VM/internal
+currency (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `76557/s`
+  - `houtou_xs_ast` median `75837/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `57625/s`
+  - `houtou_xs_ast` median `57448/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `40883/s`
+  - `houtou_xs_ast` median `41261/s`
+
+Interpretation:
+
+- `nested` and `list` both stay in a healthy same-band or slightly-ahead range
+- `abstract` still trails slightly, which suggests the remaining hot cost is
+  inside the abstract/object corridor rather than list payload wrapping
+- this is still a good checkpoint because the runtime's internal currency now
+  better matches the eventual VM design
+
+The next speed-focused work should therefore prefer:
+
+- more specialized/table-driven dispatch
+- less hot-path reliance on completed envelopes
+- corridor widening only after those internal-currency gains are exhausted

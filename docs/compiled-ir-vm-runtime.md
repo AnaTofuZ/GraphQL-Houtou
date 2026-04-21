@@ -2278,3 +2278,49 @@ At this point the VM runtime is much closer to a real state machine:
 The next speed-oriented step should keep moving fallback logic inward so these
 VM-owned states do more of the work before the runtime escapes back toward
 generic completion helpers.
+
+Another meaningful checkpoint comes from cleaning up the runtime's internal
+currency before widening more execution corridors:
+
+- `gql_execution_sync_outcome_t` now has an explicit raw-list payload shape in
+  addition to
+  - direct `SV*`
+  - raw object `HV*`
+  - completed `SV*`
+- `gql_ir_native_field_frame_t` mirrors that shape so the VM can carry list
+  results as `AV*` until the writer consumes them
+- list-family sync paths no longer eagerly wrap successful list heads in
+  `newRV_noinc(...)`
+
+This follows the same general rule adopted from tokenizer-style optimization:
+
+- decide the payload *kind* first
+- keep the payload in its native shape as long as possible
+- only materialize Perl wrapper objects at the writer/finalization boundary
+
+Repeat checkpoint benchmark after introducing raw list payloads as internal
+currency (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `76557/s`
+  - `houtou_xs_ast` median `75837/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `57625/s`
+  - `houtou_xs_ast` median `57448/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `40883/s`
+  - `houtou_xs_ast` median `41261/s`
+
+This is a good checkpoint even though `abstract` still trails slightly:
+
+- `nested` and `list` remain healthy
+- the runtime's internal currency is now more consistent across
+  `execution.h`, VM frames, and writer consumption
+- the remaining gap is more likely inside the abstract/object corridor itself
+  than in list payload materialization
+
+So the next speed-focused step should prefer:
+
+- more specialized/table-driven dispatch
+- less hot-path reliance on completed envelopes
+- corridor widening only after those internal-currency gains are exhausted

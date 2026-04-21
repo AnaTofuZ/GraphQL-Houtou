@@ -2,6 +2,26 @@
  * Responsibility: prepared executable IR handle ownership and small
  * introspection helpers used as groundwork for future IR-direct execution.
  */
+typedef struct gql_ir_native_field_frame {
+  gql_execution_lazy_resolve_info_t lazy_info;
+  SV *resolve_sv;
+  SV *args_sv;
+  SV *result_sv;
+  SV *outcome_sv;
+  AV *outcome_errors_av;
+  int used_fast_default_resolve;
+  int owns_resolve_sv;
+  int owns_args_sv;
+  int resolve_is_default;
+  U8 outcome_kind;
+} gql_ir_native_field_frame_t;
+
+enum {
+  GQL_IR_NATIVE_FIELD_OUTCOME_NONE = 0,
+  GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE = 1,
+  GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV = 2
+};
+
 static void
 gql_ir_prepared_exec_destroy(gql_ir_prepared_exec_t *prepared) {
   if (!prepared) {
@@ -36,16 +56,135 @@ gql_ir_prepared_exec_destroy(gql_ir_prepared_exec_t *prepared) {
   Safefree(prepared);
 }
 
+static gql_ir_compiled_root_field_plan_t *
+gql_ir_execution_lowered_root_field_plan(gql_ir_compiled_exec_t *compiled) {
+  if (!compiled || !compiled->lowered_plan) {
+    return NULL;
+  }
+
+  return compiled->lowered_plan->root_field_plan;
+}
+
 static const char *gql_ir_operation_kind_name(gql_ir_operation_kind_t kind);
 static gql_ir_operation_definition_t *gql_ir_prepare_select_operation(pTHX_ gql_ir_prepared_exec_t *prepared, SV *operation_name);
 static SV *gql_ir_prepare_executable_root_legacy_fields_sv(pTHX_ SV *schema, gql_ir_prepared_exec_t *prepared, SV *operation_name);
 static AV *gql_ir_prepare_executable_root_selection_plan_av(pTHX_ gql_ir_prepared_exec_t *prepared, SV *operation_name);
 static HV *gql_ir_prepare_executable_root_field_plan_hv(pTHX_ SV *schema, gql_ir_prepared_exec_t *prepared, SV *operation_name);
 static gql_ir_fragment_definition_t *gql_ir_prepare_find_fragment_by_name(pTHX_ gql_ir_prepared_exec_t *prepared, const char *name, STRLEN name_len);
+static int gql_ir_prepare_type_condition_matches_root(pTHX_ gql_ir_prepared_exec_t *prepared, SV *root_type, gql_ir_span_t type_condition);
+static int gql_ir_prepare_collect_root_field_nodes_into(pTHX_ gql_ir_prepared_exec_t *prepared, SV *root_type, gql_ir_selection_set_t *selection_set, SV *target_result_name_sv, AV *nodes_av);
+static SV *gql_ir_prepare_executable_root_field_nodes_sv(pTHX_ gql_ir_prepared_exec_t *prepared, SV *root_type, SV *operation_name, SV *target_result_name_sv);
+static void gql_ir_compiled_attach_root_field_runtime_data(pTHX_ SV *root_field_plan_sv, SV *root_fields_sv);
+static gql_ir_compiled_root_field_plan_t *gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv);
+static void gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan);
+static gql_ir_execution_lowered_plan_t *gql_ir_execution_lowered_plan_from_root_field_plan_sv(pTHX_ SV *root_field_plan_sv);
+static void gql_ir_execution_lowered_plan_destroy(gql_ir_execution_lowered_plan_t *plan);
+static gql_ir_compiled_root_field_plan_t *gql_ir_execution_lowered_root_field_plan(gql_ir_compiled_exec_t *compiled);
+static void gql_ir_compiled_concrete_plan_table_destroy(gql_ir_compiled_concrete_plan_table_t *table);
+static void gql_ir_attach_concrete_field_plan_table(pTHX_ SV *sv, gql_ir_compiled_concrete_plan_table_t *table);
+static gql_ir_compiled_field_bucket_table_t *gql_ir_compiled_field_bucket_table_from_sv(pTHX_ SV *compiled_fields_sv);
+static void gql_ir_compiled_field_bucket_table_destroy(gql_ir_compiled_field_bucket_table_t *table);
+static void gql_ir_attach_compiled_field_bucket_table(pTHX_ SV *sv, gql_ir_compiled_field_bucket_table_t *table);
+static void gql_ir_compiled_strip_legacy_buckets_from_nodes(pTHX_ SV *nodes_sv);
+static void gql_ir_compiled_strip_legacy_buckets_from_node(pTHX_ SV *node_sv);
+static void gql_ir_compiled_strip_legacy_buckets_from_fragments(pTHX_ SV *fragments_sv);
+static SV *gql_ir_compiled_root_selection_plan_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
+static SV *gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
+static gql_ir_prepared_exec_t *gql_ir_compiled_prepared_exec(gql_ir_compiled_exec_t *compiled);
+static SV *gql_ir_compiled_operation_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
+static SV *gql_ir_compiled_fragments_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
+static SV *gql_ir_compiled_root_legacy_fields_sv(pTHX_ gql_ir_compiled_exec_t *compiled);
+static SV *gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, SV *context_sv, SV *root_value, SV *path_sv);
+static SV *gql_ir_selection_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_selection_t *selection);
+static AV *gql_ir_selections_to_legacy_av(pTHX_ gql_ir_document_t *document, gql_ir_selection_set_t *selection_set);
+static SV *gql_ir_value_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_value_t *value);
+static SV *gql_ir_directives_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_ptr_array_t *directives);
+static int gql_ir_selection_set_is_plain_fields(gql_ir_selection_set_t *selection_set);
+static SV *gql_ir_selection_set_to_legacy_fields_sv(pTHX_ gql_ir_document_t *document, gql_ir_selection_set_t *selection_set);
 static SV *gql_ir_fragment_definitions_to_legacy_map_sv(pTHX_ gql_ir_prepared_exec_t *prepared);
 static SV *gql_ir_operation_to_legacy_sv(pTHX_ gql_ir_prepared_exec_t *prepared, gql_ir_operation_definition_t *operation, SV *operation_name);
-static void gql_ir_attach_compiled_field_defs_to_nodes(pTHX_ SV *schema, SV *parent_type, SV *nodes_sv);
+static void gql_ir_attach_compiled_field_defs_to_selections(pTHX_ SV *schema, SV *parent_type, AV *selections_av, SV *fragments_sv);
+static void gql_ir_attach_compiled_field_defs_to_nodes(pTHX_ SV *schema, SV *parent_type, SV *nodes_sv, SV *fragments_sv);
 static void gql_ir_attach_compiled_field_defs_to_fragments(pTHX_ SV *schema, SV *fragments_sv);
+static void gql_ir_attach_compiled_concrete_subfields_to_node(pTHX_ SV *schema, SV *abstract_type, SV *fragments_sv, SV *selection_sv);
+static void gql_ir_attach_compiled_field_defs_to_selection_sv(pTHX_ SV *schema, SV *parent_type, SV *selection_sv, SV *fragments_sv);
+static void gql_ir_accumulate_completed_result(pTHX_ HV *data_hv, AV **all_errors_avp, SV *key_sv, SV *completed_sv);
+static int gql_ir_consume_completed_result(pTHX_ HV *data_hv, AV **all_errors_avp, SV *key_sv, SV *completed_sv);
+static int gql_ir_extract_completed_outcome(
+  pTHX_ SV *completed_sv,
+  SV **data_out,
+  AV **errors_out
+);
+static int gql_ir_try_complete_abstract_sync_into(
+  pTHX_ SV *context,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  gql_ir_native_field_frame_t *frame
+);
+static int gql_ir_execute_native_field_plan_sync_to_outcome(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  SV **data_out,
+  AV **errors_out
+);
+static SV *gql_ir_build_native_result(pTHX_ HV *data_hv, AV *all_errors_av);
+static SV *gql_ir_finish_native_exec_result(
+  pTHX_ SV *promise_code_sv,
+  gql_ir_native_exec_accum_t *accum
+);
+static int gql_ir_run_native_field_plan_loop(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  int require_runtime_operand_fill
+);
+static int gql_ir_ensure_native_field_entry_operands(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+);
+static int gql_ir_execute_native_field_entry_into(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+);
+static void gql_ir_init_native_field_frame(
+  gql_ir_native_field_frame_t *frame,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+);
+static void gql_ir_cleanup_native_field_frame(
+  pTHX_ gql_ir_native_field_frame_t *frame,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+);
+static int gql_ir_native_field_entry_has_operands(
+  gql_ir_compiled_root_field_plan_entry_t *entry
+);
+static int gql_ir_native_exec_accum_push_pending(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  SV *key_sv,
+  SV *value_sv
+);
+static void gql_ir_native_exec_accum_materialize_pending_avs(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  AV **keys_out,
+  AV **values_out
+);
+static int gql_ir_init_native_exec_env(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value_sv,
+  SV *base_path_sv,
+  gql_ir_native_exec_env_t *env_out,
+  SV **promise_code_out
+);
+static void gql_ir_init_native_exec_accum(gql_ir_native_exec_accum_t *accum);
+static void gql_ir_cleanup_native_exec_accum(gql_ir_native_exec_accum_t *accum);
 
 static void
 gql_ir_compiled_exec_destroy(gql_ir_compiled_exec_t *compiled) {
@@ -65,25 +204,17 @@ gql_ir_compiled_exec_destroy(gql_ir_compiled_exec_t *compiled) {
     SvREFCNT_dec(compiled->operation_name_sv);
     compiled->operation_name_sv = NULL;
   }
-  if (compiled->operation_sv) {
-    SvREFCNT_dec(compiled->operation_sv);
-    compiled->operation_sv = NULL;
-  }
-  if (compiled->fragments_sv) {
-    SvREFCNT_dec(compiled->fragments_sv);
-    compiled->fragments_sv = NULL;
-  }
   if (compiled->root_selection_plan_sv) {
     SvREFCNT_dec(compiled->root_selection_plan_sv);
     compiled->root_selection_plan_sv = NULL;
   }
+  if (compiled->lowered_plan) {
+    gql_ir_execution_lowered_plan_destroy(compiled->lowered_plan);
+    compiled->lowered_plan = NULL;
+  }
   if (compiled->root_field_plan_sv) {
     SvREFCNT_dec(compiled->root_field_plan_sv);
     compiled->root_field_plan_sv = NULL;
-  }
-  if (compiled->root_fields_sv) {
-    SvREFCNT_dec(compiled->root_fields_sv);
-    compiled->root_fields_sv = NULL;
   }
   if (compiled->root_type_sv) {
     SvREFCNT_dec(compiled->root_type_sv);
@@ -108,6 +239,1427 @@ gql_ir_prepare_executable_handle_sv(pTHX_ SV *source_sv) {
   inner_sv = newSVuv(PTR2UV(prepared));
   handle_sv = newRV_noinc(inner_sv);
   return sv_bless(handle_sv, stash);
+}
+
+static void
+gql_ir_accumulate_completed_result(pTHX_ HV *data_hv, AV **all_errors_avp, SV *key_sv, SV *completed_sv) {
+  HV *value_hv;
+  SV **data_svp;
+  SV **child_errors_svp;
+  STRLEN key_len;
+  const char *key;
+  I32 child_error_len;
+  I32 j;
+
+  if (!data_hv || !all_errors_avp || !key_sv || !SvOK(key_sv)
+      || !completed_sv || !SvROK(completed_sv) || SvTYPE(SvRV(completed_sv)) != SVt_PVHV) {
+    return;
+  }
+
+  value_hv = (HV *)SvRV(completed_sv);
+  data_svp = hv_fetch(value_hv, "data", 4, 0);
+  if (data_svp) {
+    key = SvPV(key_sv, key_len);
+    (void)hv_store(data_hv, key, (I32)key_len, newSVsv(*data_svp), 0);
+  }
+
+  child_errors_svp = hv_fetch(value_hv, "errors", 6, 0);
+  if (child_errors_svp && SvROK(*child_errors_svp) && SvTYPE(SvRV(*child_errors_svp)) == SVt_PVAV) {
+    AV *child_errors_av = (AV *)SvRV(*child_errors_svp);
+    AV *all_errors_av = *all_errors_avp;
+    child_error_len = av_len(child_errors_av);
+    if (!all_errors_av) {
+      all_errors_av = newAV();
+      *all_errors_avp = all_errors_av;
+    }
+    for (j = 0; j <= child_error_len; j++) {
+      SV **child_error_svp = av_fetch(child_errors_av, j, 0);
+      if (child_error_svp) {
+        av_push(all_errors_av, newSVsv(*child_error_svp));
+      }
+    }
+  }
+}
+
+static int
+gql_ir_consume_completed_result(pTHX_ HV *data_hv, AV **all_errors_avp, SV *key_sv, SV *completed_sv) {
+  HV *value_hv;
+  SV **data_svp;
+  SV **child_errors_svp;
+  STRLEN key_len;
+  const char *key;
+  I32 child_error_len;
+  I32 j;
+
+  if (!data_hv || !all_errors_avp || !key_sv || !SvOK(key_sv)
+      || !completed_sv || !SvROK(completed_sv) || SvTYPE(SvRV(completed_sv)) != SVt_PVHV) {
+    return 0;
+  }
+
+  value_hv = (HV *)SvRV(completed_sv);
+  data_svp = hv_fetch(value_hv, "data", 4, 0);
+  if (!data_svp) {
+    return 0;
+  }
+
+  key = SvPV(key_sv, key_len);
+  (void)hv_store(data_hv, key, (I32)key_len, SvREFCNT_inc_simple_NN(*data_svp), 0);
+
+  child_errors_svp = hv_fetch(value_hv, "errors", 6, 0);
+  if (child_errors_svp && SvROK(*child_errors_svp) && SvTYPE(SvRV(*child_errors_svp)) == SVt_PVAV) {
+    AV *child_errors_av = (AV *)SvRV(*child_errors_svp);
+    AV *all_errors_av = *all_errors_avp;
+    child_error_len = av_len(child_errors_av);
+    if (!all_errors_av) {
+      all_errors_av = newAV();
+      *all_errors_avp = all_errors_av;
+    }
+    for (j = 0; j <= child_error_len; j++) {
+      SV **child_error_svp = av_fetch(child_errors_av, j, 0);
+      if (child_error_svp) {
+        av_push(all_errors_av, SvREFCNT_inc_simple_NN(*child_error_svp));
+      }
+    }
+  }
+
+  return 1;
+}
+
+static int
+gql_ir_extract_completed_outcome(
+  pTHX_ SV *completed_sv,
+  SV **data_out,
+  AV **errors_out
+) {
+  HV *value_hv;
+  SV **data_svp;
+  SV **child_errors_svp;
+
+  if (data_out) {
+    *data_out = NULL;
+  }
+  if (errors_out) {
+    *errors_out = NULL;
+  }
+  if (!completed_sv || !SvROK(completed_sv) || SvTYPE(SvRV(completed_sv)) != SVt_PVHV) {
+    return 0;
+  }
+
+  value_hv = (HV *)SvRV(completed_sv);
+  data_svp = hv_fetch(value_hv, "data", 4, 0);
+  if (!data_svp || !SvOK(*data_svp)) {
+    return 0;
+  }
+  if (data_out) {
+    *data_out = SvREFCNT_inc_simple_NN(*data_svp);
+  }
+
+  child_errors_svp = hv_fetch(value_hv, "errors", 6, 0);
+  if (errors_out
+      && child_errors_svp
+      && SvROK(*child_errors_svp)
+      && SvTYPE(SvRV(*child_errors_svp)) == SVt_PVAV
+      && av_len((AV *)SvRV(*child_errors_svp)) >= 0) {
+    *errors_out = (AV *)SvREFCNT_inc_simple_NN(SvRV(*child_errors_svp));
+  }
+
+  return 1;
+}
+
+static int
+gql_ir_try_complete_abstract_sync_into(
+  pTHX_ SV *context,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  gql_ir_native_field_frame_t *frame
+) {
+  SV *resolve_type_sv;
+  HV *context_hv = (SvROK(context) && SvTYPE(SvRV(context)) == SVt_PVHV) ? (HV *)SvRV(context) : NULL;
+  SV **schema_svp = context_hv ? hv_fetch(context_hv, "schema", 6, 0) : NULL;
+
+  if (!return_type || !SvOK(return_type)
+      || !frame
+      || !(sv_does(return_type, "GraphQL::Houtou::Role::Abstract")
+           || sv_does(return_type, "GraphQL::Role::Abstract"))) {
+    return 0;
+  }
+
+  resolve_type_sv = gql_execution_get_abstract_resolve_type_sv(aTHX_ context, return_type);
+
+  if (SvOK(resolve_type_sv)) {
+    int ok = 0;
+    SV *resolve_error = NULL;
+    SV *info = gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
+    SV *runtime_type_or_name = gql_execution_call_abstract_resolve_type_cb(
+      aTHX_ resolve_type_sv,
+      result,
+      context,
+      info,
+      return_type,
+      &ok,
+      &resolve_error
+    );
+
+    SvREFCNT_dec(resolve_type_sv);
+    if (ok && SvOK(runtime_type_or_name)) {
+      SV *runtime_type = runtime_type_or_name;
+
+      if (!SvROK(runtime_type_or_name) && schema_svp && SvROK(*schema_svp) && SvTYPE(SvRV(*schema_svp)) == SVt_PVHV) {
+        HV *runtime_cache_hv = gql_execution_context_runtime_cache_hv(context);
+        if (!runtime_cache_hv) {
+          runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ *schema_svp);
+        }
+        SV **name2type_svp = runtime_cache_hv
+          ? hv_fetch(runtime_cache_hv, "name2type", 9, 0)
+          : hv_fetch((HV *)SvRV(*schema_svp), "name2type", 9, 0);
+        if (name2type_svp && SvROK(*name2type_svp) && SvTYPE(SvRV(*name2type_svp)) == SVt_PVHV) {
+          HE *runtime_he = hv_fetch_ent((HV *)SvRV(*name2type_svp), runtime_type_or_name, 0, 0);
+          if (runtime_he) {
+            runtime_type = HeVAL(runtime_he);
+          }
+        }
+      }
+
+      if (SvROK(runtime_type)
+          && (sv_derived_from(runtime_type, "GraphQL::Houtou::Type::Object")
+              || sv_derived_from(runtime_type, "GraphQL::Type::Object"))
+          && schema_svp
+          && SvROK(*schema_svp)
+          && SvTYPE(SvRV(*schema_svp)) == SVt_PVHV) {
+        int possible_ok = 0;
+        SV *condition_name_sv = gql_execution_type_name_sv(aTHX_ return_type);
+        SV *runtime_name_sv = gql_execution_type_name_sv(aTHX_ runtime_type);
+        int possible_match = gql_execution_possible_type_match_simple(
+          aTHX_
+          context,
+          *schema_svp,
+          return_type,
+          condition_name_sv,
+          runtime_type,
+          runtime_name_sv,
+          &possible_ok
+        );
+        SvREFCNT_dec(runtime_name_sv);
+        SvREFCNT_dec(condition_name_sv);
+
+        if (possible_ok && possible_match) {
+          gql_ir_compiled_root_field_plan_t *native_field_plan
+            = gql_execution_collect_single_node_concrete_native_field_plan(aTHX_ runtime_type, nodes);
+          if (native_field_plan) {
+            SV *data_sv = NULL;
+            AV *errors_av = NULL;
+            SV *path = gql_execution_lazy_path_materialize(aTHX_ lazy_info);
+            SvREFCNT_dec(runtime_type_or_name);
+            if (gql_ir_execute_native_field_plan_sync_to_outcome(
+                  aTHX_
+                  context,
+                  runtime_type,
+                  result,
+                  path,
+                  native_field_plan,
+                  &data_sv,
+                  &errors_av
+                )) {
+              frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+              frame->outcome_sv = data_sv;
+              frame->outcome_errors_av = errors_av;
+              return 1;
+            }
+          }
+        }
+      }
+
+      SvREFCNT_dec(runtime_type_or_name);
+      return 0;
+    } else if (ok) {
+      SvREFCNT_dec(runtime_type_or_name);
+      return 0;
+    } else if (resolve_error) {
+      SvREFCNT_dec(resolve_error);
+      return 0;
+    }
+    return 0;
+  }
+
+  SvREFCNT_dec(resolve_type_sv);
+  return 0;
+}
+
+static SV *
+gql_ir_build_native_result(pTHX_ HV *data_hv, AV *all_errors_av) {
+  HV *result_hv = newHV();
+
+  if (HvUSEDKEYS(data_hv) > 0) {
+    gql_store_sv(result_hv, "data", newRV_noinc((SV *)data_hv));
+  } else {
+    SvREFCNT_dec((SV *)data_hv);
+  }
+
+  if (all_errors_av && av_len(all_errors_av) >= 0) {
+    gql_store_sv(result_hv, "errors", newRV_noinc((SV *)all_errors_av));
+  } else if (all_errors_av) {
+    SvREFCNT_dec((SV *)all_errors_av);
+  }
+
+  return newRV_noinc((SV *)result_hv);
+}
+
+static SV *
+gql_ir_finish_native_exec_result(
+  pTHX_ SV *promise_code_sv,
+  gql_ir_native_exec_accum_t *accum
+) {
+  HV *direct_data_hv;
+  AV *result_keys_av = NULL;
+  AV *result_values_av = NULL;
+  AV *all_errors_av;
+
+  if (!accum || !accum->direct_data_hv) {
+    return &PL_sv_undef;
+  }
+
+  direct_data_hv = accum->direct_data_hv;
+  all_errors_av = accum->all_errors_av;
+
+  if (accum->promise_present) {
+    gql_ir_native_exec_accum_materialize_pending_avs(aTHX_ accum, &result_keys_av, &result_values_av);
+    if (!result_keys_av || !result_values_av) {
+      return &PL_sv_undef;
+    }
+    accum->pending_entries = NULL;
+    accum->pending_count = 0;
+    accum->pending_capacity = 0;
+    SV *aggregate = gql_promise_call_all(aTHX_ promise_code_sv, result_values_av);
+    AV *merge_errors_av = all_errors_av ? all_errors_av : newAV();
+    SV *ret = gql_execution_call_xs_then_merge_hash_with_head(
+      aTHX_
+      promise_code_sv,
+      direct_data_hv,
+      result_keys_av,
+      aggregate,
+      merge_errors_av
+    );
+
+    SvREFCNT_dec(aggregate);
+    SvREFCNT_dec((SV *)direct_data_hv);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
+    SvREFCNT_dec((SV *)merge_errors_av);
+    return ret;
+  }
+
+  if (!SvOK(promise_code_sv) || accum->pending_count == 0) {
+    SV *ret = gql_ir_build_native_result(aTHX_ direct_data_hv, all_errors_av);
+    return ret;
+  }
+
+  {
+    gql_ir_native_exec_accum_materialize_pending_avs(aTHX_ accum, &result_keys_av, &result_values_av);
+    if (!result_keys_av || !result_values_av) {
+      return &PL_sv_undef;
+    }
+    accum->pending_entries = NULL;
+    accum->pending_count = 0;
+    accum->pending_capacity = 0;
+    AV *merge_errors_av = all_errors_av ? all_errors_av : newAV();
+    SV *ret = gql_execution_merge_hash(aTHX_ result_keys_av, result_values_av, merge_errors_av);
+    SvREFCNT_dec((SV *)direct_data_hv);
+    SvREFCNT_dec((SV *)result_keys_av);
+    SvREFCNT_dec((SV *)result_values_av);
+    SvREFCNT_dec((SV *)merge_errors_av);
+    return ret;
+  }
+}
+
+static int
+gql_ir_run_native_field_plan_loop(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  int require_runtime_operand_fill
+) {
+  UV field_i;
+  int fill_runtime_operands;
+
+  if (!field_plan || !env || !accum) {
+    return 0;
+  }
+
+  fill_runtime_operands = require_runtime_operand_fill && field_plan->requires_runtime_operand_fill;
+
+  for (field_i = 0; field_i < field_plan->field_count; field_i++) {
+    gql_ir_compiled_root_field_plan_entry_t *entry = &field_plan->entries[field_i];
+
+    if (!entry->result_name_sv || !SvOK(entry->result_name_sv)) {
+      continue;
+    }
+
+    if (!entry->field_name_sv || !SvOK(entry->field_name_sv)) {
+      return 0;
+    }
+
+    if (fill_runtime_operands) {
+      if (!entry->operands_ready
+          && (!compiled || !gql_ir_ensure_native_field_entry_operands(aTHX_ compiled, entry))) {
+        continue;
+      }
+    } else if (!entry->operands_ready && !gql_ir_native_field_entry_has_operands(entry)) {
+      return 0;
+    }
+
+    if (!gql_ir_execute_native_field_entry_into(
+          aTHX_
+          env,
+          accum,
+          entry
+        )) {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+static int
+gql_ir_native_field_entry_has_operands(gql_ir_compiled_root_field_plan_entry_t *entry) {
+  return entry
+    && entry->nodes_sv
+    && SvOK(entry->nodes_sv)
+    && SvROK(entry->nodes_sv)
+    && SvTYPE(SvRV(entry->nodes_sv)) == SVt_PVAV
+    && entry->field_def_sv
+    && SvOK(entry->field_def_sv)
+    && SvROK(entry->field_def_sv)
+    && SvTYPE(SvRV(entry->field_def_sv)) == SVt_PVHV
+    && entry->type_sv
+    && SvOK(entry->type_sv);
+}
+
+static int
+gql_ir_native_exec_accum_push_pending(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  SV *key_sv,
+  SV *value_sv
+) {
+  gql_ir_native_pending_entry_t *new_entries;
+  UV new_capacity;
+
+  if (!accum || !key_sv || !SvOK(key_sv) || !value_sv) {
+    return 0;
+  }
+
+  if (accum->pending_count == accum->pending_capacity) {
+    new_capacity = accum->pending_capacity ? accum->pending_capacity * 2 : 4;
+    Renew(accum->pending_entries, new_capacity, gql_ir_native_pending_entry_t);
+    accum->pending_capacity = new_capacity;
+  }
+
+  new_entries = accum->pending_entries;
+  new_entries[accum->pending_count].key_sv = SvREFCNT_inc_simple_NN(key_sv);
+  new_entries[accum->pending_count].value_sv = value_sv;
+  accum->pending_count++;
+  return 1;
+}
+
+static void
+gql_ir_native_exec_accum_materialize_pending_avs(
+  pTHX_ gql_ir_native_exec_accum_t *accum,
+  AV **keys_out,
+  AV **values_out
+) {
+  AV *keys_av;
+  AV *values_av;
+  UV i;
+
+  if (keys_out) {
+    *keys_out = NULL;
+  }
+  if (values_out) {
+    *values_out = NULL;
+  }
+  if (!accum) {
+    return;
+  }
+
+  keys_av = newAV();
+  values_av = newAV();
+  for (i = 0; i < accum->pending_count; i++) {
+    av_push(keys_av, accum->pending_entries[i].key_sv);
+    av_push(values_av, accum->pending_entries[i].value_sv);
+    accum->pending_entries[i].key_sv = NULL;
+    accum->pending_entries[i].value_sv = NULL;
+  }
+  Safefree(accum->pending_entries);
+  if (keys_out) {
+    *keys_out = keys_av;
+  } else {
+    SvREFCNT_dec((SV *)keys_av);
+  }
+  if (values_out) {
+    *values_out = values_av;
+  } else {
+    SvREFCNT_dec((SV *)values_av);
+  }
+}
+
+static int
+gql_ir_init_native_exec_env(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value_sv,
+  SV *base_path_sv,
+  gql_ir_native_exec_env_t *env_out,
+  SV **promise_code_out
+) {
+  HV *context_hv;
+  gql_execution_context_fast_cache_t *context_cache;
+  SV **context_value_svp;
+  SV **variable_values_svp;
+  SV **empty_args_svp;
+  SV **field_resolver_svp;
+  SV **promise_code_svp;
+  SV *promise_code_sv = &PL_sv_undef;
+
+  if (!context_sv
+      || !SvROK(context_sv)
+      || SvTYPE(SvRV(context_sv)) != SVt_PVHV
+      || !env_out) {
+    return 0;
+  }
+
+  context_hv = (HV *)SvRV(context_sv);
+  context_cache = gql_execution_context_fast_cache(aTHX_ context_sv);
+  if (context_cache) {
+    context_value_svp = context_cache->context_value_sv ? &context_cache->context_value_sv : NULL;
+    variable_values_svp = context_cache->variable_values_sv ? &context_cache->variable_values_sv : NULL;
+    empty_args_svp = context_cache->empty_args_sv ? &context_cache->empty_args_sv : NULL;
+    field_resolver_svp = context_cache->field_resolver_sv ? &context_cache->field_resolver_sv : NULL;
+    promise_code_svp = context_cache->promise_code_sv ? &context_cache->promise_code_sv : NULL;
+  } else {
+    context_value_svp = hv_fetch(context_hv, "context_value", 13, 0);
+    variable_values_svp = hv_fetch(context_hv, "variable_values", 15, 0);
+    empty_args_svp = hv_fetch(context_hv, "empty_args", 10, 0);
+    field_resolver_svp = hv_fetch(context_hv, "field_resolver", 14, 0);
+    promise_code_svp = hv_fetch(context_hv, "promise_code", 12, 0);
+  }
+
+  if (promise_code_svp && SvOK(*promise_code_svp)) {
+    promise_code_sv = *promise_code_svp;
+  }
+
+  Zero(env_out, 1, gql_ir_native_exec_env_t);
+  env_out->context_sv = context_sv;
+  env_out->parent_type_sv = parent_type_sv;
+  env_out->root_value_sv = root_value_sv;
+  env_out->base_path_sv = base_path_sv;
+  env_out->context_value_sv = (context_value_svp && SvOK(*context_value_svp)) ? *context_value_svp : &PL_sv_undef;
+  env_out->variable_values_sv = (variable_values_svp && SvOK(*variable_values_svp)) ? *variable_values_svp : &PL_sv_undef;
+  env_out->empty_args_sv = (empty_args_svp && SvOK(*empty_args_svp)) ? *empty_args_svp : &PL_sv_undef;
+  env_out->field_resolver_sv = (field_resolver_svp && SvOK(*field_resolver_svp)) ? *field_resolver_svp : &PL_sv_undef;
+  env_out->promise_code_sv = promise_code_sv;
+
+  if (promise_code_out) {
+    *promise_code_out = promise_code_sv;
+  }
+  return 1;
+}
+
+static void
+gql_ir_init_native_exec_accum(gql_ir_native_exec_accum_t *accum) {
+  if (!accum) {
+    return;
+  }
+  Zero(accum, 1, gql_ir_native_exec_accum_t);
+  accum->direct_data_hv = newHV();
+}
+
+static void
+gql_ir_cleanup_native_exec_accum(gql_ir_native_exec_accum_t *accum) {
+  if (!accum) {
+    return;
+  }
+  if (accum->direct_data_hv) {
+    SvREFCNT_dec((SV *)accum->direct_data_hv);
+    accum->direct_data_hv = NULL;
+  }
+  if (accum->all_errors_av) {
+    SvREFCNT_dec((SV *)accum->all_errors_av);
+    accum->all_errors_av = NULL;
+  }
+  if (accum->pending_entries) {
+    UV i;
+    for (i = 0; i < accum->pending_count; i++) {
+      if (accum->pending_entries[i].key_sv) {
+        SvREFCNT_dec(accum->pending_entries[i].key_sv);
+      }
+      if (accum->pending_entries[i].value_sv) {
+        SvREFCNT_dec(accum->pending_entries[i].value_sv);
+      }
+    }
+    Safefree(accum->pending_entries);
+    accum->pending_entries = NULL;
+  }
+  accum->pending_count = 0;
+  accum->pending_capacity = 0;
+}
+
+static int
+gql_ir_native_field_try_meta_dispatch(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  SV *type_sv,
+  gql_ir_native_field_frame_t *frame
+) {
+  SV *direct_data_sv = NULL;
+
+  if (!env || !entry || !type_sv || !SvOK(type_sv) || !frame) {
+    return 0;
+  }
+  if (entry->meta_dispatch_kind != GQL_IR_NATIVE_META_DISPATCH_TYPENAME) {
+    return 0;
+  }
+
+  if (gql_execution_try_typename_meta_field_data_fast(aTHX_ env->parent_type_sv, entry->field_name_sv, type_sv, &direct_data_sv)) {
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+    frame->outcome_sv = direct_data_sv;
+    return 1;
+  }
+  if (gql_execution_try_typename_meta_field_fast(aTHX_ env->parent_type_sv, entry->field_name_sv, type_sv, &frame->outcome_sv)) {
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+    return 1;
+  }
+
+  return 0;
+}
+
+static SV *
+gql_ir_native_field_get_resolver(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  int *owns_resolve_out
+) {
+  if (owns_resolve_out) {
+    *owns_resolve_out = 0;
+  }
+  if (!env || !entry) {
+    return &PL_sv_undef;
+  }
+
+  switch (entry->resolve_dispatch_kind) {
+    case GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED:
+      return entry->resolve_sv;
+    case GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT:
+    default:
+      if (entry->resolve_sv && SvOK(entry->resolve_sv)) {
+        return entry->resolve_sv;
+      }
+      if (env->field_resolver_sv && SvOK(env->field_resolver_sv)) {
+        return env->field_resolver_sv;
+      }
+      if (owns_resolve_out) {
+        *owns_resolve_out = 1;
+      }
+      return newSV(0);
+  }
+}
+
+static int
+gql_ir_native_field_call_resolver_empty_args(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *resolve_sv,
+  SV **result_out,
+  SV **args_out,
+  int *owns_args_out
+) {
+  SV *args_sv = NULL;
+
+  if (result_out) {
+    *result_out = NULL;
+  }
+  if (args_out) {
+    *args_out = NULL;
+  }
+  if (owns_args_out) {
+    *owns_args_out = 0;
+  }
+  if (!env || !lazy_info || !resolve_sv || !result_out) {
+    return 0;
+  }
+
+  (void)gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
+  if (env->empty_args_sv && SvOK(env->empty_args_sv)) {
+    args_sv = env->empty_args_sv;
+  } else {
+    args_sv = newRV_noinc((SV *)newHV());
+    if (owns_args_out) {
+      *owns_args_out = 1;
+    }
+  }
+
+  if (args_out) {
+    *args_out = args_sv;
+  }
+  *result_out = gql_execution_call_resolver(
+    aTHX_
+    resolve_sv,
+    env->root_value_sv,
+    args_sv,
+    (env->context_value_sv && SvOK(env->context_value_sv)) ? env->context_value_sv : &PL_sv_undef,
+    lazy_info->info_sv
+  );
+  return 1;
+}
+
+static int
+gql_ir_native_field_call_resolver_build_args(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *resolve_sv,
+  SV **result_out,
+  SV **args_out,
+  int *owns_args_out
+) {
+  SV *field_node_sv;
+  SV *args_sv;
+
+  if (result_out) {
+    *result_out = NULL;
+  }
+  if (args_out) {
+    *args_out = NULL;
+  }
+  if (owns_args_out) {
+    *owns_args_out = 0;
+  }
+  if (!env || !entry || !entry->field_def_sv || !entry->first_node_sv || !lazy_info || !resolve_sv || !result_out) {
+    return 0;
+  }
+
+  field_node_sv = entry->first_node_sv;
+  if (!SvROK(field_node_sv) || SvTYPE(SvRV(field_node_sv)) != SVt_PVHV) {
+    return 0;
+  }
+
+  (void)gql_execution_lazy_resolve_info_materialize(aTHX_ lazy_info);
+  args_sv = gql_execution_get_argument_values_xs_impl(
+    aTHX_ entry->field_def_sv,
+    field_node_sv,
+    (env->variable_values_sv && SvOK(env->variable_values_sv)) ? env->variable_values_sv : &PL_sv_undef
+  );
+  if (owns_args_out) {
+    *owns_args_out = 1;
+  }
+  if (args_out) {
+    *args_out = args_sv;
+  }
+  *result_out = gql_execution_call_resolver(
+    aTHX_
+    resolve_sv,
+    env->root_value_sv,
+    args_sv,
+    (env->context_value_sv && SvOK(env->context_value_sv)) ? env->context_value_sv : &PL_sv_undef,
+    lazy_info->info_sv
+  );
+  return 1;
+}
+
+static int
+gql_ir_native_field_try_trivial_completion(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_ir_native_field_frame_t *frame,
+  SV *type_sv,
+  int resolve_is_default,
+  SV **result_io
+) {
+  SV *direct_data_sv = NULL;
+  SV *result_sv = result_io ? *result_io : NULL;
+
+  if (!env || !entry || !frame || !result_io || !type_sv || !SvOK(type_sv)) {
+    return 0;
+  }
+  if (entry->completion_dispatch_kind != GQL_IR_NATIVE_COMPLETION_TRIVIAL) {
+    return 0;
+  }
+
+  if (!result_sv && resolve_is_default
+      && gql_execution_try_default_field_resolve_borrowed_fast(aTHX_ env->root_value_sv, entry->field_name_sv, &result_sv)) {
+    *result_io = result_sv;
+    if (gql_execution_try_complete_trivial_value_with_metadata_data_fast(
+          aTHX_ entry->completion_type_sv,
+          entry->trivial_completion_flags,
+          result_sv,
+          &direct_data_sv
+        )) {
+      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+      frame->outcome_sv = direct_data_sv;
+      SvREFCNT_dec(result_sv);
+      *result_io = NULL;
+      return 1;
+    }
+  }
+
+  if (result_sv) {
+    if (gql_execution_try_complete_trivial_value_with_metadata_data_fast(
+          aTHX_ entry->completion_type_sv,
+          entry->trivial_completion_flags,
+          result_sv,
+          &direct_data_sv
+        )) {
+      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+      frame->outcome_sv = direct_data_sv;
+      return 1;
+    }
+    if (gql_execution_try_complete_trivial_value_with_metadata_fast(
+          aTHX_ entry->completion_type_sv,
+          entry->trivial_completion_flags,
+          result_sv,
+          &frame->outcome_sv
+        )) {
+      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+static int
+gql_ir_native_field_complete_trivial_result(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_ir_native_field_frame_t *frame,
+  SV *result_sv
+) {
+  SV *direct_data_sv = NULL;
+
+  if (!env || !entry || !frame || !entry->completion_type_sv || !result_sv) {
+    return 0;
+  }
+
+  if (gql_execution_try_complete_trivial_value_with_metadata_data_fast(
+        aTHX_ entry->completion_type_sv,
+        entry->trivial_completion_flags,
+        result_sv,
+        &direct_data_sv
+      )) {
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+    frame->outcome_sv = direct_data_sv;
+    return 1;
+  }
+
+  if (gql_execution_try_complete_trivial_value_with_metadata_fast(
+        aTHX_ entry->completion_type_sv,
+        entry->trivial_completion_flags,
+        result_sv,
+        &frame->outcome_sv
+      )) {
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+    return 1;
+  }
+
+  return 0;
+}
+
+static int
+gql_ir_native_field_complete_generic_result(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result_sv,
+  gql_ir_native_field_frame_t *frame
+) {
+  if (!env
+      || !accum
+      || !entry
+      || !entry->field_def_sv
+      || !entry->nodes_sv
+      || !entry->type_sv
+      || !lazy_info
+      || !frame) {
+    return 0;
+  }
+
+  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
+      && gql_ir_try_complete_abstract_sync_into(
+           aTHX_
+           env->context_sv,
+           entry->return_type_sv ? entry->return_type_sv : entry->type_sv,
+           entry->nodes_sv,
+           lazy_info,
+           result_sv,
+           frame
+         )) {
+    return 1;
+  }
+
+  frame->outcome_sv = gql_execution_complete_field_value_catching_error_xs_impl(
+    aTHX_
+    env->context_sv,
+    env->parent_type_sv,
+    entry->field_def_sv,
+    entry->return_type_sv,
+    entry->nodes_sv,
+    lazy_info,
+    result_sv
+  );
+  if ((!env->promise_code_sv || !SvOK(env->promise_code_sv))
+      && gql_ir_extract_completed_outcome(
+           aTHX_
+           frame->outcome_sv,
+           &result_sv,
+           &frame->outcome_errors_av
+         )) {
+    SvREFCNT_dec(frame->outcome_sv);
+    frame->outcome_sv = result_sv;
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+  } else {
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+  }
+  return 1;
+}
+
+static int
+gql_ir_native_field_consume_completed(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  gql_ir_compiled_root_field_plan_entry_t *entry,
+  gql_ir_native_field_frame_t *frame
+) {
+  SV *completed_sv = NULL;
+  int is_completed_promise = 0;
+
+  if (!env || !accum || !entry || !frame) {
+    return 0;
+  }
+
+  if (frame->outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE) {
+    AV *child_errors_av = frame->outcome_errors_av;
+    if (!frame->outcome_sv) {
+      return 0;
+    }
+    (void)hv_store_ent(accum->direct_data_hv, entry->result_name_sv, frame->outcome_sv, 0);
+    frame->outcome_sv = NULL;
+    if (child_errors_av && av_len(child_errors_av) >= 0) {
+      AV *all_errors_av = accum->all_errors_av;
+      I32 error_len = av_len(child_errors_av);
+      I32 i;
+      if (!all_errors_av) {
+        all_errors_av = newAV();
+        accum->all_errors_av = all_errors_av;
+      }
+      for (i = 0; i <= error_len; i++) {
+        SV **error_svp = av_fetch(child_errors_av, i, 0);
+        if (error_svp) {
+          av_push(all_errors_av, SvREFCNT_inc_simple_NN(*error_svp));
+        }
+      }
+    }
+    if (child_errors_av) {
+      SvREFCNT_dec((SV *)child_errors_av);
+      frame->outcome_errors_av = NULL;
+    }
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_NONE;
+    return 1;
+  }
+
+  if (frame->outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV || !frame->outcome_sv) {
+    return 0;
+  }
+  completed_sv = frame->outcome_sv;
+
+  if (env->promise_code_sv && SvOK(env->promise_code_sv) && SvROK(completed_sv)) {
+    SV *is_completed_promise_sv = gql_promise_call_is_promise(aTHX_ env->promise_code_sv, completed_sv);
+    is_completed_promise = SvTRUE(is_completed_promise_sv);
+    SvREFCNT_dec(is_completed_promise_sv);
+    if (is_completed_promise) {
+      accum->promise_present = 1;
+    }
+  }
+
+  if (SvROK(completed_sv) && (SvTYPE(SvRV(completed_sv)) == SVt_PVHV || is_completed_promise)) {
+    if (!is_completed_promise && SvTYPE(SvRV(completed_sv)) == SVt_PVHV) {
+      gql_ir_accumulate_completed_result(
+        aTHX_
+        accum->direct_data_hv,
+        &accum->all_errors_av,
+        entry->result_name_sv,
+        completed_sv
+      );
+      SvREFCNT_dec(completed_sv);
+      frame->outcome_sv = NULL;
+      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_NONE;
+      return 1;
+    }
+    if (!gql_ir_native_exec_accum_push_pending(
+          aTHX_
+          accum,
+          entry->result_name_sv,
+          completed_sv
+        )) {
+      return 0;
+    }
+    frame->outcome_sv = NULL;
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_NONE;
+    return 1;
+  }
+
+  return 0;
+}
+
+static int
+gql_ir_ensure_native_field_entry_operands(
+  pTHX_ gql_ir_compiled_exec_t *compiled,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+) {
+  gql_ir_prepared_exec_t *prepared;
+  SV *prepared_inner_sv;
+
+  if (!compiled || !entry) {
+    return 0;
+  }
+
+  if ((!entry->nodes_sv || !SvOK(entry->nodes_sv)) && entry->result_name_sv && SvOK(entry->result_name_sv)) {
+    SV *nodes_sv;
+    SV **first_node_svp;
+    AV *nodes_av;
+
+    if (!compiled->prepared_handle_sv
+        || !SvROK(compiled->prepared_handle_sv)
+        || !sv_derived_from(compiled->prepared_handle_sv, "GraphQL::Houtou::XS::PreparedIR")) {
+      return 0;
+    }
+    prepared_inner_sv = SvRV(compiled->prepared_handle_sv);
+    if (!SvIOK(prepared_inner_sv) || SvUV(prepared_inner_sv) == 0) {
+      return 0;
+    }
+    prepared = INT2PTR(gql_ir_prepared_exec_t *, SvUV(prepared_inner_sv));
+    nodes_sv = gql_ir_prepare_executable_root_field_nodes_sv(
+      aTHX_
+      prepared,
+      compiled->root_type_sv,
+      compiled->operation_name_sv,
+      entry->result_name_sv
+    );
+    if (nodes_sv == &PL_sv_undef || !SvROK(nodes_sv) || SvTYPE(SvRV(nodes_sv)) != SVt_PVAV) {
+      if (nodes_sv != &PL_sv_undef) {
+        SvREFCNT_dec(nodes_sv);
+      }
+      return 0;
+    }
+    nodes_av = (AV *)SvRV(nodes_sv);
+    first_node_svp = av_fetch(nodes_av, 0, 0);
+    if (!first_node_svp || !SvROK(*first_node_svp) || SvTYPE(SvRV(*first_node_svp)) != SVt_PVHV) {
+      SvREFCNT_dec(nodes_sv);
+      return 0;
+    }
+    entry->nodes_sv = nodes_sv;
+    entry->first_node_sv = gql_execution_share_or_copy_sv(*first_node_svp);
+    entry->node_count = (UV)(av_len(nodes_av) + 1);
+  }
+
+  if ((!entry->field_def_sv || !SvOK(entry->field_def_sv))
+      && entry->field_name_sv && SvOK(entry->field_name_sv)) {
+    entry->field_def_sv = gql_execution_get_field_def(aTHX_ compiled->schema_sv, compiled->root_type_sv, entry->field_name_sv);
+  }
+
+  if (!entry->field_def_sv || !SvOK(entry->field_def_sv)
+      || !SvROK(entry->field_def_sv) || SvTYPE(SvRV(entry->field_def_sv)) != SVt_PVHV) {
+    return 0;
+  }
+
+  if ((!entry->type_sv || !SvOK(entry->type_sv))) {
+    SV **type_svp = hv_fetch((HV *)SvRV(entry->field_def_sv), "type", 4, 0);
+    if (!type_svp || !SvOK(*type_svp)) {
+      return 0;
+    }
+    entry->type_sv = gql_execution_share_or_copy_sv(*type_svp);
+    if (!entry->return_type_sv) {
+      entry->return_type_sv = gql_execution_share_or_copy_sv(*type_svp);
+    }
+  }
+
+  entry->operands_ready = gql_ir_native_field_entry_has_operands(entry) ? 1 : 0;
+  return entry->operands_ready;
+}
+
+static void
+gql_ir_init_native_field_ops(gql_ir_compiled_root_field_plan_entry_t *entry) {
+  U8 op_count = 0;
+
+  if (!entry) {
+    return;
+  }
+
+  if (entry->meta_dispatch_kind != GQL_IR_NATIVE_META_DISPATCH_NONE) {
+    entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_META;
+  }
+  if (entry->resolve_dispatch_kind == GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT) {
+    entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_TRIVIAL_CONTEXT;
+  }
+  if (entry->resolve_dispatch_kind == GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED) {
+    if (entry->args_dispatch_kind == GQL_IR_NATIVE_ARGS_DISPATCH_BUILD) {
+      entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_BUILD_ARGS;
+    } else {
+      entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_EMPTY_ARGS;
+    }
+  } else {
+    if (entry->args_dispatch_kind == GQL_IR_NATIVE_ARGS_DISPATCH_BUILD) {
+      entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_BUILD_ARGS;
+    } else {
+      entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_EMPTY_ARGS;
+    }
+  }
+  if (entry->completion_dispatch_kind == GQL_IR_NATIVE_COMPLETION_TRIVIAL) {
+    entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_COMPLETE_TRIVIAL;
+  } else {
+    entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_COMPLETE_GENERIC;
+  }
+  entry->consume_op_index = op_count;
+  entry->ops[op_count++] = GQL_IR_NATIVE_FIELD_OP_CONSUME;
+  entry->op_count = op_count;
+}
+
+static void
+gql_ir_init_native_field_frame(
+  gql_ir_native_field_frame_t *frame,
+  gql_ir_native_exec_env_t *env,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+) {
+  if (!frame || !env || !entry) {
+    return;
+  }
+
+  Zero(frame, 1, gql_ir_native_field_frame_t);
+  frame->lazy_info.context_sv = env->context_sv;
+  frame->lazy_info.parent_type_sv = env->parent_type_sv;
+  frame->lazy_info.field_def_sv = entry->field_def_sv;
+  frame->lazy_info.return_type_sv = entry->return_type_sv ? entry->return_type_sv : entry->type_sv;
+  frame->lazy_info.field_name_sv = entry->field_name_sv;
+  frame->lazy_info.nodes_sv = entry->nodes_sv;
+  if (entry->path_sv && SvOK(entry->path_sv)) {
+    frame->lazy_info.path_sv = entry->path_sv;
+  } else {
+    frame->lazy_info.base_path_sv = env->base_path_sv;
+    frame->lazy_info.result_name_sv = entry->result_name_sv;
+  }
+}
+
+static void
+gql_ir_cleanup_native_field_frame(
+  pTHX_ gql_ir_native_field_frame_t *frame,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+) {
+  if (!frame || !entry) {
+    return;
+  }
+
+  if (frame->lazy_info.info_sv) {
+    SvREFCNT_dec(frame->lazy_info.info_sv);
+    frame->lazy_info.info_sv = NULL;
+  }
+  if (frame->owns_args_sv && frame->args_sv) {
+    SvREFCNT_dec(frame->args_sv);
+    frame->args_sv = NULL;
+  }
+  if (frame->result_sv) {
+    SvREFCNT_dec(frame->result_sv);
+    frame->result_sv = NULL;
+  }
+  if (frame->owns_resolve_sv && frame->resolve_sv) {
+    SvREFCNT_dec(frame->resolve_sv);
+    frame->resolve_sv = NULL;
+  }
+  if (frame->lazy_info.path_sv && (!entry->path_sv || !SvOK(entry->path_sv))) {
+    SvREFCNT_dec(frame->lazy_info.path_sv);
+    frame->lazy_info.path_sv = NULL;
+  }
+  if (frame->outcome_sv) {
+    SvREFCNT_dec(frame->outcome_sv);
+    frame->outcome_sv = NULL;
+  }
+  if (frame->outcome_errors_av) {
+    SvREFCNT_dec((SV *)frame->outcome_errors_av);
+    frame->outcome_errors_av = NULL;
+  }
+  frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_NONE;
+}
+
+static int
+gql_ir_execute_native_field_entry_into(
+  pTHX_ gql_ir_native_exec_env_t *env,
+  gql_ir_native_exec_accum_t *accum,
+  gql_ir_compiled_root_field_plan_entry_t *entry
+) {
+  gql_ir_native_field_frame_t frame;
+  U8 pc = 0;
+  gql_ir_native_field_op_t op;
+
+  /* Mirrors one field iteration of gql_execution_execute_field_plan(), but the
+   * compiled-IR executor treats this as the VM-ready "execute one field op"
+   * unit and consumes native plan metadata directly. */
+  if (!env
+      || !accum
+      || !entry
+      || !entry->field_def_sv
+      || !SvOK(entry->field_def_sv)
+      || !SvROK(entry->field_def_sv)
+      || SvTYPE(SvRV(entry->field_def_sv)) != SVt_PVHV
+      || !entry->nodes_sv
+      || !SvOK(entry->nodes_sv)
+      || !SvROK(entry->nodes_sv)
+      || SvTYPE(SvRV(entry->nodes_sv)) != SVt_PVAV
+      || !entry->type_sv
+      || !SvOK(entry->type_sv)
+      || entry->op_count == 0) {
+    return 0;
+  }
+
+  gql_ir_init_native_field_frame(&frame, env, entry);
+
+dispatch:
+#if defined(__GNUC__) || defined(__clang__)
+  {
+    static void *dispatch_table[] = {
+      &&op_meta,
+      &&op_trivial_context,
+      &&op_call_fixed_empty_args,
+      &&op_call_fixed_build_args,
+      &&op_call_context_empty_args,
+      &&op_call_context_build_args,
+      &&op_complete_trivial,
+      &&op_complete_generic,
+      &&op_consume
+    };
+    if (pc >= entry->op_count) {
+      goto op_done;
+    }
+    op = entry->ops[pc];
+    goto *dispatch_table[op];
+  }
+#else
+  if (pc >= entry->op_count) {
+    goto op_done;
+  }
+  op = entry->ops[pc];
+  switch (op) {
+    case GQL_IR_NATIVE_FIELD_OP_META: goto op_meta;
+    case GQL_IR_NATIVE_FIELD_OP_TRIVIAL_CONTEXT: goto op_trivial_context;
+    case GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_EMPTY_ARGS: goto op_call_fixed_empty_args;
+    case GQL_IR_NATIVE_FIELD_OP_CALL_FIXED_BUILD_ARGS: goto op_call_fixed_build_args;
+    case GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_EMPTY_ARGS: goto op_call_context_empty_args;
+    case GQL_IR_NATIVE_FIELD_OP_CALL_CONTEXT_BUILD_ARGS: goto op_call_context_build_args;
+    case GQL_IR_NATIVE_FIELD_OP_COMPLETE_TRIVIAL: goto op_complete_trivial;
+    case GQL_IR_NATIVE_FIELD_OP_COMPLETE_GENERIC: goto op_complete_generic;
+    case GQL_IR_NATIVE_FIELD_OP_CONSUME: goto op_consume;
+    default:
+      goto op_fail;
+  }
+#endif
+
+op_meta:
+  if (gql_ir_native_field_try_meta_dispatch(
+        aTHX_
+        env,
+        entry,
+        entry->type_sv,
+        &frame
+      )) {
+    if (frame.outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+      pc = entry->consume_op_index;
+      goto dispatch;
+    }
+    goto op_done;
+  }
+  pc++;
+  goto dispatch;
+
+op_trivial_context:
+  if (!frame.resolve_sv) {
+    frame.resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame.owns_resolve_sv);
+    frame.resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame.resolve_sv);
+  }
+  if (gql_ir_native_field_try_trivial_completion(
+        aTHX_
+        env,
+        entry,
+        &frame,
+        entry->type_sv,
+        frame.resolve_is_default,
+        &frame.result_sv
+      )) {
+    if (frame.outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+      pc = entry->consume_op_index;
+      goto dispatch;
+    }
+    goto op_done;
+  }
+
+  if (frame.resolve_is_default
+      && gql_execution_try_default_field_resolve_fast(aTHX_ env->root_value_sv, entry->field_name_sv, &frame.result_sv)) {
+    frame.used_fast_default_resolve = 1;
+    if (gql_ir_native_field_try_trivial_completion(
+          aTHX_
+          env,
+          entry,
+          &frame,
+          entry->type_sv,
+          0,
+          &frame.result_sv
+        )) {
+      if (frame.outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+        pc = entry->consume_op_index;
+        goto dispatch;
+      }
+      goto op_done;
+    }
+    if (entry->completion_dispatch_kind == GQL_IR_NATIVE_COMPLETION_GENERIC
+        && gql_execution_try_complete_trivial_value_fast(aTHX_ entry->type_sv, frame.result_sv, &frame.outcome_sv)) {
+      frame.outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+      pc = entry->consume_op_index;
+      goto dispatch;
+    }
+  }
+
+  pc++;
+  goto dispatch;
+
+op_call_fixed_empty_args:
+  frame.resolve_sv = entry->resolve_sv;
+  frame.resolve_is_default = 0;
+  if (!gql_ir_native_field_call_resolver_empty_args(
+        aTHX_
+        env,
+        &frame.lazy_info,
+        frame.resolve_sv,
+        &frame.result_sv,
+        &frame.args_sv,
+        &frame.owns_args_sv
+      )) {
+    goto op_fail;
+  }
+  pc++;
+  goto dispatch;
+
+op_call_fixed_build_args:
+  frame.resolve_sv = entry->resolve_sv;
+  frame.resolve_is_default = 0;
+  if (!gql_ir_native_field_call_resolver_build_args(
+        aTHX_
+        env,
+        entry,
+        &frame.lazy_info,
+        frame.resolve_sv,
+        &frame.result_sv,
+        &frame.args_sv,
+        &frame.owns_args_sv
+      )) {
+    goto op_fail;
+  }
+  pc++;
+  goto dispatch;
+
+op_call_context_empty_args:
+  if (!frame.resolve_sv) {
+    frame.resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame.owns_resolve_sv);
+    frame.resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame.resolve_sv);
+  }
+  if (!frame.used_fast_default_resolve
+      && !gql_ir_native_field_call_resolver_empty_args(
+           aTHX_
+           env,
+           &frame.lazy_info,
+           frame.resolve_sv,
+           &frame.result_sv,
+           &frame.args_sv,
+           &frame.owns_args_sv
+         )) {
+    goto op_fail;
+  }
+  pc++;
+  goto dispatch;
+
+op_call_context_build_args:
+  if (!frame.resolve_sv) {
+    frame.resolve_sv = gql_ir_native_field_get_resolver(aTHX_ env, entry, &frame.owns_resolve_sv);
+    frame.resolve_is_default = gql_execution_is_default_field_resolver(aTHX_ frame.resolve_sv);
+  }
+  if (!frame.used_fast_default_resolve
+      && !gql_ir_native_field_call_resolver_build_args(
+           aTHX_
+           env,
+           entry,
+           &frame.lazy_info,
+           frame.resolve_sv,
+           &frame.result_sv,
+           &frame.args_sv,
+           &frame.owns_args_sv
+         )) {
+    goto op_fail;
+  }
+  pc++;
+  goto dispatch;
+
+op_complete_trivial:
+  if (!gql_ir_native_field_complete_trivial_result(
+        aTHX_
+        env,
+        entry,
+        &frame,
+        frame.result_sv
+      )) {
+    goto op_fail;
+  }
+  if (frame.outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+    goto op_done;
+  }
+  pc++;
+  goto dispatch;
+
+op_complete_generic:
+  if (!gql_ir_native_field_complete_generic_result(
+        aTHX_
+        env,
+        accum,
+        entry,
+        &frame.lazy_info,
+        frame.result_sv,
+        &frame
+      )) {
+    goto op_fail;
+  }
+  if (frame.outcome_kind == GQL_IR_NATIVE_FIELD_OUTCOME_NONE) {
+    goto op_done;
+  }
+  pc++;
+  goto dispatch;
+
+op_consume:
+  if (!gql_ir_native_field_consume_completed(
+        aTHX_
+        env,
+        accum,
+        entry,
+        &frame
+      )) {
+    goto op_fail;
+  }
+  pc++;
+  goto dispatch;
+
+op_done:
+  gql_ir_cleanup_native_field_frame(aTHX_ &frame, entry);
+  return 1;
+
+op_fail:
+  gql_ir_cleanup_native_field_frame(aTHX_ &frame, entry);
+  return 0;
 }
 
 static SV *
@@ -138,21 +1690,39 @@ gql_ir_compile_executable_plan_handle_sv(pTHX_ SV *schema, SV *prepared_handle_s
   compiled->prepared_handle_sv = newSVsv(prepared_handle_sv);
   compiled->schema_sv = gql_execution_share_or_copy_sv(schema);
   compiled->operation_name_sv = (operation_name && SvOK(operation_name)) ? newSVsv(operation_name) : newSV(0);
-  compiled->operation_sv = gql_ir_operation_to_legacy_sv(aTHX_ prepared, selected, operation_name);
-  compiled->fragments_sv = gql_ir_fragment_definitions_to_legacy_map_sv(aTHX_ prepared);
-  gql_ir_attach_compiled_field_defs_to_fragments(aTHX_ schema, compiled->fragments_sv);
-  compiled->root_selection_plan_sv = newRV_noinc((SV *)gql_ir_prepare_executable_root_selection_plan_av(
-    aTHX_ prepared,
-    operation_name
-  ));
-  compiled->root_field_plan_sv = newRV_noinc((SV *)gql_ir_prepare_executable_root_field_plan_hv(
-    aTHX_ schema,
-    prepared,
-    operation_name
-  ));
-  compiled->root_fields_sv = gql_ir_prepare_executable_root_legacy_fields_sv(aTHX_ schema, prepared, operation_name);
+  compiled->selected_operation = selected;
   compiled->root_type_sv = gql_execution_call_schema_root_type(aTHX_ schema, operation_type);
-  gql_ir_attach_compiled_field_defs_to_nodes(aTHX_ schema, compiled->root_type_sv, compiled->root_fields_sv);
+  {
+    SV *root_field_plan_sv = newRV_noinc((SV *)gql_ir_prepare_executable_root_field_plan_hv(
+      aTHX_ schema,
+      prepared,
+      operation_name
+    ));
+    SV *fragments_sv = gql_ir_fragment_definitions_to_legacy_map_sv(aTHX_ prepared);
+    SV *root_fields_sv = gql_ir_prepare_executable_root_legacy_fields_sv(aTHX_ schema, prepared, operation_name);
+
+    gql_ir_attach_compiled_field_defs_to_fragments(aTHX_ schema, fragments_sv);
+    gql_ir_attach_compiled_field_defs_to_nodes(aTHX_ schema, compiled->root_type_sv, root_fields_sv, fragments_sv);
+    gql_ir_compiled_attach_root_field_runtime_data(aTHX_ root_field_plan_sv, root_fields_sv);
+    compiled->lowered_plan = gql_ir_execution_lowered_plan_from_root_field_plan_sv(aTHX_ root_field_plan_sv);
+    if (!compiled->lowered_plan) {
+      compiled->root_field_plan_sv = root_field_plan_sv;
+      root_field_plan_sv = NULL;
+    } else {
+      gql_ir_compiled_root_field_plan_t *root_field_plan = gql_ir_execution_lowered_root_field_plan(compiled);
+      UV field_i;
+      for (field_i = 0; field_i < root_field_plan->field_count; field_i++) {
+        gql_ir_compiled_root_field_plan_entry_t *entry = &root_field_plan->entries[field_i];
+        gql_ir_compiled_strip_legacy_buckets_from_nodes(aTHX_ entry->nodes_sv);
+      }
+    }
+
+    if (root_field_plan_sv) {
+      SvREFCNT_dec(root_field_plan_sv);
+    }
+    SvREFCNT_dec(root_fields_sv);
+    SvREFCNT_dec(fragments_sv);
+  }
 
   stash = gv_stashpv("GraphQL::Houtou::XS::CompiledIR", GV_ADD);
   compiled_inner_sv = newSVuv(PTR2UV(compiled));
@@ -929,6 +2499,973 @@ gql_ir_prepare_executable_root_field_plan_hv(
   return result_hv;
 }
 
+static int
+gql_ir_prepare_collect_root_field_nodes_into(
+  pTHX_ gql_ir_prepared_exec_t *prepared,
+  SV *root_type,
+  gql_ir_selection_set_t *selection_set,
+  SV *target_result_name_sv,
+  AV *nodes_av
+) {
+  UV i;
+
+  if (!selection_set) {
+    return 1;
+  }
+
+  for (i = 0; i < (UV)selection_set->selections.count; i++) {
+    gql_ir_selection_t *selection = (gql_ir_selection_t *)selection_set->selections.items[i];
+
+    if (!selection) {
+      continue;
+    }
+
+    switch (selection->kind) {
+      case GQL_IR_SELECTION_FIELD: {
+        gql_ir_field_t *field = selection->as.field;
+        SV *result_name_sv;
+        int matches;
+
+        if (field->directives.count > 0) {
+          return 0;
+        }
+
+        result_name_sv = (field->alias.start != field->alias.end)
+          ? gql_ir_make_sv_from_span(aTHX_ prepared->document, field->alias)
+          : gql_ir_make_sv_from_span(aTHX_ prepared->document, field->name);
+        matches = sv_eq(result_name_sv, target_result_name_sv);
+        SvREFCNT_dec(result_name_sv);
+
+        if (matches) {
+          SV *selection_sv = gql_ir_selection_to_legacy_sv(aTHX_ prepared->document, selection);
+          if (!selection_sv || selection_sv == &PL_sv_undef) {
+            return 0;
+          }
+          av_push(nodes_av, selection_sv);
+        }
+        break;
+      }
+      case GQL_IR_SELECTION_FRAGMENT_SPREAD: {
+        gql_ir_fragment_spread_t *spread = selection->as.fragment_spread;
+        SV *fragment_name_sv;
+        STRLEN name_len;
+        const char *name;
+        gql_ir_fragment_definition_t *fragment;
+
+        if (spread->directives.count > 0) {
+          return 0;
+        }
+
+        fragment_name_sv = gql_ir_make_sv_from_span(aTHX_ prepared->document, spread->name);
+        name = SvPV(fragment_name_sv, name_len);
+        fragment = gql_ir_prepare_find_fragment_by_name(aTHX_ prepared, name, name_len);
+        SvREFCNT_dec(fragment_name_sv);
+        if (!fragment) {
+          return 0;
+        }
+        if (!gql_ir_prepare_type_condition_matches_root(aTHX_ prepared, root_type, fragment->type_condition)) {
+          continue;
+        }
+        if (!gql_ir_prepare_collect_root_field_nodes_into(
+              aTHX_
+              prepared,
+              root_type,
+              fragment->selection_set,
+              target_result_name_sv,
+              nodes_av
+            )) {
+          return 0;
+        }
+        break;
+      }
+      case GQL_IR_SELECTION_INLINE_FRAGMENT: {
+        gql_ir_inline_fragment_t *fragment = selection->as.inline_fragment;
+
+        if (fragment->directives.count > 0) {
+          return 0;
+        }
+        if (!gql_ir_prepare_type_condition_matches_root(aTHX_ prepared, root_type, fragment->type_condition)) {
+          continue;
+        }
+        if (!gql_ir_prepare_collect_root_field_nodes_into(
+              aTHX_
+              prepared,
+              root_type,
+              fragment->selection_set,
+              target_result_name_sv,
+              nodes_av
+            )) {
+          return 0;
+        }
+        break;
+      }
+      default:
+        return 0;
+    }
+  }
+
+  return 1;
+}
+
+static SV *
+gql_ir_prepare_executable_root_field_nodes_sv(
+  pTHX_ gql_ir_prepared_exec_t *prepared,
+  SV *root_type,
+  SV *operation_name,
+  SV *target_result_name_sv
+) {
+  gql_ir_operation_definition_t *selected;
+  AV *nodes_av;
+
+  if (!prepared || !root_type || !target_result_name_sv || !SvOK(target_result_name_sv)) {
+    return &PL_sv_undef;
+  }
+
+  selected = gql_ir_prepare_select_operation(aTHX_ prepared, operation_name);
+  nodes_av = newAV();
+
+  if (!gql_ir_prepare_collect_root_field_nodes_into(
+        aTHX_
+        prepared,
+        root_type,
+        selected->selection_set,
+        target_result_name_sv,
+        nodes_av
+      )) {
+    SvREFCNT_dec((SV *)nodes_av);
+    return &PL_sv_undef;
+  }
+
+  return newRV_noinc((SV *)nodes_av);
+}
+
+static void
+gql_ir_compiled_attach_root_field_runtime_data(pTHX_ SV *root_field_plan_sv, SV *root_fields_sv) {
+  HV *root_field_plan_hv;
+  AV *field_order_av;
+  HV *fields_hv;
+  AV *root_fields_av;
+  HV *root_nodes_defs_hv;
+  SV **field_order_svp;
+  SV **fields_svp;
+  SV **nodes_defs_svp;
+  I32 field_len;
+  I32 i;
+
+  if (!root_field_plan_sv
+      || !SvROK(root_field_plan_sv)
+      || SvTYPE(SvRV(root_field_plan_sv)) != SVt_PVHV
+      || !root_fields_sv
+      || !SvROK(root_fields_sv)
+      || SvTYPE(SvRV(root_fields_sv)) != SVt_PVAV) {
+    return;
+  }
+
+  root_field_plan_hv = (HV *)SvRV(root_field_plan_sv);
+  field_order_svp = hv_fetch(root_field_plan_hv, "field_order", 11, 0);
+  fields_svp = hv_fetch(root_field_plan_hv, "fields", 6, 0);
+  root_fields_av = (AV *)SvRV(root_fields_sv);
+  nodes_defs_svp = av_fetch(root_fields_av, 1, 0);
+
+  if (!field_order_svp
+      || !SvROK(*field_order_svp)
+      || SvTYPE(SvRV(*field_order_svp)) != SVt_PVAV
+      || !fields_svp
+      || !SvROK(*fields_svp)
+      || SvTYPE(SvRV(*fields_svp)) != SVt_PVHV
+      || !nodes_defs_svp
+      || !SvROK(*nodes_defs_svp)
+      || SvTYPE(SvRV(*nodes_defs_svp)) != SVt_PVHV) {
+    return;
+  }
+
+  field_order_av = (AV *)SvRV(*field_order_svp);
+  fields_hv = (HV *)SvRV(*fields_svp);
+  root_nodes_defs_hv = (HV *)SvRV(*nodes_defs_svp);
+  field_len = av_len(field_order_av);
+
+  for (i = 0; i <= field_len; i++) {
+    SV **result_name_svp = av_fetch(field_order_av, i, 0);
+    HE *field_plan_he;
+    HV *field_plan_hv;
+    HE *nodes_he;
+
+    if (!result_name_svp || !SvOK(*result_name_svp)) {
+      continue;
+    }
+
+    field_plan_he = hv_fetch_ent(fields_hv, *result_name_svp, 0, 0);
+    nodes_he = hv_fetch_ent(root_nodes_defs_hv, *result_name_svp, 0, 0);
+    if (!field_plan_he
+        || !SvROK(HeVAL(field_plan_he))
+        || SvTYPE(SvRV(HeVAL(field_plan_he))) != SVt_PVHV
+        || !nodes_he
+        || !SvOK(HeVAL(nodes_he))) {
+      continue;
+    }
+
+    field_plan_hv = (HV *)SvRV(HeVAL(field_plan_he));
+    if (!hv_exists(field_plan_hv, "nodes", 5)) {
+      gql_store_sv(field_plan_hv, "nodes", gql_execution_share_or_copy_sv(HeVAL(nodes_he)));
+    }
+  }
+}
+
+static void
+gql_ir_compiled_root_field_plan_destroy(gql_ir_compiled_root_field_plan_t *plan) {
+  UV i;
+
+  if (!plan) {
+    return;
+  }
+
+  if (plan->entries) {
+    for (i = 0; i < plan->field_count; i++) {
+      gql_ir_compiled_root_field_plan_entry_t *entry = &plan->entries[i];
+
+      if (entry->result_name_sv) {
+        SvREFCNT_dec(entry->result_name_sv);
+        entry->result_name_sv = NULL;
+      }
+      if (entry->field_name_sv) {
+        SvREFCNT_dec(entry->field_name_sv);
+        entry->field_name_sv = NULL;
+      }
+      if (entry->field_def_sv) {
+        SvREFCNT_dec(entry->field_def_sv);
+        entry->field_def_sv = NULL;
+      }
+      if (entry->return_type_sv) {
+        SvREFCNT_dec(entry->return_type_sv);
+        entry->return_type_sv = NULL;
+      }
+      if (entry->type_sv) {
+        SvREFCNT_dec(entry->type_sv);
+        entry->type_sv = NULL;
+      }
+      if (entry->completion_type_sv) {
+        SvREFCNT_dec(entry->completion_type_sv);
+        entry->completion_type_sv = NULL;
+      }
+      if (entry->resolve_sv) {
+        SvREFCNT_dec(entry->resolve_sv);
+        entry->resolve_sv = NULL;
+      }
+      if (entry->nodes_sv) {
+        SvREFCNT_dec(entry->nodes_sv);
+        entry->nodes_sv = NULL;
+      }
+      if (entry->first_node_sv) {
+        SvREFCNT_dec(entry->first_node_sv);
+        entry->first_node_sv = NULL;
+      }
+      if (entry->path_sv) {
+        SvREFCNT_dec(entry->path_sv);
+        entry->path_sv = NULL;
+      }
+    }
+    Safefree(plan->entries);
+    plan->entries = NULL;
+  }
+
+  Safefree(plan);
+}
+
+static gql_ir_execution_lowered_plan_t *
+gql_ir_execution_lowered_plan_from_root_field_plan_sv(pTHX_ SV *root_field_plan_sv) {
+  gql_ir_compiled_root_field_plan_t *root_field_plan;
+  gql_ir_execution_lowered_plan_t *plan;
+
+  root_field_plan = gql_ir_compiled_root_field_plan_from_sv(aTHX_ root_field_plan_sv);
+  if (!root_field_plan) {
+    return NULL;
+  }
+
+  Newxz(plan, 1, gql_ir_execution_lowered_plan_t);
+  plan->stage = GQL_IR_COMPILATION_STAGE_LOWERED_NATIVE_FIELDS;
+  plan->root_field_plan = root_field_plan;
+  return plan;
+}
+
+static void
+gql_ir_execution_lowered_plan_destroy(gql_ir_execution_lowered_plan_t *plan) {
+  if (!plan) {
+    return;
+  }
+
+  if (plan->root_field_plan) {
+    gql_ir_compiled_root_field_plan_destroy(plan->root_field_plan);
+    plan->root_field_plan = NULL;
+  }
+
+  Safefree(plan);
+}
+
+static int
+gql_ir_compiled_concrete_plan_table_magic_free(pTHX_ SV *sv, MAGIC *mg) {
+  gql_ir_compiled_concrete_plan_table_t *table = (mg && mg->mg_ptr)
+    ? INT2PTR(gql_ir_compiled_concrete_plan_table_t *, mg->mg_ptr)
+    : NULL;
+
+  if (table) {
+    gql_ir_compiled_concrete_plan_table_destroy(table);
+    mg->mg_ptr = NULL;
+  }
+  return 0;
+}
+
+static int
+gql_ir_compiled_field_bucket_table_magic_free(pTHX_ SV *sv, MAGIC *mg) {
+  gql_ir_compiled_field_bucket_table_t *table = (mg && mg->mg_ptr)
+    ? INT2PTR(gql_ir_compiled_field_bucket_table_t *, mg->mg_ptr)
+    : NULL;
+
+  if (table) {
+    gql_ir_compiled_field_bucket_table_destroy(table);
+    mg->mg_ptr = NULL;
+  }
+  return 0;
+}
+
+static MGVTBL gql_ir_compiled_concrete_plan_table_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gql_ir_compiled_concrete_plan_table_magic_free
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
+
+static MGVTBL gql_ir_compiled_field_bucket_table_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gql_ir_compiled_field_bucket_table_magic_free
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
+
+static void
+gql_ir_compiled_concrete_plan_table_destroy(gql_ir_compiled_concrete_plan_table_t *table) {
+  UV i;
+
+  if (!table) {
+    return;
+  }
+
+  if (table->entries) {
+    for (i = 0; i < table->count; i++) {
+      gql_ir_compiled_concrete_plan_entry_t *entry = &table->entries[i];
+
+      if (entry->possible_type_sv) {
+        SvREFCNT_dec(entry->possible_type_sv);
+        entry->possible_type_sv = NULL;
+      }
+      if (entry->compiled_fields_sv) {
+        SvREFCNT_dec(entry->compiled_fields_sv);
+        entry->compiled_fields_sv = NULL;
+      }
+      if (entry->field_plan_sv) {
+        SvREFCNT_dec(entry->field_plan_sv);
+        entry->field_plan_sv = NULL;
+      }
+      if (entry->native_field_plan) {
+        gql_ir_compiled_root_field_plan_destroy(entry->native_field_plan);
+        entry->native_field_plan = NULL;
+      }
+    }
+    Safefree(table->entries);
+    table->entries = NULL;
+  }
+
+  Safefree(table);
+}
+
+static void
+gql_ir_compiled_field_bucket_table_destroy(gql_ir_compiled_field_bucket_table_t *table) {
+  UV i;
+
+  if (!table) {
+    return;
+  }
+
+  if (table->entries) {
+    for (i = 0; i < table->count; i++) {
+      gql_ir_compiled_field_bucket_entry_t *entry = &table->entries[i];
+
+      if (entry->result_name_sv) {
+        SvREFCNT_dec(entry->result_name_sv);
+        entry->result_name_sv = NULL;
+      }
+      if (entry->nodes_sv) {
+        SvREFCNT_dec(entry->nodes_sv);
+        entry->nodes_sv = NULL;
+      }
+    }
+    Safefree(table->entries);
+    table->entries = NULL;
+  }
+
+  Safefree(table);
+}
+
+static void
+gql_ir_attach_concrete_field_plan_table(pTHX_ SV *sv, gql_ir_compiled_concrete_plan_table_t *table) {
+  MAGIC *mg;
+  SV *target = sv;
+
+  if (!sv || !table) {
+    return;
+  }
+
+  if (SvROK(target)) {
+    target = SvRV(target);
+  }
+
+  sv_magicext(target, NULL, PERL_MAGIC_ext, &gql_ir_compiled_concrete_plan_table_vtbl, NULL, 0);
+  mg = mg_findext(target, PERL_MAGIC_ext, &gql_ir_compiled_concrete_plan_table_vtbl);
+  if (!mg) {
+    gql_ir_compiled_concrete_plan_table_destroy(table);
+    croak("failed to attach compiled concrete field plan table");
+  }
+  mg->mg_ptr = (char *)PTR2IV(table);
+}
+
+static void
+gql_ir_attach_compiled_field_bucket_table(pTHX_ SV *sv, gql_ir_compiled_field_bucket_table_t *table) {
+  MAGIC *mg;
+  SV *target = sv;
+
+  if (!sv || !table) {
+    return;
+  }
+
+  if (SvROK(target)) {
+    target = SvRV(target);
+  }
+
+  sv_magicext(target, NULL, PERL_MAGIC_ext, &gql_ir_compiled_field_bucket_table_vtbl, NULL, 0);
+  mg = mg_findext(target, PERL_MAGIC_ext, &gql_ir_compiled_field_bucket_table_vtbl);
+  if (!mg) {
+    gql_ir_compiled_field_bucket_table_destroy(table);
+    croak("failed to attach compiled field bucket table");
+  }
+  mg->mg_ptr = (char *)PTR2IV(table);
+}
+
+static gql_ir_compiled_concrete_plan_table_t *
+gql_ir_get_concrete_field_plan_table(pTHX_ SV *sv) {
+  MAGIC *mg;
+  SV *target = sv;
+
+  if (!sv) {
+    return NULL;
+  }
+
+  if (SvROK(target)) {
+    target = SvRV(target);
+  }
+
+  mg = mg_findext(target, PERL_MAGIC_ext, &gql_ir_compiled_concrete_plan_table_vtbl);
+  if (!mg || !mg->mg_ptr) {
+    return NULL;
+  }
+
+  return INT2PTR(gql_ir_compiled_concrete_plan_table_t *, mg->mg_ptr);
+}
+
+static gql_ir_compiled_field_bucket_table_t *
+gql_ir_get_compiled_field_bucket_table(pTHX_ SV *sv) {
+  MAGIC *mg;
+  SV *target = sv;
+
+  if (!sv) {
+    return NULL;
+  }
+
+  if (SvROK(target)) {
+    target = SvRV(target);
+  }
+
+  mg = mg_findext(target, PERL_MAGIC_ext, &gql_ir_compiled_field_bucket_table_vtbl);
+  if (!mg || !mg->mg_ptr) {
+    return NULL;
+  }
+
+  return INT2PTR(gql_ir_compiled_field_bucket_table_t *, mg->mg_ptr);
+}
+
+static gql_ir_compiled_field_bucket_table_t *
+gql_ir_compiled_field_bucket_table_from_sv(pTHX_ SV *compiled_fields_sv) {
+  AV *compiled_av;
+  SV **compiled_names_svp;
+  SV **compiled_defs_svp;
+  AV *compiled_names_av;
+  HV *compiled_defs_hv;
+  I32 name_len;
+  UV field_count;
+  UV field_i;
+  gql_ir_compiled_field_bucket_table_t *table = NULL;
+
+  if (!compiled_fields_sv || !SvROK(compiled_fields_sv) || SvTYPE(SvRV(compiled_fields_sv)) != SVt_PVAV) {
+    return NULL;
+  }
+
+  compiled_av = (AV *)SvRV(compiled_fields_sv);
+  if (av_len(compiled_av) != 1) {
+    return NULL;
+  }
+
+  compiled_names_svp = av_fetch(compiled_av, 0, 0);
+  compiled_defs_svp = av_fetch(compiled_av, 1, 0);
+  if (!compiled_names_svp || !compiled_defs_svp
+      || !SvROK(*compiled_names_svp) || SvTYPE(SvRV(*compiled_names_svp)) != SVt_PVAV
+      || !SvROK(*compiled_defs_svp) || SvTYPE(SvRV(*compiled_defs_svp)) != SVt_PVHV) {
+    return NULL;
+  }
+
+  compiled_names_av = (AV *)SvRV(*compiled_names_svp);
+  compiled_defs_hv = (HV *)SvRV(*compiled_defs_svp);
+  name_len = av_len(compiled_names_av);
+  field_count = name_len >= 0 ? (UV)(name_len + 1) : 0;
+
+  Newxz(table, 1, gql_ir_compiled_field_bucket_table_t);
+  table->count = field_count;
+  if (field_count > 0) {
+    Newxz(table->entries, field_count, gql_ir_compiled_field_bucket_entry_t);
+  }
+
+  for (field_i = 0; field_i < field_count; field_i++) {
+    SV **result_name_svp = av_fetch(compiled_names_av, (I32)field_i, 0);
+    HE *compiled_he;
+    gql_ir_compiled_field_bucket_entry_t *entry = &table->entries[field_i];
+
+    if (!result_name_svp || !SvOK(*result_name_svp)) {
+      goto fail;
+    }
+
+    compiled_he = hv_fetch_ent(compiled_defs_hv, *result_name_svp, 0, 0);
+    if (!compiled_he || !SvOK(HeVAL(compiled_he))) {
+      goto fail;
+    }
+
+    entry->result_name_sv = gql_execution_share_or_copy_sv(*result_name_svp);
+    entry->nodes_sv = gql_execution_share_or_copy_sv(HeVAL(compiled_he));
+  }
+
+  return table;
+
+fail:
+  gql_ir_compiled_field_bucket_table_destroy(table);
+  return NULL;
+}
+
+static gql_ir_compiled_root_field_plan_t *
+gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
+  HV *root_field_plan_hv;
+  SV **field_order_svp;
+  SV **fields_svp;
+  AV *field_order_av;
+  HV *fields_hv;
+  I32 field_len;
+  UV field_count;
+  UV field_i;
+  gql_ir_compiled_root_field_plan_t *plan = NULL;
+
+  if (!root_field_plan_sv
+      || !SvROK(root_field_plan_sv)
+      || SvTYPE(SvRV(root_field_plan_sv)) != SVt_PVHV) {
+    return NULL;
+  }
+
+  root_field_plan_hv = (HV *)SvRV(root_field_plan_sv);
+  field_order_svp = hv_fetch(root_field_plan_hv, "field_order", 11, 0);
+  fields_svp = hv_fetch(root_field_plan_hv, "fields", 6, 0);
+  if (!field_order_svp
+      || !SvROK(*field_order_svp)
+      || SvTYPE(SvRV(*field_order_svp)) != SVt_PVAV
+      || !fields_svp
+      || !SvROK(*fields_svp)
+      || SvTYPE(SvRV(*fields_svp)) != SVt_PVHV) {
+    return NULL;
+  }
+
+  field_order_av = (AV *)SvRV(*field_order_svp);
+  fields_hv = (HV *)SvRV(*fields_svp);
+  field_len = av_len(field_order_av);
+  field_count = field_len >= 0 ? (UV)(field_len + 1) : 0;
+
+  Newxz(plan, 1, gql_ir_compiled_root_field_plan_t);
+  plan->field_count = field_count;
+  plan->requires_runtime_operand_fill = 0;
+  if (field_count > 0) {
+    Newxz(plan->entries, field_count, gql_ir_compiled_root_field_plan_entry_t);
+  }
+
+  for (field_i = 0; field_i < field_count; field_i++) {
+    SV **result_name_svp = av_fetch(field_order_av, (I32)field_i, 0);
+    HE *field_plan_he;
+    HV *field_plan_hv;
+    HV *field_def_hv;
+    gql_ir_compiled_root_field_plan_entry_t *entry = &plan->entries[field_i];
+    SV **field_name_svp;
+    SV **field_def_svp;
+    SV **type_svp;
+    SV **resolve_svp;
+    SV **field_args_svp;
+    SV *completion_type_sv = NULL;
+    UV trivial_completion_flags = 0;
+    SV **nodes_svp;
+    AV *nodes_av;
+    SV **first_node_svp;
+    SV **node_count_svp;
+    SV **argument_count_svp;
+    SV **directive_count_svp;
+    SV **selection_count_svp;
+    const char *field_name_pv;
+    STRLEN field_name_len;
+
+    if (!result_name_svp || !SvOK(*result_name_svp)) {
+      goto fail;
+    }
+
+    field_plan_he = hv_fetch_ent(fields_hv, *result_name_svp, 0, 0);
+    if (!field_plan_he
+        || !SvROK(HeVAL(field_plan_he))
+        || SvTYPE(SvRV(HeVAL(field_plan_he))) != SVt_PVHV) {
+      goto fail;
+    }
+
+    field_plan_hv = (HV *)SvRV(HeVAL(field_plan_he));
+    field_name_svp = hv_fetch(field_plan_hv, "field_name", 10, 0);
+    field_def_svp = hv_fetch(field_plan_hv, "field_def", 9, 0);
+    nodes_svp = hv_fetch(field_plan_hv, "nodes", 5, 0);
+    node_count_svp = hv_fetch(field_plan_hv, "node_count", 10, 0);
+    argument_count_svp = hv_fetch(field_plan_hv, "argument_count", 14, 0);
+    directive_count_svp = hv_fetch(field_plan_hv, "directive_count", 15, 0);
+    selection_count_svp = hv_fetch(field_plan_hv, "selection_count", 15, 0);
+    if (!field_name_svp
+        || !SvOK(*field_name_svp)
+        || !field_def_svp
+        || !SvOK(*field_def_svp)
+        || !nodes_svp
+        || !SvOK(*nodes_svp)) {
+      goto fail;
+    }
+    if (!SvROK(*nodes_svp) || SvTYPE(SvRV(*nodes_svp)) != SVt_PVAV) {
+      goto fail;
+    }
+    nodes_av = (AV *)SvRV(*nodes_svp);
+    first_node_svp = av_fetch(nodes_av, 0, 0);
+    if (!first_node_svp || !SvROK(*first_node_svp) || SvTYPE(SvRV(*first_node_svp)) != SVt_PVHV) {
+      goto fail;
+    }
+
+    field_def_hv = (HV *)SvRV(*field_def_svp);
+    type_svp = hv_fetch(field_def_hv, "type", 4, 0);
+    resolve_svp = hv_fetch(field_def_hv, "resolve", 7, 0);
+    field_args_svp = hv_fetch(field_def_hv, "args", 4, 0);
+
+    entry->result_name_sv = gql_execution_share_or_copy_sv(*result_name_svp);
+    entry->field_name_sv = gql_execution_share_or_copy_sv(*field_name_svp);
+    entry->meta_dispatch_kind = GQL_IR_NATIVE_META_DISPATCH_NONE;
+    entry->resolve_dispatch_kind = GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT;
+    entry->args_dispatch_kind =
+      ((argument_count_svp && SvOK(*argument_count_svp)) ? SvUV(*argument_count_svp) : 0) == 0
+      && ((field_args_svp
+           && SvROK(*field_args_svp)
+           && SvTYPE(SvRV(*field_args_svp)) == SVt_PVHV)
+            ? (UV)HvUSEDKEYS((HV *)SvRV(*field_args_svp))
+            : 0) == 0
+        ? GQL_IR_NATIVE_ARGS_DISPATCH_EMPTY
+        : GQL_IR_NATIVE_ARGS_DISPATCH_BUILD;
+    field_name_pv = SvPV(*field_name_svp, field_name_len);
+    if (field_name_len == 10 && memEQ(field_name_pv, "__typename", 10)) {
+      entry->meta_dispatch_kind = GQL_IR_NATIVE_META_DISPATCH_TYPENAME;
+    }
+    entry->field_def_sv = gql_execution_share_or_copy_sv(*field_def_svp);
+    if (type_svp && SvOK(*type_svp)) {
+      entry->return_type_sv = gql_execution_share_or_copy_sv(*type_svp);
+    }
+    if (type_svp && SvOK(*type_svp)) {
+      entry->type_sv = gql_execution_share_or_copy_sv(*type_svp);
+      if (gql_execution_get_trivial_completion_metadata(aTHX_ *type_svp, &completion_type_sv, &trivial_completion_flags)) {
+        entry->completion_type_sv = completion_type_sv;
+        entry->trivial_completion_flags = trivial_completion_flags;
+        entry->completion_dispatch_kind = GQL_IR_NATIVE_COMPLETION_TRIVIAL;
+        completion_type_sv = NULL;
+      }
+    }
+    if (resolve_svp && SvOK(*resolve_svp)) {
+      entry->resolve_sv = gql_execution_share_or_copy_sv(*resolve_svp);
+      entry->resolve_dispatch_kind = GQL_IR_NATIVE_RESOLVE_DISPATCH_FIXED;
+    }
+    entry->nodes_sv = gql_execution_share_or_copy_sv(*nodes_svp);
+    entry->first_node_sv = gql_execution_share_or_copy_sv(*first_node_svp);
+    entry->node_count = (node_count_svp && SvOK(*node_count_svp)) ? SvUV(*node_count_svp) : 0;
+    entry->argument_count = (argument_count_svp && SvOK(*argument_count_svp)) ? SvUV(*argument_count_svp) : 0;
+    entry->field_arg_count =
+      (field_args_svp
+       && SvROK(*field_args_svp)
+       && SvTYPE(SvRV(*field_args_svp)) == SVt_PVHV)
+        ? (UV)HvUSEDKEYS((HV *)SvRV(*field_args_svp))
+        : 0;
+    entry->directive_count = (directive_count_svp && SvOK(*directive_count_svp)) ? SvUV(*directive_count_svp) : 0;
+    entry->selection_count = (selection_count_svp && SvOK(*selection_count_svp)) ? SvUV(*selection_count_svp) : 0;
+    entry->operands_ready = gql_ir_native_field_entry_has_operands(entry) ? 1 : 0;
+    if (!entry->operands_ready) {
+      plan->requires_runtime_operand_fill = 1;
+    }
+    gql_ir_init_native_field_ops(entry);
+    if (completion_type_sv) {
+      SvREFCNT_dec(completion_type_sv);
+      completion_type_sv = NULL;
+    }
+  }
+
+  return plan;
+
+fail:
+  gql_ir_compiled_root_field_plan_destroy(plan);
+  return NULL;
+}
+
+static void
+gql_ir_compiled_strip_legacy_buckets_from_nodes(pTHX_ SV *nodes_sv) {
+  AV *nodes_av;
+  I32 node_len;
+  I32 node_i;
+
+  if (!nodes_sv || !SvROK(nodes_sv) || SvTYPE(SvRV(nodes_sv)) != SVt_PVAV) {
+    return;
+  }
+
+  nodes_av = (AV *)SvRV(nodes_sv);
+  node_len = av_len(nodes_av);
+  for (node_i = 0; node_i <= node_len; node_i++) {
+    SV **node_svp = av_fetch(nodes_av, node_i, 0);
+    if (node_svp && SvOK(*node_svp)) {
+      gql_ir_compiled_strip_legacy_buckets_from_node(aTHX_ *node_svp);
+    }
+  }
+}
+
+static void
+gql_ir_compiled_strip_legacy_buckets_from_node(pTHX_ SV *node_sv) {
+  HV *node_hv;
+  SV **selections_svp;
+  AV *selections_av;
+  I32 selection_len;
+  I32 selection_i;
+
+  if (!node_sv || !SvROK(node_sv) || SvTYPE(SvRV(node_sv)) != SVt_PVHV) {
+    return;
+  }
+
+  node_hv = (HV *)SvRV(node_sv);
+  if (gql_ir_get_compiled_field_bucket_table(aTHX_ node_sv)) {
+    (void)hv_delete(node_hv, "compiled_fields", 15, G_DISCARD);
+  }
+  if (gql_ir_get_concrete_field_plan_table(aTHX_ node_sv)) {
+    (void)hv_delete(node_hv, "compiled_concrete_subfields", 27, G_DISCARD);
+    (void)hv_delete(node_hv, "compiled_concrete_field_plans", 28, G_DISCARD);
+  }
+
+  selections_svp = hv_fetch(node_hv, "selections", 10, 0);
+  if (!selections_svp
+      || !SvROK(*selections_svp)
+      || SvTYPE(SvRV(*selections_svp)) != SVt_PVAV) {
+    return;
+  }
+
+  selections_av = (AV *)SvRV(*selections_svp);
+  selection_len = av_len(selections_av);
+  for (selection_i = 0; selection_i <= selection_len; selection_i++) {
+    SV **selection_svp = av_fetch(selections_av, selection_i, 0);
+    if (selection_svp && SvOK(*selection_svp)) {
+      gql_ir_compiled_strip_legacy_buckets_from_node(aTHX_ *selection_svp);
+    }
+  }
+}
+
+static void
+gql_ir_compiled_strip_legacy_buckets_from_fragments(pTHX_ SV *fragments_sv) {
+  HV *fragments_hv;
+  HE *he;
+
+  if (!fragments_sv || !SvROK(fragments_sv) || SvTYPE(SvRV(fragments_sv)) != SVt_PVHV) {
+    return;
+  }
+
+  fragments_hv = (HV *)SvRV(fragments_sv);
+  hv_iterinit(fragments_hv);
+  while ((he = hv_iternext(fragments_hv))) {
+    SV *fragment_sv = HeVAL(he);
+    if (fragment_sv && SvOK(fragment_sv)) {
+      gql_ir_compiled_strip_legacy_buckets_from_node(aTHX_ fragment_sv);
+    }
+  }
+}
+
+static SV *
+gql_ir_compiled_root_selection_plan_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
+  gql_ir_prepared_exec_t *prepared;
+
+  if (!compiled) {
+    return &PL_sv_undef;
+  }
+
+  if (compiled->root_selection_plan_sv) {
+    return compiled->root_selection_plan_sv;
+  }
+
+  prepared = gql_ir_compiled_prepared_exec(compiled);
+  if (!prepared || !compiled->selected_operation) {
+    return &PL_sv_undef;
+  }
+
+  compiled->root_selection_plan_sv = newRV_noinc((SV *)gql_ir_prepare_selection_plan_av(
+    aTHX_ prepared,
+    compiled->selected_operation->selection_set
+  ));
+  return compiled->root_selection_plan_sv;
+}
+
+static SV *
+gql_ir_compiled_root_field_plan_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
+  HV *root_field_plan_hv;
+  AV *field_order_av;
+  HV *fields_hv;
+  UV field_i;
+
+  if (!compiled) {
+    return &PL_sv_undef;
+  }
+
+  if (compiled->root_field_plan_sv) {
+    return compiled->root_field_plan_sv;
+  }
+
+  if (!gql_ir_execution_lowered_root_field_plan(compiled)) {
+    return &PL_sv_undef;
+  }
+
+  root_field_plan_hv = newHV();
+  field_order_av = newAV();
+  fields_hv = newHV();
+  gql_store_sv(
+    root_field_plan_hv,
+    "operation_type",
+    newSVpv(gql_ir_operation_kind_name(compiled->selected_operation->operation), 0)
+  );
+  gql_store_sv(root_field_plan_hv, "root_type", gql_execution_share_or_copy_sv(compiled->root_type_sv));
+
+  {
+    gql_ir_compiled_root_field_plan_t *root_field_plan = gql_ir_execution_lowered_root_field_plan(compiled);
+    for (field_i = 0; field_i < root_field_plan->field_count; field_i++) {
+      gql_ir_compiled_root_field_plan_entry_t *entry = &root_field_plan->entries[field_i];
+    HV *field_plan_hv = newHV();
+
+    gql_store_sv(field_plan_hv, "result_name", gql_execution_share_or_copy_sv(entry->result_name_sv));
+    gql_store_sv(field_plan_hv, "field_name", gql_execution_share_or_copy_sv(entry->field_name_sv));
+    gql_store_sv(field_plan_hv, "field_def", gql_execution_share_or_copy_sv(entry->field_def_sv));
+    if (entry->return_type_sv) {
+      gql_store_sv(field_plan_hv, "return_type", gql_execution_share_or_copy_sv(entry->return_type_sv));
+    }
+    gql_store_sv(field_plan_hv, "nodes", gql_execution_share_or_copy_sv(entry->nodes_sv));
+    if (entry->path_sv && SvOK(entry->path_sv)) {
+      gql_store_sv(field_plan_hv, "path", gql_execution_share_or_copy_sv(entry->path_sv));
+    } else {
+      AV *path_av = newAV();
+      av_push(path_av, gql_execution_share_or_copy_sv(entry->result_name_sv));
+      gql_store_sv(field_plan_hv, "path", newRV_noinc((SV *)path_av));
+    }
+    hv_stores(field_plan_hv, "node_count", newSVuv(entry->node_count));
+    hv_stores(field_plan_hv, "argument_count", newSVuv(entry->argument_count));
+    hv_stores(field_plan_hv, "directive_count", newSVuv(entry->directive_count));
+    hv_stores(field_plan_hv, "selection_count", newSVuv(entry->selection_count));
+
+    av_push(field_order_av, gql_execution_share_or_copy_sv(entry->result_name_sv));
+    (void)hv_store_ent(
+      fields_hv,
+      gql_execution_share_or_copy_sv(entry->result_name_sv),
+      newRV_noinc((SV *)field_plan_hv),
+      0
+    );
+    }
+  }
+
+  gql_store_sv(root_field_plan_hv, "field_order", newRV_noinc((SV *)field_order_av));
+  gql_store_sv(root_field_plan_hv, "fields", newRV_noinc((SV *)fields_hv));
+  compiled->root_field_plan_sv = newRV_noinc((SV *)root_field_plan_hv);
+  return compiled->root_field_plan_sv;
+}
+
+static gql_ir_prepared_exec_t *
+gql_ir_compiled_prepared_exec(gql_ir_compiled_exec_t *compiled) {
+  SV *prepared_inner_sv;
+
+  if (!compiled
+      || !compiled->prepared_handle_sv
+      || !SvROK(compiled->prepared_handle_sv)
+      || !sv_derived_from(compiled->prepared_handle_sv, "GraphQL::Houtou::XS::PreparedIR")) {
+    return NULL;
+  }
+
+  prepared_inner_sv = SvRV(compiled->prepared_handle_sv);
+  if (!SvIOK(prepared_inner_sv) || SvUV(prepared_inner_sv) == 0) {
+    return NULL;
+  }
+
+  return INT2PTR(gql_ir_prepared_exec_t *, SvUV(prepared_inner_sv));
+}
+
+static SV *
+gql_ir_compiled_operation_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
+  gql_ir_prepared_exec_t *prepared = gql_ir_compiled_prepared_exec(compiled);
+
+  if (!prepared || !compiled || !compiled->selected_operation) {
+    return &PL_sv_undef;
+  }
+
+  return gql_ir_operation_to_legacy_sv(aTHX_ prepared, compiled->selected_operation, compiled->operation_name_sv);
+}
+
+static SV *
+gql_ir_compiled_fragments_legacy_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
+  gql_ir_prepared_exec_t *prepared = gql_ir_compiled_prepared_exec(compiled);
+  SV *fragments_sv;
+
+  if (!prepared) {
+    return &PL_sv_undef;
+  }
+
+  fragments_sv = gql_ir_fragment_definitions_to_legacy_map_sv(aTHX_ prepared);
+  if (fragments_sv != &PL_sv_undef) {
+    gql_ir_compiled_strip_legacy_buckets_from_fragments(aTHX_ fragments_sv);
+  }
+  return fragments_sv;
+}
+
+static SV *
+gql_ir_compiled_root_legacy_fields_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
+  gql_ir_prepared_exec_t *prepared = gql_ir_compiled_prepared_exec(compiled);
+
+  if (!prepared || !compiled || !compiled->schema_sv) {
+    return &PL_sv_undef;
+  }
+
+  return gql_ir_prepare_executable_root_legacy_fields_sv(aTHX_ compiled->schema_sv, prepared, compiled->operation_name_sv);
+}
+
 static SV *gql_ir_selection_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_selection_t *selection);
 static AV *gql_ir_selections_to_legacy_av(pTHX_ gql_ir_document_t *document, gql_ir_selection_set_t *selection_set);
 static SV *gql_ir_value_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_value_t *value);
@@ -937,7 +3474,7 @@ static int gql_ir_selection_set_is_plain_fields(gql_ir_selection_set_t *selectio
 static SV *gql_ir_selection_set_to_legacy_fields_sv(pTHX_ gql_ir_document_t *document, gql_ir_selection_set_t *selection_set);
 
 static SV *
-gql_ir_compiled_attach_concrete_output_type(pTHX_ SV *field_def_sv) {
+gql_ir_compiled_unwrap_output_type(pTHX_ SV *field_def_sv) {
   SV **type_svp;
   SV *current;
 
@@ -960,6 +3497,17 @@ gql_ir_compiled_attach_concrete_output_type(pTHX_ SV *field_def_sv) {
     current = inner;
   }
 
+  return current;
+}
+
+static SV *
+gql_ir_compiled_attach_concrete_output_type(pTHX_ SV *field_def_sv) {
+  SV *current = gql_ir_compiled_unwrap_output_type(aTHX_ field_def_sv);
+
+  if (current == &PL_sv_undef) {
+    return &PL_sv_undef;
+  }
+
   if (sv_derived_from(current, "GraphQL::Houtou::Type::Object")
       || sv_derived_from(current, "GraphQL::Type::Object")) {
     return current;
@@ -970,10 +3518,250 @@ gql_ir_compiled_attach_concrete_output_type(pTHX_ SV *field_def_sv) {
 }
 
 static void
+gql_ir_attach_compiled_concrete_subfields_to_node(
+  pTHX_ SV *schema,
+  SV *abstract_type,
+  SV *fragments_sv,
+  SV *selection_sv
+) {
+  SV **child_selections_svp;
+  HV *selection_hv;
+  SV *possible_types_sv;
+  HV *context_hv;
+  SV *context_sv;
+  gql_ir_compiled_concrete_plan_table_t *compiled_plan_table = NULL;
+  UV compiled_plan_table_count = 0;
+  I32 possible_i;
+  I32 possible_len;
+
+  if (!selection_sv || !SvROK(selection_sv) || SvTYPE(SvRV(selection_sv)) != SVt_PVHV) {
+    return;
+  }
+
+  selection_hv = (HV *)SvRV(selection_sv);
+  child_selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
+  if (!child_selections_svp
+      || !SvROK(*child_selections_svp)
+      || SvTYPE(SvRV(*child_selections_svp)) != SVt_PVAV) {
+    return;
+  }
+
+  possible_types_sv = gql_execution_schema_possible_types_sv(aTHX_ schema, abstract_type);
+  if (possible_types_sv == &PL_sv_undef
+      || !SvROK(possible_types_sv)
+      || SvTYPE(SvRV(possible_types_sv)) != SVt_PVAV) {
+    if (possible_types_sv != &PL_sv_undef) {
+      SvREFCNT_dec(possible_types_sv);
+    }
+    return;
+  }
+
+  context_hv = newHV();
+  {
+    UV possible_count = possible_types_sv && SvROK(possible_types_sv) && SvTYPE(SvRV(possible_types_sv)) == SVt_PVAV
+      ? (UV)(av_len((AV *)SvRV(possible_types_sv)) + 1)
+      : 0;
+    if (possible_count > 0) {
+      Newxz(compiled_plan_table, 1, gql_ir_compiled_concrete_plan_table_t);
+      Newxz(compiled_plan_table->entries, possible_count, gql_ir_compiled_concrete_plan_entry_t);
+    }
+  }
+  gql_store_sv(context_hv, "schema", gql_execution_share_or_copy_sv(schema));
+  {
+    HV *runtime_cache_hv = gql_execution_schema_runtime_cache_hv(aTHX_ schema);
+    if (runtime_cache_hv) {
+      gql_store_sv(context_hv, "runtime_cache", newRV_inc((SV *)runtime_cache_hv));
+    }
+  }
+  gql_store_sv(
+    context_hv,
+    "fragments",
+    (fragments_sv && SvOK(fragments_sv))
+      ? gql_execution_share_or_copy_sv(fragments_sv)
+      : newRV_noinc((SV *)newHV())
+  );
+  gql_store_sv(context_hv, "variable_values", newRV_noinc((SV *)newHV()));
+  context_sv = newRV_noinc((SV *)context_hv);
+
+  possible_len = av_len((AV *)SvRV(possible_types_sv));
+  for (possible_i = 0; possible_i <= possible_len; possible_i++) {
+    SV **possible_svp = av_fetch((AV *)SvRV(possible_types_sv), possible_i, 0);
+    SV *possible_type;
+
+    if (!possible_svp || !SvROK(*possible_svp)) {
+      continue;
+    }
+
+    possible_type = *possible_svp;
+    if (!(sv_derived_from(possible_type, "GraphQL::Houtou::Type::Object")
+          || sv_derived_from(possible_type, "GraphQL::Type::Object"))) {
+      continue;
+    }
+
+    {
+      AV *node_bucket_av = newAV();
+      SV *node_bucket_sv;
+      SV *compiled_fields_sv;
+      SV *compiled_plan_sv;
+      SV *type_name_sv;
+      int ok = 0;
+
+      av_push(node_bucket_av, newSVsv(selection_sv));
+      node_bucket_sv = newRV_noinc((SV *)node_bucket_av);
+      compiled_fields_sv = gql_execution_collect_simple_object_fields(
+        aTHX_
+        context_sv,
+        possible_type,
+        node_bucket_sv,
+        &ok
+      );
+      SvREFCNT_dec(node_bucket_sv);
+
+      if (!ok || compiled_fields_sv == &PL_sv_undef || !SvOK(compiled_fields_sv)) {
+        continue;
+      }
+
+      type_name_sv = gql_execution_type_name_sv(aTHX_ possible_type);
+      if (!type_name_sv || !SvOK(type_name_sv)) {
+        SvREFCNT_dec(compiled_fields_sv);
+        continue;
+      }
+
+      compiled_plan_sv = gql_execution_build_field_plan_from_compiled_fields(
+        aTHX_
+        schema,
+        possible_type,
+        compiled_fields_sv
+      );
+      if (compiled_plan_sv != &PL_sv_undef && SvOK(compiled_plan_sv)) {
+        gql_ir_compiled_root_field_plan_t *native_field_plan
+          = gql_ir_compiled_root_field_plan_from_sv(aTHX_ compiled_plan_sv);
+        if (compiled_plan_table && compiled_plan_table->entries) {
+          gql_ir_compiled_concrete_plan_entry_t *entry = &compiled_plan_table->entries[compiled_plan_table_count++];
+          entry->possible_type_sv = gql_execution_share_or_copy_sv(possible_type);
+          entry->compiled_fields_sv = gql_execution_share_or_copy_sv(compiled_fields_sv);
+          if (native_field_plan) {
+            entry->native_field_plan = native_field_plan;
+            native_field_plan = NULL;
+          } else {
+            entry->field_plan_sv = gql_execution_share_or_copy_sv(compiled_plan_sv);
+          }
+        }
+        if (native_field_plan) {
+          gql_ir_compiled_root_field_plan_destroy(native_field_plan);
+        }
+        SvREFCNT_dec(compiled_plan_sv);
+      } else if (compiled_plan_sv != &PL_sv_undef) {
+        SvREFCNT_dec(compiled_plan_sv);
+      }
+      SvREFCNT_dec(compiled_fields_sv);
+      SvREFCNT_dec(type_name_sv);
+    }
+  }
+
+  if (compiled_plan_table) {
+    compiled_plan_table->count = compiled_plan_table_count;
+    if (compiled_plan_table_count > 0) {
+      gql_ir_attach_concrete_field_plan_table(aTHX_ selection_sv, compiled_plan_table);
+      compiled_plan_table = NULL;
+    }
+  }
+
+  SvREFCNT_dec(context_sv);
+  SvREFCNT_dec(possible_types_sv);
+  if (compiled_plan_table) {
+    gql_ir_compiled_concrete_plan_table_destroy(compiled_plan_table);
+  }
+}
+
+static void
+gql_ir_attach_compiled_field_defs_to_selection_sv(
+  pTHX_ SV *schema,
+  SV *parent_type,
+  SV *selection_sv,
+  SV *fragments_sv
+) {
+  HV *selection_hv;
+  SV **kind_svp;
+  STRLEN kind_len;
+  const char *kind_pv;
+
+  if (!parent_type || !SvOK(parent_type) || !selection_sv || !SvROK(selection_sv) || SvTYPE(SvRV(selection_sv)) != SVt_PVHV) {
+    return;
+  }
+
+  selection_hv = (HV *)SvRV(selection_sv);
+  kind_svp = hv_fetch(selection_hv, "kind", 4, 0);
+  if (!kind_svp || !SvOK(*kind_svp)) {
+    return;
+  }
+  kind_pv = SvPV(*kind_svp, kind_len);
+
+  if (kind_len == 5 && strEQ(kind_pv, "field")) {
+    SV **name_svp = hv_fetch(selection_hv, "name", 4, 0);
+    SV **child_selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
+
+    if (name_svp && SvOK(*name_svp)) {
+      SV *field_def_sv = gql_execution_get_field_def(aTHX_ schema, parent_type, *name_svp);
+      if (field_def_sv && SvOK(field_def_sv) && field_def_sv != &PL_sv_undef) {
+        SV *output_type_sv;
+        SV *child_parent_type_sv;
+        gql_store_sv(selection_hv, "compiled_field_def", field_def_sv);
+        output_type_sv = gql_ir_compiled_unwrap_output_type(aTHX_ field_def_sv);
+        child_parent_type_sv = gql_ir_compiled_attach_concrete_output_type(aTHX_ field_def_sv);
+        if (child_parent_type_sv != &PL_sv_undef
+            && child_selections_svp
+            && SvROK(*child_selections_svp)
+            && SvTYPE(SvRV(*child_selections_svp)) == SVt_PVAV) {
+          gql_ir_attach_compiled_field_defs_to_selections(
+            aTHX_
+            schema,
+            child_parent_type_sv,
+            (AV *)SvRV(*child_selections_svp),
+            fragments_sv
+          );
+          SvREFCNT_dec(child_parent_type_sv);
+        } else if (output_type_sv != &PL_sv_undef
+                   && (sv_does(output_type_sv, "GraphQL::Houtou::Role::Abstract")
+                       || sv_does(output_type_sv, "GraphQL::Role::Abstract"))) {
+          gql_ir_attach_compiled_concrete_subfields_to_node(
+            aTHX_
+            schema,
+            output_type_sv,
+            fragments_sv,
+            selection_sv
+          );
+        }
+        if (output_type_sv != &PL_sv_undef) {
+          SvREFCNT_dec(output_type_sv);
+        }
+      }
+    }
+    return;
+  }
+
+  if (kind_len == 15 && strEQ(kind_pv, "inline_fragment")) {
+    SV **child_selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
+    if (child_selections_svp
+        && SvROK(*child_selections_svp)
+        && SvTYPE(SvRV(*child_selections_svp)) == SVt_PVAV) {
+      gql_ir_attach_compiled_field_defs_to_selections(
+        aTHX_
+        schema,
+        parent_type,
+        (AV *)SvRV(*child_selections_svp),
+        fragments_sv
+      );
+    }
+  }
+}
+
+static void
 gql_ir_attach_compiled_field_defs_to_selections(
   pTHX_ SV *schema,
   SV *parent_type,
-  AV *selections_av
+  AV *selections_av,
+  SV *fragments_sv
 ) {
   I32 selection_i;
   I32 selection_len;
@@ -985,67 +3773,23 @@ gql_ir_attach_compiled_field_defs_to_selections(
   selection_len = av_len(selections_av);
   for (selection_i = 0; selection_i <= selection_len; selection_i++) {
     SV **selection_svp = av_fetch(selections_av, selection_i, 0);
-    HV *selection_hv;
-    SV **kind_svp;
-    STRLEN kind_len;
-    const char *kind_pv;
 
-    if (!selection_svp || !SvROK(*selection_svp) || SvTYPE(SvRV(*selection_svp)) != SVt_PVHV) {
+    if (!selection_svp) {
       continue;
     }
 
-    selection_hv = (HV *)SvRV(*selection_svp);
-    kind_svp = hv_fetch(selection_hv, "kind", 4, 0);
-    if (!kind_svp || !SvOK(*kind_svp)) {
-      continue;
-    }
-    kind_pv = SvPV(*kind_svp, kind_len);
-
-    if (kind_len == 5 && strEQ(kind_pv, "field")) {
-      SV **name_svp = hv_fetch(selection_hv, "name", 4, 0);
-      SV **child_selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
-
-      if (name_svp && SvOK(*name_svp)) {
-        SV *field_def_sv = gql_execution_get_field_def(aTHX_ schema, parent_type, *name_svp);
-        if (field_def_sv && SvOK(field_def_sv) && field_def_sv != &PL_sv_undef) {
-          SV *child_parent_type_sv;
-          gql_store_sv(selection_hv, "compiled_field_def", field_def_sv);
-          child_parent_type_sv = gql_ir_compiled_attach_concrete_output_type(aTHX_ field_def_sv);
-          if (child_parent_type_sv != &PL_sv_undef
-              && child_selections_svp
-              && SvROK(*child_selections_svp)
-              && SvTYPE(SvRV(*child_selections_svp)) == SVt_PVAV) {
-            gql_ir_attach_compiled_field_defs_to_selections(
-              aTHX_
-              schema,
-              child_parent_type_sv,
-              (AV *)SvRV(*child_selections_svp)
-            );
-            SvREFCNT_dec(child_parent_type_sv);
-          }
-        }
-      }
-      continue;
-    }
-
-    if (kind_len == 15 && strEQ(kind_pv, "inline_fragment")) {
-      SV **child_selections_svp = hv_fetch(selection_hv, "selections", 10, 0);
-      if (child_selections_svp
-          && SvROK(*child_selections_svp)
-          && SvTYPE(SvRV(*child_selections_svp)) == SVt_PVAV) {
-        gql_ir_attach_compiled_field_defs_to_selections(
-          aTHX_
-          schema,
-          parent_type,
-          (AV *)SvRV(*child_selections_svp)
-        );
-      }
-    }
+    gql_ir_attach_compiled_field_defs_to_selection_sv(
+      aTHX_
+      schema,
+      parent_type,
+      *selection_svp,
+      fragments_sv
+    );
   }
 }
 
 static void
-gql_ir_attach_compiled_field_defs_to_nodes(pTHX_ SV *schema, SV *parent_type, SV *nodes_sv) {
+gql_ir_attach_compiled_field_defs_to_nodes(pTHX_ SV *schema, SV *parent_type, SV *nodes_sv, SV *fragments_sv) {
   AV *nodes_av;
   I32 node_i;
   I32 node_len;
@@ -1059,25 +3803,18 @@ gql_ir_attach_compiled_field_defs_to_nodes(pTHX_ SV *schema, SV *parent_type, SV
 
   for (node_i = 0; node_i <= node_len; node_i++) {
     SV **node_svp = av_fetch(nodes_av, node_i, 0);
-    HV *node_hv;
-    SV **selections_svp;
 
-    if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) {
+    if (!node_svp) {
       continue;
     }
 
-    node_hv = (HV *)SvRV(*node_svp);
-    selections_svp = hv_fetch(node_hv, "selections", 10, 0);
-    if (selections_svp
-        && SvROK(*selections_svp)
-        && SvTYPE(SvRV(*selections_svp)) == SVt_PVAV) {
-      gql_ir_attach_compiled_field_defs_to_selections(
-        aTHX_
-        schema,
-        parent_type,
-        (AV *)SvRV(*selections_svp)
-      );
-    }
+    gql_ir_attach_compiled_field_defs_to_selection_sv(
+      aTHX_
+      schema,
+      parent_type,
+      *node_svp,
+      fragments_sv
+    );
   }
 }
 
@@ -1152,7 +3889,8 @@ gql_ir_attach_compiled_field_defs_to_fragments(pTHX_ SV *schema, SV *fragments_s
       aTHX_
       schema,
       parent_type_sv,
-      (AV *)SvRV(*selections_svp)
+      (AV *)SvRV(*selections_svp),
+      fragments_sv
     );
     SvREFCNT_dec(parent_type_sv);
   }
@@ -1604,7 +4342,12 @@ gql_ir_fragment_definitions_to_legacy_map_sv(pTHX_ gql_ir_prepared_exec_t *prepa
     }
     gql_store_sv(fragment_hv, "selections", newRV_noinc((SV *)gql_ir_selections_to_legacy_av(aTHX_ prepared->document, fragment->selection_set)));
     if (gql_ir_selection_set_is_plain_fields(fragment->selection_set)) {
-      gql_store_sv(fragment_hv, "compiled_fields", gql_ir_selection_set_to_legacy_fields_sv(aTHX_ prepared->document, fragment->selection_set));
+      SV *compiled_fields_sv = gql_ir_selection_set_to_legacy_fields_sv(aTHX_ prepared->document, fragment->selection_set);
+      gql_ir_compiled_field_bucket_table_t *bucket_table = gql_ir_compiled_field_bucket_table_from_sv(aTHX_ compiled_fields_sv);
+      gql_store_sv(fragment_hv, "compiled_fields", compiled_fields_sv);
+      if (bucket_table) {
+        gql_ir_attach_compiled_field_bucket_table(aTHX_ (SV *)fragment_hv, bucket_table);
+      }
     }
     (void)hv_store_ent(hv, name_sv, newRV_noinc((SV *)fragment_hv), 0);
     SvREFCNT_dec(name_sv);
@@ -1664,18 +4407,34 @@ gql_ir_operation_to_legacy_sv(
 static SV *
 gql_ir_compiled_plan_to_hv_sv(pTHX_ gql_ir_compiled_exec_t *compiled) {
   HV *hv;
+  SV *operation_sv;
+  SV *fragments_sv;
+  SV *root_fields_sv;
 
   if (!compiled) {
     return newRV_noinc((SV *)newHV());
   }
 
   hv = newHV();
-  gql_store_sv(hv, "operation", gql_execution_share_or_copy_sv(compiled->operation_sv));
-  gql_store_sv(hv, "fragments", gql_execution_share_or_copy_sv(compiled->fragments_sv));
+  operation_sv = gql_ir_compiled_operation_legacy_sv(aTHX_ compiled);
+  fragments_sv = gql_ir_compiled_fragments_legacy_sv(aTHX_ compiled);
+  root_fields_sv = gql_ir_compiled_root_legacy_fields_sv(aTHX_ compiled);
+  gql_store_sv(hv, "operation", operation_sv != &PL_sv_undef ? operation_sv : newSV(0));
+  gql_store_sv(hv, "fragments", fragments_sv != &PL_sv_undef ? fragments_sv : newSV(0));
   gql_store_sv(hv, "root_type", gql_execution_share_or_copy_sv(compiled->root_type_sv));
-  gql_store_sv(hv, "root_selection_plan", gql_execution_share_or_copy_sv(compiled->root_selection_plan_sv));
-  gql_store_sv(hv, "root_field_plan", gql_execution_share_or_copy_sv(compiled->root_field_plan_sv));
-  gql_store_sv(hv, "root_fields", gql_execution_share_or_copy_sv(compiled->root_fields_sv));
+  {
+    SV *root_selection_plan_sv = gql_ir_compiled_root_selection_plan_sv(aTHX_ compiled);
+    gql_store_sv(
+      hv,
+      "root_selection_plan",
+      root_selection_plan_sv != &PL_sv_undef ? gql_execution_share_or_copy_sv(root_selection_plan_sv) : newSV(0)
+    );
+  }
+  {
+    SV *root_field_plan_sv = gql_ir_compiled_root_field_plan_legacy_sv(aTHX_ compiled);
+    gql_store_sv(hv, "root_field_plan", root_field_plan_sv != &PL_sv_undef ? gql_execution_share_or_copy_sv(root_field_plan_sv) : newSV(0));
+  }
+  gql_store_sv(hv, "root_fields", root_fields_sv != &PL_sv_undef ? root_fields_sv : newSV(0));
   return newRV_noinc((SV *)hv);
 }
 
@@ -1767,35 +4526,37 @@ gql_ir_build_execution_context_from_compiled_sv(
 ) {
   HV *context_hv = newHV();
   HV *resolve_info_base_hv = newHV();
+  gql_ir_prepared_exec_t *prepared;
   SV *runtime_variables_sv = NULL;
   SV *applied_variables_sv;
-  HV *operation_hv;
-  SV **operation_variables_svp;
-  SV **root_fields_svp = NULL;
+  SV *operation_sv;
+  SV *fragments_sv;
+  SV *operation_variables_sv;
+  SV *root_fields_sv;
 
-  if (!compiled || !compiled->operation_sv || !SvROK(compiled->operation_sv) || SvTYPE(SvRV(compiled->operation_sv)) != SVt_PVHV) {
-    croak("compiled IR plan is missing operation metadata");
+  prepared = gql_ir_compiled_prepared_exec(compiled);
+  if (!compiled || !prepared || !compiled->selected_operation) {
+    croak("compiled IR plan is missing selected operation metadata");
   }
 
-  operation_hv = (HV *)SvRV(compiled->operation_sv);
-  operation_variables_svp = hv_fetch(operation_hv, "variables", 9, 0);
-  if (compiled->root_field_plan_sv
-      && SvROK(compiled->root_field_plan_sv)
-      && SvTYPE(SvRV(compiled->root_field_plan_sv)) == SVt_PVHV) {
-    root_fields_svp = hv_fetch((HV *)SvRV(compiled->root_field_plan_sv), "fields", 6, 0);
-  }
+  operation_sv = gql_ir_compiled_operation_legacy_sv(aTHX_ compiled);
+  fragments_sv = gql_ir_compiled_fragments_legacy_sv(aTHX_ compiled);
+  root_fields_sv = gql_ir_compiled_root_legacy_fields_sv(aTHX_ compiled);
+  operation_variables_sv = compiled->selected_operation->variable_definitions.count == 0
+    ? &PL_sv_undef
+    : gql_ir_variable_definitions_to_legacy_sv(aTHX_ prepared->document, &compiled->selected_operation->variable_definitions);
 
   if (!variable_values || !SvOK(variable_values)) {
     runtime_variables_sv = newRV_noinc((SV *)newHV());
   }
 
-  if (!operation_variables_svp || !SvOK(*operation_variables_svp)) {
+  if (operation_variables_sv == &PL_sv_undef || !SvOK(operation_variables_sv)) {
     applied_variables_sv = newRV_noinc((SV *)newHV());
   } else {
     applied_variables_sv = gql_execution_call_pp_variables_apply_defaults(
       aTHX_
       compiled->schema_sv,
-      *operation_variables_svp,
+      operation_variables_sv,
       (variable_values && SvOK(variable_values)) ? variable_values : runtime_variables_sv
     );
   }
@@ -1807,10 +4568,10 @@ gql_ir_build_execution_context_from_compiled_sv(
       gql_store_sv(context_hv, "runtime_cache", newRV_inc((SV *)runtime_cache_hv));
     }
   }
-  gql_store_sv(context_hv, "fragments", gql_execution_share_or_copy_sv(compiled->fragments_sv));
+  gql_store_sv(context_hv, "fragments", fragments_sv != &PL_sv_undef ? fragments_sv : newSV(0));
   gql_store_sv(context_hv, "root_value", gql_execution_share_or_copy_sv(root_value));
   gql_store_sv(context_hv, "context_value", gql_execution_share_or_copy_sv(context_value));
-  gql_store_sv(context_hv, "operation", gql_execution_share_or_copy_sv(compiled->operation_sv));
+  gql_store_sv(context_hv, "operation", operation_sv != &PL_sv_undef ? operation_sv : newSV(0));
   gql_store_sv(context_hv, "variable_values", applied_variables_sv);
   gql_store_sv(
     context_hv,
@@ -1821,23 +4582,195 @@ gql_ir_build_execution_context_from_compiled_sv(
   );
   gql_store_sv(context_hv, "promise_code", gql_execution_share_or_copy_sv(promise_code));
   gql_store_sv(context_hv, "empty_args", newRV_noinc((SV *)newHV()));
-  if (root_fields_svp && SvOK(*root_fields_svp)) {
-    gql_store_sv(context_hv, "compiled_root_field_defs", gql_execution_share_or_copy_sv(*root_fields_svp));
+  if (root_fields_sv != &PL_sv_undef && SvOK(root_fields_sv)) {
+    gql_store_sv(context_hv, "compiled_root_field_defs", gql_execution_share_or_copy_sv(root_fields_sv));
   }
 
   gql_store_sv(resolve_info_base_hv, "schema", gql_execution_share_or_copy_sv(compiled->schema_sv));
-  gql_store_sv(resolve_info_base_hv, "fragments", gql_execution_share_or_copy_sv(compiled->fragments_sv));
+  gql_store_sv(resolve_info_base_hv, "fragments", fragments_sv != &PL_sv_undef ? gql_execution_share_or_copy_sv(fragments_sv) : newSV(0));
   gql_store_sv(resolve_info_base_hv, "root_value", gql_execution_share_or_copy_sv(root_value));
-  gql_store_sv(resolve_info_base_hv, "operation", gql_execution_share_or_copy_sv(compiled->operation_sv));
+  gql_store_sv(resolve_info_base_hv, "operation", operation_sv != &PL_sv_undef ? gql_execution_share_or_copy_sv(operation_sv) : newSV(0));
   gql_store_sv(resolve_info_base_hv, "variable_values", gql_execution_share_or_copy_sv(applied_variables_sv));
   gql_store_sv(resolve_info_base_hv, "promise_code", gql_execution_share_or_copy_sv(promise_code));
   gql_store_sv(context_hv, "resolve_info_base", newRV_noinc((SV *)resolve_info_base_hv));
 
+  if (operation_variables_sv != &PL_sv_undef) {
+    SvREFCNT_dec(operation_variables_sv);
+  }
   if (runtime_variables_sv) {
     SvREFCNT_dec(runtime_variables_sv);
   }
 
   return newRV_noinc((SV *)context_hv);
+}
+
+static SV *
+gql_ir_execute_compiled_root_field_plan(pTHX_ gql_ir_compiled_exec_t *compiled, SV *context_sv, SV *root_value, SV *path_sv) {
+  gql_ir_compiled_root_field_plan_t *root_field_plan;
+  SV *promise_code_sv = &PL_sv_undef;
+  gql_ir_native_exec_env_t exec_env;
+  gql_ir_native_exec_accum_t exec_accum;
+
+  Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
+
+  if (!compiled
+      || !gql_ir_execution_lowered_root_field_plan(compiled)
+      || !context_sv
+      || !SvROK(context_sv)
+      || SvTYPE(SvRV(context_sv)) != SVt_PVHV) {
+    goto fallback;
+  }
+
+  root_field_plan = gql_ir_execution_lowered_root_field_plan(compiled);
+  if (!gql_ir_init_native_exec_env(
+        aTHX_
+        context_sv,
+        compiled->root_type_sv,
+        root_value,
+        path_sv,
+        &exec_env,
+        &promise_code_sv
+      )) {
+    goto fallback;
+  }
+  gql_ir_init_native_exec_accum(&exec_accum);
+  if (!gql_ir_run_native_field_plan_loop(
+        aTHX_
+        compiled,
+        root_field_plan,
+        &exec_env,
+        &exec_accum,
+        1
+      )) {
+    goto fallback;
+  }
+
+  return gql_ir_finish_native_exec_result(aTHX_ promise_code_sv, &exec_accum);
+
+fallback:
+  gql_ir_cleanup_native_exec_accum(&exec_accum);
+  return &PL_sv_undef;
+}
+
+static SV *
+gql_ir_execute_native_field_plan(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_compiled_root_field_plan_t *field_plan
+) {
+  /* Mirrors gql_execution_execute_field_plan(), but compiled IR is allowed to
+   * diverge here so native plan metadata can replace legacy bucket lookups. */
+  SV *promise_code_sv = &PL_sv_undef;
+  gql_ir_native_exec_env_t exec_env;
+  gql_ir_native_exec_accum_t exec_accum;
+
+  Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
+
+  if (!field_plan
+      || !context_sv
+      || !SvROK(context_sv)
+      || SvTYPE(SvRV(context_sv)) != SVt_PVHV) {
+    goto fallback;
+  }
+
+  if (!gql_ir_init_native_exec_env(
+        aTHX_
+        context_sv,
+        parent_type_sv,
+        root_value,
+        path_sv,
+        &exec_env,
+        &promise_code_sv
+      )) {
+    goto fallback;
+  }
+  gql_ir_init_native_exec_accum(&exec_accum);
+  if (!gql_ir_run_native_field_plan_loop(
+        aTHX_
+        NULL,
+        field_plan,
+        &exec_env,
+        &exec_accum,
+        0
+      )) {
+    goto fallback;
+  }
+
+  return gql_ir_finish_native_exec_result(aTHX_ promise_code_sv, &exec_accum);
+
+fallback:
+  gql_ir_cleanup_native_exec_accum(&exec_accum);
+  return &PL_sv_undef;
+}
+
+static int
+gql_ir_execute_native_field_plan_sync_to_outcome(
+  pTHX_ SV *context_sv,
+  SV *parent_type_sv,
+  SV *root_value,
+  SV *path_sv,
+  gql_ir_compiled_root_field_plan_t *field_plan,
+  SV **data_out,
+  AV **errors_out
+) {
+  SV *promise_code_sv = &PL_sv_undef;
+  gql_ir_native_exec_env_t exec_env;
+  gql_ir_native_exec_accum_t exec_accum;
+
+  Zero(&exec_accum, 1, gql_ir_native_exec_accum_t);
+
+  if (!field_plan
+      || !data_out
+      || !errors_out
+      || !context_sv
+      || !SvROK(context_sv)
+      || SvTYPE(SvRV(context_sv)) != SVt_PVHV) {
+    goto fallback;
+  }
+
+  if (!gql_ir_init_native_exec_env(
+        aTHX_
+        context_sv,
+        parent_type_sv,
+        root_value,
+        path_sv,
+        &exec_env,
+        &promise_code_sv
+      )) {
+    goto fallback;
+  }
+  if (promise_code_sv && SvOK(promise_code_sv)) {
+    goto fallback;
+  }
+
+  gql_ir_init_native_exec_accum(&exec_accum);
+  if (!gql_ir_run_native_field_plan_loop(
+        aTHX_
+        NULL,
+        field_plan,
+        &exec_env,
+        &exec_accum,
+        0
+      )) {
+    goto fallback;
+  }
+  if (exec_accum.promise_present || exec_accum.pending_count > 0 || !exec_accum.direct_data_hv) {
+    goto fallback;
+  }
+
+  *data_out = newRV_noinc((SV *)exec_accum.direct_data_hv);
+  exec_accum.direct_data_hv = NULL;
+  *errors_out = exec_accum.all_errors_av;
+  exec_accum.all_errors_av = NULL;
+
+  gql_ir_cleanup_native_exec_accum(&exec_accum);
+  return 1;
+
+fallback:
+  gql_ir_cleanup_native_exec_accum(&exec_accum);
+  return 0;
 }
 
 static SV *
@@ -1922,8 +4855,7 @@ gql_execution_execute_compiled_ir_xs_impl(
   gql_ir_compiled_exec_t *compiled;
   SV *inner_sv;
   SV *context_sv;
-  AV *path_av;
-  SV *path_sv;
+  SV *path_sv = &PL_sv_undef;
   SV *result_sv;
   SV *response_sv;
   SV *promise_code_sv;
@@ -1947,17 +4879,24 @@ gql_execution_execute_compiled_ir_xs_impl(
     field_resolver,
     promise_code
   );
-  path_av = newAV();
-  path_sv = newRV_noinc((SV *)path_av);
 
-  result_sv = gql_execution_execute_fields(
-    aTHX_
-    context_sv,
-    compiled->root_type_sv,
-    root_value,
-    path_sv,
-    compiled->root_fields_sv
-  );
+  result_sv = gql_ir_execute_compiled_root_field_plan(aTHX_ compiled, context_sv, root_value, path_sv);
+  if (result_sv == &PL_sv_undef) {
+    SV *root_fields_sv = gql_ir_compiled_root_legacy_fields_sv(aTHX_ compiled);
+    if (root_fields_sv == &PL_sv_undef) {
+      SvREFCNT_dec(context_sv);
+      croak("compiled IR plan could not materialize root legacy fields");
+    }
+    result_sv = gql_execution_execute_fields(
+      aTHX_
+      context_sv,
+      compiled->root_type_sv,
+      root_value,
+      path_sv,
+      root_fields_sv
+    );
+    SvREFCNT_dec(root_fields_sv);
+  }
   promise_code_sv = gql_execution_context_promise_code(context_sv);
   if (promise_code_sv != &PL_sv_undef && SvTRUE(gql_promise_call_is_promise(aTHX_ promise_code_sv, result_sv))) {
     response_sv = gql_execution_call_xs_then_build_response(aTHX_ promise_code_sv, result_sv, 0);
@@ -1966,7 +4905,6 @@ gql_execution_execute_compiled_ir_xs_impl(
   }
 
   SvREFCNT_dec(result_sv);
-  SvREFCNT_dec(path_sv);
   SvREFCNT_dec(context_sv);
 
   return response_sv;
@@ -2135,7 +5073,12 @@ gql_ir_selection_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_selectio
       if (field->selection_set && field->selection_set->selections.count > 0) {
         gql_store_sv(hv, "selections", newRV_noinc((SV *)gql_ir_selections_to_legacy_av(aTHX_ document, field->selection_set)));
         if (gql_ir_selection_set_is_plain_fields(field->selection_set)) {
-          gql_store_sv(hv, "compiled_fields", gql_ir_selection_set_to_legacy_fields_sv(aTHX_ document, field->selection_set));
+          SV *compiled_fields_sv = gql_ir_selection_set_to_legacy_fields_sv(aTHX_ document, field->selection_set);
+          gql_ir_compiled_field_bucket_table_t *bucket_table = gql_ir_compiled_field_bucket_table_from_sv(aTHX_ compiled_fields_sv);
+          gql_store_sv(hv, "compiled_fields", compiled_fields_sv);
+          if (bucket_table) {
+            gql_ir_attach_compiled_field_bucket_table(aTHX_ (SV *)hv, bucket_table);
+          }
         }
       }
       return newRV_noinc((SV *)hv);
@@ -2166,7 +5109,12 @@ gql_ir_selection_to_legacy_sv(pTHX_ gql_ir_document_t *document, gql_ir_selectio
       }
       gql_store_sv(hv, "selections", newRV_noinc((SV *)gql_ir_selections_to_legacy_av(aTHX_ document, fragment->selection_set)));
       if (gql_ir_selection_set_is_plain_fields(fragment->selection_set)) {
-        gql_store_sv(hv, "compiled_fields", gql_ir_selection_set_to_legacy_fields_sv(aTHX_ document, fragment->selection_set));
+        SV *compiled_fields_sv = gql_ir_selection_set_to_legacy_fields_sv(aTHX_ document, fragment->selection_set);
+        gql_ir_compiled_field_bucket_table_t *bucket_table = gql_ir_compiled_field_bucket_table_from_sv(aTHX_ compiled_fields_sv);
+        gql_store_sv(hv, "compiled_fields", compiled_fields_sv);
+        if (bucket_table) {
+          gql_ir_attach_compiled_field_bucket_table(aTHX_ (SV *)hv, bucket_table);
+        }
       }
       return newRV_noinc((SV *)hv);
     }

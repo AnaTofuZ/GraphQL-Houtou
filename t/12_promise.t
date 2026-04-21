@@ -94,6 +94,12 @@ my $Query = GraphQL::Houtou::Type::Object->new(
         return Local::Test::ChainPromise->resolve('world');
       },
     },
+    now => {
+      type => $String->non_null,
+      resolve => sub {
+        return 'present';
+      },
+    },
     later_user => {
       type => $User,
       resolve => sub {
@@ -221,6 +227,50 @@ subtest 'promise all hooks may fulfill with multiple values' => sub {
       later_list => [ 'alpha', 'beta' ],
     },
   }, 'list completion accepts multi-value promise all hooks';
+};
+
+subtest 'compiled_ir promise execution keeps sync head fields' => sub {
+  my $promise_code = normalize_promise_code({
+    resolve => sub { Local::Test::ChainPromise->resolve(@_) },
+    reject => sub { Local::Test::ChainPromise->reject(@_) },
+    all => sub { Local::Test::ChainPromise->all(@_) },
+    then => sub {
+      my ($promise, $on_fulfilled, $on_rejected) = @_;
+      return $promise->chain($on_fulfilled, $on_rejected);
+    },
+    is_promise => sub {
+      my ($value) = @_;
+      return ref($value) eq 'Local::Test::ChainPromise';
+    },
+  });
+
+  my $prepared = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs(
+    '{ now later later_user { id name } }',
+  );
+  my $compiled = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
+    $schema,
+    $prepared,
+  );
+  my $result = GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs(
+    $compiled,
+    undef,
+    undef,
+    undef,
+    undef,
+    $promise_code,
+  );
+
+  isa_ok $result, 'Local::Test::ChainPromise';
+  is_deeply $result->get, {
+    data => {
+      now => 'present',
+      later => 'world',
+      later_user => {
+        id => '41',
+        name => 'async:41',
+      },
+    },
+  }, 'compiled_ir promise path preserves sync and async fields together';
 };
 
 subtest 'global default promise code is used when request override is absent' => sub {

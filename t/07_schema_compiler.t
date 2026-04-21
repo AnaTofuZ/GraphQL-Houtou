@@ -182,6 +182,9 @@ subtest 'runtime schema cache can be warmed explicitly' => sub {
     ['User'],
     'prepare_runtime exposes interface implementation cache',
   );
+  is ref($cache->{resolve_type_map}{Node}), 'CODE', 'prepare_runtime caches interface resolve_type callback';
+  is ref($cache->{resolve_type_map}{SearchResult}), 'CODE', 'prepare_runtime caches union resolve_type callback';
+  is ref($cache->{is_type_of_map}{User}), 'CODE', 'prepare_runtime caches object is_type_of callback';
 
   is $schema->runtime_cache, $cache, 'runtime_cache returns warmed cache';
   $schema->clear_runtime_cache;

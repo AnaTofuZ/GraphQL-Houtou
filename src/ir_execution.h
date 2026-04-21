@@ -2201,6 +2201,9 @@ gql_ir_try_complete_sync_list_into_outcome(
   result_av = (AV *)SvRV(result_sv);
   result_len = av_len(result_av);
   data_av = newAV();
+  if (result_len >= 0) {
+    av_extend(data_av, result_len);
+  }
 
   for (i = 0; i <= result_len; i++) {
     SV **item_svp = av_fetch(result_av, i, 0);
@@ -2323,7 +2326,6 @@ gql_ir_try_complete_sync_list_into_outcome(
         goto fallback;
       }
     } else {
-      av_fill(data_av, i);
       (void)av_store(data_av, i, item_data_sv ? item_data_sv : newSV(0));
 
       if (item_errors_av && av_len(item_errors_av) >= 0) {

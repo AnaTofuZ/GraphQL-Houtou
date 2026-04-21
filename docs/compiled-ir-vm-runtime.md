@@ -2359,3 +2359,39 @@ This is a meaningful speed-oriented checkpoint because:
 - `list` does regress somewhat, which means the next work should focus on
   recovering list throughput while preserving the more specialized dispatch
   shape
+
+That recovery checkpoint is now in place without undoing the raw-list internal
+currency:
+
+- list-family sync paths pre-extend their result `AV` once with `av_extend(...)`
+  based on the final list length
+- hot item loops stop calling `av_fill(...)` before every `av_store(...)`
+- the payload kind remains `DIRECT_LIST_AV`, so the VM still keeps raw list
+  payloads until writer/finalization time
+
+This is the kind of optimization that matches the tokenizer-inspired design
+rules better than more corridor-widening:
+
+- keep dispatch shape stable
+- keep kind/payload separated
+- make the hot container operations themselves cheaper
+
+Repeat checkpoint benchmark after pre-extending list result arrays
+(`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `77456/s`
+  - `houtou_xs_ast` median `76132/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `57540/s`
+  - `houtou_xs_ast` median `57098/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `41226/s`
+  - `houtou_xs_ast` median `40588/s`
+
+This is a good checkpoint because:
+
+- it recovers the list-path regression without restoring a shared family switch
+- it keeps the VM/internal currency design aligned around raw native payloads
+- it confirms that "less repeated work inside the hot loop" is currently more
+  valuable than yet another layer of corridor widening

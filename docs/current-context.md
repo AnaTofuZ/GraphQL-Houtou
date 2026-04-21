@@ -3802,3 +3802,45 @@ This is still worth keeping because it advances both goals at once:
 - it makes the VM runtime more specialized
 - it validates that specialized dispatch can help `abstract` more than yet
   another corridor-widening tweak
+
+The next checkpoint keeps the same internal-currency shape but trims one more
+piece of list-family overhead:
+
+- list sync paths now call `av_extend(...)` once up front for the final list
+  length instead of growing the result array incrementally with `av_fill(...)`
+  on every item write
+- this does not change the corridor shape or dispatch ownership
+- it simply makes the raw-list payload path less allocation- and mutation-heavy
+
+This is intentionally closer to the tokenizer-style optimization rule:
+
+- do not add more wrappers or helper branches
+- keep the kind/payload split intact
+- reduce repeated container work inside the hot loop itself
+
+Repeat checkpoint benchmark after pre-extending list result arrays
+(`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `77456/s`
+  - `houtou_xs_ast` median `76132/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `57540/s`
+  - `houtou_xs_ast` median `57098/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `41226/s`
+  - `houtou_xs_ast` median `40588/s`
+
+Interpretation:
+
+- all three checkpoint cases now stay ahead on median
+- the gain is not from more corridor widening
+- it comes from keeping the internal currency native while reducing repeated
+  list-container work
+
+That reinforces the current optimization order:
+
+- internal currency first
+- specialized dispatch second
+- completed-envelope elimination third
+- corridor widening only after those are exhausted

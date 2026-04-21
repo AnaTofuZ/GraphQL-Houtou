@@ -2324,3 +2324,38 @@ So the next speed-focused step should prefer:
 - more specialized/table-driven dispatch
 - less hot-path reliance on completed envelopes
 - corridor widening only after those internal-currency gains are exhausted
+
+The next checkpoint then pushes that same rule directly into the VM runtime's
+completion dispatch:
+
+- `COMPLETE_OBJECT/LIST/ABSTRACT` no longer route back through a shared
+  family-switch helper in `ir_execution.h`
+- each completion family now calls its own execution-owned family API
+  directly
+- the VM keeps only a small helper that transfers
+  `gql_execution_sync_outcome_t` into the field frame
+
+This keeps the internal currency native while making the dispatch shape more
+specialized.
+
+Repeat checkpoint benchmark after removing the shared family switch
+(`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `76135/s`
+  - `houtou_xs_ast` median `75894/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `56520/s`
+  - `houtou_xs_ast` median `58897/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `42173/s`
+  - `houtou_xs_ast` median `41134/s`
+
+This is a meaningful speed-oriented checkpoint because:
+
+- `abstract` moves ahead on median without reintroducing more outer corridor
+  wrappers
+- `nested` stays healthy
+- `list` does regress somewhat, which means the next work should focus on
+  recovering list throughput while preserving the more specialized dispatch
+  shape

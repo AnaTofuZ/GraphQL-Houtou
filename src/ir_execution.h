@@ -330,13 +330,6 @@ static int gql_ir_native_field_complete_abstract_result(
 static int gql_ir_native_field_complete_generic_fallback_result(
   pTHX_ gql_ir_vm_exec_state_t *state
 );
-static int gql_ir_native_field_complete_no_direct_data_fallback_result(
-  pTHX_ gql_ir_vm_exec_state_t *state
-);
-static int gql_ir_native_field_complete_family_fallback_result(
-  pTHX_ gql_ir_vm_exec_state_t *state,
-  gql_ir_native_completion_dispatch_kind_t family_kind
-);
 static int gql_ir_native_field_consume_completed(
   pTHX_ gql_ir_native_exec_env_t *env,
   gql_ir_native_result_writer_t *writer,
@@ -2433,11 +2426,139 @@ gql_ir_native_field_complete_generic_fallback_result(
 }
 
 static int
-gql_ir_native_field_complete_no_direct_data_fallback_result(
+gql_ir_native_field_apply_sync_outcome_to_frame(
+  gql_execution_sync_outcome_t *outcome,
+  gql_ir_native_field_frame_t *frame
+) {
+  if (!outcome || !frame) {
+    return 0;
+  }
+
+  if (outcome->kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE) {
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
+    frame->outcome_sv = outcome->value_sv;
+    frame->outcome_errors_av = outcome->errors_av;
+    gql_execution_sync_outcome_reset(outcome);
+    return 1;
+  }
+  if (outcome->kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_LIST_AV) {
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_LIST_AV;
+    frame->outcome_sv = (SV *)outcome->list_av;
+    frame->outcome_errors_av = outcome->errors_av;
+    gql_execution_sync_outcome_reset(outcome);
+    return 1;
+  }
+  if (outcome->kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV) {
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV;
+    frame->outcome_sv = (SV *)outcome->object_hv;
+    frame->outcome_errors_av = outcome->errors_av;
+    gql_execution_sync_outcome_reset(outcome);
+    return 1;
+  }
+  if (outcome->kind == GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV) {
+    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
+    frame->outcome_sv = outcome->completed_sv;
+    gql_execution_sync_outcome_reset(outcome);
+    return 1;
+  }
+
+  return 0;
+}
+
+static int
+gql_ir_native_field_complete_object_family_fallback_result(
   pTHX_ gql_ir_vm_exec_state_t *state
 ) {
   gql_ir_native_exec_env_t *env = state ? state->env : NULL;
-  gql_ir_native_result_writer_t *writer = state ? state->writer : NULL;
+  gql_ir_vm_exec_cursor_t *cursor = state ? &state->cursor : NULL;
+  gql_ir_native_field_frame_t *frame = state ? &state->frame : NULL;
+  gql_execution_lazy_resolve_info_t *lazy_info = frame ? &frame->lazy_info : NULL;
+  SV *result_sv = frame ? frame->result_sv : NULL;
+  gql_ir_vm_field_meta_t *meta = cursor ? cursor->meta : NULL;
+  SV *field_def_sv = cursor ? cursor->field_def_sv : NULL;
+  SV *nodes_sv = cursor ? cursor->nodes_sv : NULL;
+  SV *return_type_sv = meta ? meta->return_type_sv : NULL;
+  gql_ir_compiled_root_field_plan_t *native_field_plan = cursor ? cursor->native_field_plan : NULL;
+  gql_execution_sync_outcome_t outcome;
+
+  if (!return_type_sv || !SvOK(return_type_sv)) {
+    return_type_sv = cursor ? cursor->type_sv : NULL;
+  }
+  if (!env || !cursor || !field_def_sv || !nodes_sv || !return_type_sv || !lazy_info || !frame) {
+    return 0;
+  }
+
+  gql_execution_sync_outcome_reset(&outcome);
+  if (!gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_plan(
+        aTHX_
+        gql_ir_native_env_context(env),
+        gql_ir_native_env_parent_type(env),
+        field_def_sv,
+        return_type_sv,
+        nodes_sv,
+        lazy_info,
+        result_sv,
+        native_field_plan,
+        &outcome
+      )) {
+    return 0;
+  }
+
+  return gql_ir_native_field_apply_sync_outcome_to_frame(&outcome, frame);
+}
+
+static int
+gql_ir_native_field_complete_list_family_fallback_result(
+  pTHX_ gql_ir_vm_exec_state_t *state
+) {
+  gql_ir_native_exec_env_t *env = state ? state->env : NULL;
+  gql_ir_vm_exec_cursor_t *cursor = state ? &state->cursor : NULL;
+  gql_ir_native_field_frame_t *frame = state ? &state->frame : NULL;
+  gql_execution_lazy_resolve_info_t *lazy_info = frame ? &frame->lazy_info : NULL;
+  SV *result_sv = frame ? frame->result_sv : NULL;
+  gql_ir_vm_field_meta_t *meta = cursor ? cursor->meta : NULL;
+  SV *field_def_sv = cursor ? cursor->field_def_sv : NULL;
+  SV *nodes_sv = cursor ? cursor->nodes_sv : NULL;
+  SV *return_type_sv = meta ? meta->return_type_sv : NULL;
+  SV *list_item_type_sv = (meta && meta->list_item_type_sv) ? meta->list_item_type_sv : NULL;
+  gql_ir_lowered_abstract_child_plan_table_t *list_item_abstract_child_plan_table =
+    cursor ? cursor->list_item_abstract_child_plan_table : NULL;
+  gql_ir_compiled_root_field_plan_t *native_field_plan = cursor ? cursor->native_field_plan : NULL;
+  gql_execution_sync_outcome_t outcome;
+
+  if (!return_type_sv || !SvOK(return_type_sv)) {
+    return_type_sv = cursor ? cursor->type_sv : NULL;
+  }
+  if (!env || !cursor || !field_def_sv || !nodes_sv || !return_type_sv || !lazy_info || !frame) {
+    return 0;
+  }
+
+  gql_execution_sync_outcome_reset(&outcome);
+  if (!gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outcome_with_items(
+        aTHX_
+        gql_ir_native_env_context(env),
+        gql_ir_native_env_parent_type(env),
+        field_def_sv,
+        return_type_sv,
+        nodes_sv,
+        lazy_info,
+        result_sv,
+        list_item_type_sv,
+        native_field_plan,
+        list_item_abstract_child_plan_table,
+        &outcome
+      )) {
+    return 0;
+  }
+
+  return gql_ir_native_field_apply_sync_outcome_to_frame(&outcome, frame);
+}
+
+static int
+gql_ir_native_field_complete_abstract_family_fallback_result(
+  pTHX_ gql_ir_vm_exec_state_t *state
+) {
+  gql_ir_native_exec_env_t *env = state ? state->env : NULL;
   gql_ir_vm_exec_cursor_t *cursor = state ? &state->cursor : NULL;
   gql_ir_native_field_frame_t *frame = state ? &state->frame : NULL;
   gql_execution_lazy_resolve_info_t *lazy_info = frame ? &frame->lazy_info : NULL;
@@ -2448,58 +2569,17 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
   SV *return_type_sv = meta ? meta->return_type_sv : NULL;
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table =
     cursor ? cursor->abstract_child_plan_table : NULL;
-  SV *list_item_type_sv = (meta && meta->list_item_type_sv) ? meta->list_item_type_sv : NULL;
-  gql_ir_lowered_abstract_child_plan_table_t *list_item_abstract_child_plan_table =
-    cursor ? cursor->list_item_abstract_child_plan_table : NULL;
   gql_execution_sync_outcome_t outcome;
-  gql_ir_native_completion_dispatch_kind_t family_kind =
-    meta ? meta->completion_dispatch_kind : GQL_IR_NATIVE_COMPLETION_GENERIC;
 
   if (!return_type_sv || !SvOK(return_type_sv)) {
     return_type_sv = cursor ? cursor->type_sv : NULL;
   }
-
-  if (!env
-      || !writer
-      || !cursor
-      || !field_def_sv
-      || !nodes_sv
-      || !return_type_sv
-      || !lazy_info
-      || !frame) {
+  if (!env || !cursor || !field_def_sv || !nodes_sv || !return_type_sv || !lazy_info || !frame) {
     return 0;
   }
 
   gql_execution_sync_outcome_reset(&outcome);
-  switch (family_kind) {
-    case GQL_IR_NATIVE_COMPLETION_OBJECT:
-      (void)gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
-        aTHX_
-        gql_ir_native_env_context(env),
-        gql_ir_native_env_parent_type(env),
-        field_def_sv,
-        return_type_sv,
-        nodes_sv,
-        lazy_info,
-        result_sv,
-        &outcome
-      );
-      break;
-    case GQL_IR_NATIVE_COMPLETION_LIST:
-      (void)gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
-        aTHX_
-        gql_ir_native_env_context(env),
-        gql_ir_native_env_parent_type(env),
-        field_def_sv,
-        return_type_sv,
-        nodes_sv,
-        lazy_info,
-        result_sv,
-        &outcome
-      );
-      break;
-    case GQL_IR_NATIVE_COMPLETION_ABSTRACT:
-      (void)gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data_with_table(
+  if (!gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_outcome_with_table(
         aTHX_
         gql_ir_native_env_context(env),
         gql_ir_native_env_parent_type(env),
@@ -2510,189 +2590,11 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
         result_sv,
         abstract_child_plan_table,
         &outcome
-      );
-      break;
-    default:
-      (void)gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome_no_direct_data(
-        aTHX_
-        gql_ir_native_env_context(env),
-        gql_ir_native_env_parent_type(env),
-        field_def_sv,
-        return_type_sv,
-        nodes_sv,
-        lazy_info,
-        result_sv,
-        &outcome
-      );
-      break;
-  }
-  if (outcome.kind != GQL_EXECUTION_SYNC_OUTCOME_NONE) {
-    if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE) {
-      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
-      frame->outcome_sv = outcome.value_sv;
-      frame->outcome_errors_av = outcome.errors_av;
-      gql_execution_sync_outcome_reset(&outcome);
-      return 1;
-    }
-    if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_LIST_AV) {
-      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_LIST_AV;
-      frame->outcome_sv = (SV *)outcome.list_av;
-      frame->outcome_errors_av = outcome.errors_av;
-      gql_execution_sync_outcome_reset(&outcome);
-      return 1;
-    }
-    if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV) {
-      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV;
-      frame->outcome_sv = (SV *)outcome.object_hv;
-      frame->outcome_errors_av = outcome.errors_av;
-      gql_execution_sync_outcome_reset(&outcome);
-      return 1;
-    }
-    if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV) {
-      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
-      frame->outcome_sv = outcome.completed_sv;
-      gql_execution_sync_outcome_reset(&outcome);
-      return 1;
-    }
-  }
-  return 0;
-}
-
-static int
-gql_ir_native_field_complete_family_fallback_result(
-  pTHX_ gql_ir_vm_exec_state_t *state,
-  gql_ir_native_completion_dispatch_kind_t family_kind
-) {
-  gql_ir_native_exec_env_t *env = state ? state->env : NULL;
-  gql_ir_native_result_writer_t *writer = state ? state->writer : NULL;
-  gql_ir_vm_exec_cursor_t *cursor = state ? &state->cursor : NULL;
-  gql_ir_native_field_frame_t *frame = state ? &state->frame : NULL;
-  gql_execution_lazy_resolve_info_t *lazy_info = frame ? &frame->lazy_info : NULL;
-  SV *result_sv = frame ? frame->result_sv : NULL;
-  gql_ir_vm_field_meta_t *meta = cursor ? cursor->meta : NULL;
-  SV *field_def_sv = cursor ? cursor->field_def_sv : NULL;
-  SV *nodes_sv = cursor ? cursor->nodes_sv : NULL;
-  SV *return_type_sv = meta ? meta->return_type_sv : NULL;
-  gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table =
-    cursor ? cursor->abstract_child_plan_table : NULL;
-  SV *list_item_type_sv = (meta && meta->list_item_type_sv) ? meta->list_item_type_sv : NULL;
-  gql_ir_lowered_abstract_child_plan_table_t *list_item_abstract_child_plan_table =
-    cursor ? cursor->list_item_abstract_child_plan_table : NULL;
-  gql_ir_compiled_root_field_plan_t *native_field_plan = cursor ? cursor->native_field_plan : NULL;
-  gql_execution_sync_outcome_t outcome;
-
-  if (!return_type_sv || !SvOK(return_type_sv)) {
-    return_type_sv = cursor ? cursor->type_sv : NULL;
-  }
-
-  if (!env
-      || !writer
-      || !cursor
-      || !field_def_sv
-      || !nodes_sv
-      || !return_type_sv
-      || !lazy_info
-      || !frame) {
+      )) {
     return 0;
   }
 
-  gql_execution_sync_outcome_reset(&outcome);
-  switch (family_kind) {
-    case GQL_IR_NATIVE_COMPLETION_OBJECT:
-      if (gql_execution_complete_object_field_value_catching_error_xs_lazy_sync_native_outcome_with_plan(
-            aTHX_
-            gql_ir_native_env_context(env),
-            gql_ir_native_env_parent_type(env),
-            field_def_sv,
-            return_type_sv,
-            nodes_sv,
-            lazy_info,
-            result_sv,
-            native_field_plan,
-            &outcome
-          )) {
-        break;
-      }
-      return 0;
-    case GQL_IR_NATIVE_COMPLETION_LIST:
-      if (gql_execution_complete_list_field_value_catching_error_xs_lazy_sync_native_outcome_with_items(
-            aTHX_
-            gql_ir_native_env_context(env),
-            gql_ir_native_env_parent_type(env),
-            field_def_sv,
-            return_type_sv,
-            nodes_sv,
-            lazy_info,
-            result_sv,
-            list_item_type_sv,
-            native_field_plan,
-            list_item_abstract_child_plan_table,
-            &outcome
-          )) {
-        break;
-      }
-      return 0;
-    case GQL_IR_NATIVE_COMPLETION_ABSTRACT:
-      if (gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_outcome_with_table(
-            aTHX_
-            gql_ir_native_env_context(env),
-            gql_ir_native_env_parent_type(env),
-            field_def_sv,
-            return_type_sv,
-            nodes_sv,
-            lazy_info,
-            result_sv,
-            abstract_child_plan_table,
-            &outcome
-          )) {
-        break;
-      }
-      return 0;
-    default:
-      if (gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome(
-            aTHX_
-            gql_ir_native_env_context(env),
-            gql_ir_native_env_parent_type(env),
-            field_def_sv,
-            return_type_sv,
-            nodes_sv,
-            lazy_info,
-            result_sv,
-            &outcome
-          )) {
-        break;
-      }
-      return 0;
-  }
-
-    if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE) {
-      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
-      frame->outcome_sv = outcome.value_sv;
-      frame->outcome_errors_av = outcome.errors_av;
-      gql_execution_sync_outcome_reset(&outcome);
-      return 1;
-    }
-    if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_LIST_AV) {
-      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_LIST_AV;
-      frame->outcome_sv = (SV *)outcome.list_av;
-      frame->outcome_errors_av = outcome.errors_av;
-      gql_execution_sync_outcome_reset(&outcome);
-      return 1;
-    }
-    if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV) {
-      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV;
-      frame->outcome_sv = (SV *)outcome.object_hv;
-      frame->outcome_errors_av = outcome.errors_av;
-      gql_execution_sync_outcome_reset(&outcome);
-      return 1;
-    }
-    if (outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV) {
-      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
-      frame->outcome_sv = outcome.completed_sv;
-      gql_execution_sync_outcome_reset(&outcome);
-      return 1;
-    }
-  return 0;
+  return gql_ir_native_field_apply_sync_outcome_to_frame(&outcome, frame);
 }
 
 static int
@@ -2790,10 +2692,7 @@ gql_ir_native_field_complete_object_result(
     return 0;
   }
 
-  return gql_ir_native_field_complete_family_fallback_result(
-    aTHX_ state,
-    GQL_IR_NATIVE_COMPLETION_OBJECT
-  );
+  return gql_ir_native_field_complete_object_family_fallback_result(aTHX_ state);
 }
 
 static int
@@ -2818,10 +2717,7 @@ gql_ir_native_field_complete_list_result(
     return 0;
   }
 
-  return gql_ir_native_field_complete_family_fallback_result(
-    aTHX_ state,
-    GQL_IR_NATIVE_COMPLETION_LIST
-  );
+  return gql_ir_native_field_complete_list_family_fallback_result(aTHX_ state);
 }
 
 static int
@@ -2846,10 +2742,7 @@ gql_ir_native_field_complete_abstract_result(
     return 0;
   }
 
-  return gql_ir_native_field_complete_family_fallback_result(
-    aTHX_ state,
-    GQL_IR_NATIVE_COMPLETION_ABSTRACT
-  );
+  return gql_ir_native_field_complete_abstract_family_fallback_result(aTHX_ state);
 }
 
 static int

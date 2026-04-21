@@ -3763,3 +3763,42 @@ The next speed-focused work should therefore prefer:
 - more specialized/table-driven dispatch
 - less hot-path reliance on completed envelopes
 - corridor widening only after those internal-currency gains are exhausted
+
+The next checkpoint applies that dispatch-shape rule directly inside the VM
+runtime:
+
+- `COMPLETE_OBJECT/LIST/ABSTRACT` no longer re-enter a shared family switch in
+  `ir_execution.h`
+- each completion family now calls its own execution-side family API directly
+- the VM only uses a tiny helper to move `gql_execution_sync_outcome_t` into
+  the field frame
+
+This keeps the "kind first, payload later" internal currency, while making the
+dispatch shape more specialized and table-driven.
+
+Repeat checkpoint benchmark after removing the shared family switch
+(`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `76135/s`
+  - `houtou_xs_ast` median `75894/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `56520/s`
+  - `houtou_xs_ast` median `58897/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `42173/s`
+  - `houtou_xs_ast` median `41134/s`
+
+Interpretation:
+
+- `abstract` finally moves ahead on median, which is the main signal this batch
+  was trying to unlock
+- `nested` stays in the healthy same-band range
+- `list` regresses somewhat, so the next work should recover list throughput
+  without reintroducing a shared family switch
+
+This is still worth keeping because it advances both goals at once:
+
+- it makes the VM runtime more specialized
+- it validates that specialized dispatch can help `abstract` more than yet
+  another corridor-widening tweak

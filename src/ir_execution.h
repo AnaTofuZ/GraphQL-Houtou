@@ -316,36 +316,26 @@ static int gql_ir_native_field_call_resolver_build_args(
   int *owns_args_out
 );
 static int gql_ir_native_field_complete_generic_result(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  gql_ir_vm_exec_cursor_t *cursor,
-  gql_execution_lazy_resolve_info_t *lazy_info,
-  SV *result_sv,
-  gql_ir_native_field_frame_t *frame
+  pTHX_ gql_ir_vm_exec_state_t *state
 );
 static int gql_ir_native_field_complete_object_result(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  gql_ir_vm_exec_cursor_t *cursor,
-  gql_execution_lazy_resolve_info_t *lazy_info,
-  SV *result_sv,
-  gql_ir_native_field_frame_t *frame
+  pTHX_ gql_ir_vm_exec_state_t *state
 );
 static int gql_ir_native_field_complete_list_result(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  gql_ir_vm_exec_cursor_t *cursor,
-  gql_execution_lazy_resolve_info_t *lazy_info,
-  SV *result_sv,
-  gql_ir_native_field_frame_t *frame
+  pTHX_ gql_ir_vm_exec_state_t *state
 );
 static int gql_ir_native_field_complete_abstract_result(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  gql_ir_vm_exec_cursor_t *cursor,
-  gql_execution_lazy_resolve_info_t *lazy_info,
-  SV *result_sv,
-  gql_ir_native_field_frame_t *frame
+  pTHX_ gql_ir_vm_exec_state_t *state
+);
+static int gql_ir_native_field_complete_generic_fallback_result(
+  pTHX_ gql_ir_vm_exec_state_t *state
+);
+static int gql_ir_native_field_complete_no_direct_data_fallback_result(
+  pTHX_ gql_ir_vm_exec_state_t *state
+);
+static int gql_ir_native_field_complete_family_fallback_result(
+  pTHX_ gql_ir_vm_exec_state_t *state,
+  gql_ir_native_completion_dispatch_kind_t family_kind
 );
 static int gql_ir_native_field_consume_completed(
   pTHX_ gql_ir_native_exec_env_t *env,
@@ -1437,41 +1427,13 @@ gql_ir_vm_exec_state_complete_current_field(
 
   switch (op) {
     case GQL_IR_NATIVE_FIELD_OP_COMPLETE_GENERIC:
-      return gql_ir_native_field_complete_generic_result(
-        aTHX_ state->env,
-        state->writer,
-        &state->cursor,
-        &frame->lazy_info,
-        frame->result_sv,
-        frame
-      );
+      return gql_ir_native_field_complete_generic_result(aTHX_ state);
     case GQL_IR_NATIVE_FIELD_OP_COMPLETE_OBJECT:
-      return gql_ir_native_field_complete_object_result(
-        aTHX_ state->env,
-        state->writer,
-        &state->cursor,
-        &frame->lazy_info,
-        frame->result_sv,
-        frame
-      );
+      return gql_ir_native_field_complete_object_result(aTHX_ state);
     case GQL_IR_NATIVE_FIELD_OP_COMPLETE_LIST:
-      return gql_ir_native_field_complete_list_result(
-        aTHX_ state->env,
-        state->writer,
-        &state->cursor,
-        &frame->lazy_info,
-        frame->result_sv,
-        frame
-      );
+      return gql_ir_native_field_complete_list_result(aTHX_ state);
     case GQL_IR_NATIVE_FIELD_OP_COMPLETE_ABSTRACT:
-      return gql_ir_native_field_complete_abstract_result(
-        aTHX_ state->env,
-        state->writer,
-        &state->cursor,
-        &frame->lazy_info,
-        frame->result_sv,
-        frame
-      );
+      return gql_ir_native_field_complete_abstract_result(aTHX_ state);
     default:
       return 0;
   }
@@ -2400,13 +2362,14 @@ fallback:
 
 static int
 gql_ir_native_field_complete_generic_fallback_result(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  gql_ir_vm_exec_cursor_t *cursor,
-  gql_execution_lazy_resolve_info_t *lazy_info,
-  SV *result_sv,
-  gql_ir_native_field_frame_t *frame
+  pTHX_ gql_ir_vm_exec_state_t *state
 ) {
+  gql_ir_native_exec_env_t *env = state ? state->env : NULL;
+  gql_ir_native_result_writer_t *writer = state ? state->writer : NULL;
+  gql_ir_vm_exec_cursor_t *cursor = state ? &state->cursor : NULL;
+  gql_ir_native_field_frame_t *frame = state ? &state->frame : NULL;
+  gql_execution_lazy_resolve_info_t *lazy_info = frame ? &frame->lazy_info : NULL;
+  SV *result_sv = frame ? frame->result_sv : NULL;
   gql_ir_vm_field_meta_t *meta = cursor ? cursor->meta : NULL;
   SV *field_def_sv = cursor ? cursor->field_def_sv : NULL;
   SV *nodes_sv = cursor ? cursor->nodes_sv : NULL;
@@ -2459,13 +2422,14 @@ gql_ir_native_field_complete_generic_fallback_result(
 
 static int
 gql_ir_native_field_complete_no_direct_data_fallback_result(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  gql_ir_vm_exec_cursor_t *cursor,
-  gql_execution_lazy_resolve_info_t *lazy_info,
-  SV *result_sv,
-  gql_ir_native_field_frame_t *frame
+  pTHX_ gql_ir_vm_exec_state_t *state
 ) {
+  gql_ir_native_exec_env_t *env = state ? state->env : NULL;
+  gql_ir_native_result_writer_t *writer = state ? state->writer : NULL;
+  gql_ir_vm_exec_cursor_t *cursor = state ? &state->cursor : NULL;
+  gql_ir_native_field_frame_t *frame = state ? &state->frame : NULL;
+  gql_execution_lazy_resolve_info_t *lazy_info = frame ? &frame->lazy_info : NULL;
+  SV *result_sv = frame ? frame->result_sv : NULL;
   gql_ir_vm_field_meta_t *meta = cursor ? cursor->meta : NULL;
   SV *field_def_sv = cursor ? cursor->field_def_sv : NULL;
   SV *nodes_sv = cursor ? cursor->nodes_sv : NULL;
@@ -2577,14 +2541,15 @@ gql_ir_native_field_complete_no_direct_data_fallback_result(
 
 static int
 gql_ir_native_field_complete_family_fallback_result(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  gql_ir_vm_exec_cursor_t *cursor,
-  gql_execution_lazy_resolve_info_t *lazy_info,
-  SV *result_sv,
-  gql_ir_native_field_frame_t *frame,
+  pTHX_ gql_ir_vm_exec_state_t *state,
   gql_ir_native_completion_dispatch_kind_t family_kind
 ) {
+  gql_ir_native_exec_env_t *env = state ? state->env : NULL;
+  gql_ir_native_result_writer_t *writer = state ? state->writer : NULL;
+  gql_ir_vm_exec_cursor_t *cursor = state ? &state->cursor : NULL;
+  gql_ir_native_field_frame_t *frame = state ? &state->frame : NULL;
+  gql_execution_lazy_resolve_info_t *lazy_info = frame ? &frame->lazy_info : NULL;
+  SV *result_sv = frame ? frame->result_sv : NULL;
   gql_ir_vm_field_meta_t *meta = cursor ? cursor->meta : NULL;
   SV *field_def_sv = cursor ? cursor->field_def_sv : NULL;
   SV *nodes_sv = cursor ? cursor->nodes_sv : NULL;
@@ -2706,13 +2671,14 @@ gql_ir_native_field_complete_family_fallback_result(
 
 static int
 gql_ir_native_field_complete_generic_result(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  gql_ir_vm_exec_cursor_t *cursor,
-  gql_execution_lazy_resolve_info_t *lazy_info,
-  SV *result_sv,
-  gql_ir_native_field_frame_t *frame
+  pTHX_ gql_ir_vm_exec_state_t *state
 ) {
+  gql_ir_native_exec_env_t *env = state ? state->env : NULL;
+  gql_ir_native_result_writer_t *writer = state ? state->writer : NULL;
+  gql_ir_vm_exec_cursor_t *cursor = state ? &state->cursor : NULL;
+  gql_ir_native_field_frame_t *frame = state ? &state->frame : NULL;
+  gql_execution_lazy_resolve_info_t *lazy_info = frame ? &frame->lazy_info : NULL;
+  SV *result_sv = frame ? frame->result_sv : NULL;
   gql_ir_vm_field_meta_t *meta = cursor ? cursor->meta : NULL;
   SV *nodes_sv = cursor ? cursor->nodes_sv : NULL;
   SV *return_type_sv = meta ? meta->return_type_sv : NULL;
@@ -2772,25 +2738,20 @@ gql_ir_native_field_complete_generic_result(
   }
 
   return gql_ir_native_field_complete_generic_fallback_result(
-    aTHX_
-    env,
-    writer,
-    cursor,
-    lazy_info,
-    result_sv,
-    frame
+    aTHX_ state
   );
 }
 
 static int
 gql_ir_native_field_complete_object_result(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  gql_ir_vm_exec_cursor_t *cursor,
-  gql_execution_lazy_resolve_info_t *lazy_info,
-  SV *result_sv,
-  gql_ir_native_field_frame_t *frame
+  pTHX_ gql_ir_vm_exec_state_t *state
 ) {
+  gql_ir_native_exec_env_t *env = state ? state->env : NULL;
+  gql_ir_native_result_writer_t *writer = state ? state->writer : NULL;
+  gql_ir_vm_exec_cursor_t *cursor = state ? &state->cursor : NULL;
+  gql_ir_native_field_frame_t *frame = state ? &state->frame : NULL;
+  gql_execution_lazy_resolve_info_t *lazy_info = frame ? &frame->lazy_info : NULL;
+  SV *result_sv = frame ? frame->result_sv : NULL;
   gql_ir_vm_field_meta_t *meta = cursor ? cursor->meta : NULL;
   SV *field_def_sv = cursor ? cursor->field_def_sv : NULL;
   SV *nodes_sv = cursor ? cursor->nodes_sv : NULL;
@@ -2804,26 +2765,21 @@ gql_ir_native_field_complete_object_result(
   }
 
   return gql_ir_native_field_complete_family_fallback_result(
-    aTHX_
-    env,
-    writer,
-    cursor,
-    lazy_info,
-    result_sv,
-    frame,
+    aTHX_ state,
     GQL_IR_NATIVE_COMPLETION_OBJECT
   );
 }
 
 static int
 gql_ir_native_field_complete_list_result(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  gql_ir_vm_exec_cursor_t *cursor,
-  gql_execution_lazy_resolve_info_t *lazy_info,
-  SV *result_sv,
-  gql_ir_native_field_frame_t *frame
+  pTHX_ gql_ir_vm_exec_state_t *state
 ) {
+  gql_ir_native_exec_env_t *env = state ? state->env : NULL;
+  gql_ir_native_result_writer_t *writer = state ? state->writer : NULL;
+  gql_ir_vm_exec_cursor_t *cursor = state ? &state->cursor : NULL;
+  gql_ir_native_field_frame_t *frame = state ? &state->frame : NULL;
+  gql_execution_lazy_resolve_info_t *lazy_info = frame ? &frame->lazy_info : NULL;
+  SV *result_sv = frame ? frame->result_sv : NULL;
   gql_ir_vm_field_meta_t *meta = cursor ? cursor->meta : NULL;
   SV *field_def_sv = cursor ? cursor->field_def_sv : NULL;
   SV *nodes_sv = cursor ? cursor->nodes_sv : NULL;
@@ -2837,26 +2793,21 @@ gql_ir_native_field_complete_list_result(
   }
 
   return gql_ir_native_field_complete_family_fallback_result(
-    aTHX_
-    env,
-    writer,
-    cursor,
-    lazy_info,
-    result_sv,
-    frame,
+    aTHX_ state,
     GQL_IR_NATIVE_COMPLETION_LIST
   );
 }
 
 static int
 gql_ir_native_field_complete_abstract_result(
-  pTHX_ gql_ir_native_exec_env_t *env,
-  gql_ir_native_result_writer_t *writer,
-  gql_ir_vm_exec_cursor_t *cursor,
-  gql_execution_lazy_resolve_info_t *lazy_info,
-  SV *result_sv,
-  gql_ir_native_field_frame_t *frame
+  pTHX_ gql_ir_vm_exec_state_t *state
 ) {
+  gql_ir_native_exec_env_t *env = state ? state->env : NULL;
+  gql_ir_native_result_writer_t *writer = state ? state->writer : NULL;
+  gql_ir_vm_exec_cursor_t *cursor = state ? &state->cursor : NULL;
+  gql_ir_native_field_frame_t *frame = state ? &state->frame : NULL;
+  gql_execution_lazy_resolve_info_t *lazy_info = frame ? &frame->lazy_info : NULL;
+  SV *result_sv = frame ? frame->result_sv : NULL;
   gql_ir_vm_field_meta_t *meta = cursor ? cursor->meta : NULL;
   SV *field_def_sv = cursor ? cursor->field_def_sv : NULL;
   SV *nodes_sv = cursor ? cursor->nodes_sv : NULL;
@@ -2870,13 +2821,7 @@ gql_ir_native_field_complete_abstract_result(
   }
 
   return gql_ir_native_field_complete_family_fallback_result(
-    aTHX_
-    env,
-    writer,
-    cursor,
-    lazy_info,
-    result_sv,
-    frame,
+    aTHX_ state,
     GQL_IR_NATIVE_COMPLETION_ABSTRACT
   );
 }

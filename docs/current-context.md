@@ -2,6 +2,13 @@
 
 Compressed handoff for the current `GraphQL::Houtou` worktree.
 
+Design rule of thumb for the current VM work:
+
+- keep the runtime's internal currency native
+- keep kind/shape and payload separate
+- do not materialize Perl envelopes unless a boundary actually requires them
+- prefer widening family-owned corridors over adding local helper shortcuts
+
 ## Pause Snapshot
 
 Current pause point for `proj/compiled-ir-vm-runtime`:
@@ -28,6 +35,9 @@ Current pause point for `proj/compiled-ir-vm-runtime`:
   - lowering pipeline
   - native runtime core
   - delayed boundary materialization
+- current VM checkpoint is moving completion-family ownership itself onto
+  `gql_ir_vm_exec_state_t`, so `env/writer/cursor/frame/result` are no longer
+  passed as separate helper arguments through the hot path
 
 ## Current Runtime Flow
 

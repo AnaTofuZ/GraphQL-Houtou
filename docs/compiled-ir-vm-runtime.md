@@ -250,6 +250,31 @@ The runtime core should be split into:
 The runtime core should not use Perl objects as its internal currency except
 where user code forces it.
 
+Here, "internal currency" means the primary shape that execution helpers pass
+to each other on the hot path. For this runtime, that should be VM-owned state
+such as:
+
+- `gql_ir_vm_exec_state_t`
+- `gql_ir_vm_exec_cursor_t`
+- `gql_ir_native_field_frame_t`
+- `gql_ir_native_child_outcome_t`
+- `gql_execution_sync_outcome_t`
+- `gql_ir_native_result_writer_t`
+
+It should not normally be:
+
+- completed Perl envelopes like `{ data => ..., errors => ... }`
+- ad hoc `SV * / HV * / AV *` triples passed between helpers
+- re-materialized AST/legacy field buckets
+
+This is the same design pressure seen in high-performance tokenizers: return
+the smallest kind/shape first, and materialize payload only when a later stage
+actually needs it. For the VM runtime that means:
+
+- dispatch on family/opcode/slot metadata first
+- keep payload in native outcome/state structs as long as possible
+- delay Perl object materialization until writer/finalization boundaries
+
 #### Immutable Program
 
 Own:

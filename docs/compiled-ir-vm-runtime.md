@@ -135,6 +135,10 @@ tag dispatch metadata. Each lowered table entry can lazily attach a
 `runtime_tag`/`tag_resolver` through table-driven dispatch before falling back
 to the broader runtime-cache-based lookup.
 
+The next ownership step is to keep `tag_resolver_sv` on the lowered abstract
+table as well, so the hot path stops re-fetching the resolver callback from the
+runtime cache once that table has been used.
+
 ## Target Architecture
 
 Planned stages:

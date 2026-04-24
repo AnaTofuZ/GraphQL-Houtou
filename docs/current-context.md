@@ -162,6 +162,9 @@ This is now wired through:
   entry from the runtime cache once, so compiled IR / XS abstract completion
   can do tag dispatch as a table-driven lookup instead of repeating nested
   runtime-cache hash lookups on every call
+- the same lowered tables now also cache `tag_resolver_sv`, so abstract family
+  tag dispatch can stay inside table-owned state once the resolver has been
+  fetched once
 
 Here, "internal currency" means the primary payload shape exchanged between
 hot-path helpers before the final Perl-facing materialization step. In the

@@ -4749,6 +4749,9 @@ gql_ir_lowered_abstract_child_plan_table_clone(
   Newxz(clone, 1, gql_ir_lowered_abstract_child_plan_table_t);
   clone->count = table->count;
   Newxz(clone->entries, clone->count, gql_ir_lowered_abstract_child_entry_t);
+  if (table->tag_resolver_sv) {
+    clone->tag_resolver_sv = gql_execution_share_or_copy_sv(table->tag_resolver_sv);
+  }
 
   for (i = 0; i < clone->count; i++) {
     gql_ir_lowered_abstract_child_entry_t *dst = &clone->entries[i];
@@ -4862,6 +4865,10 @@ gql_ir_lowered_abstract_child_plan_table_destroy(gql_ir_lowered_abstract_child_p
     table->entries = NULL;
   }
 
+  if (table->tag_resolver_sv) {
+    SvREFCNT_dec(table->tag_resolver_sv);
+    table->tag_resolver_sv = NULL;
+  }
   table->cached_dispatch_tag_sv = NULL;
   Safefree(table);
 }

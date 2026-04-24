@@ -433,6 +433,7 @@ struct gql_ir_lowered_abstract_child_entry {
 struct gql_ir_lowered_abstract_child_plan_table {
   UV count;
   gql_ir_lowered_abstract_child_entry_t *entries;
+  SV *tag_resolver_sv;
   SV *cached_possible_type_sv;
   SV *cached_possible_type_name_sv;
   SV *cached_dispatch_tag_sv;

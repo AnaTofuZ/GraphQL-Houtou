@@ -3631,6 +3631,25 @@ gql_execution_get_abstract_tag_resolver_sv(pTHX_ SV *context, SV *type) {
 }
 
 static SV *
+gql_execution_get_lowered_abstract_tag_resolver_sv(
+  pTHX_ SV *context,
+  SV *type,
+  gql_ir_lowered_abstract_child_plan_table_t *table
+) {
+  if (table && table->tag_resolver_sv && SvOK(table->tag_resolver_sv)) {
+    return gql_execution_share_or_copy_sv(table->tag_resolver_sv);
+  }
+
+  {
+    SV *resolver_sv = gql_execution_get_abstract_tag_resolver_sv(aTHX_ context, type);
+    if (table && SvOK(resolver_sv) && !table->tag_resolver_sv) {
+      table->tag_resolver_sv = gql_execution_share_or_copy_sv(resolver_sv);
+    }
+    return resolver_sv;
+  }
+}
+
+static SV *
 gql_execution_call_is_type_of_cb(pTHX_ SV *cb, SV *result, SV *context, SV *info, int *ok, SV **error_out) {
   dSP;
   int count;
@@ -8500,7 +8519,11 @@ gql_execution_try_complete_abstract_tag_sync_native_outcome(
     return 0;
   }
 
-  tag_resolver_sv = gql_execution_get_abstract_tag_resolver_sv(aTHX_ context, declared_return_type);
+  tag_resolver_sv = gql_execution_get_lowered_abstract_tag_resolver_sv(
+    aTHX_ context,
+    declared_return_type,
+    abstract_child_plan_table
+  );
   if (!SvOK(tag_resolver_sv)) {
     SvREFCNT_dec(tag_resolver_sv);
     return 0;

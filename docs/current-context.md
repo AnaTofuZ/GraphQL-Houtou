@@ -176,6 +176,10 @@ This is now wired through:
   contract; a `native_field_plan` is optional. When a tag matches but only the
   concrete type is known, abstract completion can still enter the verified
   runtime-object corridor without falling back to runtime-cache `runtime_tag_map`
+- execution-side tag dispatch now treats explicit abstract-side `tag_map` and
+  `tag_resolver` as primary data, not merely as runtime-cache seeds. The XS
+  path and the Perl default abstract resolver both try those direct type-object
+  fields before asking the schema runtime cache to synthesize `runtime_tag_map`
 
 Here, "internal currency" means the primary payload shape exchanged between
 hot-path helpers before the final Perl-facing materialization step. In the

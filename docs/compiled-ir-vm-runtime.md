@@ -153,6 +153,11 @@ second. That means a lowered abstract table can still keep dispatch on the
 table-driven path even when the concrete child plan is unavailable, because the
 verified runtime-object corridor can run from the resolved concrete type alone.
 
+Outside lowered-table dispatch, explicit `tag_resolver` and `tag_map` are also
+treated as first-class runtime data. Both the XS execution path and the Perl
+default abstract resolver now try direct type-object `tag_resolver` / `tag_map`
+fields before asking the schema runtime cache for synthesized tag maps.
+
 ## Target Architecture
 
 Planned stages:

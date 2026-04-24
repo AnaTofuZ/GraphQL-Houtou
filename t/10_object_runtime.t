@@ -273,6 +273,10 @@ subtest 'union default resolve_type can dispatch by tag_map override' => sub {
     my ($ctx, $type, $result) = @_;
     return +{ data => { runtime_type => $type->name, payload => $result->{name} } };
   };
+  $schema->clear_runtime_cache;
+  local *GraphQL::Houtou::Schema::prepare_runtime = sub {
+    die "prepare_runtime should not run for explicit tag_map dispatch\n";
+  };
 
   $got = $TaggedSearchResult->_complete_value(
     $context,

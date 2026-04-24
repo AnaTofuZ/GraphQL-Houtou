@@ -3627,6 +3627,20 @@ gql_execution_get_abstract_tag_resolver_sv(pTHX_ SV *context, SV *type) {
     return cached;
   }
 
+  if (type
+      && SvROK(type)
+      && SvTYPE(SvRV(type)) == SVt_PVHV
+      && (sv_derived_from(type, "GraphQL::Houtou::Type")
+          || sv_derived_from(type, "GraphQL::Type"))) {
+    HV *type_hv = (HV *)SvRV(type);
+    SV **resolver_svp = hv_fetch(type_hv, "tag_resolver", 12, 0);
+
+    if (resolver_svp && SvOK(*resolver_svp)) {
+      SvREFCNT_dec(cached);
+      return gql_execution_share_or_copy_sv(*resolver_svp);
+    }
+  }
+
   return cached;
 }
 
@@ -8440,6 +8454,22 @@ gql_execution_lookup_abstract_runtime_tag_type_sv(
   SV *abstract_type,
   SV *tag_sv
 ) {
+  if (abstract_type
+      && SvROK(abstract_type)
+      && SvTYPE(SvRV(abstract_type)) == SVt_PVHV
+      && (sv_derived_from(abstract_type, "GraphQL::Houtou::Type")
+          || sv_derived_from(abstract_type, "GraphQL::Type"))) {
+    HV *type_hv = (HV *)SvRV(abstract_type);
+    SV **tag_map_svp = hv_fetch(type_hv, "tag_map", 7, 0);
+
+    if (tag_map_svp && SvROK(*tag_map_svp) && SvTYPE(SvRV(*tag_map_svp)) == SVt_PVHV) {
+      HE *tag_he = hv_fetch_ent((HV *)SvRV(*tag_map_svp), tag_sv, 0, 0);
+      if (tag_he && SvOK(HeVAL(tag_he))) {
+        return gql_execution_share_or_copy_sv(HeVAL(tag_he));
+      }
+    }
+  }
+
   HV *runtime_cache_hv;
   SV **tag_map_svp;
   SV *abstract_name_sv = NULL;

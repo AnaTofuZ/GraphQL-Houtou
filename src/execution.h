@@ -4692,33 +4692,29 @@ gql_execution_attach_lowered_abstract_child_dispatch_tags(
   SV *abstract_type,
   gql_ir_lowered_abstract_child_plan_table_t *table
 ) {
+  HV *abstract_hv = NULL;
   HV *runtime_cache_hv;
   SV **tag_map_svp;
   SV *abstract_name_sv = NULL;
   HE *abstract_he;
   int owned_abstract_name_sv = 0;
+  UV i;
+  int missing_tags = 0;
 
   if (!context || !abstract_type || !table || table->dispatch_tags_ready) {
     return;
   }
 
   table->dispatch_tags_ready = 1;
-  runtime_cache_hv = gql_execution_context_or_schema_runtime_cache_hv(aTHX_ context);
-  if (!runtime_cache_hv) {
-    return;
-  }
-
-  tag_map_svp = hv_fetch(runtime_cache_hv, "runtime_tag_map", 15, 0);
-  if (!tag_map_svp || !SvROK(*tag_map_svp) || SvTYPE(SvRV(*tag_map_svp)) != SVt_PVHV) {
-    return;
-  }
 
   if (SvROK(abstract_type)
       && SvTYPE(SvRV(abstract_type)) == SVt_PVHV
       && (sv_derived_from(abstract_type, "GraphQL::Houtou::Type")
           || sv_derived_from(abstract_type, "GraphQL::Type"))) {
-    HV *type_hv = (HV *)SvRV(abstract_type);
-    SV **name_svp = hv_fetch(type_hv, "name", 4, 0);
+    SV **name_svp;
+
+    abstract_hv = (HV *)SvRV(abstract_type);
+    name_svp = hv_fetch(abstract_hv, "name", 4, 0);
     if (name_svp && SvOK(*name_svp)) {
       abstract_name_sv = *name_svp;
     }
@@ -4727,6 +4723,91 @@ gql_execution_attach_lowered_abstract_child_dispatch_tags(
   if (!abstract_name_sv) {
     abstract_name_sv = gql_execution_type_name_sv(aTHX_ abstract_type);
     owned_abstract_name_sv = 1;
+  }
+
+  if (abstract_hv) {
+    tag_map_svp = hv_fetch(abstract_hv, "tag_map", 7, 0);
+    if (tag_map_svp && SvROK(*tag_map_svp) && SvTYPE(SvRV(*tag_map_svp)) == SVt_PVHV) {
+      HV *declared_tag_map_hv = (HV *)SvRV(*tag_map_svp);
+      HE *tag_he;
+
+      hv_iterinit(declared_tag_map_hv);
+      while ((tag_he = hv_iternext(declared_tag_map_hv))) {
+        SV *tag_sv = hv_iterkeysv(tag_he);
+        SV *possible_type_sv = HeVAL(tag_he);
+
+        if (!possible_type_sv || !SvOK(possible_type_sv) || !tag_sv || !SvOK(tag_sv)) {
+          continue;
+        }
+
+        for (i = 0; i < table->count; i++) {
+          gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
+
+          if (!entry->possible_type_sv) {
+            continue;
+          }
+          if (entry->possible_type_sv == possible_type_sv
+              || (SvROK(entry->possible_type_sv)
+                  && SvROK(possible_type_sv)
+                  && SvRV(entry->possible_type_sv) == SvRV(possible_type_sv))) {
+            if (entry->dispatch_tag_sv) {
+              SvREFCNT_dec(entry->dispatch_tag_sv);
+            }
+            entry->dispatch_tag_sv = gql_execution_share_or_copy_sv(tag_sv);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  for (i = 0; i < table->count; i++) {
+    gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
+    HV *object_hv;
+    SV **runtime_tag_svp;
+
+    if (entry->dispatch_tag_sv
+        || !entry->possible_type_sv
+        || !SvROK(entry->possible_type_sv)
+        || SvTYPE(SvRV(entry->possible_type_sv)) != SVt_PVHV) {
+      continue;
+    }
+
+    object_hv = (HV *)SvRV(entry->possible_type_sv);
+    runtime_tag_svp = hv_fetch(object_hv, "runtime_tag", 11, 0);
+    if (runtime_tag_svp && SvOK(*runtime_tag_svp) && !SvROK(*runtime_tag_svp)) {
+      entry->dispatch_tag_sv = gql_execution_share_or_copy_sv(*runtime_tag_svp);
+    }
+  }
+
+  for (i = 0; i < table->count; i++) {
+    if (!table->entries[i].dispatch_tag_sv) {
+      missing_tags = 1;
+      break;
+    }
+  }
+
+  if (!missing_tags) {
+    if (owned_abstract_name_sv) {
+      SvREFCNT_dec(abstract_name_sv);
+    }
+    return;
+  }
+
+  runtime_cache_hv = gql_execution_context_or_schema_runtime_cache_hv(aTHX_ context);
+  if (!runtime_cache_hv) {
+    if (owned_abstract_name_sv) {
+      SvREFCNT_dec(abstract_name_sv);
+    }
+    return;
+  }
+
+  tag_map_svp = hv_fetch(runtime_cache_hv, "runtime_tag_map", 15, 0);
+  if (!tag_map_svp || !SvROK(*tag_map_svp) || SvTYPE(SvRV(*tag_map_svp)) != SVt_PVHV) {
+    if (owned_abstract_name_sv) {
+      SvREFCNT_dec(abstract_name_sv);
+    }
+    return;
   }
 
   abstract_he = hv_fetch_ent((HV *)SvRV(*tag_map_svp), abstract_name_sv, 0, 0);
@@ -4745,7 +4826,6 @@ gql_execution_attach_lowered_abstract_child_dispatch_tags(
     while ((tag_he = hv_iternext(abstract_tag_map_hv))) {
       SV *tag_sv = hv_iterkeysv(tag_he);
       SV *possible_type_sv = HeVAL(tag_he);
-      UV i;
 
       if (!possible_type_sv || !SvOK(possible_type_sv) || !tag_sv || !SvOK(tag_sv)) {
         continue;
@@ -4753,16 +4833,13 @@ gql_execution_attach_lowered_abstract_child_dispatch_tags(
 
       for (i = 0; i < table->count; i++) {
         gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
-        if (!entry->possible_type_sv) {
+        if (entry->dispatch_tag_sv || !entry->possible_type_sv) {
           continue;
         }
         if (entry->possible_type_sv == possible_type_sv
             || (SvROK(entry->possible_type_sv)
                 && SvROK(possible_type_sv)
                 && SvRV(entry->possible_type_sv) == SvRV(possible_type_sv))) {
-          if (entry->dispatch_tag_sv) {
-            SvREFCNT_dec(entry->dispatch_tag_sv);
-          }
           entry->dispatch_tag_sv = gql_execution_share_or_copy_sv(tag_sv);
           break;
         }

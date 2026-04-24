@@ -180,6 +180,14 @@ This is now wired through:
   `tag_resolver` as primary data, not merely as runtime-cache seeds. The XS
   path and the Perl default abstract resolver both try those direct type-object
   fields before asking the schema runtime cache to synthesize `runtime_tag_map`
+- lowered-table dispatch-tag hydration now follows the same priority:
+  1. explicit abstract-side `tag_map`
+  2. concrete object-side `runtime_tag`
+  3. runtime-cache `runtime_tag_map` only for still-missing entries
+- checkpoint benchmark after these batches:
+  - `nested_variable_object`: `houtou_compiled_ir 76800/s`
+  - `list_of_objects`: `houtou_compiled_ir 57053/s`
+  - `abstract_with_fragment`: `houtou_compiled_ir 40714/s`
 
 Here, "internal currency" means the primary payload shape exchanged between
 hot-path helpers before the final Perl-facing materialization step. In the

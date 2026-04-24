@@ -158,6 +158,15 @@ treated as first-class runtime data. Both the XS execution path and the Perl
 default abstract resolver now try direct type-object `tag_resolver` / `tag_map`
 fields before asking the schema runtime cache for synthesized tag maps.
 
+Lowered-table dispatch-tag hydration follows the same direct-first rule:
+1. explicit abstract-side `tag_map`
+2. concrete object-side `runtime_tag`
+3. runtime-cache `runtime_tag_map` only for unresolved entries
+
+This keeps the tag-dispatch path aligned with the tokenizer-style principle
+that the hot path should first consume already-owned metadata and only consult
+shared maps as a fallback.
+
 ## Target Architecture
 
 Planned stages:

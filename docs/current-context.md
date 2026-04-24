@@ -166,9 +166,16 @@ This is now wired through:
   tables also pre-seed `dispatch_tag_sv` directly from `tag_map` /
   `runtime_tag` during lowering, so the first hit can already stay on the
   table-driven path
+- the same lowering step also pre-seeds `tag_resolver_sv` when the abstract
+  type itself already carries that callback, so native Houtou schemas can keep
+  the first tag-dispatch hit entirely inside lowered-table state
 - the same lowered tables now also cache `tag_resolver_sv`, so abstract family
   tag dispatch can stay inside table-owned state once the resolver has been
   fetched once
+- lowered tag lookup now treats `tag -> possible_type` as the primary table
+  contract; a `native_field_plan` is optional. When a tag matches but only the
+  concrete type is known, abstract completion can still enter the verified
+  runtime-object corridor without falling back to runtime-cache `runtime_tag_map`
 
 Here, "internal currency" means the primary payload shape exchanged between
 hot-path helpers before the final Perl-facing materialization step. In the

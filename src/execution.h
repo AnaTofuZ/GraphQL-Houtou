@@ -4769,11 +4769,11 @@ gql_execution_lookup_lowered_abstract_child_entry_by_tag(
   }
 
   if (table->cached_dispatch_tag_sv
-      && table->cached_native_field_plan
+      && table->cached_possible_type_sv
       && sv_eq(table->cached_dispatch_tag_sv, tag_sv)) {
     for (i = 0; i < table->count; i++) {
       gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
-      if (entry->native_field_plan == table->cached_native_field_plan
+      if (entry->possible_type_sv == table->cached_possible_type_sv
           && entry->dispatch_tag_sv == table->cached_dispatch_tag_sv) {
         return entry;
       }
@@ -4782,7 +4782,7 @@ gql_execution_lookup_lowered_abstract_child_entry_by_tag(
 
   for (i = 0; i < table->count; i++) {
     gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
-    if (!entry->dispatch_tag_sv || !entry->native_field_plan) {
+    if (!entry->dispatch_tag_sv || !entry->possible_type_sv) {
       continue;
     }
     if (sv_eq(entry->dispatch_tag_sv, tag_sv)) {
@@ -8571,7 +8571,7 @@ gql_execution_try_complete_abstract_tag_sync_native_outcome(
       aTHX_ abstract_child_plan_table,
       runtime_tag_sv
     );
-    if (known_entry && known_entry->possible_type_sv && known_entry->native_field_plan) {
+    if (known_entry && known_entry->possible_type_sv) {
       Zero(&resolution, 1, gql_execution_abstract_runtime_resolution_t);
       resolution.runtime_type_sv = known_entry->possible_type_sv;
       resolution.native_field_plan = known_entry->native_field_plan;

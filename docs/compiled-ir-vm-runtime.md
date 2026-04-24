@@ -144,6 +144,15 @@ from `tag_map` and object `runtime_tag` fields during lowering. That keeps the
 very first abstract dispatch on the same table-driven path instead of waiting
 for a runtime-cache hydration step.
 
+Likewise, when the abstract type already carries `tag_resolver`, the lowered
+table can pre-seed `tag_resolver_sv` during lowering, so the first dispatch can
+stay entirely inside lowered-table-owned state for native Houtou schemas.
+
+The table-owned contract is now `tag -> possible_type` first and `native plan`
+second. That means a lowered abstract table can still keep dispatch on the
+table-driven path even when the concrete child plan is unavailable, because the
+verified runtime-object corridor can run from the resolved concrete type alone.
+
 ## Target Architecture
 
 Planned stages:

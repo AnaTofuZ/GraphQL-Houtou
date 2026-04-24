@@ -3020,6 +3020,12 @@ gql_ir_lower_single_node_abstract_child_plan_table(pTHX_ SV *return_type_sv, SV 
     }
 
     abstract_hv = (HV *)SvRV(return_type_sv);
+    {
+      SV **tag_resolver_svp = hv_fetch(abstract_hv, "tag_resolver", 12, 0);
+      if (tag_resolver_svp && SvOK(*tag_resolver_svp)) {
+        table->tag_resolver_sv = gql_execution_share_or_copy_sv(*tag_resolver_svp);
+      }
+    }
     tag_map_svp = hv_fetch(abstract_hv, "tag_map", 7, 0);
     if (tag_map_svp && SvROK(*tag_map_svp) && SvTYPE(SvRV(*tag_map_svp)) == SVt_PVHV) {
       HV *tag_map_hv = (HV *)SvRV(*tag_map_svp);

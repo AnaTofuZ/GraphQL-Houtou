@@ -4760,6 +4760,9 @@ gql_ir_lowered_abstract_child_plan_table_clone(
     if (src->possible_type_name_sv) {
       dst->possible_type_name_sv = gql_execution_share_or_copy_sv(src->possible_type_name_sv);
     }
+    if (src->dispatch_tag_sv) {
+      dst->dispatch_tag_sv = gql_execution_share_or_copy_sv(src->dispatch_tag_sv);
+    }
     if (src->native_field_plan) {
       dst->native_field_plan = gql_ir_compiled_root_field_plan_clone(aTHX_ src->native_field_plan);
     }
@@ -4769,6 +4772,8 @@ gql_ir_lowered_abstract_child_plan_table_clone(
       dst->native_block = gql_ir_vm_block_new(dst->native_field_plan, 0);
     }
   }
+
+  clone->dispatch_tags_ready = table->dispatch_tags_ready;
 
   return clone;
 }
@@ -4840,6 +4845,10 @@ gql_ir_lowered_abstract_child_plan_table_destroy(gql_ir_lowered_abstract_child_p
         SvREFCNT_dec(entry->possible_type_name_sv);
         entry->possible_type_name_sv = NULL;
       }
+      if (entry->dispatch_tag_sv) {
+        SvREFCNT_dec(entry->dispatch_tag_sv);
+        entry->dispatch_tag_sv = NULL;
+      }
       if (entry->native_field_plan) {
         gql_ir_compiled_root_field_plan_destroy(entry->native_field_plan);
         entry->native_field_plan = NULL;
@@ -4853,6 +4862,7 @@ gql_ir_lowered_abstract_child_plan_table_destroy(gql_ir_lowered_abstract_child_p
     table->entries = NULL;
   }
 
+  table->cached_dispatch_tag_sv = NULL;
   Safefree(table);
 }
 

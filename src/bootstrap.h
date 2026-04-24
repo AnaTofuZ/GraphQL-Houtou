@@ -425,6 +425,7 @@ struct gql_ir_execution_lowered_plan {
 struct gql_ir_lowered_abstract_child_entry {
   SV *possible_type_sv;
   SV *possible_type_name_sv;
+  SV *dispatch_tag_sv;
   gql_ir_compiled_root_field_plan_t *native_field_plan;
   gql_ir_vm_block_t *native_block;
 };
@@ -434,8 +435,10 @@ struct gql_ir_lowered_abstract_child_plan_table {
   gql_ir_lowered_abstract_child_entry_t *entries;
   SV *cached_possible_type_sv;
   SV *cached_possible_type_name_sv;
+  SV *cached_dispatch_tag_sv;
   gql_ir_compiled_root_field_plan_t *cached_native_field_plan;
   gql_ir_vm_block_t *cached_native_block;
+  U8 dispatch_tags_ready;
 };
 
 struct gql_ir_compiled_concrete_plan_entry {

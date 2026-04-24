@@ -158,6 +158,16 @@ This is now wired through:
 - Perl default abstract resolution in `GraphQL::Houtou::Role::Abstract`
 - schema runtime cache warmup
 - XS abstract completion fast path in `src/execution.h`
+- lowered abstract child-plan tables now lazily attach `dispatch_tag_sv` per
+  entry from the runtime cache once, so compiled IR / XS abstract completion
+  can do tag dispatch as a table-driven lookup instead of repeating nested
+  runtime-cache hash lookups on every call
+
+Here, "internal currency" means the primary payload shape exchanged between
+hot-path helpers before the final Perl-facing materialization step. In the
+current runtime, that should be native structs such as `gql_execution_sync_outcome_t`,
+`gql_ir_native_child_outcome_t`, `gql_ir_native_field_frame_t`, and
+`gql_ir_native_result_writer_t`, not ad hoc `{ data, errors }` envelopes.
 
 ## Latest VM Checkpoint
 

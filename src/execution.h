@@ -4653,6 +4653,132 @@ gql_execution_lookup_lowered_abstract_child_entry_by_name(
   return NULL;
 }
 
+static void
+gql_execution_attach_lowered_abstract_child_dispatch_tags(
+  pTHX_ SV *context,
+  SV *abstract_type,
+  gql_ir_lowered_abstract_child_plan_table_t *table
+) {
+  HV *runtime_cache_hv;
+  SV **tag_map_svp;
+  SV *abstract_name_sv = NULL;
+  HE *abstract_he;
+  int owned_abstract_name_sv = 0;
+
+  if (!context || !abstract_type || !table || table->dispatch_tags_ready) {
+    return;
+  }
+
+  table->dispatch_tags_ready = 1;
+  runtime_cache_hv = gql_execution_context_or_schema_runtime_cache_hv(aTHX_ context);
+  if (!runtime_cache_hv) {
+    return;
+  }
+
+  tag_map_svp = hv_fetch(runtime_cache_hv, "runtime_tag_map", 15, 0);
+  if (!tag_map_svp || !SvROK(*tag_map_svp) || SvTYPE(SvRV(*tag_map_svp)) != SVt_PVHV) {
+    return;
+  }
+
+  if (SvROK(abstract_type)
+      && SvTYPE(SvRV(abstract_type)) == SVt_PVHV
+      && (sv_derived_from(abstract_type, "GraphQL::Houtou::Type")
+          || sv_derived_from(abstract_type, "GraphQL::Type"))) {
+    HV *type_hv = (HV *)SvRV(abstract_type);
+    SV **name_svp = hv_fetch(type_hv, "name", 4, 0);
+    if (name_svp && SvOK(*name_svp)) {
+      abstract_name_sv = *name_svp;
+    }
+  }
+
+  if (!abstract_name_sv) {
+    abstract_name_sv = gql_execution_type_name_sv(aTHX_ abstract_type);
+    owned_abstract_name_sv = 1;
+  }
+
+  abstract_he = hv_fetch_ent((HV *)SvRV(*tag_map_svp), abstract_name_sv, 0, 0);
+  if (owned_abstract_name_sv) {
+    SvREFCNT_dec(abstract_name_sv);
+  }
+  if (!abstract_he || !SvROK(HeVAL(abstract_he)) || SvTYPE(SvRV(HeVAL(abstract_he))) != SVt_PVHV) {
+    return;
+  }
+
+  {
+    HV *abstract_tag_map_hv = (HV *)SvRV(HeVAL(abstract_he));
+    HE *tag_he;
+
+    hv_iterinit(abstract_tag_map_hv);
+    while ((tag_he = hv_iternext(abstract_tag_map_hv))) {
+      SV *tag_sv = hv_iterkeysv(tag_he);
+      SV *possible_type_sv = HeVAL(tag_he);
+      UV i;
+
+      if (!possible_type_sv || !SvOK(possible_type_sv) || !tag_sv || !SvOK(tag_sv)) {
+        continue;
+      }
+
+      for (i = 0; i < table->count; i++) {
+        gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
+        if (!entry->possible_type_sv) {
+          continue;
+        }
+        if (entry->possible_type_sv == possible_type_sv
+            || (SvROK(entry->possible_type_sv)
+                && SvROK(possible_type_sv)
+                && SvRV(entry->possible_type_sv) == SvRV(possible_type_sv))) {
+          if (entry->dispatch_tag_sv) {
+            SvREFCNT_dec(entry->dispatch_tag_sv);
+          }
+          entry->dispatch_tag_sv = gql_execution_share_or_copy_sv(tag_sv);
+          break;
+        }
+      }
+    }
+  }
+}
+
+static gql_ir_lowered_abstract_child_entry_t *
+gql_execution_lookup_lowered_abstract_child_entry_by_tag(
+  pTHX_ gql_ir_lowered_abstract_child_plan_table_t *table,
+  SV *tag_sv
+) {
+  UV i;
+
+  if (!table || !tag_sv || !SvOK(tag_sv) || SvROK(tag_sv)) {
+    return NULL;
+  }
+
+  if (table->cached_dispatch_tag_sv
+      && table->cached_native_field_plan
+      && sv_eq(table->cached_dispatch_tag_sv, tag_sv)) {
+    for (i = 0; i < table->count; i++) {
+      gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
+      if (entry->native_field_plan == table->cached_native_field_plan
+          && entry->dispatch_tag_sv == table->cached_dispatch_tag_sv) {
+        return entry;
+      }
+    }
+  }
+
+  for (i = 0; i < table->count; i++) {
+    gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
+    if (!entry->dispatch_tag_sv || !entry->native_field_plan) {
+      continue;
+    }
+    if (sv_eq(entry->dispatch_tag_sv, tag_sv)) {
+      table->cached_dispatch_tag_sv = entry->dispatch_tag_sv;
+      table->cached_possible_type_sv = entry->possible_type_sv;
+      table->cached_possible_type_name_sv = entry->possible_type_name_sv;
+      table->cached_native_field_plan = entry->native_field_plan;
+      table->cached_native_block = entry->native_block;
+      return entry;
+    }
+  }
+
+  return NULL;
+}
+
 static SV *
 gql_execution_build_field_plan_from_compiled_fields(pTHX_ SV *schema, SV *parent_type, SV *compiled_fields_sv) {
   AV *compiled_av;
@@ -8361,6 +8487,7 @@ gql_execution_try_complete_abstract_tag_sync_native_outcome(
   gql_execution_sync_outcome_t *outcome
 ) {
   gql_execution_context_fast_cache_t *context_cache;
+  gql_ir_lowered_abstract_child_entry_t *known_entry = NULL;
   SV *tag_resolver_sv;
   SV *runtime_tag_sv;
   SV *runtime_type_sv;
@@ -8409,6 +8536,39 @@ gql_execution_try_complete_abstract_tag_sync_native_outcome(
   if (!SvOK(runtime_tag_sv)) {
     SvREFCNT_dec(runtime_tag_sv);
     return 0;
+  }
+
+  if (abstract_child_plan_table) {
+    gql_execution_attach_lowered_abstract_child_dispatch_tags(
+      aTHX_ context,
+      declared_return_type,
+      abstract_child_plan_table
+    );
+    known_entry = gql_execution_lookup_lowered_abstract_child_entry_by_tag(
+      aTHX_ abstract_child_plan_table,
+      runtime_tag_sv
+    );
+    if (known_entry && known_entry->possible_type_sv && known_entry->native_field_plan) {
+      Zero(&resolution, 1, gql_execution_abstract_runtime_resolution_t);
+      resolution.runtime_type_sv = known_entry->possible_type_sv;
+      resolution.native_field_plan = known_entry->native_field_plan;
+      resolution.native_block = known_entry->native_block;
+      resolution.runtime_type_verified = 1;
+      SvREFCNT_dec(runtime_tag_sv);
+      return gql_execution_complete_abstract_runtime_resolution_catching_error_xs_lazy_sync_native_outcome(
+        aTHX_
+        context,
+        parent_type,
+        field_def,
+        declared_return_type,
+        nodes,
+        lazy_info,
+        result,
+        abstract_child_plan_table,
+        &resolution,
+        outcome
+      );
+    }
   }
 
   runtime_type_sv = gql_execution_lookup_abstract_runtime_tag_type_sv(

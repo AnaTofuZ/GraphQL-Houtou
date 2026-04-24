@@ -129,6 +129,12 @@ This avoids repeatedly exposing `houtou_*` prefixed knobs in application code,
 while still giving the lowered runtime a clean discriminator path that can
 short-circuit `possible_types + is_type_of`.
 
+The latest lowering step also lets abstract child-plan tables own abstract-local
+tag dispatch metadata. Each lowered table entry can lazily attach a
+`dispatch_tag_sv`, so `compiled_ir` / XS abstract completion can resolve
+`runtime_tag`/`tag_resolver` through table-driven dispatch before falling back
+to the broader runtime-cache-based lookup.
+
 ## Target Architecture
 
 Planned stages:

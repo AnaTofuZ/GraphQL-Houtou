@@ -175,6 +175,7 @@ typedef enum gql_ir_native_meta_dispatch_kind gql_ir_native_meta_dispatch_kind_t
 typedef enum gql_ir_native_resolve_dispatch_kind gql_ir_native_resolve_dispatch_kind_t;
 typedef enum gql_ir_native_args_dispatch_kind gql_ir_native_args_dispatch_kind_t;
 typedef enum gql_ir_native_completion_dispatch_kind gql_ir_native_completion_dispatch_kind_t;
+typedef enum gql_ir_abstract_dispatch_kind gql_ir_abstract_dispatch_kind_t;
 typedef enum gql_ir_compilation_stage gql_ir_compilation_stage_t;
 typedef struct {
   gql_ir_document_t *document;
@@ -221,6 +222,13 @@ enum gql_ir_native_completion_dispatch_kind {
   GQL_IR_NATIVE_COMPLETION_OBJECT = 2,
   GQL_IR_NATIVE_COMPLETION_LIST = 3,
   GQL_IR_NATIVE_COMPLETION_ABSTRACT = 4
+};
+
+enum gql_ir_abstract_dispatch_kind {
+  GQL_IR_ABSTRACT_DISPATCH_NONE = 0,
+  GQL_IR_ABSTRACT_DISPATCH_TAG = 1,
+  GQL_IR_ABSTRACT_DISPATCH_RESOLVE_TYPE = 2,
+  GQL_IR_ABSTRACT_DISPATCH_POSSIBLE_TYPES = 3
 };
 
 struct gql_execution_lazy_resolve_info {
@@ -286,6 +294,7 @@ struct gql_ir_vm_field_meta {
   gql_ir_native_resolve_dispatch_kind_t resolve_dispatch_kind;
   gql_ir_native_args_dispatch_kind_t args_dispatch_kind;
   gql_ir_native_completion_dispatch_kind_t completion_dispatch_kind;
+  gql_ir_abstract_dispatch_kind_t abstract_dispatch_kind;
 };
 
 struct gql_ir_vm_field_hot {

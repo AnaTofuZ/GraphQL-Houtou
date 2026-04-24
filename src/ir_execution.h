@@ -2289,26 +2289,44 @@ gql_ir_try_complete_sync_list_into_outcome(
       }
     }
 
-    if (!item_data_sv
-        && !item_completed_sv
-        && !gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome(
-             aTHX_
-             gql_ir_native_env_context(env),
-             item_lazy_info.parent_type_sv,
-             item_lazy_info.field_def_sv,
-             item_type,
-             item_lazy_info.nodes_sv,
-             &item_lazy_info,
-             item_svp ? *item_svp : &PL_sv_undef,
-             &item_data_sv,
-             &item_errors_av,
-             &item_completed_sv
-           )) {
-      SvREFCNT_dec(item_path_sv);
-      if (item_errors_av) {
-        SvREFCNT_dec((SV *)item_errors_av);
+    if (!item_data_sv && !item_completed_sv) {
+      if (!gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome(
+            aTHX_
+            gql_ir_native_env_context(env),
+            item_lazy_info.parent_type_sv,
+            item_lazy_info.field_def_sv,
+            item_type,
+            item_lazy_info.nodes_sv,
+            &item_lazy_info,
+            item_svp ? *item_svp : &PL_sv_undef,
+            &item_sync_outcome
+          )) {
+        SvREFCNT_dec(item_path_sv);
+        if (item_errors_av) {
+          SvREFCNT_dec((SV *)item_errors_av);
+        }
+        goto fallback;
       }
-      goto fallback;
+
+      if (item_sync_outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV) {
+        item_data_sv = item_sync_outcome.object_hv ? newRV_noinc((SV *)item_sync_outcome.object_hv) : newSV(0);
+        item_sync_outcome.object_hv = NULL;
+        item_errors_av = item_sync_outcome.errors_av;
+        item_sync_outcome.errors_av = NULL;
+      } else if (item_sync_outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_LIST_AV) {
+        item_data_sv = item_sync_outcome.list_av ? newRV_noinc((SV *)item_sync_outcome.list_av) : newSV(0);
+        item_sync_outcome.list_av = NULL;
+        item_errors_av = item_sync_outcome.errors_av;
+        item_sync_outcome.errors_av = NULL;
+      } else if (item_sync_outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE) {
+        item_data_sv = item_sync_outcome.value_sv;
+        item_sync_outcome.value_sv = NULL;
+        item_errors_av = item_sync_outcome.errors_av;
+        item_sync_outcome.errors_av = NULL;
+      } else if (item_sync_outcome.kind == GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV) {
+        item_completed_sv = item_sync_outcome.completed_sv;
+        item_sync_outcome.completed_sv = NULL;
+      }
     }
 
     if (item_completed_sv) {
@@ -2385,9 +2403,7 @@ gql_ir_native_field_complete_generic_fallback_result(
   SV *field_def_sv = cursor ? cursor->field_def_sv : NULL;
   SV *nodes_sv = cursor ? cursor->nodes_sv : NULL;
   SV *return_type_sv = meta ? meta->return_type_sv : NULL;
-  SV *direct_data_sv = NULL;
-  AV *direct_errors_av = NULL;
-  SV *completed_sv = NULL;
+  gql_execution_sync_outcome_t outcome;
   if (!return_type_sv || !SvOK(return_type_sv)) {
     return_type_sv = cursor ? cursor->type_sv : NULL;
   }
@@ -2403,7 +2419,8 @@ gql_ir_native_field_complete_generic_fallback_result(
     return 0;
   }
 
-  if (gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome(
+  gql_execution_sync_outcome_reset(&outcome);
+  if (gql_execution_complete_field_value_catching_error_xs_lazy_sync_native_outcome(
         aTHX_
         gql_ir_native_env_context(env),
         gql_ir_native_env_parent_type(env),
@@ -2412,62 +2429,11 @@ gql_ir_native_field_complete_generic_fallback_result(
         nodes_sv,
         lazy_info,
         result_sv,
-        &direct_data_sv,
-        &direct_errors_av,
-        &completed_sv
+        &outcome
       )) {
-    if (direct_data_sv) {
-      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
-      frame->outcome_sv = direct_data_sv;
-      frame->outcome_errors_av = direct_errors_av;
-      return 1;
-    }
-    if (completed_sv) {
-      frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
-      frame->outcome_sv = completed_sv;
-      return 1;
-    }
+    gql_ir_sync_outcome_move_to_frame(&outcome, frame);
+    return frame->outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE;
   }
-  return 0;
-}
-
-static int
-gql_ir_native_field_apply_sync_outcome_to_frame(
-  gql_execution_sync_outcome_t *outcome,
-  gql_ir_native_field_frame_t *frame
-) {
-  if (!outcome || !frame) {
-    return 0;
-  }
-
-  if (outcome->kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE) {
-    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE;
-    frame->outcome_sv = outcome->value_sv;
-    frame->outcome_errors_av = outcome->errors_av;
-    gql_execution_sync_outcome_reset(outcome);
-    return 1;
-  }
-  if (outcome->kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_LIST_AV) {
-    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_LIST_AV;
-    frame->outcome_sv = (SV *)outcome->list_av;
-    frame->outcome_errors_av = outcome->errors_av;
-    gql_execution_sync_outcome_reset(outcome);
-    return 1;
-  }
-  if (outcome->kind == GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV) {
-    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV;
-    frame->outcome_sv = (SV *)outcome->object_hv;
-    frame->outcome_errors_av = outcome->errors_av;
-    gql_execution_sync_outcome_reset(outcome);
-    return 1;
-  }
-  if (outcome->kind == GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV) {
-    frame->outcome_kind = GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV;
-    frame->outcome_sv = outcome->completed_sv;
-    gql_execution_sync_outcome_reset(outcome);
-    return 1;
-  }
-
   return 0;
 }
 
@@ -2510,7 +2476,8 @@ gql_ir_native_field_complete_object_family_fallback_result(
     return 0;
   }
 
-  return gql_ir_native_field_apply_sync_outcome_to_frame(&outcome, frame);
+  gql_ir_sync_outcome_move_to_frame(&outcome, frame);
+  return frame->outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE;
 }
 
 static int
@@ -2557,7 +2524,8 @@ gql_ir_native_field_complete_list_family_fallback_result(
     return 0;
   }
 
-  return gql_ir_native_field_apply_sync_outcome_to_frame(&outcome, frame);
+  gql_ir_sync_outcome_move_to_frame(&outcome, frame);
+  return frame->outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE;
 }
 
 static int
@@ -2575,6 +2543,8 @@ gql_ir_native_field_complete_abstract_family_fallback_result(
   SV *return_type_sv = meta ? meta->return_type_sv : NULL;
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table =
     cursor ? cursor->abstract_child_plan_table : NULL;
+  gql_ir_abstract_dispatch_kind_t abstract_dispatch_kind =
+    meta ? meta->abstract_dispatch_kind : GQL_IR_ABSTRACT_DISPATCH_NONE;
   gql_execution_sync_outcome_t outcome;
 
   if (!return_type_sv || !SvOK(return_type_sv)) {
@@ -2585,7 +2555,7 @@ gql_ir_native_field_complete_abstract_family_fallback_result(
   }
 
   gql_execution_sync_outcome_reset(&outcome);
-  if (!gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_outcome_with_table(
+  if (!gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_outcome_with_table_and_dispatch(
         aTHX_
         gql_ir_native_env_context(env),
         gql_ir_native_env_parent_type(env),
@@ -2595,12 +2565,14 @@ gql_ir_native_field_complete_abstract_family_fallback_result(
         lazy_info,
         result_sv,
         abstract_child_plan_table,
+        abstract_dispatch_kind,
         &outcome
       )) {
     return 0;
   }
 
-  return gql_ir_native_field_apply_sync_outcome_to_frame(&outcome, frame);
+  gql_ir_sync_outcome_move_to_frame(&outcome, frame);
+  return frame->outcome_kind != GQL_IR_NATIVE_FIELD_OUTCOME_NONE;
 }
 
 static int
@@ -4678,6 +4650,7 @@ gql_ir_vm_field_meta_from_seed(
   meta->resolve_dispatch_kind = seed->resolve_dispatch_kind;
   meta->args_dispatch_kind = seed->args_dispatch_kind;
   meta->completion_dispatch_kind = seed->completion_dispatch_kind;
+  meta->abstract_dispatch_kind = seed->abstract_dispatch_kind;
   entry->meta = meta;
 
   return meta;
@@ -5406,6 +5379,7 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     gql_ir_native_resolve_dispatch_kind_t resolve_dispatch_kind = GQL_IR_NATIVE_RESOLVE_DISPATCH_CONTEXT_OR_DEFAULT;
     gql_ir_native_args_dispatch_kind_t args_dispatch_kind;
     gql_ir_native_completion_dispatch_kind_t completion_dispatch_kind = GQL_IR_NATIVE_COMPLETION_GENERIC;
+    gql_ir_abstract_dispatch_kind_t abstract_dispatch_kind = GQL_IR_ABSTRACT_DISPATCH_NONE;
     SV **nodes_svp;
     AV *nodes_av;
     SV **first_node_svp;
@@ -5543,6 +5517,21 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
       } else if (sv_does(*type_svp, "GraphQL::Houtou::Role::Abstract")
                  || sv_does(*type_svp, "GraphQL::Role::Abstract")) {
         completion_dispatch_kind = GQL_IR_NATIVE_COMPLETION_ABSTRACT;
+        if (SvROK(*type_svp) && SvTYPE(SvRV(*type_svp)) == SVt_PVHV) {
+          HV *abstract_hv = (HV *)SvRV(*type_svp);
+          SV **tag_resolver_svp = hv_fetch(abstract_hv, "tag_resolver", 12, 0);
+          SV **resolve_type_svp = hv_fetch(abstract_hv, "resolve_type", 12, 0);
+
+          if (tag_resolver_svp && SvOK(*tag_resolver_svp)) {
+            abstract_dispatch_kind = GQL_IR_ABSTRACT_DISPATCH_TAG;
+          } else if (resolve_type_svp && SvOK(*resolve_type_svp)) {
+            abstract_dispatch_kind = GQL_IR_ABSTRACT_DISPATCH_RESOLVE_TYPE;
+          } else {
+            abstract_dispatch_kind = GQL_IR_ABSTRACT_DISPATCH_POSSIBLE_TYPES;
+          }
+        } else {
+          abstract_dispatch_kind = GQL_IR_ABSTRACT_DISPATCH_POSSIBLE_TYPES;
+        }
       }
     }
     entry->operands_ready = gql_ir_native_field_entry_has_operands(entry) ? 1 : 0;
@@ -5564,6 +5553,7 @@ gql_ir_compiled_root_field_plan_from_sv(pTHX_ SV *root_field_plan_sv) {
     meta_seed.resolve_dispatch_kind = resolve_dispatch_kind;
     meta_seed.args_dispatch_kind = args_dispatch_kind;
     meta_seed.completion_dispatch_kind = completion_dispatch_kind;
+    meta_seed.abstract_dispatch_kind = abstract_dispatch_kind;
     entry->meta = gql_ir_vm_field_meta_from_seed(aTHX_ entry, &meta_seed);
     if (!entry->meta) {
       if (meta_seed.list_item_type_sv) {

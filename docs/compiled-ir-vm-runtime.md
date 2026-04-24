@@ -2472,3 +2472,42 @@ This is a good checkpoint because:
 - it keeps the VM/internal currency design aligned around raw native payloads
 - it confirms that "less repeated work inside the hot loop" is currently more
   valuable than yet another layer of corridor widening
+
+The next checkpoint applies the same principle to two remaining export/repack
+boundaries in `compiled_ir`:
+
+- list-family item fallback now keeps `gql_execution_sync_outcome_t` as the
+  internal currency instead of exporting to temporary
+  `item_data_sv/item_errors_av/item_completed_sv` slots first
+- generic VM fallback now keeps the native sync outcome until it is applied to
+  the field frame, instead of exporting into three Perl-facing outputs and
+  then reconstructing frame state from them
+
+This is intentionally closer to the tokenizer-style rule than another corridor
+widening tweak:
+
+- decide the outcome kind first
+- keep payload native as long as possible
+- do not export/repack unless the boundary truly requires it
+
+Checkpoint benchmark after removing those two export/repack boundaries
+(`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `76413/s`
+  - `houtou_xs_ast` median `75431/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `58151/s`
+  - `houtou_xs_ast` median `57625/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `40714/s`
+  - `houtou_xs_ast` median `41647/s`
+
+This is the right kind of result for this stage:
+
+- it validates that reducing export/repack overhead helps object/list-heavy
+  paths without widening more corridors
+- it keeps the tokenizer-style "kind first, payload later" rule intact
+- it also makes the remaining `abstract` gap more explicit: the next win has
+  to come from the abstract/object corridor itself, not from more sync-outcome
+  packaging cleanup

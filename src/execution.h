@@ -355,14 +355,7 @@ static int gql_execution_try_complete_abstract_possible_types_sync_native_outcom
   gql_execution_sync_outcome_t *outcome
 );
 
-typedef enum {
-  GQL_EXECUTION_ABSTRACT_DISPATCH_NONE = 0,
-  GQL_EXECUTION_ABSTRACT_DISPATCH_TAG = 1,
-  GQL_EXECUTION_ABSTRACT_DISPATCH_RESOLVE_TYPE = 2,
-  GQL_EXECUTION_ABSTRACT_DISPATCH_POSSIBLE_TYPES = 3
-} gql_execution_abstract_dispatch_kind_t;
-
-static gql_execution_abstract_dispatch_kind_t
+static gql_ir_abstract_dispatch_kind_t
 gql_execution_get_abstract_dispatch_kind(
   pTHX_ SV *context,
   SV *declared_return_type,
@@ -8427,9 +8420,20 @@ gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_o
   SV *result,
   gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
   gql_execution_sync_outcome_t *outcome
+);
+static int
+gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_outcome_with_table_and_dispatch(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
+  gql_ir_abstract_dispatch_kind_t dispatch_kind,
+  gql_execution_sync_outcome_t *outcome
 ) {
-  gql_execution_abstract_dispatch_kind_t dispatch_kind;
-
   gql_execution_sync_outcome_reset(outcome);
 
   if (!context
@@ -8441,13 +8445,15 @@ gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_o
     goto abstract_fallback;
   }
 
-  dispatch_kind = gql_execution_get_abstract_dispatch_kind(
-    aTHX_ context,
-    return_type,
-    abstract_child_plan_table
-  );
+  if (dispatch_kind == GQL_IR_ABSTRACT_DISPATCH_NONE) {
+    dispatch_kind = gql_execution_get_abstract_dispatch_kind(
+      aTHX_ context,
+      return_type,
+      abstract_child_plan_table
+    );
+  }
   switch (dispatch_kind) {
-    case GQL_EXECUTION_ABSTRACT_DISPATCH_TAG:
+    case GQL_IR_ABSTRACT_DISPATCH_TAG:
       if (gql_execution_try_complete_abstract_tag_sync_native_outcome(
             aTHX_
             context,
@@ -8463,7 +8469,7 @@ gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_o
         return 1;
       }
       break;
-    case GQL_EXECUTION_ABSTRACT_DISPATCH_RESOLVE_TYPE:
+    case GQL_IR_ABSTRACT_DISPATCH_RESOLVE_TYPE:
       if (gql_execution_try_complete_abstract_resolve_type_sync_native_outcome(
             aTHX_
             context,
@@ -8479,7 +8485,7 @@ gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_o
         return 1;
       }
       break;
-    case GQL_EXECUTION_ABSTRACT_DISPATCH_POSSIBLE_TYPES:
+    case GQL_IR_ABSTRACT_DISPATCH_POSSIBLE_TYPES:
       if (gql_execution_try_complete_abstract_possible_types_sync_native_outcome(
             aTHX_
             context,
@@ -8509,6 +8515,33 @@ abstract_fallback:
     lazy_info,
     result,
     abstract_child_plan_table,
+    outcome
+  );
+}
+
+static int
+gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_outcome_with_table(
+  pTHX_ SV *context,
+  SV *parent_type,
+  SV *field_def,
+  SV *return_type,
+  SV *nodes,
+  gql_execution_lazy_resolve_info_t *lazy_info,
+  SV *result,
+  gql_ir_lowered_abstract_child_plan_table_t *abstract_child_plan_table,
+  gql_execution_sync_outcome_t *outcome
+) {
+  return gql_execution_complete_abstract_field_value_catching_error_xs_lazy_sync_native_outcome_with_table_and_dispatch(
+    aTHX_
+    context,
+    parent_type,
+    field_def,
+    return_type,
+    nodes,
+    lazy_info,
+    result,
+    abstract_child_plan_table,
+    GQL_IR_ABSTRACT_DISPATCH_NONE,
     outcome
   );
 }
@@ -8659,7 +8692,7 @@ gql_execution_lookup_abstract_runtime_tag_type_sv(
   return gql_execution_share_or_copy_sv(HeVAL(tag_he));
 }
 
-static gql_execution_abstract_dispatch_kind_t
+static gql_ir_abstract_dispatch_kind_t
 gql_execution_get_abstract_dispatch_kind(
   pTHX_ SV *context,
   SV *declared_return_type,
@@ -8669,7 +8702,7 @@ gql_execution_get_abstract_dispatch_kind(
   SV *resolve_type_sv;
 
   if (!context || !declared_return_type || !SvOK(declared_return_type)) {
-    return GQL_EXECUTION_ABSTRACT_DISPATCH_NONE;
+    return GQL_IR_ABSTRACT_DISPATCH_NONE;
   }
 
   tag_resolver_sv = gql_execution_get_lowered_abstract_tag_resolver_sv(
@@ -8679,24 +8712,24 @@ gql_execution_get_abstract_dispatch_kind(
   );
   if (SvOK(tag_resolver_sv)) {
     SvREFCNT_dec(tag_resolver_sv);
-    return GQL_EXECUTION_ABSTRACT_DISPATCH_TAG;
+    return GQL_IR_ABSTRACT_DISPATCH_TAG;
   }
   SvREFCNT_dec(tag_resolver_sv);
 
   resolve_type_sv = gql_execution_get_abstract_resolve_type_sv(aTHX_ context, declared_return_type);
   if (SvOK(resolve_type_sv)) {
     SvREFCNT_dec(resolve_type_sv);
-    return GQL_EXECUTION_ABSTRACT_DISPATCH_RESOLVE_TYPE;
+    return GQL_IR_ABSTRACT_DISPATCH_RESOLVE_TYPE;
   }
   SvREFCNT_dec(resolve_type_sv);
 
   if (abstract_child_plan_table
       && abstract_child_plan_table->entries
       && abstract_child_plan_table->count > 0) {
-    return GQL_EXECUTION_ABSTRACT_DISPATCH_POSSIBLE_TYPES;
+    return GQL_IR_ABSTRACT_DISPATCH_POSSIBLE_TYPES;
   }
 
-  return GQL_EXECUTION_ABSTRACT_DISPATCH_NONE;
+  return GQL_IR_ABSTRACT_DISPATCH_NONE;
 }
 
 static int

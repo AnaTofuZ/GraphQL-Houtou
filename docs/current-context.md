@@ -3937,3 +3937,44 @@ That reinforces the current optimization order:
 - specialized dispatch second
 - completed-envelope elimination third
 - corridor widening only after those are exhausted
+
+The next kept batch applies that rule to two remaining `compiled_ir` hot spots:
+
+- the VM list-family item loop no longer falls back to
+  `gql_execution_complete_field_value_catching_error_xs_lazy_sync_outcome(...)`
+  just to unpack it again into `item_data_sv/item_errors_av/item_completed_sv`
+- the VM generic completion fallback no longer exports a native sync outcome
+  into three ad hoc Perl-facing slots only to move it back into the field
+  frame
+
+Both paths now stay on `gql_execution_sync_outcome_t` until the last possible
+point and only materialize a Perl-facing payload when the VM actually needs to
+write it into the final response shape.
+
+This is closer to the tokenizer-style rule than another corridor tweak:
+
+- decide the outcome kind first
+- keep the payload in native form
+- do not export/repack just to satisfy an intermediate helper boundary
+
+Checkpoint benchmark after removing those two export/repack boundaries
+(`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `76413/s`
+  - `houtou_xs_ast` median `75431/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `58151/s`
+  - `houtou_xs_ast` median `57625/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `40714/s`
+  - `houtou_xs_ast` median `41647/s`
+
+Interpretation:
+
+- this is a real internal-currency checkpoint, not a helper-layout tweak
+- `nested` and `list` both benefit from keeping `gql_execution_sync_outcome_t`
+  native until the last possible point
+- `abstract` still trails, which means the remaining gap is now even more
+  clearly inside the abstract/object corridor itself rather than in generic
+  sync-outcome export/repack

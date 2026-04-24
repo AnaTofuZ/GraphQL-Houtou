@@ -60,7 +60,17 @@ sub _ensure_valid_runtime_type {
 
 sub _default_resolve_type {
   my ($value, $context, $info, $abstract_type) = @_;
-  my @possibles = @{ $info->{schema}->get_possible_types($abstract_type) };
+  my $schema = $info->{schema};
+  my $runtime_cache = $info->{runtime_cache} || $schema->runtime_cache || $schema->prepare_runtime;
+  my $tag_resolver = $abstract_type->can('tag_resolver') ? $abstract_type->tag_resolver : undef;
+
+  if ($tag_resolver) {
+    my $tag = $tag_resolver->($value, $context, $abstract_type);
+    my $tag_map = ($runtime_cache->{runtime_tag_map} || {})->{ $abstract_type->name } || {};
+    return $tag_map->{$tag} if defined $tag && exists $tag_map->{$tag};
+  }
+
+  my @possibles = @{ $runtime_cache->{possible_types}{ $abstract_type->name } || $schema->get_possible_types($abstract_type) };
   return (grep { $_->is_type_of->($value, $context, $info) } grep { $_->is_type_of } @possibles)[0];
 }
 

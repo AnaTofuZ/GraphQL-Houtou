@@ -8,6 +8,8 @@ Design rule of thumb for the current VM work:
 - keep kind/shape and payload separate
 - do not materialize Perl envelopes unless a boundary actually requires them
 - prefer widening family-owned corridors over adding local helper shortcuts
+- prefer lightweight abstract discriminators over `is_type_of` when the schema
+  can provide them
 
 ## Pause Snapshot
 
@@ -129,6 +131,33 @@ Hot-path interpretation:
   - the next win should still come from widening execution-side family
     corridors and shrinking generic fallback frequency, not from `resolve_type`
     micro-optimizations
+
+## Abstract Dispatch API
+
+New lightweight abstract-dispatch API names:
+
+- object-side: `runtime_tag`
+- abstract-side: `tag_resolver`
+- optional override map: `tag_map`
+
+These names intentionally avoid the older `houtou_*`-style prefix and are
+meant to read like schema-level concepts rather than implementation leaks.
+
+Current behavior:
+
+- `runtime_tag` is a static tag attached to an object type
+- `tag_resolver` is a lightweight callback that extracts a tag from runtime
+  values without building full `ResolveInfo`
+- `tag_map` optionally overrides tag-to-object resolution for an
+  interface/union
+- default abstract resolution now tries tag dispatch before falling back to
+  `possible_types + is_type_of`
+
+This is now wired through:
+
+- Perl default abstract resolution in `GraphQL::Houtou::Role::Abstract`
+- schema runtime cache warmup
+- XS abstract completion fast path in `src/execution.h`
 
 ## Latest VM Checkpoint
 

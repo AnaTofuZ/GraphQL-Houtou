@@ -12,6 +12,9 @@ use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 use GraphQL::Houtou::Type::Union;
 
 my $SearchResult;
+my $TaggedNode;
+my $TaggedUser;
+my $TaggedSearchResult;
 
 my $Node;
 my $User;
@@ -40,14 +43,42 @@ $SearchResult = GraphQL::Houtou::Type::Union->new(
   resolve_type => sub { $User },
 );
 
+$TaggedNode = GraphQL::Houtou::Type::Interface->new(
+  name => 'TaggedNode',
+  fields => {
+    id => { type => $String->non_null },
+  },
+  tag_resolver => sub { $_[0]{kind} },
+);
+
+$TaggedUser = GraphQL::Houtou::Type::Object->new(
+  name => 'TaggedUser',
+  interfaces => [ $TaggedNode ],
+  runtime_tag => 'tagged-user',
+  fields => {
+    id => { type => $String->non_null },
+    name => { type => $String },
+  },
+);
+
+$TaggedSearchResult = GraphQL::Houtou::Type::Union->new(
+  name => 'TaggedSearchResult',
+  types => [ $TaggedUser ],
+  tag_resolver => sub { $_[0]{kind} },
+  tag_map => {
+    tagged => $TaggedUser,
+  },
+);
+
 my $schema = GraphQL::Houtou::Schema->new(
   query => GraphQL::Houtou::Type::Object->new(
     name => 'Query',
     fields => {
       viewer => { type => $User },
+      taggedViewer => { type => $TaggedUser },
     },
   ),
-  types => [ $User, $Node ],
+  types => [ $User, $Node, $TaggedUser, $TaggedNode, $TaggedSearchResult ],
 );
 
 subtest '_collect_fields merges aliases and fragment selections' => sub {
@@ -193,6 +224,66 @@ subtest 'union runtime completion resolves to object type' => sub {
 
   is_deeply $got, { data => { runtime_type => 'User', payload => 'Ana' } },
     'union completion delegates to resolved runtime object';
+};
+
+subtest 'interface default resolve_type can dispatch by runtime_tag' => sub {
+  my $context = {
+    schema => $schema,
+    context_value => undef,
+  };
+  my $info = {
+    schema => $schema,
+    parent_type => $schema->query,
+    field_name => 'taggedViewer',
+  };
+  my $got;
+
+  no warnings 'redefine';
+  local *GraphQL::Houtou::Execution::PP::_execute_fields = sub {
+    my ($ctx, $type, $result) = @_;
+    return +{ data => { runtime_type => $type->name, payload => $result->{name} } };
+  };
+
+  $got = $TaggedNode->_complete_value(
+    $context,
+    [ { selections => [] } ],
+    $info,
+    [ 'taggedViewer' ],
+    { kind => 'tagged-user', name => 'Taro' },
+  );
+
+  is_deeply $got, { data => { runtime_type => 'TaggedUser', payload => 'Taro' } },
+    'interface default resolve_type uses runtime_tag dispatch';
+};
+
+subtest 'union default resolve_type can dispatch by tag_map override' => sub {
+  my $context = {
+    schema => $schema,
+    context_value => undef,
+  };
+  my $info = {
+    schema => $schema,
+    parent_type => $schema->query,
+    field_name => 'search',
+  };
+  my $got;
+
+  no warnings 'redefine';
+  local *GraphQL::Houtou::Execution::PP::_execute_fields = sub {
+    my ($ctx, $type, $result) = @_;
+    return +{ data => { runtime_type => $type->name, payload => $result->{name} } };
+  };
+
+  $got = $TaggedSearchResult->_complete_value(
+    $context,
+    [ { selections => [] } ],
+    $info,
+    [ 'search' ],
+    { kind => 'tagged', name => 'Hanako' },
+  );
+
+  is_deeply $got, { data => { runtime_type => 'TaggedUser', payload => 'Hanako' } },
+    'union default resolve_type uses explicit tag_map dispatch';
 };
 
 done_testing;

@@ -6,7 +6,7 @@ use warnings;
 
 use Moo;
 use GraphQL::Houtou::Directive ();
-use Types::Standard qw(ArrayRef Object CodeRef);
+use Types::Standard qw(ArrayRef Object CodeRef Str);
 use GraphQL::Error;
 
 extends 'GraphQL::Houtou::Type';
@@ -32,6 +32,7 @@ use constant DEBUG => $ENV{GRAPHQL_DEBUG};
 
 has interfaces => (is => 'ro', isa => ArrayRef[Object], default => sub { [] });
 has is_type_of => (is => 'ro', isa => CodeRef);
+has runtime_tag => (is => 'ro', isa => Str);
 
 sub graphql_to_perl {
   my ($self, $item) = @_;

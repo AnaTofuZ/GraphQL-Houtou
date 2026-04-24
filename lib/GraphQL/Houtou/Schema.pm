@@ -91,6 +91,8 @@ sub _runtime_cache {
   my %field_maps;
   my %resolve_type_map;
   my %is_type_of_map;
+  my %tag_resolver_map;
+  my %runtime_tag_map;
 
   for my $type (values %$name2type) {
     next if !$type;
@@ -110,18 +112,28 @@ sub _runtime_cache {
     if ($type->isa('GraphQL::Type::Union') || $type->isa('GraphQL::Houtou::Type::Union')) {
       my $types = $type->{types} || $type->types || [];
       my $resolve_type = $type->resolve_type;
+      my $tag_resolver = $type->can('tag_resolver') ? $type->tag_resolver : undef;
       $resolve_type_map{ $type->name } = $resolve_type if $resolve_type;
+      $tag_resolver_map{ $type->name } = $tag_resolver if $tag_resolver;
       $possible_types{ $type->name } = [ @$types ];
       $possible_type_map->{ $type->name } ||= { map { ($_->name => 1) } @$types };
+      if (my $tag_map = _build_runtime_tag_map($type, $types, $name2type)) {
+        $runtime_tag_map{ $type->name } = $tag_map;
+      }
       next;
     }
 
     if ($type->isa('GraphQL::Type::Interface') || $type->isa('GraphQL::Houtou::Type::Interface')) {
       my $types = [ @{ $interface2types->{ $type->name } || [] } ];
       my $resolve_type = $type->resolve_type;
+      my $tag_resolver = $type->can('tag_resolver') ? $type->tag_resolver : undef;
       $resolve_type_map{ $type->name } = $resolve_type if $resolve_type;
+      $tag_resolver_map{ $type->name } = $tag_resolver if $tag_resolver;
       $possible_types{ $type->name } = $types;
       $possible_type_map->{ $type->name } ||= { map { ($_->name => 1) } @$types };
+      if (my $tag_map = _build_runtime_tag_map($type, $types, $name2type)) {
+        $runtime_tag_map{ $type->name } = $tag_map;
+      }
       next;
     }
   }
@@ -139,7 +151,34 @@ sub _runtime_cache {
     field_maps => \%field_maps,
     resolve_type_map => \%resolve_type_map,
     is_type_of_map => \%is_type_of_map,
+    tag_resolver_map => \%tag_resolver_map,
+    runtime_tag_map => \%runtime_tag_map,
   };
+}
+
+sub _build_runtime_tag_map {
+  my ($abstract_type, $possible_types, $name2type) = @_;
+  my %tag_map;
+  my $declared = $abstract_type->can('tag_map') ? $abstract_type->tag_map : undef;
+
+  if ($declared) {
+    for my $tag (keys %$declared) {
+      my $target = $declared->{$tag};
+      my $type = ref($target) ? $target : $name2type->{$target};
+      next if !$type;
+      next if !($type->isa('GraphQL::Type::Object') || $type->isa('GraphQL::Houtou::Type::Object'));
+      $tag_map{$tag} = $type;
+    }
+  }
+
+  for my $type (@{ $possible_types || [] }) {
+    next if !$type || !$type->can('runtime_tag');
+    my $tag = $type->runtime_tag;
+    next if !defined $tag || ref($tag);
+    $tag_map{$tag} ||= $type;
+  }
+
+  return keys(%tag_map) ? \%tag_map : undef;
 }
 
 sub _build_name2type {

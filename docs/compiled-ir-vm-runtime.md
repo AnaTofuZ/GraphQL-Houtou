@@ -64,6 +64,11 @@ The useful lessons to import are architectural, not surface-level:
 - separate immutable program metadata from mutable execution frames
 - delay host-language object materialization until API boundaries
 
+One additional design rule follows directly from that:
+
+- when abstract dispatch can be represented as a lightweight tag lookup,
+  prefer that over `is_type_of` probing
+
 The runtime here should follow those principles while still preserving the
 public GraphQL execution API, promise behavior, and response semantics.
 
@@ -110,6 +115,19 @@ Latest kept runtime checkpoint on `proj/compiled-ir-vm-runtime`:
     generic completion
   - secondary lookup shaving remains lower priority than further ownership
     widening inside execution-side family APIs
+
+## Abstract Dispatch Naming
+
+To keep the public surface readable while still supporting optimized abstract
+dispatch, the runtime is moving toward these schema-facing names:
+
+- `runtime_tag` on object types
+- `tag_resolver` on interfaces/unions
+- optional `tag_map` overrides on interfaces/unions
+
+This avoids repeatedly exposing `houtou_*` prefixed knobs in application code,
+while still giving the lowered runtime a clean discriminator path that can
+short-circuit `possible_types + is_type_of`.
 
 ## Target Architecture
 

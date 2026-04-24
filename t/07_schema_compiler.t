@@ -24,6 +24,7 @@ $Node = GraphQL::Houtou::Type::Interface->new(
     id => { type => $String->non_null },
   },
   resolve_type => sub { $User },
+  tag_resolver => sub { $_[0]{kind} },
 );
 
 my $Status = GraphQL::Houtou::Type::Enum->new(
@@ -49,6 +50,7 @@ $User = GraphQL::Houtou::Type::Object->new(
   name => 'User',
   interfaces => [ $Node ],
   is_type_of => sub { ref($_[0]) eq 'HASH' && $_[0]{kind} && $_[0]{kind} eq 'user' },
+  runtime_tag => 'user',
   fields => {
     id => { type => $String->non_null },
     name => { type => $String },
@@ -60,6 +62,7 @@ my $SearchResult = GraphQL::Houtou::Type::Union->new(
   name => 'SearchResult',
   types => [ $User ],
   resolve_type => sub { $User },
+  tag_resolver => sub { $_[0]{kind} },
 );
 
 my $auth = GraphQL::Houtou::Directive->new(
@@ -185,6 +188,10 @@ subtest 'runtime schema cache can be warmed explicitly' => sub {
   is ref($cache->{resolve_type_map}{Node}), 'CODE', 'prepare_runtime caches interface resolve_type callback';
   is ref($cache->{resolve_type_map}{SearchResult}), 'CODE', 'prepare_runtime caches union resolve_type callback';
   is ref($cache->{is_type_of_map}{User}), 'CODE', 'prepare_runtime caches object is_type_of callback';
+  is ref($cache->{tag_resolver_map}{Node}), 'CODE', 'prepare_runtime caches interface tag_resolver callback';
+  is ref($cache->{tag_resolver_map}{SearchResult}), 'CODE', 'prepare_runtime caches union tag_resolver callback';
+  is $cache->{runtime_tag_map}{Node}{user}->name, 'User', 'prepare_runtime caches interface runtime tag map';
+  is $cache->{runtime_tag_map}{SearchResult}{user}->name, 'User', 'prepare_runtime caches union runtime tag map';
 
   is $schema->runtime_cache, $cache, 'runtime_cache returns warmed cache';
   $schema->clear_runtime_cache;

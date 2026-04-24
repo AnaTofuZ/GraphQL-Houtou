@@ -63,6 +63,33 @@ my $AutoSearchResult = GraphQL::Houtou::Type::Union->new(
   types => [ $AutoCheckedUser ],
 );
 
+my $TaggedNamedEntity = GraphQL::Houtou::Type::Interface->new(
+  name => 'TaggedNamedEntity',
+  tag_resolver => sub { $_[0]{kind} },
+  fields => {
+    name => { type => $String->non_null },
+  },
+);
+
+my $TaggedUser = GraphQL::Houtou::Type::Object->new(
+  name => 'TaggedUser',
+  interfaces => [ $TaggedNamedEntity ],
+  runtime_tag => 'tagged-user',
+  fields => {
+    id => { type => $ID->non_null },
+    name => { type => $String->non_null },
+  },
+);
+
+my $TaggedSearchResult = GraphQL::Houtou::Type::Union->new(
+  name => 'TaggedSearchResult',
+  tag_resolver => sub { $_[0]{kind} },
+  tag_map => {
+    member => $TaggedUser,
+  },
+  types => [ $TaggedUser ],
+);
+
 my $ThrowingCheckedUser = GraphQL::Houtou::Type::Object->new(
   name => 'ThrowingCheckedUser',
   is_type_of => sub { die "is_type_of exploded\n" },
@@ -183,6 +210,26 @@ my $Query = GraphQL::Houtou::Type::Object->new(
         };
       },
     },
+    tagged_named_entity => {
+      type => $TaggedNamedEntity,
+      resolve => sub {
+        return {
+          kind => 'tagged-user',
+          id => '16',
+          name => 'tagged:16',
+        };
+      },
+    },
+    tagged_search_result => {
+      type => $TaggedSearchResult,
+      resolve => sub {
+        return {
+          kind => 'member',
+          id => '17',
+          name => 'tagged-search:17',
+        };
+      },
+    },
     throwing_named_entity => {
       type => $ThrowingNamedEntity,
       resolve => sub {
@@ -201,7 +248,7 @@ my $Query = GraphQL::Houtou::Type::Object->new(
 
 my $schema = GraphQL::Houtou::Schema->new(
   query => $Query,
-  types => [ $User, $CheckedUser, $NamedEntity, $SearchResult, $AutoNamedEntity, $AutoCheckedUser, $AutoSearchResult, $ThrowingCheckedUser, $ThrowingNamedEntity ],
+  types => [ $User, $CheckedUser, $NamedEntity, $SearchResult, $AutoNamedEntity, $AutoCheckedUser, $AutoSearchResult, $TaggedNamedEntity, $TaggedUser, $TaggedSearchResult, $ThrowingCheckedUser, $ThrowingNamedEntity ],
 );
 
 subtest 'execute simple query from source' => sub {
@@ -678,6 +725,26 @@ subtest 'execute abstract fragment condition through xs object completion path' 
   my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
 
   is_deeply $xs, $public, 'abstract fragment condition is handled in xs object completion';
+};
+
+subtest 'execute interface field with tag_resolver through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ tagged_named_entity { ... on TaggedUser { id name } } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'interface field with tag_resolver matches public facade';
+};
+
+subtest 'execute union field with tag_resolver through xs path' => sub {
+  require GraphQL::Houtou::XS::Execution;
+
+  my $query = '{ tagged_search_result { ... on TaggedUser { id name } } }';
+  my $public = execute($schema, $query);
+  my $xs = GraphQL::Houtou::XS::Execution::execute_xs($schema, $query);
+
+  is_deeply $xs, $public, 'union field with tag_resolver matches public facade';
 };
 
 subtest 'prepare executable ir handle' => sub {

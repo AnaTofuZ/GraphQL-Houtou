@@ -542,6 +542,10 @@ static int gql_ir_native_result_writer_consume_completed(
   SV *completed_sv
 );
 static gql_ir_lowered_abstract_child_plan_table_t *gql_ir_lower_single_node_abstract_child_plan_table(pTHX_ SV *return_type_sv, SV *nodes_sv);
+static void gql_ir_attach_lowered_abstract_dispatch_tags_from_type(
+  pTHX_ SV *abstract_type_sv,
+  gql_ir_lowered_abstract_child_plan_table_t *table
+);
 static gql_ir_compiled_root_field_plan_t *gql_ir_lookup_native_concrete_child_plan(
   gql_ir_lowered_abstract_child_plan_table_t *table,
   SV *object_type
@@ -2998,9 +3002,80 @@ gql_ir_lower_single_node_abstract_child_plan_table(pTHX_ SV *return_type_sv, SV 
     return NULL;
   }
 
-  return gql_ir_lowered_abstract_child_plan_table_from_concrete_table(
-    aTHX_ gql_ir_get_concrete_field_plan_table(aTHX_ *node_svp)
-  );
+  {
+    gql_ir_lowered_abstract_child_plan_table_t *table =
+      gql_ir_lowered_abstract_child_plan_table_from_concrete_table(
+        aTHX_ gql_ir_get_concrete_field_plan_table(aTHX_ *node_svp)
+      );
+    HV *abstract_hv;
+    SV **tag_map_svp;
+    UV i;
+
+    if (!table) {
+      return NULL;
+    }
+
+    if (!SvROK(return_type_sv) || SvTYPE(SvRV(return_type_sv)) != SVt_PVHV) {
+      return table;
+    }
+
+    abstract_hv = (HV *)SvRV(return_type_sv);
+    tag_map_svp = hv_fetch(abstract_hv, "tag_map", 7, 0);
+    if (tag_map_svp && SvROK(*tag_map_svp) && SvTYPE(SvRV(*tag_map_svp)) == SVt_PVHV) {
+      HV *tag_map_hv = (HV *)SvRV(*tag_map_svp);
+      HE *tag_he;
+
+      hv_iterinit(tag_map_hv);
+      while ((tag_he = hv_iternext(tag_map_hv))) {
+        SV *tag_sv = hv_iterkeysv(tag_map_hv ? tag_he : NULL);
+        SV *target_sv = HeVAL(tag_he);
+
+        if (!tag_sv || !SvOK(tag_sv) || !target_sv || !SvOK(target_sv)) {
+          continue;
+        }
+
+        for (i = 0; i < table->count; i++) {
+          gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
+
+          if (!entry->possible_type_sv) {
+            continue;
+          }
+
+          if ((SvROK(target_sv)
+               && SvROK(entry->possible_type_sv)
+               && SvRV(target_sv) == SvRV(entry->possible_type_sv))
+              || (!SvROK(target_sv)
+                  && entry->possible_type_name_sv
+                  && sv_eq(target_sv, entry->possible_type_name_sv))) {
+            entry->dispatch_tag_sv = gql_execution_share_or_copy_sv(tag_sv);
+            break;
+          }
+        }
+      }
+    }
+
+    for (i = 0; i < table->count; i++) {
+      gql_ir_lowered_abstract_child_entry_t *entry = &table->entries[i];
+      HV *object_hv;
+      SV **runtime_tag_svp;
+
+      if (entry->dispatch_tag_sv
+          || !entry->possible_type_sv
+          || !SvROK(entry->possible_type_sv)
+          || SvTYPE(SvRV(entry->possible_type_sv)) != SVt_PVHV) {
+        continue;
+      }
+
+      object_hv = (HV *)SvRV(entry->possible_type_sv);
+      runtime_tag_svp = hv_fetch(object_hv, "runtime_tag", 11, 0);
+      if (runtime_tag_svp && SvOK(*runtime_tag_svp) && !SvROK(*runtime_tag_svp)) {
+        entry->dispatch_tag_sv = gql_execution_share_or_copy_sv(*runtime_tag_svp);
+      }
+    }
+
+    table->dispatch_tags_ready = 1;
+    return table;
+  }
 }
 
 static gql_ir_compiled_root_field_plan_t *

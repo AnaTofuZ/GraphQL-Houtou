@@ -162,6 +162,10 @@ This is now wired through:
   entry from the runtime cache once, so compiled IR / XS abstract completion
   can do tag dispatch as a table-driven lookup instead of repeating nested
   runtime-cache hash lookups on every call
+- when the abstract/object types are native Houtou objects, lowered abstract
+  tables also pre-seed `dispatch_tag_sv` directly from `tag_map` /
+  `runtime_tag` during lowering, so the first hit can already stay on the
+  table-driven path
 - the same lowered tables now also cache `tag_resolver_sv`, so abstract family
   tag dispatch can stay inside table-owned state once the resolver has been
   fetched once

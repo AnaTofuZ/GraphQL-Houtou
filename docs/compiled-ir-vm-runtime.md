@@ -139,6 +139,11 @@ The next ownership step is to keep `tag_resolver_sv` on the lowered abstract
 table as well, so the hot path stops re-fetching the resolver callback from the
 runtime cache once that table has been used.
 
+For native Houtou types, the lowered table can also pre-seed `dispatch_tag_sv`
+from `tag_map` and object `runtime_tag` fields during lowering. That keeps the
+very first abstract dispatch on the same table-driven path instead of waiting
+for a runtime-cache hydration step.
+
 ## Target Architecture
 
 Planned stages:

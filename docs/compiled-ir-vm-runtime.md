@@ -115,6 +115,9 @@ Latest kept runtime checkpoint on `proj/compiled-ir-vm-runtime`:
     generic completion
   - secondary lookup shaving remains lower priority than further ownership
     widening inside execution-side family APIs
+  - more recently, specializing the abstract dispatch shape first (`TAG`,
+    `RESOLVE_TYPE`, `POSSIBLE_TYPES`, `NONE`) proved more valuable than adding
+    extra corridor-local probes
 
 ## Abstract Dispatch Naming
 
@@ -166,6 +169,24 @@ Lowered-table dispatch-tag hydration follows the same direct-first rule:
 This keeps the tag-dispatch path aligned with the tokenizer-style principle
 that the hot path should first consume already-owned metadata and only consult
 shared maps as a fallback.
+
+The next step on that same principle is to make abstract execution choose its
+dispatch family up front, before entering the corridor:
+
+- `TAG`
+- `RESOLVE_TYPE`
+- `POSSIBLE_TYPES`
+- `NONE`
+
+That keeps dispatch kind separate from payload materialization. In other
+words, the runtime first decides *which family* it is in, then runs that
+family's corridor, instead of probing every abstract strategy in sequence.
+
+Checkpoint benchmark after the dispatch-shape batch:
+
+- `nested_variable_object`: `houtou_compiled_ir 79455/s`
+- `list_of_objects`: `houtou_compiled_ir 59024/s`
+- `abstract_with_fragment`: `houtou_compiled_ir 40883/s`
 
 ## Target Architecture
 

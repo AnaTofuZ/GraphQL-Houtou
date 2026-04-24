@@ -184,10 +184,17 @@ This is now wired through:
   1. explicit abstract-side `tag_map`
   2. concrete object-side `runtime_tag`
   3. runtime-cache `runtime_tag_map` only for still-missing entries
-- checkpoint benchmark after these batches:
-  - `nested_variable_object`: `houtou_compiled_ir 76800/s`
-  - `list_of_objects`: `houtou_compiled_ir 57053/s`
-  - `abstract_with_fragment`: `houtou_compiled_ir 40714/s`
+- execution-side abstract completion now also chooses a dispatch family up
+  front:
+  - `TAG`
+  - `RESOLVE_TYPE`
+  - `POSSIBLE_TYPES`
+  - `NONE`
+  so the hot path runs one corridor instead of probing every abstract strategy
+- checkpoint benchmark after the dispatch-shape batch:
+  - `nested_variable_object`: `houtou_compiled_ir 79455/s`
+  - `list_of_objects`: `houtou_compiled_ir 59024/s`
+  - `abstract_with_fragment`: `houtou_compiled_ir 40883/s`
 
 Here, "internal currency" means the primary payload shape exchanged between
 hot-path helpers before the final Perl-facing materialization step. In the
@@ -255,6 +262,27 @@ Reading:
   `compiled_ir` now treats root and child sync execution as the same
   block-owned runtime shape, with a single `vm_exec_state` plus field cursor
   feeding the direct-threaded block executor
+
+Latest execution checkpoint after prioritizing dispatch shape over corridor
+micro-shortcuts:
+
+- `nested_variable_object`
+  - `houtou_compiled_ir 79455/s`
+  - `houtou_xs_ast 77288/s`
+- `list_of_objects`
+  - `houtou_compiled_ir 59024/s`
+  - `houtou_xs_ast 58659/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir 40883/s`
+  - `houtou_xs_ast 40104/s`
+
+Reading:
+
+- specializing the abstract dispatch family before entering the corridor is a
+  better lever than trying to widen corridors by adding more local helper
+  probes
+- the next profitable work should keep separating dispatch kind from payload
+  materialization, not add more branchy micro-shortcuts around `resolve_type`
 
 ## April 2026 VM Reset
 

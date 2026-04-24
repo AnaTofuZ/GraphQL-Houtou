@@ -191,10 +191,30 @@ This is now wired through:
   - `POSSIBLE_TYPES`
   - `NONE`
   so the hot path runs one corridor instead of probing every abstract strategy
-- checkpoint benchmark after the dispatch-shape batch:
-  - `nested_variable_object`: `houtou_compiled_ir 79455/s`
-  - `list_of_objects`: `houtou_compiled_ir 59024/s`
-  - `abstract_with_fragment`: `houtou_compiled_ir 40883/s`
+- that dispatch shape is now also lowered all the way into VM completion ops:
+  - `COMPLETE_ABSTRACT_TAG`
+  - `COMPLETE_ABSTRACT_RESOLVE_TYPE`
+  - `COMPLETE_ABSTRACT_POSSIBLE_TYPES`
+  - `COMPLETE_ABSTRACT`
+- checkpoint benchmark after lowering abstract completion into op families
+  (`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+  - `nested_variable_object`
+    - `houtou_compiled_ir` median `81429/s`
+    - `houtou_xs_ast` median `80129/s`
+  - `list_of_objects`
+    - `houtou_compiled_ir` median `59730/s`
+    - `houtou_xs_ast` median `60680/s`
+  - `abstract_with_fragment`
+    - `houtou_compiled_ir` median `42848/s`
+    - `houtou_xs_ast` median `43305/s`
+- reading:
+  - this keeps the dispatch decision in the VM instruction stream instead of in
+    a generic helper probe sequence
+  - `nested` clearly benefits, `list` stays near parity, and `abstract` is now
+    within a small margin without regressing the other families
+  - this is a better checkpoint than previous helper-heavy widening attempts,
+    because it improves dispatch shape rather than just adding corridor-local
+    branches
 
 Here, "internal currency" means the primary payload shape exchanged between
 hot-path helpers before the final Perl-facing materialization step. In the

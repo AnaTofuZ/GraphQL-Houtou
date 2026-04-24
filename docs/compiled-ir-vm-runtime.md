@@ -118,6 +118,32 @@ Latest kept runtime checkpoint on `proj/compiled-ir-vm-runtime`:
   - more recently, specializing the abstract dispatch shape first (`TAG`,
     `RESOLVE_TYPE`, `POSSIBLE_TYPES`, `NONE`) proved more valuable than adding
     extra corridor-local probes
+  - the next kept step lowers that same dispatch shape into VM ops, so the VM
+    does not re-discover abstract dispatch strategy at runtime once lowering
+    already knows it
+
+Checkpoint benchmark after lowering abstract completion into VM op families
+(`util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`):
+
+- `nested_variable_object`
+  - `houtou_compiled_ir` median `81429/s`
+  - `houtou_xs_ast` median `80129/s`
+- `list_of_objects`
+  - `houtou_compiled_ir` median `59730/s`
+  - `houtou_xs_ast` median `60680/s`
+- `abstract_with_fragment`
+  - `houtou_compiled_ir` median `42848/s`
+  - `houtou_xs_ast` median `43305/s`
+
+Reading:
+
+- this keeps dispatch kind in the instruction stream instead of a generic
+  probe helper
+- `nested` benefits clearly, `list` stays near parity, and `abstract` narrows
+  the gap without sacrificing the other families
+- this is a healthier checkpoint than helper-layer corridor widening because it
+  improves dispatch shape and preserves the "kind first, payload later"
+  internal-currency rule
 
 ## Abstract Dispatch Naming
 

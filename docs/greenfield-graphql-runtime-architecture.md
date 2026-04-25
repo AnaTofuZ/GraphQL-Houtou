@@ -63,6 +63,15 @@ In execution terms:
 - promise presence should also be treated as a first-class kind transition,
   not as a reason to immediately rebuild Perl response envelopes
 
+The same rule applies to resolver metadata:
+
+- callbacks should receive an `info` surface that is compatible enough for
+  user code
+- but `path`, `parent_type`, `return_type`, `schema`, and similar data should
+  be materialized lazily behind that surface
+- hot execution should treat `info` as a cold boundary object, not as part of
+  the internal currency
+
 ### 3. Keep Perl objects out of the hot path
 
 The hot path should not use Perl envelopes like:

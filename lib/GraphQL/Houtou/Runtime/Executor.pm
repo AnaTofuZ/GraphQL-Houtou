@@ -13,6 +13,7 @@ use GraphQL::Houtou::Promise::Adapter qw(
 use GraphQL::Houtou::Runtime::Cursor ();
 use GraphQL::Houtou::Runtime::ErrorRecord ();
 use GraphQL::Houtou::Runtime::ExecState ();
+use GraphQL::Houtou::Runtime::LazyInfo ();
 use GraphQL::Houtou::Runtime::Outcome ();
 use GraphQL::Houtou::Runtime::PathFrame ();
 use GraphQL::Houtou::Runtime::Writer ();
@@ -88,7 +89,7 @@ sub _execute_block {
 sub _execute_instruction {
   my ($state, $block, $instruction, $source, $path_frame) = @_;
   my ($ok, $value) = _capture_eval(sub {
-    return _resolve_field_value($state, $block, $instruction, $source);
+    return _resolve_field_value($state, $block, $instruction, $source, $path_frame);
   });
 
   if (!$ok) {
@@ -99,8 +100,8 @@ sub _execute_instruction {
     return then_promise($state->promise_code, $value, sub {
       my ($resolved_value) = @_;
       my ($complete_ok, $outcome) = _capture_eval(sub {
-        return _complete_resolved_value($state, $instruction, $resolved_value, $path_frame);
-      });
+      return _complete_resolved_value($state, $block, $instruction, $resolved_value, $path_frame);
+    });
       return $complete_ok ? $outcome : _error_outcome($outcome, $path_frame);
     }, sub {
       return _error_outcome($_[0], $path_frame);
@@ -108,41 +109,42 @@ sub _execute_instruction {
   }
 
   my ($complete_ok, $outcome) = _capture_eval(sub {
-    return _complete_resolved_value($state, $instruction, $value, $path_frame);
+    return _complete_resolved_value($state, $block, $instruction, $value, $path_frame);
   });
   return $complete_ok ? $outcome : _error_outcome($outcome, $path_frame);
 }
 
 sub _complete_resolved_value {
-  my ($state, $instruction, $value, $path_frame) = @_;
+  my ($state, $block, $instruction, $value, $path_frame) = @_;
   my $op = $instruction->complete_op || 'COMPLETE_GENERIC';
 
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if $op eq 'COMPLETE_GENERIC';
 
-  return _complete_object($state, $instruction, $value, $path_frame)
+  return _complete_object($state, $block, $instruction, $value, $path_frame)
     if $op eq 'COMPLETE_OBJECT';
 
-  return _complete_list($state, $instruction, $value, $path_frame)
+  return _complete_list($state, $block, $instruction, $value, $path_frame)
     if $op eq 'COMPLETE_LIST';
 
-  return _complete_abstract($state, $instruction, $value, $path_frame)
+  return _complete_abstract($state, $block, $instruction, $value, $path_frame)
     if $op eq 'COMPLETE_ABSTRACT';
 
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'VALUE', value => $value);
 }
 
 sub _resolve_field_value {
-  my ($state, $block, $instruction, $source) = @_;
+  my ($state, $block, $instruction, $source, $path_frame) = @_;
   my $field_map = $state->runtime_schema->runtime_cache->{field_maps}{ $block->type_name } || {};
   my $field = $field_map->{ $instruction->field_name } || {};
   my $resolver = $field->{resolve};
   my $return_type = $field->{type}
     || $state->runtime_schema->runtime_cache->{name2type}{ $instruction->return_type_name };
   my $args = _resolve_instruction_args($state, $instruction);
+  my $info = _build_info($state, $block, $instruction, $path_frame);
 
   if ($resolver) {
-    return $resolver->($source, $args, $state->context, $return_type);
+    return $resolver->($source, $args, $state->context, $info, $return_type);
   }
 
   return $source->{ $instruction->field_name } if ref($source) eq 'HASH';
@@ -282,7 +284,7 @@ sub _coerce_input_value {
 }
 
 sub _complete_object {
-  my ($state, $instruction, $value, $path_frame) = @_;
+  my ($state, $block, $instruction, $value, $path_frame) = @_;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
 
@@ -307,7 +309,7 @@ sub _complete_object {
 }
 
 sub _complete_list {
-  my ($state, $instruction, $value, $path_frame) = @_;
+  my ($state, $block, $instruction, $value, $path_frame) = @_;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
 
@@ -336,11 +338,11 @@ sub _complete_list {
 }
 
 sub _complete_abstract {
-  my ($state, $instruction, $value, $path_frame) = @_;
+  my ($state, $block, $instruction, $value, $path_frame) = @_;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
 
-  my ($runtime_type, $error_record) = _resolve_runtime_type($state, $instruction, $value, $path_frame);
+  my ($runtime_type, $error_record) = _resolve_runtime_type($state, $block, $instruction, $value, $path_frame);
   return GraphQL::Houtou::Runtime::Outcome->new(
     kind => 'SCALAR',
     scalar_value => undef,
@@ -371,14 +373,15 @@ sub _complete_abstract {
 }
 
 sub _resolve_runtime_type {
-  my ($state, $instruction, $value, $path_frame) = @_;
+  my ($state, $block, $instruction, $value, $path_frame) = @_;
   my $cache = $state->runtime_schema->runtime_cache;
   my $abstract_name = $instruction->return_type_name;
   my $abstract_type = $cache->{name2type}{$abstract_name} or return;
+  my $info = _build_info($state, $block, $instruction, $path_frame);
 
   if (my $tag_resolver = $cache->{tag_resolver_map}{$abstract_name}) {
     my ($ok, $tag) = _capture_eval(sub {
-      return $tag_resolver->($value, $state->context, $abstract_type);
+      return $tag_resolver->($value, $state->context, $info, $abstract_type);
     });
     return (undef, _error_record($tag, $path_frame)) if !$ok;
     if (defined $tag) {
@@ -389,7 +392,7 @@ sub _resolve_runtime_type {
 
   if (my $resolve_type = $cache->{resolve_type_map}{$abstract_name}) {
     my ($ok, $resolved) = _capture_eval(sub {
-      return $resolve_type->($value, $state->context, undef, $abstract_type);
+      return $resolve_type->($value, $state->context, $info, $abstract_type);
     });
     return (undef, _error_record($resolved, $path_frame)) if !$ok;
     return if !defined $resolved;
@@ -400,13 +403,24 @@ sub _resolve_runtime_type {
     next if !$type;
     my $cb = $cache->{is_type_of_map}{ $type->name } or next;
     my ($ok, $matched) = _capture_eval(sub {
-      return $cb->($value, $state->context, undef, $type);
+      return $cb->($value, $state->context, $info, $type);
     });
     return (undef, _error_record($matched, $path_frame)) if !$ok;
     return ($type, undef) if $matched;
   }
 
   return (undef, undef);
+}
+
+sub _build_info {
+  my ($state, $block, $instruction, $path_frame) = @_;
+  return GraphQL::Houtou::Runtime::LazyInfo->new(
+    state => $state,
+    runtime_schema => $state->runtime_schema,
+    block => $block,
+    instruction => $instruction,
+    path_frame => $path_frame,
+  );
 }
 
 sub _consume_outcome {

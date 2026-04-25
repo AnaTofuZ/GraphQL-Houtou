@@ -218,6 +218,88 @@ subtest 'dynamic argument values are coerced through lowered arg defs' => sub {
   }, 'dynamic arg coercion uses lowered arg defs';
 };
 
+subtest 'resolver receives lazy info hash' => sub {
+  my $saw = {};
+  my $info_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'InfoQuery',
+      fields => {
+        hello => {
+          type => $String,
+          resolve => sub {
+            my ($source, $args, $context, $info, $return_type) = @_;
+            $saw->{field_name} = $info->{field_name};
+            $saw->{parent_type} = $info->{parent_type}->name;
+            $saw->{return_type} = $info->{return_type}->name;
+            $saw->{path} = $info->{path};
+            $saw->{context_value} = $info->{context_value};
+            return $return_type->name;
+          },
+        },
+      },
+    ),
+  );
+
+  my $result = $info_schema->execute_runtime('{ hello }', context => { trace_id => 1 });
+  is_deeply $result, { data => { hello => 'String' }, errors => [] }, 'resolver still executes';
+  is_deeply $saw, {
+    field_name => 'hello',
+    parent_type => 'InfoQuery',
+    return_type => 'String',
+    path => [ 'hello' ],
+    context_value => { trace_id => 1 },
+  }, 'lazy info exposes compatible keys on demand';
+};
+
+subtest 'abstract callbacks receive lazy info hash' => sub {
+  my $seen = {};
+  my $Abstract = GraphQL::Houtou::Type::Interface->new(
+    name => 'TaggedNode',
+    fields => {
+      id => { type => $String->non_null },
+    },
+    tag_resolver => sub {
+      my ($value, $context, $info, $abstract_type) = @_;
+      $seen->{field_name} = $info->{field_name};
+      $seen->{parent_type} = $info->{parent_type}->name;
+      $seen->{return_type} = $info->{return_type}->name;
+      $seen->{path} = $info->{path};
+      $seen->{abstract_type} = $abstract_type->name;
+      return $value->{kind};
+    },
+  );
+  my $Tagged = GraphQL::Houtou::Type::Object->new(
+    name => 'TaggedUser',
+    interfaces => [ $Abstract ],
+    runtime_tag => 'user',
+    fields => {
+      id => { type => $String->non_null },
+    },
+  );
+  my $tag_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'TaggedQuery',
+      fields => {
+        node => {
+          type => $Abstract,
+          resolve => sub { +{ kind => 'user', id => 'u1' } },
+        },
+      },
+    ),
+    types => [ $Tagged, $Abstract ],
+  );
+
+  my $result = $tag_schema->execute_runtime('{ node { ... on TaggedUser { id } } }');
+  is_deeply $result, { data => { node => { id => 'u1' } }, errors => [] }, 'abstract dispatch still executes';
+  is_deeply $seen, {
+    field_name => 'node',
+    parent_type => 'TaggedQuery',
+    return_type => 'TaggedNode',
+    path => [ 'node' ],
+    abstract_type => 'TaggedNode',
+  }, 'abstract callback sees lazy info keys';
+};
+
 subtest 'fragment spreads execute through lowered child blocks' => sub {
   my $result = $schema->execute_runtime(<<'GRAPHQL');
 query Q {

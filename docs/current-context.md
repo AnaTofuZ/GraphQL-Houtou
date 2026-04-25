@@ -153,6 +153,15 @@ Current greenfield runtime coverage:
     `ErrorRecord` objects
   - path is carried as parent-linked `PathFrame`
   - Perl error hashes are materialized only at the final writer boundary
+- lazy info skeleton:
+  - resolver and abstract callbacks receive a lazy hash-style `info`
+  - `field_name`, `parent_type`, `return_type`, `path`, `schema`,
+    `runtime_cache`, `variable_values`, `root_value`, `context_value`
+    are materialized on demand
+  - explicit field resolvers now receive
+    `($source, $args, $context, $info, $return_type)`
+    so greenfield can preserve the existing callback surface while keeping
+    `info` cold
 
 Still intentionally missing:
 
@@ -177,7 +186,7 @@ Latest greenfield checkpoint:
   - `perl -Ilib t/16_greenfield_runtime_promise.t`
   - `minil test t/14_greenfield_operation_runtime.t t/15_greenfield_runtime_execute.t`
   - `minil test`
-  - latest full test run target is now `Files=18, Tests=227`
+  - latest full test run target is now `Files=18, Tests=229`
 
 ## Pause Snapshot
 

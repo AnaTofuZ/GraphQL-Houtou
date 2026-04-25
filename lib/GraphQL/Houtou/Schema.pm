@@ -96,6 +96,16 @@ sub compile_operation {
   return $self->compile_runtime(%opts)->compile_operation($document, %opts);
 }
 
+sub compile_operation_descriptor {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_operation($document, %opts)->to_struct;
+}
+
+sub inflate_operation {
+  my ($self, $descriptor, %opts) = @_;
+  return $self->compile_runtime(%opts)->inflate_operation($descriptor);
+}
+
 sub execute_runtime {
   my ($self, $document, %opts) = @_;
   my $runtime = $self->compile_runtime(%opts);

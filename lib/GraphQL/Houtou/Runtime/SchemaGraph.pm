@@ -41,6 +41,12 @@ sub compile_operation {
   return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation($self, $document, %opts);
 }
 
+sub inflate_operation {
+  my ($self, $descriptor) = @_;
+  require GraphQL::Houtou::Runtime::OperationCompiler;
+  return GraphQL::Houtou::Runtime::OperationCompiler->inflate_operation($self, $descriptor);
+}
+
 sub execute_operation {
   my ($self, $program, %opts) = @_;
   require GraphQL::Houtou::Runtime::Executor;

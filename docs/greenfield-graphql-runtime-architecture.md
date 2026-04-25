@@ -217,6 +217,18 @@ The important distinction is:
 - resolver *shape* and *call metadata* are boot-time assets and should be
   compiled once
 
+The same applies to operations. The control-plane API should expose:
+
+```perl
+my $program = $runtime->compile_operation($document);
+my $descriptor = $program->to_struct;
+my $inflated = $runtime->inflate_operation($descriptor);
+```
+
+That boundary is useful even before introducing a binary serializer because it
+makes "compile once at boot, reuse many times during requests" a first-class
+part of the runtime design.
+
 ### 3. Query Lowering Pipeline
 
 The parser output should not remain the runtime's internal shape.

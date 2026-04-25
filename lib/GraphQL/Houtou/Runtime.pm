@@ -9,7 +9,13 @@ use GraphQL::Houtou::Runtime::Compiler ();
 use GraphQL::Houtou::Runtime::Executor ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
 
-our @EXPORT_OK = qw(compile_schema inflate_schema compile_operation execute_operation);
+our @EXPORT_OK = qw(
+  compile_schema
+  inflate_schema
+  compile_operation
+  inflate_operation
+  execute_operation
+);
 
 sub compile_schema {
   return GraphQL::Houtou::Runtime::Compiler->compile_schema(@_);
@@ -21,6 +27,10 @@ sub inflate_schema {
 
 sub compile_operation {
   return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation(@_);
+}
+
+sub inflate_operation {
+  return GraphQL::Houtou::Runtime::OperationCompiler->inflate_operation(@_);
 }
 
 sub execute_operation {

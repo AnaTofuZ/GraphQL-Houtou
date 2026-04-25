@@ -3,7 +3,7 @@ use warnings;
 
 use Test::More 0.98;
 
-use GraphQL::Houtou::Runtime qw(compile_operation);
+use GraphQL::Houtou::Runtime qw(compile_operation inflate_operation);
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
@@ -99,6 +99,30 @@ subtest 'execution program can round-trip through struct form' => sub {
   is $struct->{operation_type}, 'query', 'struct keeps operation type';
   is $struct->{root_block}, $program->root_block->name, 'struct keeps root block name';
   is $root_block->{instructions}[0]{complete_op}, 'COMPLETE_OBJECT', 'instruction op is serialized on root block';
+};
+
+subtest 'execution program descriptor can round-trip back into executable program' => sub {
+  my $runtime = $schema->compile_runtime;
+  my $program = $runtime->compile_operation('{ viewer { id name } }');
+  my $descriptor = $program->to_struct;
+  my $inflated = inflate_operation($runtime, $descriptor);
+
+  isa_ok $inflated, 'GraphQL::Houtou::Runtime::ExecutionProgram';
+  is $inflated->operation_type, 'query', 'inflated program keeps operation type';
+  is $inflated->root_block->name, $program->root_block->name, 'inflated program keeps root block name';
+  is scalar(@{ $inflated->blocks || [] }), scalar(@{ $program->blocks || [] }), 'inflated program keeps block count';
+  is_deeply
+    [ map { $_->field_name } @{ $inflated->root_block->instructions } ],
+    [ map { $_->field_name } @{ $program->root_block->instructions } ],
+    'inflated root block keeps instruction fields';
+};
+
+subtest 'schema helper can compile and inflate operation descriptors' => sub {
+  my $descriptor = $schema->compile_operation_descriptor('{ viewer { id } }');
+  my $inflated = $schema->inflate_operation($descriptor);
+
+  isa_ok $inflated, 'GraphQL::Houtou::Runtime::ExecutionProgram';
+  is $inflated->root_block->type_name, 'Query', 'schema helper inflates operation root block';
 };
 
 subtest 'instruction lowering classifies static and dynamic args' => sub {

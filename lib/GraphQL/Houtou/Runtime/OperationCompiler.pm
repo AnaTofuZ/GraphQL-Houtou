@@ -45,6 +45,22 @@ sub compile_operation {
   );
 }
 
+sub inflate_operation {
+  my ($class, $runtime_schema, $struct) = @_;
+  my @blocks = map { _inflate_execution_block($_) } @{ $struct->{blocks} || [] };
+  my %by_name = map { ($_->name => $_) } @blocks;
+  my $root_block = defined $struct->{root_block} ? $by_name{ $struct->{root_block} } : undef;
+
+  return GraphQL::Houtou::Runtime::ExecutionProgram->new(
+    version => $struct->{version} || 1,
+    operation_type => $struct->{operation_type} || 'query',
+    operation_name => $struct->{operation_name},
+    variable_defs => _clone_argument_value($struct->{variable_defs} || {}),
+    blocks => \@blocks,
+    root_block => $root_block,
+  );
+}
+
 sub _lower_selection_block {
   my ($state, $type_name, $schema_block, $selections, $base_name) = @_;
   my %schema_slots = map { ($_->field_name => $_) } @{ $schema_block->slots || [] };
@@ -114,6 +130,37 @@ sub _next_block_name {
   my ($state, $base_name) = @_;
   my $name = sprintf('%s#%d', $base_name, $state->{block_index}++);
   return $name;
+}
+
+sub _inflate_execution_block {
+  my ($struct) = @_;
+  return GraphQL::Houtou::Runtime::ExecutionBlock->new(
+    name => $struct->{name},
+    type_name => $struct->{type_name},
+    family => $struct->{family} || 'OBJECT',
+    instructions => [ map { _inflate_instruction($_) } @{ $struct->{instructions} || [] } ],
+  );
+}
+
+sub _inflate_instruction {
+  my ($struct) = @_;
+  return GraphQL::Houtou::Runtime::Instruction->new(
+    field_name => $struct->{field_name},
+    result_name => $struct->{result_name},
+    return_type_name => $struct->{return_type_name},
+    resolve_op => $struct->{resolve_op},
+    complete_op => $struct->{complete_op},
+    dispatch_family => $struct->{dispatch_family},
+    arg_defs => _clone_argument_value($struct->{arg_defs} || {}),
+    has_args => $struct->{has_args},
+    args_mode => $struct->{args_mode} || 'NONE',
+    args_payload => _clone_argument_value($struct->{args_payload}),
+    has_directives => $struct->{has_directives},
+    directives_mode => $struct->{directives_mode} || 'NONE',
+    directives_payload => _clone_argument_value($struct->{directives_payload}),
+    child_block_name => $struct->{child_block_name},
+    abstract_child_blocks => _clone_argument_value($struct->{abstract_child_blocks} || {}),
+  );
 }
 
 sub _lower_abstract_child_blocks {

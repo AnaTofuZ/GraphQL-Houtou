@@ -26,6 +26,13 @@ Current greenfield direction:
 - immutable execution-lowered operation program / blocks / instructions
 - mutable exec state / cursor / frame / writer
 - XS-first hot runtime, with no PP compatibility constraint in the core
+- operation artifact boundary:
+  - compile lowered execution programs once
+  - export them with `to_struct`
+  - re-inflate them through runtime/schema helpers at boot time
+  - schema helpers now expose:
+    - `compile_operation_descriptor`
+    - `inflate_operation`
 
 Greenfield scaffold checkpoint:
 
@@ -63,9 +70,13 @@ Greenfield scaffold checkpoint:
 New greenfield entrypoints now include:
 
 - `GraphQL::Houtou::Runtime::compile_operation($runtime_schema, $document)`
+- `GraphQL::Houtou::Runtime::inflate_operation($runtime_schema, $descriptor)`
 - `GraphQL::Houtou::Runtime::execute_operation($runtime_schema, $program, %opts)`
 - `$schema->compile_operation($document)`
+- `$schema->compile_operation_descriptor($document)`
+- `$schema->inflate_operation($descriptor)`
 - `$runtime_schema->compile_operation($document)`
+- `$runtime_schema->inflate_operation($descriptor)`
 - `$runtime_schema->execute_operation($program, %opts)`
 - `$schema->execute_runtime($document, %opts)`
 
@@ -166,7 +177,7 @@ Latest greenfield checkpoint:
   - `perl -Ilib t/16_greenfield_runtime_promise.t`
   - `minil test t/14_greenfield_operation_runtime.t t/15_greenfield_runtime_execute.t`
   - `minil test`
-  - latest full test run target is now `Files=17`
+  - latest full test run target is now `Files=18, Tests=227`
 
 ## Pause Snapshot
 

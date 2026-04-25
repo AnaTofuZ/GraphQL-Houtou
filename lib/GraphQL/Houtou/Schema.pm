@@ -140,6 +140,13 @@ sub execute_runtime {
   return $runtime->execute_operation($program, %opts);
 }
 
+sub compile_vm_operation {
+  my ($self, $document, %opts) = @_;
+  my $runtime = $self->compile_runtime(%opts);
+  my $program = $runtime->compile_operation($document, %opts);
+  return $runtime->lower_vm_program($program);
+}
+
 sub runtime_cache {
   my ($self) = @_;
   return $self->{_runtime_cache};

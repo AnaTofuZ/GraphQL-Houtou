@@ -236,6 +236,12 @@ my $descriptor = $program->to_struct;
 my $inflated = $runtime->inflate_operation($descriptor);
 ```
 
+And the next lowering stage should also be explicit:
+
+```perl
+my $vm_program = $runtime->lower_vm_program($program);
+```
+
 That boundary is useful even before introducing a binary serializer because it
 makes "compile once at boot, reuse many times during requests" a first-class
 part of the runtime design.
@@ -251,6 +257,15 @@ runtime-cache hash lookups per field.
 Likewise, child blocks should be rebound directly onto lowered instructions so
 object/list/abstract execution does not linearly search blocks by name during
 the hot loop.
+
+This leads naturally to a second artifact boundary:
+
+- execution-lowered program
+- then VM-lowered program
+
+The first keeps source-level structure convenient for correctness work. The
+second should collapse that structure into compact opcodes and immutable block
+metadata that an XS-first runtime can execute directly.
 
 ### 3. Query Lowering Pipeline
 

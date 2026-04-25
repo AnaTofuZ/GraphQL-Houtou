@@ -82,7 +82,9 @@ New greenfield entrypoints now include:
 - `$runtime_schema->compile_operation($document)`
 - `$runtime_schema->inflate_operation($descriptor)`
 - `$runtime_schema->execute_operation($program, %opts)`
+- `$runtime_schema->lower_vm_program($program)`
 - `$schema->execute_runtime($document, %opts)`
+- `$schema->compile_vm_operation($document)`
 
 Current operation lowering shape:
 
@@ -98,6 +100,20 @@ Current operation lowering shape:
   - `complete_op`
   - `dispatch_family`
   - `child_block_name`
+  - plus runtime-only bindings for:
+    - schema slot
+    - abstract dispatch descriptor
+    - child block references
+
+Current VM-lowering shape:
+
+- `ExecutionProgram -> VMProgram`
+- `ExecutionBlock -> VMBlock`
+- `Instruction -> VMOp`
+- current VM opcodes are still a compact structural lowering:
+  - `RESOLVE_*:COMPLETE_*`
+  - family / child-block metadata retained alongside the opcode
+  - intended as the immediate artifact boundary before the XS-first VM loop
 
 This is still structural, but it establishes the key boundary:
 

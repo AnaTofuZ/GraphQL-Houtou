@@ -53,6 +53,12 @@ sub execute_operation {
   return GraphQL::Houtou::Runtime::Executor->execute_operation($self, $program, %opts);
 }
 
+sub lower_vm_program {
+  my ($self, $program) = @_;
+  require GraphQL::Houtou::Runtime::VMCompiler;
+  return GraphQL::Houtou::Runtime::VMCompiler->lower_program($self, $program);
+}
+
 sub to_struct {
   my ($self) = @_;
   return {

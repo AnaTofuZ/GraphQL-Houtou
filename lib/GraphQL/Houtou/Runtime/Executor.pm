@@ -4,6 +4,12 @@ use 5.014;
 use strict;
 use warnings;
 
+use GraphQL::Houtou::Promise::Adapter qw(
+  all_promise
+  is_promise_value
+  normalize_promise_code
+  then_promise
+);
 use GraphQL::Houtou::Runtime::Cursor ();
 use GraphQL::Houtou::Runtime::ExecState ();
 use GraphQL::Houtou::Runtime::Outcome ();
@@ -12,6 +18,7 @@ use GraphQL::Houtou::Runtime::Writer ();
 sub execute_operation {
   my ($class, $runtime_schema, $program, %opts) = @_;
   my $writer = GraphQL::Houtou::Runtime::Writer->new;
+  my $promise_code = normalize_promise_code($opts{promise_code});
   my $variables = _prepare_variables($runtime_schema, $program, $opts{variables} || {});
   my $state = GraphQL::Houtou::Runtime::ExecState->new(
     runtime_schema => $runtime_schema,
@@ -21,11 +28,19 @@ sub execute_operation {
     context => $opts{context},
     variables => $variables,
     root_value => $opts{root_value},
-    promise_code => $opts{promise_code},
+    promise_code => $promise_code,
     empty_args => {},
   );
 
   my $data = _execute_block($state, $program->root_block, $opts{root_value});
+  if (_is_promise($state, $data)) {
+    return then_promise($promise_code, $data, sub {
+      return {
+        data => $_[0],
+        errors => [ @{ $writer->errors || [] } ],
+      };
+    });
+  }
   return {
     data => $data,
     errors => [ @{ $writer->errors || [] } ],
@@ -35,11 +50,30 @@ sub execute_operation {
 sub _execute_block {
   my ($state, $block, $source) = @_;
   my %data;
+  my @pending_names;
+  my @pending_outcomes;
 
   for my $instruction (@{ $block->instructions || [] }) {
     next if !_should_execute_instruction($state, $instruction);
     my $outcome = _execute_instruction($state, $block, $instruction, $source);
+    if (_is_promise($state, $outcome)) {
+      push @pending_names, $instruction->result_name;
+      push @pending_outcomes, $outcome;
+      next;
+    }
     _consume_outcome($state->writer, \%data, $instruction->result_name, $outcome);
+  }
+
+  if (@pending_outcomes) {
+    my $aggregate = all_promise($state->promise_code, @pending_outcomes);
+    return then_promise($state->promise_code, $aggregate, sub {
+      my @resolved = _promise_all_values_to_array(@_);
+      my %merged = %data;
+      for my $i (0 .. $#resolved) {
+        _consume_outcome($state->writer, \%merged, $pending_names[$i], $resolved[$i]);
+      }
+      return \%merged;
+    });
   }
 
   return \%data;
@@ -48,6 +82,16 @@ sub _execute_block {
 sub _execute_instruction {
   my ($state, $block, $instruction, $source) = @_;
   my $value = _resolve_field_value($state, $block, $instruction, $source);
+  if (_is_promise($state, $value)) {
+    return then_promise($state->promise_code, $value, sub {
+      return _complete_resolved_value($state, $instruction, $_[0]);
+    });
+  }
+  return _complete_resolved_value($state, $instruction, $value);
+}
+
+sub _complete_resolved_value {
+  my ($state, $instruction, $value) = @_;
   my $op = $instruction->complete_op || 'COMPLETE_GENERIC';
 
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
@@ -223,9 +267,19 @@ sub _complete_object {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$child;
 
+  my $child_value = _execute_block($state, $child, $value);
+  if (_is_promise($state, $child_value)) {
+    return then_promise($state->promise_code, $child_value, sub {
+      return GraphQL::Houtou::Runtime::Outcome->new(
+        kind => 'OBJECT',
+        object_value => $_[0],
+      );
+    });
+  }
+
   return GraphQL::Houtou::Runtime::Outcome->new(
     kind => 'OBJECT',
-    object_value => _execute_block($state, $child, $value),
+    object_value => $child_value,
   );
 }
 
@@ -241,6 +295,14 @@ sub _complete_list {
   my @items = map {
     $child ? _execute_block($state, $child, $_) : $_
   } @$value;
+
+  if (grep { _is_promise($state, $_) } @items) {
+    my $aggregate = all_promise($state->promise_code, @items);
+    return then_promise($state->promise_code, $aggregate, sub {
+      my @resolved = _promise_all_values_to_array(@_);
+      return GraphQL::Houtou::Runtime::Outcome->new(kind => 'LIST', list_value => \@resolved);
+    });
+  }
 
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'LIST', list_value => \@items);
 }
@@ -259,9 +321,19 @@ sub _complete_abstract {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$child;
 
+  my $child_value = _execute_block($state, $child, $value);
+  if (_is_promise($state, $child_value)) {
+    return then_promise($state->promise_code, $child_value, sub {
+      return GraphQL::Houtou::Runtime::Outcome->new(
+        kind => 'OBJECT',
+        object_value => $_[0],
+      );
+    });
+  }
+
   return GraphQL::Houtou::Runtime::Outcome->new(
     kind => 'OBJECT',
-    object_value => _execute_block($state, $child, $value),
+    object_value => $child_value,
   );
 }
 
@@ -300,6 +372,16 @@ sub _consume_outcome {
   $data->{$result_name} = $outcome->value;
   push @{ $writer->errors }, @{ $outcome->errors || [] } if @{ $outcome->errors || [] };
   return;
+}
+
+sub _is_promise {
+  my ($state, $value) = @_;
+  return is_promise_value($state->promise_code, $value);
+}
+
+sub _promise_all_values_to_array {
+  return @{ $_[0] } if @_ == 1 && ref($_[0]) eq 'ARRAY';
+  return @_;
 }
 
 1;

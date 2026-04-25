@@ -60,6 +60,8 @@ In execution terms:
 - scalar/object/list/abstract payload is the "value"
 - the runtime should not eagerly bundle them into a Perl envelope if the next
   stage only needs the family discriminator
+- promise presence should also be treated as a first-class kind transition,
+  not as a reason to immediately rebuild Perl response envelopes
 
 ### 3. Keep Perl objects out of the hot path
 
@@ -97,6 +99,11 @@ The design target is:
 - decide kind/shape first
 - keep payload native as long as possible
 - only materialize Perl-facing containers at a real boundary
+
+This also implies that promise-aware execution should not fork into a fully
+separate runtime shape. The same lowered program, family contracts, and
+outcome structs should be reused; only the payload transport changes from
+direct values to adapter-managed promises at the block / instruction boundary.
 
 ### 3.5. Do not let PP fallback shape the runtime
 

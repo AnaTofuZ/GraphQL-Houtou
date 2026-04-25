@@ -102,8 +102,8 @@ Current greenfield internal-currency rule:
 
 Current greenfield runtime coverage:
 
-- sync execution only
-- no promise adapter integration yet
+- sync execution
+- promise adapter integration for promise-returning resolvers and child blocks
 - object child execution
 - list child execution
 - abstract dispatch through:
@@ -130,6 +130,13 @@ Current greenfield runtime coverage:
   - dynamic directives are kept as runtime guard payload on instructions
 - explicit resolver ABI matches the existing runtime shape:
   - `($source, $args, $context, $return_type)`
+- promise-aware block execution:
+  - promise-returning field resolvers are chained through the same completion
+    families
+  - promise-returning object/list/abstract child blocks are aggregated via the
+    adapter
+  - final response envelopes are only materialized after promise resolution at
+    the execution boundary
 
 Still intentionally missing:
 
@@ -145,12 +152,16 @@ Latest greenfield checkpoint:
   resolver dispatch
 - `GraphQL::Houtou::Type::InputObject` now preserves field defaults during
   `graphql_to_perl` / `perl_to_graphql`, which the greenfield runtime relies on
+- promise adapter support now exists in the greenfield executor
+  - promise-returning scalar/object/list/abstract fields resolve through the
+    same lowered program
 - validation:
   - `perl -Ilib t/14_greenfield_operation_runtime.t`
   - `perl -Ilib t/15_greenfield_runtime_execute.t`
+  - `perl -Ilib t/16_greenfield_runtime_promise.t`
   - `minil test t/14_greenfield_operation_runtime.t t/15_greenfield_runtime_execute.t`
   - `minil test`
-  - latest full test run: `Files=16, Tests=222, Result: PASS`
+  - latest full test run target is now `Files=17`
 
 ## Pause Snapshot
 

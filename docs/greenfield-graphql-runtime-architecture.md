@@ -246,6 +246,14 @@ Arguments should follow the same split:
 - variable-dependent payload should only be materialized at the field
   execution boundary
 
+Operation variables should also be part of the execution artifact:
+
+- variable definitions should be lowered onto the immutable execution program
+- provided runtime variables should be merged with lowered defaults when
+  execution state is created
+- full coercion can remain a later typed-runtime step, but the artifact
+  boundary should exist from the start
+
 For a practical web application deployment, the expected flow should be:
 
 1. construct schema objects at boot

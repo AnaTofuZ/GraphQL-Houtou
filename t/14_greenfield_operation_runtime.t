@@ -116,6 +116,19 @@ subtest 'instruction lowering classifies static and dynamic args' => sub {
   ok exists $dynamic_greet->args_payload->{name}, 'dynamic payload keeps argument key';
 };
 
+subtest 'operation variable definitions are lowered into immutable program metadata' => sub {
+  my $runtime = $schema->compile_runtime;
+  my $program = $runtime->compile_operation('query Q($name: String = "Ana") { greet(name: $name) }');
+
+  is_deeply $program->variable_defs, {
+    name => {
+      type => 'String',
+      has_default => 1,
+      default_value => 'Ana',
+    },
+  }, 'variable definitions are lowered onto the execution program';
+};
+
 subtest 'fragment spreads are normalized into lowered child blocks' => sub {
   my $runtime = $schema->compile_runtime;
   my $program = $runtime->compile_operation(<<'GRAPHQL');

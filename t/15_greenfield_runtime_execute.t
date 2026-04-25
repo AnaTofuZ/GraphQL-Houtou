@@ -138,6 +138,18 @@ subtest 'variable args are materialized at execution time' => sub {
   }, 'dynamic args are passed to resolver';
 };
 
+subtest 'variable defaults are materialized from lowered program metadata' => sub {
+  my $result = $schema->execute_runtime(
+    'query Q($name: String = "Ana") { greet(name: $name) }',
+  );
+  is_deeply $result, {
+    data => {
+      greet => 'hello Ana',
+    },
+    errors => [],
+  }, 'variable defaults flow through execution program metadata';
+};
+
 subtest 'fragment spreads execute through lowered child blocks' => sub {
   my $result = $schema->execute_runtime(<<'GRAPHQL');
 query Q {

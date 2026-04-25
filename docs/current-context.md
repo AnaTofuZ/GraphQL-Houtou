@@ -111,15 +111,17 @@ Current greenfield runtime coverage:
   - `resolve_type`
   - `possible_types + is_type_of`
 - inline-fragment lowering for operation child blocks
+- fragment spread lowering for operation child blocks
 - static/dynamic argument lowering
   - static literal args are materialized during lowering
   - variable-dependent args are materialized at field execution time
+- operation variable definitions are lowered into immutable program metadata
+  - execution merges provided variables with lowered defaults
 - explicit resolver ABI matches the existing runtime shape:
   - `($source, $args, $context, $return_type)`
 
 Still intentionally missing:
 
-- fragment spread lowering
 - full variable/argument coercion into lowered instructions
 - directives
 - lazy `info/path/error` materialization

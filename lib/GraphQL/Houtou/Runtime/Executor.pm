@@ -12,13 +12,14 @@ use GraphQL::Houtou::Runtime::Writer ();
 sub execute_operation {
   my ($class, $runtime_schema, $program, %opts) = @_;
   my $writer = GraphQL::Houtou::Runtime::Writer->new;
+  my $variables = _prepare_variables($program, $opts{variables} || {});
   my $state = GraphQL::Houtou::Runtime::ExecState->new(
     runtime_schema => $runtime_schema,
     program => $program,
     cursor => GraphQL::Houtou::Runtime::Cursor->new(block => $program->root_block),
     writer => $writer,
     context => $opts{context},
-    variables => $opts{variables} || {},
+    variables => $variables,
     root_value => $opts{root_value},
     promise_code => $opts{promise_code},
     empty_args => {},
@@ -86,6 +87,18 @@ sub _resolve_instruction_args {
   return $state->empty_args if $mode eq 'NONE';
   return $instruction->args_payload if $mode eq 'STATIC';
   return _materialize_dynamic_args($instruction->args_payload, $state->variables || {});
+}
+
+sub _prepare_variables {
+  my ($program, $provided) = @_;
+  my %resolved = %{ $provided || {} };
+  for my $name (keys %{ $program->variable_defs || {} }) {
+    next if exists $resolved{$name};
+    my $def = $program->variable_defs->{$name} || {};
+    next if !$def->{has_default};
+    $resolved{$name} = $def->{default_value};
+  }
+  return \%resolved;
 }
 
 sub _materialize_dynamic_args {

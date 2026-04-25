@@ -39,6 +39,7 @@ sub compile_operation {
   return GraphQL::Houtou::Runtime::ExecutionProgram->new(
     operation_type => $operation_type,
     operation_name => $operation->{name},
+    variable_defs => _lower_variable_defs($operation->{variables}),
     blocks => $state{blocks},
     root_block => $root_block,
   );
@@ -169,6 +170,23 @@ sub _resolve_op_for_slot {
   my ($slot) = @_;
   return 'RESOLVE_EXPLICIT' if ($slot->resolver_shape || '') eq 'EXPLICIT';
   return 'RESOLVE_DEFAULT';
+}
+
+sub _lower_variable_defs {
+  my ($variables) = @_;
+  return {} if !$variables || !keys %$variables;
+  my %defs;
+  for my $name (sort keys %$variables) {
+    my $def = $variables->{$name} || {};
+    $defs{$name} = {
+      type => $def->{type},
+      has_default => exists $def->{default_value} ? 1 : 0,
+      default_value => exists $def->{default_value}
+        ? _materialize_static_value($def->{default_value})
+        : undef,
+    };
+  }
+  return \%defs;
 }
 
 sub _lower_arguments {

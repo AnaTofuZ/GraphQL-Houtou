@@ -288,7 +288,7 @@ sub _complete_object {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
 
-  my $child = $state->program->block_by_name($instruction->child_block_name);
+  my $child = $instruction->bound_child_block;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$child;
 
@@ -316,7 +316,7 @@ sub _complete_list {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if ref($value) ne 'ARRAY';
 
-  my $child = $state->program->block_by_name($instruction->child_block_name);
+  my $child = $instruction->bound_child_block;
   my @items;
   for my $i (0 .. $#$value) {
     my $item_path = GraphQL::Houtou::Runtime::PathFrame->new(
@@ -351,8 +351,7 @@ sub _complete_abstract {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$runtime_type;
 
-  my $child_block_name = ($instruction->abstract_child_blocks || {})->{ $runtime_type->name };
-  my $child = $child_block_name ? $state->program->block_by_name($child_block_name) : undef;
+  my $child = ($instruction->bound_abstract_child_blocks || {})->{ $runtime_type->name };
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$child;
 

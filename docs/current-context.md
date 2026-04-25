@@ -177,6 +177,8 @@ Current greenfield runtime coverage:
     `tag_resolver`, `tag_map`, `resolve_type`, and `possible_types` metadata,
     so abstract execution does not need to rediscover those through
     runtime-cache hash lookups per field
+  - child object/list/abstract blocks are also rebound onto instructions, so
+    hot execution does not linearly search `block_by_name` per child dispatch
 
 Still intentionally missing:
 

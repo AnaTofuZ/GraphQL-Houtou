@@ -36,13 +36,16 @@ sub compile_operation {
     uc($operation_type),
   );
 
-  return GraphQL::Houtou::Runtime::ExecutionProgram->new(
+  my $program = GraphQL::Houtou::Runtime::ExecutionProgram->new(
     operation_type => $operation_type,
     operation_name => $operation->{name},
     variable_defs => _lower_variable_defs($operation->{variables}),
     blocks => $state{blocks},
     root_block => $root_block,
   );
+
+  _bind_instruction_blocks($program);
+  return $program;
 }
 
 sub inflate_operation {
@@ -51,8 +54,7 @@ sub inflate_operation {
   my %by_name = map { ($_->name => $_) } @blocks;
   my $root_block = defined $struct->{root_block} ? $by_name{ $struct->{root_block} } : undef;
   _bind_instructions_to_schema_slots($runtime_schema, \@blocks);
-
-  return GraphQL::Houtou::Runtime::ExecutionProgram->new(
+  my $program = GraphQL::Houtou::Runtime::ExecutionProgram->new(
     version => $struct->{version} || 1,
     operation_type => $struct->{operation_type} || 'query',
     operation_name => $struct->{operation_name},
@@ -60,6 +62,8 @@ sub inflate_operation {
     blocks => \@blocks,
     root_block => $root_block,
   );
+  _bind_instruction_blocks($program);
+  return $program;
 }
 
 sub _lower_selection_block {
@@ -184,6 +188,31 @@ sub _bind_instructions_to_schema_slots {
   }
 
   return $blocks;
+}
+
+sub _bind_instruction_blocks {
+  my ($program) = @_;
+  my %by_name = map { ($_->name => $_) } @{ $program->blocks || [] };
+  if (my $root = $program->root_block) {
+    $by_name{ $root->name } = $root;
+  }
+
+  for my $block (@{ $program->blocks || [] }, ($program->root_block || ())) {
+    next if !$block;
+    for my $instruction (@{ $block->instructions || [] }) {
+      $instruction->{bound_child_block} = $instruction->child_block_name
+        ? $by_name{ $instruction->child_block_name }
+        : undef;
+      $instruction->{bound_abstract_child_blocks} = {
+        map {
+          my $child_name = $instruction->abstract_child_blocks->{$_};
+          ($_ => ($child_name ? $by_name{$child_name} : undef))
+        } keys %{ $instruction->abstract_child_blocks || {} }
+      };
+    }
+  }
+
+  return $program;
 }
 
 sub _bind_abstract_dispatch {

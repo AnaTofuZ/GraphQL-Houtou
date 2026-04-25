@@ -248,6 +248,9 @@ The same applies to abstract dispatch metadata: lowered instructions should
 carry a bound dispatch descriptor so `tag_resolver`, `tag_map`,
 `resolve_type`, and `possible_types` do not have to be rediscovered through
 runtime-cache hash lookups per field.
+Likewise, child blocks should be rebound directly onto lowered instructions so
+object/list/abstract execution does not linearly search blocks by name during
+the hot loop.
 
 ### 3. Query Lowering Pipeline
 

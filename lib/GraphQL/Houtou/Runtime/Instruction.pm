@@ -24,6 +24,8 @@ sub new {
     abstract_child_blocks => $args{abstract_child_blocks} || {},
     bound_slot => $args{bound_slot},
     abstract_dispatch => $args{abstract_dispatch},
+    bound_child_block => $args{bound_child_block},
+    bound_abstract_child_blocks => $args{bound_abstract_child_blocks} || {},
   }, $class;
 }
 
@@ -44,6 +46,8 @@ sub child_block_name { return $_[0]{child_block_name} }
 sub abstract_child_blocks { return $_[0]{abstract_child_blocks} }
 sub bound_slot { return $_[0]{bound_slot} }
 sub abstract_dispatch { return $_[0]{abstract_dispatch} }
+sub bound_child_block { return $_[0]{bound_child_block} }
+sub bound_abstract_child_blocks { return $_[0]{bound_abstract_child_blocks} }
 
 sub to_struct {
   my ($self) = @_;

@@ -16,6 +16,7 @@ sub new {
     variables => $args{variables} || {},
     root_value => $args{root_value},
     promise_code => $args{promise_code},
+    empty_args => $args{empty_args} || {},
   }, $class;
 }
 
@@ -28,5 +29,6 @@ sub context { return $_[0]{context} }
 sub variables { return $_[0]{variables} }
 sub root_value { return $_[0]{root_value} }
 sub promise_code { return $_[0]{promise_code} }
+sub empty_args { return $_[0]{empty_args} }
 
 1;

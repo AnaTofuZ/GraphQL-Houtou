@@ -14,8 +14,11 @@ sub new {
     complete_op => $args{complete_op},
     dispatch_family => $args{dispatch_family},
     has_args => $args{has_args} ? 1 : 0,
+    args_mode => $args{args_mode} || 'NONE',
+    args_payload => $args{args_payload},
     has_directives => $args{has_directives} ? 1 : 0,
     child_block_name => $args{child_block_name},
+    abstract_child_blocks => $args{abstract_child_blocks} || {},
   }, $class;
 }
 
@@ -26,8 +29,11 @@ sub resolve_op { return $_[0]{resolve_op} }
 sub complete_op { return $_[0]{complete_op} }
 sub dispatch_family { return $_[0]{dispatch_family} }
 sub has_args { return $_[0]{has_args} }
+sub args_mode { return $_[0]{args_mode} }
+sub args_payload { return $_[0]{args_payload} }
 sub has_directives { return $_[0]{has_directives} }
 sub child_block_name { return $_[0]{child_block_name} }
+sub abstract_child_blocks { return $_[0]{abstract_child_blocks} }
 
 sub to_struct {
   my ($self) = @_;
@@ -39,9 +45,21 @@ sub to_struct {
     complete_op => $self->{complete_op},
     dispatch_family => $self->{dispatch_family},
     has_args => $self->{has_args},
+    args_mode => $self->{args_mode},
+    args_payload => _clone_value($self->{args_payload}),
     has_directives => $self->{has_directives},
     child_block_name => $self->{child_block_name},
+    abstract_child_blocks => { %{ $self->{abstract_child_blocks} || {} } },
   };
+}
+
+sub _clone_value {
+  my ($value) = @_;
+  my $ref = ref($value);
+  return $value if !$ref;
+  return [ map { _clone_value($_) } @$value ] if $ref eq 'ARRAY';
+  return { map { $_ => _clone_value($value->{$_}) } keys %$value } if $ref eq 'HASH';
+  return $value;
 }
 
 1;

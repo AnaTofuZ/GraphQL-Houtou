@@ -45,17 +45,27 @@ sub _lower_selection_block {
   my ($state, $type_name, $schema_block, $selections, $base_name) = @_;
   my %schema_slots = map { ($_->field_name => $_) } @{ $schema_block->slots || [] };
   my @instructions;
+  my $field_selections = _normalize_selections($selections, $type_name);
 
-  for my $selection (@{ $selections || [] }) {
+  for my $selection (@{ $field_selections || [] }) {
     next if !$selection || ($selection->{kind} || '') ne 'field';
     my $field_name = $selection->{name};
     my $slot = $schema_slots{$field_name} or next;
     my $child_block;
+    my $abstract_child_blocks;
+    my ($args_mode, $args_payload) = _lower_arguments($selection->{arguments});
 
     if ($selection->{selections} && @{ $selection->{selections} }) {
       my $child_type_name = $slot->return_type_name;
-      my $child_schema_block = $state->{runtime_schema}->program->block_by_type_name($child_type_name);
-      if ($child_schema_block) {
+      if (($slot->completion_family || '') eq 'ABSTRACT') {
+        $abstract_child_blocks = _lower_abstract_child_blocks(
+          $state,
+          $child_type_name,
+          $selection->{selections},
+          $base_name . q(.) . $field_name,
+        );
+      }
+      elsif (my $child_schema_block = $state->{runtime_schema}->program->block_by_type_name($child_type_name)) {
         $child_block = _lower_selection_block(
           $state,
           $child_type_name,
@@ -74,8 +84,11 @@ sub _lower_selection_block {
       complete_op => _complete_op_for_slot($slot),
       dispatch_family => $slot->dispatch_family,
       has_args => $slot->has_args,
+      args_mode => $args_mode,
+      args_payload => $args_payload,
       has_directives => $slot->has_directives,
       child_block_name => $child_block ? $child_block->name : undef,
+      abstract_child_blocks => $abstract_child_blocks,
     );
   }
 
@@ -95,10 +108,104 @@ sub _next_block_name {
   return $name;
 }
 
+sub _lower_abstract_child_blocks {
+  my ($state, $abstract_type_name, $selections, $base_name) = @_;
+  my $possible_types = $state->{runtime_schema}->runtime_cache->{possible_types}{$abstract_type_name} || [];
+  my %blocks;
+
+  for my $type (@$possible_types) {
+    next if !$type || !$type->isa('GraphQL::Houtou::Type::Object');
+    my $schema_block = $state->{runtime_schema}->program->block_by_type_name($type->name) or next;
+    my $block = _lower_selection_block(
+      $state,
+      $type->name,
+      $schema_block,
+      $selections,
+      $base_name . q(.) . $type->name,
+    );
+    $blocks{ $type->name } = $block->name if $block;
+  }
+
+  return \%blocks;
+}
+
+sub _normalize_selections {
+  my ($selections, $type_name) = @_;
+  my @normalized;
+
+  for my $selection (@{ $selections || [] }) {
+    next if !$selection;
+    my $kind = $selection->{kind} || '';
+    if ($kind eq 'field') {
+      push @normalized, $selection;
+      next;
+    }
+    if ($kind eq 'inline_fragment') {
+      my $on = $selection->{on};
+      next if defined($on) && defined($type_name) && $on ne $type_name;
+      push @normalized, @{ _normalize_selections($selection->{selections} || [], $type_name) };
+      next;
+    }
+  }
+
+  return \@normalized;
+}
+
 sub _resolve_op_for_slot {
   my ($slot) = @_;
   return 'RESOLVE_EXPLICIT' if ($slot->resolver_shape || '') eq 'EXPLICIT';
   return 'RESOLVE_DEFAULT';
+}
+
+sub _lower_arguments {
+  my ($arguments) = @_;
+  return ('NONE', undef) if !$arguments || !keys %$arguments;
+  return ('STATIC', _materialize_static_value($arguments))
+    if !_contains_variable_refs($arguments);
+  return ('DYNAMIC', _clone_argument_value($arguments));
+}
+
+sub _contains_variable_refs {
+  my ($value) = @_;
+  my $ref = ref($value);
+  return 0 if !$ref;
+  return 1 if $ref eq 'SCALAR';
+  return _contains_variable_refs($$value) if $ref eq 'REF';
+  if ($ref eq 'ARRAY') {
+    for my $item (@$value) {
+      return 1 if _contains_variable_refs($item);
+    }
+    return 0;
+  }
+  if ($ref eq 'HASH') {
+    for my $key (keys %$value) {
+      return 1 if _contains_variable_refs($value->{$key});
+    }
+    return 0;
+  }
+  return 0;
+}
+
+sub _materialize_static_value {
+  my ($value) = @_;
+  my $ref = ref($value);
+  return $value if !$ref;
+  return $$$value if $ref eq 'REF';
+  return [ map { _materialize_static_value($_) } @$value ] if $ref eq 'ARRAY';
+  return { map { $_ => _materialize_static_value($value->{$_}) } keys %$value } if $ref eq 'HASH';
+  die "Unsupported static argument value ref '$ref' in greenfield runtime.\n"
+    if $ref eq 'SCALAR';
+  return $value;
+}
+
+sub _clone_argument_value {
+  my ($value) = @_;
+  my $ref = ref($value);
+  return $value if !$ref;
+  return $value if $ref eq 'REF' || $ref eq 'SCALAR';
+  return [ map { _clone_argument_value($_) } @$value ] if $ref eq 'ARRAY';
+  return { map { $_ => _clone_argument_value($value->{$_}) } keys %$value } if $ref eq 'HASH';
+  return $value;
 }
 
 sub _complete_op_for_slot {

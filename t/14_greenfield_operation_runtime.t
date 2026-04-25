@@ -44,6 +44,13 @@ my $schema = GraphQL::Houtou::Schema->new(
         type => $User,
         resolve => sub { +{ kind => 'user', id => 'u1', name => 'Ana' } },
       },
+      greet => {
+        type => $String,
+        args => {
+          name => { type => $String },
+        },
+        resolve => sub { 'hello' },
+      },
       search => {
         type => $SearchResult->list->non_null,
         resolve => sub { [] },
@@ -92,6 +99,21 @@ subtest 'execution program can round-trip through struct form' => sub {
   is $struct->{operation_type}, 'query', 'struct keeps operation type';
   is $struct->{root_block}, $program->root_block->name, 'struct keeps root block name';
   is $root_block->{instructions}[0]{complete_op}, 'COMPLETE_OBJECT', 'instruction op is serialized on root block';
+};
+
+subtest 'instruction lowering classifies static and dynamic args' => sub {
+  my $runtime = $schema->compile_runtime;
+  my $static = $runtime->compile_operation('{ greet(name: "Ana") }');
+  my $dynamic = $runtime->compile_operation('query Q($name: String) { greet(name: $name) }');
+
+  my ($static_greet) = grep { $_->field_name eq 'greet' } @{ $static->root_block->instructions };
+  my ($dynamic_greet) = grep { $_->field_name eq 'greet' } @{ $dynamic->root_block->instructions };
+
+  is $static_greet->args_mode, 'STATIC', 'static literal args are lowered as static payload';
+  is_deeply $static_greet->args_payload, { name => 'Ana' }, 'static args are materialized during lowering';
+
+  is $dynamic_greet->args_mode, 'DYNAMIC', 'variable args stay as dynamic payload';
+  ok exists $dynamic_greet->args_payload->{name}, 'dynamic payload keeps argument key';
 };
 
 done_testing;

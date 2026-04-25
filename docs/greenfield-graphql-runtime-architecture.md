@@ -54,6 +54,13 @@ This is the same general lesson that appears in high-performance tokenizer
 work: token kind and token value should not be eagerly bundled together if the
 hot path often needs only the kind.
 
+In execution terms:
+
+- completion family is the "kind"
+- scalar/object/list/abstract payload is the "value"
+- the runtime should not eagerly bundle them into a Perl envelope if the next
+  stage only needs the family discriminator
+
 ### 3. Keep Perl objects out of the hot path
 
 The hot path should not use Perl envelopes like:
@@ -68,6 +75,28 @@ Instead it should use native structs and only cross into Perl object space at:
 - error boundary
 - promise adapter boundary
 - user callback boundary
+
+In this document, **internal currency** means the primary data representation
+that hot-path helpers pass to one another. Good internal currency is not:
+
+- `{ data => ..., errors => ... }`
+- arbitrary `SV/HV/AV` tuples
+- AST-compatible node trees
+
+It is instead a small set of runtime-native structs such as:
+
+- execution state
+- cursor / slot
+- field frame
+- child outcome
+- sync outcome
+- result writer
+
+The design target is:
+
+- decide kind/shape first
+- keep payload native as long as possible
+- only materialize Perl-facing containers at a real boundary
 
 ### 3.5. Do not let PP fallback shape the runtime
 
@@ -210,6 +239,13 @@ Responsibilities:
 The runtime should never rediscover information that the lowering pipeline
 already knew.
 
+Arguments should follow the same split:
+
+- static literal arguments should be fully lowered at compile time
+- dynamic arguments should remain a compact payload template
+- variable-dependent payload should only be materialized at the field
+  execution boundary
+
 For a practical web application deployment, the expected flow should be:
 
 1. construct schema objects at boot
@@ -247,6 +283,18 @@ my $result = $runtime->execute_operation($program);
 
 Even this first executor should already use native internal currency
 (`state/cursor/outcome/writer`) instead of Perl completed envelopes.
+
+That narrow first executor should still support the core GraphQL shape families:
+
+- object child execution
+- list child execution
+- abstract dispatch
+
+For abstract dispatch, the preferred order remains:
+
+1. `tag_resolver` / `tag_map`
+2. `resolve_type`
+3. `possible_types + is_type_of` as slow fallback
 
 Internally, a greenfield runtime should own distinct structures for:
 

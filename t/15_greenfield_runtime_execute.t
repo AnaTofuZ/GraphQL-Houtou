@@ -5,15 +5,32 @@ use Test::More 0.98;
 
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Runtime qw(execute_operation);
+use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);
+use GraphQL::Houtou::Type::Union;
 
 my $User = GraphQL::Houtou::Type::Object->new(
   name => 'User',
+  runtime_tag => 'user',
   fields => {
     id => { type => $String->non_null },
     name => { type => $String },
   },
+);
+
+my $Node = GraphQL::Houtou::Type::Interface->new(
+  name => 'Node',
+  fields => {
+    id => { type => $String->non_null },
+  },
+  tag_resolver => sub { $_[0]{kind} },
+);
+
+my $SearchResult = GraphQL::Houtou::Type::Union->new(
+  name => 'SearchResult',
+  types => [ $User ],
+  tag_resolver => sub { $_[0]{kind} },
 );
 
 my $schema = GraphQL::Houtou::Schema->new(
@@ -29,9 +46,23 @@ my $schema = GraphQL::Houtou::Schema->new(
         type => $User->list,
         resolve => sub { [ +{ id => 'u1', name => 'Ana' }, +{ id => 'u2', name => 'Bob' } ] },
       },
+      greet => {
+        type => $String,
+        args => {
+          name => { type => $String },
+        },
+        resolve => sub {
+          my ($source, $args) = @_;
+          return "hello $args->{name}";
+        },
+      },
+      search => {
+        type => $SearchResult,
+        resolve => sub { +{ kind => 'user', id => 'u3', name => 'Cara' } },
+      },
     },
   ),
-  types => [ $User ],
+  types => [ $User, $Node, $SearchResult ],
 );
 
 subtest 'schema can execute greenfield runtime program' => sub {
@@ -69,6 +100,42 @@ subtest 'default resolver path reads root hash values' => sub {
     },
     errors => [],
   }, 'default resolver path works in greenfield runtime';
+};
+
+subtest 'abstract fields dispatch through lowered child blocks' => sub {
+  my $result = $schema->execute_runtime('{ search { ... on User { id name } } }');
+  is_deeply $result, {
+    data => {
+      search => {
+        id => 'u3',
+        name => 'Cara',
+      },
+    },
+    errors => [],
+  }, 'abstract field resolves through runtime tag dispatch';
+};
+
+subtest 'static literal args are executed through lowered payloads' => sub {
+  my $result = $schema->execute_runtime('{ greet(name: "Ana") }');
+  is_deeply $result, {
+    data => {
+      greet => 'hello Ana',
+    },
+    errors => [],
+  }, 'static args are passed to resolver';
+};
+
+subtest 'variable args are materialized at execution time' => sub {
+  my $result = $schema->execute_runtime(
+    'query Q($name: String) { greet(name: $name) }',
+    variables => { name => 'Bob' },
+  );
+  is_deeply $result, {
+    data => {
+      greet => 'hello Bob',
+    },
+    errors => [],
+  }, 'dynamic args are passed to resolver';
 };
 
 done_testing;

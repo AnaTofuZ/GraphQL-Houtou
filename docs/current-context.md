@@ -57,7 +57,7 @@ Greenfield scaffold checkpoint:
   - export/import runtime descriptors
   - lower source/AST into execution programs with root/child blocks and
     `RESOLVE_*` / `COMPLETE_*` instruction families
-  - execute sync/no-promise object/list/default-resolver programs through the
+  - execute sync/no-promise object/list/default-resolver/abstract-tag programs through the
     new runtime
 
 New greenfield entrypoints now include:
@@ -90,8 +90,40 @@ This is still structural, but it establishes the key boundary:
 - operation compile lowers request shape into immutable execution program
 - runtime execution consumes those two artifacts through
   `Outcome` / `Writer` internal currency
-- promise / abstract / arguments / directives / errors are still incomplete
+- promise / directives / errors are still incomplete
   and remain next-stage work
+
+Current greenfield internal-currency rule:
+
+- `Outcome` is kind-first (`SCALAR` / `OBJECT` / `LIST`)
+- payload stays separated by kind inside the runtime
+- Perl response envelopes are response-boundary artifacts, not hot-path
+  execution artifacts
+
+Current greenfield runtime coverage:
+
+- sync execution only
+- no promise adapter integration yet
+- object child execution
+- list child execution
+- abstract dispatch through:
+  - `tag_resolver`
+  - `resolve_type`
+  - `possible_types + is_type_of`
+- inline-fragment lowering for operation child blocks
+- static/dynamic argument lowering
+  - static literal args are materialized during lowering
+  - variable-dependent args are materialized at field execution time
+- explicit resolver ABI matches the existing runtime shape:
+  - `($source, $args, $context, $return_type)`
+
+Still intentionally missing:
+
+- fragment spread lowering
+- full variable/argument coercion into lowered instructions
+- directives
+- lazy `info/path/error` materialization
+- XS VM executor
 
 ## Pause Snapshot
 

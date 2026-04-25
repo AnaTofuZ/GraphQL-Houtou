@@ -9,6 +9,7 @@ use Moo;
 use Types::Standard qw(HashRef Object ArrayRef);
 
 use GraphQL::Houtou::Directive ();
+use GraphQL::Houtou::Runtime ();
 use GraphQL::Houtou::Type::Scalar qw($Int $Float $String $Boolean $ID);
 use GraphQL::Houtou::Introspection qw($SCHEMA_META_TYPE);
 
@@ -67,6 +68,26 @@ has _possible_type_map => (
 sub prepare_runtime {
   my ($self) = @_;
   return $self->_runtime_cache;
+}
+
+sub compile_runtime {
+  my ($self, %opts) = @_;
+  return GraphQL::Houtou::Runtime::compile_schema($self, %opts);
+}
+
+sub compile_runtime_graph {
+  my ($self, %opts) = @_;
+  return $self->compile_runtime(%opts);
+}
+
+sub compile_runtime_descriptor {
+  my ($self, %opts) = @_;
+  return $self->compile_runtime(%opts)->to_struct;
+}
+
+sub inflate_runtime {
+  my ($self, $descriptor) = @_;
+  return GraphQL::Houtou::Runtime::inflate_schema($self, $descriptor);
 }
 
 sub runtime_cache {

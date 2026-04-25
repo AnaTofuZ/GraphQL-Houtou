@@ -10,11 +10,46 @@ Design rule of thumb for the current VM work:
 - prefer widening family-owned corridors over adding local helper shortcuts
 - prefer lightweight abstract discriminators over `is_type_of` when the schema
   can provide them
+- for the greenfield runtime, do not treat PP fallback as a core design
+  requirement
 
 For the "if we restarted from zero" architecture that distills the lessons
 from these experiments, see:
 
 - `docs/greenfield-graphql-runtime-architecture.md`
+
+Current greenfield direction:
+
+- boot-time `compile_runtime` / `compile_runtime_graph` API
+- immutable schema graph
+- immutable lowered program / blocks / slots
+- mutable exec state / cursor / frame / writer
+- XS-first hot runtime, with no PP compatibility constraint in the core
+
+Greenfield scaffold checkpoint:
+
+- `GraphQL::Houtou::Schema` now exposes:
+  - `compile_runtime`
+  - `compile_runtime_graph`
+  - `compile_runtime_descriptor`
+  - `inflate_runtime`
+- new runtime namespace:
+  - `GraphQL::Houtou::Runtime`
+  - `GraphQL::Houtou::Runtime::Compiler`
+  - `GraphQL::Houtou::Runtime::SchemaGraph`
+  - `GraphQL::Houtou::Runtime::Program`
+  - `GraphQL::Houtou::Runtime::Block`
+  - `GraphQL::Houtou::Runtime::Slot`
+  - `GraphQL::Houtou::Runtime::ExecState`
+  - `GraphQL::Houtou::Runtime::Cursor`
+  - `GraphQL::Houtou::Runtime::Outcome`
+  - `GraphQL::Houtou::Runtime::Writer`
+- current scaffold is intentionally boot-time and structural:
+  - compile immutable schema graph
+  - compile root blocks and field slots
+  - classify resolver/completion/dispatch families
+  - export/import runtime descriptors
+  - do not yet execute through the new runtime
 
 ## Pause Snapshot
 

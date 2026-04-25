@@ -19,6 +19,7 @@ The goal is:
 - move the hot runtime to a native execution engine
 - delay Perl object materialization until an API boundary truly requires it
 - keep the runtime's internal currency native, small, and specialized
+- not design around a Pure Perl fallback for the hot runtime
 
 ## Design Principles
 
@@ -67,6 +68,24 @@ Instead it should use native structs and only cross into Perl object space at:
 - error boundary
 - promise adapter boundary
 - user callback boundary
+
+### 3.5. Do not let PP fallback shape the runtime
+
+For a greenfield runtime, PP should not be a design constraint.
+
+- boot-time schema compilation may still be written in Perl initially
+- public API glue may still be written in Perl initially
+- but the hot execution runtime should be designed as XS-first
+
+That means:
+
+- no duplicated "fast path" and "PP path" ownership in core runtime structs
+- no generic helper layering chosen only because PP also needs it
+- no requirement that internal runtime currency be representable as legacy Perl
+  envelopes
+
+If a compatibility-only PP path ever exists, it should wrap the architecture,
+not determine it.
 
 ### 4. Family-owned execution beats generic helper layering
 
@@ -141,8 +160,26 @@ $schema->dump_runtime_cache("var/schema.cache");
 my $runtime_schema = GraphQL::Houtou::Schema->load_runtime_cache("var/schema.cache");
 ```
 
+At the very least, the runtime should expose a structural artifact boundary:
+
+```perl
+my $runtime = $schema->compile_runtime;
+my $descriptor = $runtime->to_struct;
+my $inflated = $schema->inflate_runtime($descriptor);
+```
+
+This does not need to serialize user callbacks immediately. It is still useful
+to make the immutable runtime graph exportable and reloadable as a first-class
+artifact boundary.
+
 The purpose is not to cache resolver results. The purpose is to cache the
 static execution graph.
+
+The important distinction is:
+
+- resolver return values are request-local and generally not worth caching
+- resolver *shape* and *call metadata* are boot-time assets and should be
+  compiled once
 
 ### 3. Query Lowering Pipeline
 
@@ -172,6 +209,32 @@ Responsibilities:
 
 The runtime should never rediscover information that the lowering pipeline
 already knew.
+
+For a practical web application deployment, the expected flow should be:
+
+1. construct schema objects at boot
+2. compile schema runtime graph once
+3. optionally precompile common operations to lowered programs
+4. execute requests against immutable schema/program artifacts
+
+An initial public scaffold for this should look like:
+
+```perl
+my $runtime = $schema->compile_runtime;
+my $program = $runtime->program;
+my $root = $runtime->root_block('query');
+```
+
+Internally, a greenfield runtime should own distinct structures for:
+
+- schema graph
+- lowered program
+- block
+- slot
+- execution state
+- cursor
+- outcome
+- writer
 
 ### 4. VM Runtime Layer
 

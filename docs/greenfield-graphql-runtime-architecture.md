@@ -244,6 +244,10 @@ In practical terms, the compiled operation should also be rebound to
 schema-owned slot metadata before execution. The hot loop should not reconstruct
 resolver and return-type metadata through hash lookups per field when an
 immutable schema slot can be pointed to directly by the lowered instruction.
+The same applies to abstract dispatch metadata: lowered instructions should
+carry a bound dispatch descriptor so `tag_resolver`, `tag_map`,
+`resolve_type`, and `possible_types` do not have to be rediscovered through
+runtime-cache hash lookups per field.
 
 ### 3. Query Lowering Pipeline
 

@@ -173,6 +173,10 @@ Current greenfield runtime coverage:
   - explicit resolver and return type metadata are read from that slot instead
     of repeated runtime-cache field-map hash lookups
   - operation inflate rebinds instructions to schema slots after loading
+  - abstract completion instructions also keep a bound dispatch descriptor for
+    `tag_resolver`, `tag_map`, `resolve_type`, and `possible_types` metadata,
+    so abstract execution does not need to rediscover those through
+    runtime-cache hash lookups per field
 
 Still intentionally missing:
 

@@ -374,38 +374,44 @@ sub _complete_abstract {
 
 sub _resolve_runtime_type {
   my ($state, $block, $instruction, $value, $path_frame) = @_;
+  my $dispatch = $instruction->abstract_dispatch;
   my $cache = $state->runtime_schema->runtime_cache;
-  my $abstract_name = $instruction->return_type_name;
-  my $abstract_type = $cache->{name2type}{$abstract_name} or return;
+  my $abstract_name = $dispatch ? $dispatch->{abstract_name} : $instruction->return_type_name;
+  my $abstract_type = $dispatch ? $dispatch->{abstract_type} : $cache->{name2type}{$abstract_name};
+  return if !$abstract_type;
   my $info;
   my $build_info = sub {
     $info ||= _build_info($state, $block, $instruction, $path_frame);
     return $info;
   };
 
-  if (my $tag_resolver = $cache->{tag_resolver_map}{$abstract_name}) {
+  if (my $tag_resolver = $dispatch ? $dispatch->{tag_resolver} : $cache->{tag_resolver_map}{$abstract_name}) {
     my ($ok, $tag) = _capture_eval(sub {
       return $tag_resolver->($value, $state->context, $build_info->(), $abstract_type);
     });
     return (undef, _error_record($tag, $path_frame)) if !$ok;
     if (defined $tag) {
-      my $type = ($cache->{runtime_tag_map}{$abstract_name} || {})->{$tag};
+      my $tag_map = $dispatch ? $dispatch->{tag_map} : (($cache->{runtime_tag_map}{$abstract_name} || {}));
+      my $type = $tag_map->{$tag};
       return ($type, undef) if $type;
     }
   }
 
-  if (my $resolve_type = $cache->{resolve_type_map}{$abstract_name}) {
+  if (my $resolve_type = $dispatch ? $dispatch->{resolve_type} : $cache->{resolve_type_map}{$abstract_name}) {
     my ($ok, $resolved) = _capture_eval(sub {
       return $resolve_type->($value, $state->context, $build_info->(), $abstract_type);
     });
     return (undef, _error_record($resolved, $path_frame)) if !$ok;
     return if !defined $resolved;
-    return (ref($resolved) ? $resolved : $cache->{name2type}{$resolved}, undef);
+    my $name2type = $dispatch ? $dispatch->{name2type} : $cache->{name2type};
+    return (ref($resolved) ? $resolved : $name2type->{$resolved}, undef);
   }
 
-  for my $type (@{ $cache->{possible_types}{$abstract_name} || [] }) {
+  my $possible_types = $dispatch ? $dispatch->{possible_types} : ($cache->{possible_types}{$abstract_name} || []);
+  my $is_type_of_map = $dispatch ? $dispatch->{is_type_of_map} : $cache->{is_type_of_map};
+  for my $type (@{ $possible_types || [] }) {
     next if !$type;
-    my $cb = $cache->{is_type_of_map}{ $type->name } or next;
+    my $cb = $is_type_of_map->{ $type->name } or next;
     my ($ok, $matched) = _capture_eval(sub {
       return $cb->($value, $state->context, $build_info->(), $type);
     });

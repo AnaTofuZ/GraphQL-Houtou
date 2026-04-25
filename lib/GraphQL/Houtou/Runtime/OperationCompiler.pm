@@ -115,6 +115,9 @@ sub _lower_selection_block {
       child_block_name => $child_block ? $child_block->name : undef,
       abstract_child_blocks => $abstract_child_blocks,
       bound_slot => $slot,
+      abstract_dispatch => (($slot->completion_family || '') eq 'ABSTRACT')
+        ? _bind_abstract_dispatch($state->{runtime_schema}, $slot->return_type_name)
+        : undef,
     );
   }
 
@@ -173,10 +176,31 @@ sub _bind_instructions_to_schema_slots {
     my %slots = map { ($_->field_name => $_) } @{ $schema_block->slots || [] };
     for my $instruction (@{ $block->instructions || [] }) {
       $instruction->{bound_slot} = $slots{ $instruction->field_name };
+      $instruction->{abstract_dispatch} = _bind_abstract_dispatch(
+        $runtime_schema,
+        $instruction->return_type_name,
+      ) if ($instruction->complete_op || '') eq 'COMPLETE_ABSTRACT';
     }
   }
 
   return $blocks;
+}
+
+sub _bind_abstract_dispatch {
+  my ($runtime_schema, $abstract_name) = @_;
+  return undef if !defined $abstract_name;
+  my $cache = $runtime_schema->runtime_cache || {};
+  my $abstract_type = ($cache->{name2type} || {})->{$abstract_name} or return undef;
+  return {
+    abstract_name => $abstract_name,
+    abstract_type => $abstract_type,
+    tag_resolver => ($cache->{tag_resolver_map} || {})->{$abstract_name},
+    tag_map => ($cache->{runtime_tag_map} || {})->{$abstract_name} || {},
+    resolve_type => ($cache->{resolve_type_map} || {})->{$abstract_name},
+    possible_types => ($cache->{possible_types} || {})->{$abstract_name} || [],
+    is_type_of_map => $cache->{is_type_of_map} || {},
+    name2type => $cache->{name2type} || {},
+  };
 }
 
 sub _lower_abstract_child_blocks {

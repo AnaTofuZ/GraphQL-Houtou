@@ -59,6 +59,12 @@ sub lower_vm_program {
   return GraphQL::Houtou::Runtime::VMCompiler->lower_program($self, $program);
 }
 
+sub inflate_vm_program {
+  my ($self, $descriptor) = @_;
+  require GraphQL::Houtou::Runtime::VMCompiler;
+  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program($self, $descriptor);
+}
+
 sub to_struct {
   my ($self) = @_;
   return {

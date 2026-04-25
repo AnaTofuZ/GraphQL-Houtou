@@ -147,6 +147,29 @@ sub compile_vm_operation {
   return $runtime->lower_vm_program($program);
 }
 
+sub compile_vm_operation_descriptor {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_vm_operation($document, %opts)->to_struct;
+}
+
+sub inflate_vm_operation {
+  my ($self, $descriptor, %opts) = @_;
+  return $self->compile_runtime(%opts)->inflate_vm_program($descriptor);
+}
+
+sub dump_vm_operation_descriptor {
+  my ($self, $document, $path, %opts) = @_;
+  my $descriptor = $self->compile_vm_operation_descriptor($document, %opts);
+  _write_json_descriptor($path, $descriptor);
+  return $descriptor;
+}
+
+sub load_vm_operation_descriptor {
+  my ($self, $path, %opts) = @_;
+  my $descriptor = _read_json_descriptor($path);
+  return $self->inflate_vm_operation($descriptor, %opts);
+}
+
 sub runtime_cache {
   my ($self) = @_;
   return $self->{_runtime_cache};

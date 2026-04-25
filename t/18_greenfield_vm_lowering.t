@@ -53,4 +53,12 @@ subtest 'schema can lower operation into VM program' => sub {
   like $node->opcode, qr/^RESOLVE_.*:COMPLETE_ABSTRACT$/, 'node lowers to abstract completion opcode';
 };
 
+subtest 'VM program descriptor can round-trip through schema helpers' => sub {
+  my $descriptor = $schema->compile_vm_operation_descriptor('{ viewer { id } }');
+  my $vm = $schema->inflate_vm_operation($descriptor);
+  isa_ok $vm, 'GraphQL::Houtou::Runtime::VMProgram';
+  isa_ok $vm->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
+  is $vm->root_block->ops->[0]->field_name, 'viewer', 'inflated VM program keeps field op';
+};
+
 done_testing;

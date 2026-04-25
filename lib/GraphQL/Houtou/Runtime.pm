@@ -17,6 +17,7 @@ our @EXPORT_OK = qw(
   inflate_operation
   execute_operation
   lower_vm_program
+  inflate_vm_program
 );
 
 sub compile_schema {
@@ -41,6 +42,10 @@ sub execute_operation {
 
 sub lower_vm_program {
   return GraphQL::Houtou::Runtime::VMCompiler->lower_program(@_);
+}
+
+sub inflate_vm_program {
+  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program(@_);
 }
 
 1;

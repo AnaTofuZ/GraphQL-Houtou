@@ -5,6 +5,7 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use JSON::PP ();
 use Moo;
 use Types::Standard qw(HashRef Object ArrayRef);
 
@@ -91,6 +92,19 @@ sub inflate_runtime {
   return GraphQL::Houtou::Runtime::inflate_schema($self, $descriptor);
 }
 
+sub dump_runtime_descriptor {
+  my ($self, $path, %opts) = @_;
+  my $descriptor = $self->compile_runtime_descriptor(%opts);
+  _write_json_descriptor($path, $descriptor);
+  return $descriptor;
+}
+
+sub load_runtime_descriptor {
+  my ($self, $path) = @_;
+  my $descriptor = _read_json_descriptor($path);
+  return $self->inflate_runtime($descriptor);
+}
+
 sub compile_operation {
   my ($self, $document, %opts) = @_;
   return $self->compile_runtime(%opts)->compile_operation($document, %opts);
@@ -104,6 +118,19 @@ sub compile_operation_descriptor {
 sub inflate_operation {
   my ($self, $descriptor, %opts) = @_;
   return $self->compile_runtime(%opts)->inflate_operation($descriptor);
+}
+
+sub dump_operation_descriptor {
+  my ($self, $document, $path, %opts) = @_;
+  my $descriptor = $self->compile_operation_descriptor($document, %opts);
+  _write_json_descriptor($path, $descriptor);
+  return $descriptor;
+}
+
+sub load_operation_descriptor {
+  my ($self, $path, %opts) = @_;
+  my $descriptor = _read_json_descriptor($path);
+  return $self->inflate_operation($descriptor, %opts);
 }
 
 sub execute_runtime {
@@ -233,6 +260,23 @@ sub _build_name2type {
   my %name2type;
   _expand_type_houtou(\%name2type, $_) for @types;
   return \%name2type;
+}
+
+sub _write_json_descriptor {
+  my ($path, $descriptor) = @_;
+  open my $fh, '>', $path or die "Cannot write descriptor '$path': $!";
+  print {$fh} JSON::PP->new->canonical->encode($descriptor);
+  close $fh or die "Cannot close descriptor '$path': $!";
+  return;
+}
+
+sub _read_json_descriptor {
+  my ($path) = @_;
+  open my $fh, '<', $path or die "Cannot read descriptor '$path': $!";
+  local $/;
+  my $json = <$fh>;
+  close $fh or die "Cannot close descriptor '$path': $!";
+  return JSON::PP->new->decode($json);
 }
 
 sub _does_any_role {

@@ -33,6 +33,10 @@ Current greenfield direction:
   - schema helpers now expose:
     - `compile_operation_descriptor`
     - `inflate_operation`
+    - `dump_operation_descriptor`
+    - `load_operation_descriptor`
+    - `dump_runtime_descriptor`
+    - `load_runtime_descriptor`
 
 Greenfield scaffold checkpoint:
 

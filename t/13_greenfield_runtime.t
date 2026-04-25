@@ -2,6 +2,7 @@ use strict;
 use warnings;
 
 use Test::More 0.98;
+use File::Temp qw(tempfile);
 
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Runtime qw(compile_schema inflate_schema);
@@ -87,6 +88,17 @@ subtest 'runtime graph can round-trip through descriptor form' => sub {
   is $inflated->root_block('query')->name, 'QUERY', 'inflated graph restores root block';
   is $inflated->root_block('query')->slots->[0]->can('field_name') ? 1 : 0, 1, 'inflated slot object responds to accessors';
   is_deeply $inflated->to_struct, $descriptor, 'descriptor round-trip is stable';
+};
+
+subtest 'runtime descriptor can round-trip through JSON file helpers' => sub {
+  my ($fh, $path) = tempfile();
+  close $fh;
+
+  my $descriptor = $schema->dump_runtime_descriptor($path);
+  my $inflated = $schema->load_runtime_descriptor($path);
+
+  isa_ok $inflated, 'GraphQL::Houtou::Runtime::SchemaGraph';
+  is_deeply $inflated->to_struct, $descriptor, 'schema helper preserves runtime descriptor through file boundary';
 };
 
 done_testing;

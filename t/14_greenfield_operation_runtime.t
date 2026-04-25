@@ -2,6 +2,7 @@ use strict;
 use warnings;
 
 use Test::More 0.98;
+use File::Temp qw(tempfile);
 
 use GraphQL::Houtou::Runtime qw(compile_operation inflate_operation);
 use GraphQL::Houtou::Schema;
@@ -123,6 +124,17 @@ subtest 'schema helper can compile and inflate operation descriptors' => sub {
 
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::ExecutionProgram';
   is $inflated->root_block->type_name, 'Query', 'schema helper inflates operation root block';
+};
+
+subtest 'operation descriptor can round-trip through JSON file helpers' => sub {
+  my ($fh, $path) = tempfile();
+  close $fh;
+
+  my $descriptor = $schema->dump_operation_descriptor('{ viewer { id } }', $path);
+  my $inflated = $schema->load_operation_descriptor($path);
+
+  isa_ok $inflated, 'GraphQL::Houtou::Runtime::ExecutionProgram';
+  is_deeply $inflated->to_struct, $descriptor, 'schema helper preserves operation descriptor through file boundary';
 };
 
 subtest 'instruction lowering classifies static and dynamic args' => sub {

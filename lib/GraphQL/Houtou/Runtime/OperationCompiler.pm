@@ -88,6 +88,7 @@ sub _lower_selection_block {
       resolve_op => _resolve_op_for_slot($slot),
       complete_op => _complete_op_for_slot($slot),
       dispatch_family => $slot->dispatch_family,
+      arg_defs => $slot->arg_defs,
       has_args => $slot->has_args,
       args_mode => $args_mode,
       args_payload => $args_payload,
@@ -188,7 +189,7 @@ sub _lower_variable_defs {
   for my $name (sort keys %$variables) {
     my $def = $variables->{$name} || {};
     $defs{$name} = {
-      type => $def->{type},
+      type => { type => _clone_argument_value($def->{type}) },
       has_default => exists $def->{default_value} ? 1 : 0,
       default_value => exists $def->{default_value}
         ? _materialize_static_value($def->{default_value})

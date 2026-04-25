@@ -13,6 +13,7 @@ sub new {
     resolve_op => $args{resolve_op},
     complete_op => $args{complete_op},
     dispatch_family => $args{dispatch_family},
+    arg_defs => $args{arg_defs} || {},
     has_args => $args{has_args} ? 1 : 0,
     args_mode => $args{args_mode} || 'NONE',
     args_payload => $args{args_payload},
@@ -30,6 +31,7 @@ sub return_type_name { return $_[0]{return_type_name} }
 sub resolve_op { return $_[0]{resolve_op} }
 sub complete_op { return $_[0]{complete_op} }
 sub dispatch_family { return $_[0]{dispatch_family} }
+sub arg_defs { return $_[0]{arg_defs} }
 sub has_args { return $_[0]{has_args} }
 sub args_mode { return $_[0]{args_mode} }
 sub args_payload { return $_[0]{args_payload} }
@@ -48,6 +50,7 @@ sub to_struct {
     resolve_op => $self->{resolve_op},
     complete_op => $self->{complete_op},
     dispatch_family => $self->{dispatch_family},
+    arg_defs => _clone_value($self->{arg_defs}),
     has_args => $self->{has_args},
     args_mode => $self->{args_mode},
     args_payload => _clone_value($self->{args_payload}),

@@ -246,13 +246,21 @@ Arguments should follow the same split:
 - variable-dependent payload should only be materialized at the field
   execution boundary
 
+The execution artifact should also carry enough type metadata to coerce inputs
+without rediscovering schema facts at execution time:
+
+- variable definitions should lower to compact type descriptors
+- field argument definitions should lower to compact type/default descriptors
+- execution should coerce variables and arguments from those lowered
+  descriptors, rather than falling back to legacy argument walkers
+
 Operation variables should also be part of the execution artifact:
 
 - variable definitions should be lowered onto the immutable execution program
 - provided runtime variables should be merged with lowered defaults when
   execution state is created
-- full coercion can remain a later typed-runtime step, but the artifact
-  boundary should exist from the start
+- variable coercion should happen from those lowered descriptors when execution
+  state is created
 
 Directive handling should follow the same model:
 

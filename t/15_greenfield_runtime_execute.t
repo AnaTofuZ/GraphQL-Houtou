@@ -8,8 +8,17 @@ use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Runtime qw(execute_operation);
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
-use GraphQL::Houtou::Type::Scalar qw($String);
+use GraphQL::Houtou::Type::InputObject;
+use GraphQL::Houtou::Type::Scalar qw($Int $String);
 use GraphQL::Houtou::Type::Union;
+
+my $ProfileInput = GraphQL::Houtou::Type::InputObject->new(
+  name => 'ProfileInput',
+  fields => {
+    name => { type => $String->non_null },
+    age => { type => $Int, default_value => 20 },
+  },
+);
 
 my $User = GraphQL::Houtou::Type::Object->new(
   name => 'User',
@@ -57,13 +66,33 @@ my $schema = GraphQL::Houtou::Schema->new(
           return "hello $args->{name}";
         },
       },
+      addOne => {
+        type => $Int,
+        args => {
+          value => { type => $Int->non_null },
+        },
+        resolve => sub {
+          my ($source, $args) = @_;
+          return $args->{value} + 1;
+        },
+      },
+      describeProfile => {
+        type => $String,
+        args => {
+          profile => { type => $ProfileInput->non_null },
+        },
+        resolve => sub {
+          my ($source, $args) = @_;
+          return join q(:), $args->{profile}{name}, $args->{profile}{age};
+        },
+      },
       search => {
         type => $SearchResult,
         resolve => sub { +{ kind => 'user', id => 'u3', name => 'Cara' } },
       },
     },
   ),
-  types => [ $User, $Node, $SearchResult ],
+  types => [ $User, $Node, $SearchResult, $ProfileInput ],
 );
 
 subtest 'schema can execute greenfield runtime program' => sub {
@@ -149,6 +178,44 @@ subtest 'variable defaults are materialized from lowered program metadata' => su
     },
     errors => [],
   }, 'variable defaults flow through execution program metadata';
+};
+
+subtest 'variable values are coerced through lowered variable defs' => sub {
+  my $result = $schema->execute_runtime(
+    'query Q($value: Int!) { addOne(value: $value) }',
+    variables => { value => '41' },
+  );
+  is_deeply $result, {
+    data => {
+      addOne => 42,
+    },
+    errors => [],
+  }, 'variable coercion uses graphql_to_perl';
+};
+
+subtest 'argument values are coerced through lowered arg defs' => sub {
+  my $result = $schema->execute_runtime(
+    '{ describeProfile(profile: { name: "Ana" }) }',
+  );
+  is_deeply $result, {
+    data => {
+      describeProfile => 'Ana:20',
+    },
+    errors => [],
+  }, 'static arg coercion uses input defaults';
+};
+
+subtest 'dynamic argument values are coerced through lowered arg defs' => sub {
+  my $result = $schema->execute_runtime(
+    'query Q($profile: ProfileInput!) { describeProfile(profile: $profile) }',
+    variables => { profile => { name => 'Bob' } },
+  );
+  is_deeply $result, {
+    data => {
+      describeProfile => 'Bob:20',
+    },
+    errors => [],
+  }, 'dynamic arg coercion uses lowered arg defs';
 };
 
 subtest 'fragment spreads execute through lowered child blocks' => sub {

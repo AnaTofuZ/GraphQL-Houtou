@@ -41,10 +41,15 @@ sub uplift {
   my $fields = $self->fields;
 
   return $item if !defined $item;
-  return $self->hashmap($item, $fields, sub {
-    my ($key, $value) = @_;
-    return $fields->{$key}{type}->uplift($value // $fields->{$key}{default_value});
-  });
+  die "found not an object" if ref($item) ne 'HASH';
+  _assert_known_fields($item, $fields);
+  my %uplifted;
+  for my $key (sort keys %$fields) {
+    next if !exists $item->{$key} && !exists $fields->{$key}{default_value};
+    my $value = exists $item->{$key} ? $item->{$key} : $fields->{$key}{default_value};
+    $uplifted{$key} = $fields->{$key}{type}->uplift($value);
+  }
+  return \%uplifted;
 }
 
 sub graphql_to_perl {
@@ -54,9 +59,13 @@ sub graphql_to_perl {
   return $item if !defined $item;
   die "found not an object" if ref($item) ne 'HASH';
   $item = $self->uplift($item);
-  return $self->hashmap($item, $fields, sub {
-    return $fields->{$_[0]}{type}->graphql_to_perl($_[1]);
-  });
+  my %value;
+  for my $key (sort keys %$fields) {
+    next if !exists $item->{$key} && !exists $fields->{$key}{default_value};
+    my $raw = exists $item->{$key} ? $item->{$key} : $fields->{$key}{default_value};
+    $value{$key} = $fields->{$key}{type}->graphql_to_perl($raw);
+  }
+  return \%value;
 }
 
 sub perl_to_graphql {
@@ -66,9 +75,20 @@ sub perl_to_graphql {
   return $item if !defined $item;
   die "found not an object" if ref($item) ne 'HASH';
   $item = $self->uplift($item);
-  return $self->hashmap($item, $fields, sub {
-    return $fields->{$_[0]}{type}->perl_to_graphql($_[1]);
-  });
+  my %value;
+  for my $key (sort keys %$fields) {
+    next if !exists $item->{$key} && !exists $fields->{$key}{default_value};
+    my $raw = exists $item->{$key} ? $item->{$key} : $fields->{$key}{default_value};
+    $value{$key} = $fields->{$key}{type}->perl_to_graphql($raw);
+  }
+  return \%value;
+}
+
+sub _assert_known_fields {
+  my ($item, $fields) = @_;
+  my @unknown = grep { !exists $fields->{$_} } sort keys %{$item || {}};
+  die join '', map qq{In field "$_": Unknown field.\n}, @unknown if @unknown;
+  return;
 }
 
 1;

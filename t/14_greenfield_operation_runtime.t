@@ -122,7 +122,7 @@ subtest 'operation variable definitions are lowered into immutable program metad
 
   is_deeply $program->variable_defs, {
     name => {
-      type => 'String',
+      type => { type => 'String' },
       has_default => 1,
       default_value => 'Ana',
     },

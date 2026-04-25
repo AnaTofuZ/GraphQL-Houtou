@@ -117,6 +117,14 @@ Current greenfield runtime coverage:
   - variable-dependent args are materialized at field execution time
 - operation variable definitions are lowered into immutable program metadata
   - execution merges provided variables with lowered defaults
+  - provided/default values are coerced through lowered variable type
+    descriptors when execution state is created
+- field argument definitions are lowered into immutable slot/instruction
+  metadata
+  - static and dynamic arg payloads are coerced through lowered arg type
+    descriptors before resolver dispatch
+  - input object defaults now flow through typed coercion in the greenfield
+    runtime path
 - `@include` / `@skip` lowering
   - static directives prune selections during lowering
   - dynamic directives are kept as runtime guard payload on instructions
@@ -125,10 +133,24 @@ Current greenfield runtime coverage:
 
 Still intentionally missing:
 
-- full variable/argument coercion into lowered instructions
 - directives beyond `@include` / `@skip`
 - lazy `info/path/error` materialization
 - XS VM executor
+
+Latest greenfield checkpoint:
+
+- lowered variable defs and field arg defs now carry compact type metadata
+- executor coerces variables via lowered program metadata at exec-state build
+- executor coerces static/dynamic args via lowered instruction metadata before
+  resolver dispatch
+- `GraphQL::Houtou::Type::InputObject` now preserves field defaults during
+  `graphql_to_perl` / `perl_to_graphql`, which the greenfield runtime relies on
+- validation:
+  - `perl -Ilib t/14_greenfield_operation_runtime.t`
+  - `perl -Ilib t/15_greenfield_runtime_execute.t`
+  - `minil test t/14_greenfield_operation_runtime.t t/15_greenfield_runtime_execute.t`
+  - `minil test`
+  - latest full test run: `Files=16, Tests=222, Result: PASS`
 
 ## Pause Snapshot
 

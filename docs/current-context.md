@@ -11,6 +11,11 @@ Design rule of thumb for the current VM work:
 - prefer lightweight abstract discriminators over `is_type_of` when the schema
   can provide them
 
+For the "if we restarted from zero" architecture that distills the lessons
+from these experiments, see:
+
+- `docs/greenfield-graphql-runtime-architecture.md`
+
 ## Pause Snapshot
 
 Current pause point for `proj/compiled-ir-vm-runtime`:

@@ -6,8 +6,9 @@ use warnings;
 
 use Exporter 'import';
 use GraphQL::Houtou::Runtime::Compiler ();
+use GraphQL::Houtou::Runtime::OperationCompiler ();
 
-our @EXPORT_OK = qw(compile_schema inflate_schema);
+our @EXPORT_OK = qw(compile_schema inflate_schema compile_operation);
 
 sub compile_schema {
   return GraphQL::Houtou::Runtime::Compiler->compile_schema(@_);
@@ -15,6 +16,10 @@ sub compile_schema {
 
 sub inflate_schema {
   return GraphQL::Houtou::Runtime::Compiler->inflate_schema(@_);
+}
+
+sub compile_operation {
+  return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation(@_);
 }
 
 1;

@@ -82,16 +82,24 @@ sub _build_program {
   my @blocks;
   my %root_blocks;
   my %root_types;
+  my %blocks_by_type;
+
+  for my $type_name (sort keys %{ $runtime_cache->{name2type} || {} }) {
+    my $type = $runtime_cache->{name2type}{$type_name} or next;
+    next if !$type->isa('GraphQL::Houtou::Type::Object');
+    my $block = GraphQL::Houtou::Runtime::Block->new(
+      name => uc($type_name),
+      family => 'OBJECT',
+      root_type_name => $type->name,
+      slots => _build_slots_for_object($type),
+    );
+    push @blocks, $block;
+    $blocks_by_type{ $type->name } = $block;
+  }
 
   for my $root_name (qw(query mutation subscription)) {
     my $root_type = $runtime_cache->{root_types}{$root_name} or next;
-    my $block = GraphQL::Houtou::Runtime::Block->new(
-      name => uc($root_name),
-      family => 'ROOT',
-      root_type_name => $root_type->name,
-      slots => _build_slots_for_object($root_type),
-    );
-    push @blocks, $block;
+    my $block = $blocks_by_type{ $root_type->name } or next;
     $root_blocks{$root_name} = $block;
     $root_types{$root_name} = $root_type->name;
   }

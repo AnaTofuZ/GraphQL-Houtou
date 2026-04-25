@@ -10,6 +10,7 @@ use Types::Standard qw(HashRef Object ArrayRef);
 
 use GraphQL::Houtou::Directive ();
 use GraphQL::Houtou::Runtime ();
+use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Type::Scalar qw($Int $Float $String $Boolean $ID);
 use GraphQL::Houtou::Introspection qw($SCHEMA_META_TYPE);
 
@@ -88,6 +89,11 @@ sub compile_runtime_descriptor {
 sub inflate_runtime {
   my ($self, $descriptor) = @_;
   return GraphQL::Houtou::Runtime::inflate_schema($self, $descriptor);
+}
+
+sub compile_operation {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_runtime(%opts)->compile_operation($document, %opts);
 }
 
 sub runtime_cache {

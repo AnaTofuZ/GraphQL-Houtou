@@ -20,6 +20,16 @@ sub root_block {
   return $self->{root_blocks}{$name};
 }
 
+sub block_by_type_name {
+  my ($self, $type_name) = @_;
+  return if !defined $type_name;
+  for my $block (@{ $self->{blocks} || [] }) {
+    next if !defined $block->root_type_name;
+    return $block if $block->root_type_name eq $type_name;
+  }
+  return;
+}
+
 sub to_struct {
   my ($self) = @_;
   my @blocks = map { $_->to_struct } @{ $self->{blocks} || [] };

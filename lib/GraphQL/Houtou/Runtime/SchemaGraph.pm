@@ -30,6 +30,17 @@ sub root_block {
   return $self->{program} ? $self->{program}->root_block($name) : undef;
 }
 
+sub block_by_type_name {
+  my ($self, $type_name) = @_;
+  return $self->{program} ? $self->{program}->block_by_type_name($type_name) : undef;
+}
+
+sub compile_operation {
+  my ($self, $document, %opts) = @_;
+  require GraphQL::Houtou::Runtime::OperationCompiler;
+  return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation($self, $document, %opts);
+}
+
 sub to_struct {
   my ($self) = @_;
   return {

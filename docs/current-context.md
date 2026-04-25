@@ -23,6 +23,7 @@ Current greenfield direction:
 - boot-time `compile_runtime` / `compile_runtime_graph` API
 - immutable schema graph
 - immutable lowered program / blocks / slots
+- immutable execution-lowered operation program / blocks / instructions
 - mutable exec state / cursor / frame / writer
 - XS-first hot runtime, with no PP compatibility constraint in the core
 
@@ -36,10 +37,14 @@ Greenfield scaffold checkpoint:
 - new runtime namespace:
   - `GraphQL::Houtou::Runtime`
   - `GraphQL::Houtou::Runtime::Compiler`
+  - `GraphQL::Houtou::Runtime::OperationCompiler`
   - `GraphQL::Houtou::Runtime::SchemaGraph`
   - `GraphQL::Houtou::Runtime::Program`
   - `GraphQL::Houtou::Runtime::Block`
   - `GraphQL::Houtou::Runtime::Slot`
+  - `GraphQL::Houtou::Runtime::ExecutionProgram`
+  - `GraphQL::Houtou::Runtime::ExecutionBlock`
+  - `GraphQL::Houtou::Runtime::Instruction`
   - `GraphQL::Houtou::Runtime::ExecState`
   - `GraphQL::Houtou::Runtime::Cursor`
   - `GraphQL::Houtou::Runtime::Outcome`
@@ -49,7 +54,36 @@ Greenfield scaffold checkpoint:
   - compile root blocks and field slots
   - classify resolver/completion/dispatch families
   - export/import runtime descriptors
+  - lower source/AST into execution programs with root/child blocks and
+    `RESOLVE_*` / `COMPLETE_*` instruction families
   - do not yet execute through the new runtime
+
+New greenfield entrypoints now include:
+
+- `GraphQL::Houtou::Runtime::compile_operation($runtime_schema, $document)`
+- `$schema->compile_operation($document)`
+- `$runtime_schema->compile_operation($document)`
+
+Current operation lowering shape:
+
+- input:
+  - source string or legacy parsed operation AST
+- output:
+  - immutable execution program
+  - root block
+  - child blocks
+  - field instructions
+- each instruction currently owns:
+  - `resolve_op`
+  - `complete_op`
+  - `dispatch_family`
+  - `child_block_name`
+
+This is still structural, but it establishes the key boundary:
+
+- schema compile produces immutable runtime graph
+- operation compile lowers request shape into immutable execution program
+- future VM execution will consume those two artifacts
 
 ## Pause Snapshot
 

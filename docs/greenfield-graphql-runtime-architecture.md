@@ -225,12 +225,26 @@ my $program = $runtime->program;
 my $root = $runtime->root_block('query');
 ```
 
+The next required scaffold is operation lowering:
+
+```perl
+my $runtime = $schema->compile_runtime;
+my $exec = $runtime->compile_operation('{ viewer { id name } }');
+my $root_block = $exec->root_block;
+```
+
+That operation-lowered artifact should already be immutable and should not
+depend on legacy AST nodes after compilation.
+
 Internally, a greenfield runtime should own distinct structures for:
 
 - schema graph
 - lowered program
 - block
 - slot
+- execution program
+- execution block
+- instruction
 - execution state
 - cursor
 - outcome

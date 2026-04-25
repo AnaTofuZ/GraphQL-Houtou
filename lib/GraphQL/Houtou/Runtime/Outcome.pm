@@ -9,7 +9,7 @@ sub new {
   my $kind = $args{kind} || 'NONE';
   my $self = {
     kind => $kind,
-    errors => $args{errors} || [],
+    error_records => $args{error_records} || [],
     completed => $args{completed},
   };
   $self->{scalar_value} = $args{scalar_value} if exists $args{scalar_value};
@@ -30,7 +30,7 @@ sub value {
   return $self->{list_value} if ($self->{kind} || '') eq 'LIST';
   return $self->{value};
 }
-sub errors { return $_[0]{errors} }
+sub error_records { return $_[0]{error_records} }
 sub completed { return $_[0]{completed} }
 
 1;

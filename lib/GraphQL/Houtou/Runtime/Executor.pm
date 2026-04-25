@@ -11,8 +11,10 @@ use GraphQL::Houtou::Promise::Adapter qw(
   then_promise
 );
 use GraphQL::Houtou::Runtime::Cursor ();
+use GraphQL::Houtou::Runtime::ErrorRecord ();
 use GraphQL::Houtou::Runtime::ExecState ();
 use GraphQL::Houtou::Runtime::Outcome ();
+use GraphQL::Houtou::Runtime::PathFrame ();
 use GraphQL::Houtou::Runtime::Writer ();
 
 sub execute_operation {
@@ -37,25 +39,29 @@ sub execute_operation {
     return then_promise($promise_code, $data, sub {
       return {
         data => $_[0],
-        errors => [ @{ $writer->errors || [] } ],
+        errors => $writer->materialize_errors,
       };
     });
   }
   return {
     data => $data,
-    errors => [ @{ $writer->errors || [] } ],
+    errors => $writer->materialize_errors,
   };
 }
 
 sub _execute_block {
-  my ($state, $block, $source) = @_;
+  my ($state, $block, $source, $base_path) = @_;
   my %data;
   my @pending_names;
   my @pending_outcomes;
 
   for my $instruction (@{ $block->instructions || [] }) {
     next if !_should_execute_instruction($state, $instruction);
-    my $outcome = _execute_instruction($state, $block, $instruction, $source);
+    my $path_frame = GraphQL::Houtou::Runtime::PathFrame->new(
+      parent => $base_path,
+      key => $instruction->result_name,
+    );
+    my $outcome = _execute_instruction($state, $block, $instruction, $source, $path_frame);
     if (_is_promise($state, $outcome)) {
       push @pending_names, $instruction->result_name;
       push @pending_outcomes, $outcome;
@@ -80,30 +86,47 @@ sub _execute_block {
 }
 
 sub _execute_instruction {
-  my ($state, $block, $instruction, $source) = @_;
-  my $value = _resolve_field_value($state, $block, $instruction, $source);
+  my ($state, $block, $instruction, $source, $path_frame) = @_;
+  my ($ok, $value) = _capture_eval(sub {
+    return _resolve_field_value($state, $block, $instruction, $source);
+  });
+
+  if (!$ok) {
+    return _error_outcome($value, $path_frame);
+  }
+
   if (_is_promise($state, $value)) {
     return then_promise($state->promise_code, $value, sub {
-      return _complete_resolved_value($state, $instruction, $_[0]);
+      my ($resolved_value) = @_;
+      my ($complete_ok, $outcome) = _capture_eval(sub {
+        return _complete_resolved_value($state, $instruction, $resolved_value, $path_frame);
+      });
+      return $complete_ok ? $outcome : _error_outcome($outcome, $path_frame);
+    }, sub {
+      return _error_outcome($_[0], $path_frame);
     });
   }
-  return _complete_resolved_value($state, $instruction, $value);
+
+  my ($complete_ok, $outcome) = _capture_eval(sub {
+    return _complete_resolved_value($state, $instruction, $value, $path_frame);
+  });
+  return $complete_ok ? $outcome : _error_outcome($outcome, $path_frame);
 }
 
 sub _complete_resolved_value {
-  my ($state, $instruction, $value) = @_;
+  my ($state, $instruction, $value, $path_frame) = @_;
   my $op = $instruction->complete_op || 'COMPLETE_GENERIC';
 
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if $op eq 'COMPLETE_GENERIC';
 
-  return _complete_object($state, $instruction, $value)
+  return _complete_object($state, $instruction, $value, $path_frame)
     if $op eq 'COMPLETE_OBJECT';
 
-  return _complete_list($state, $instruction, $value)
+  return _complete_list($state, $instruction, $value, $path_frame)
     if $op eq 'COMPLETE_LIST';
 
-  return _complete_abstract($state, $instruction, $value)
+  return _complete_abstract($state, $instruction, $value, $path_frame)
     if $op eq 'COMPLETE_ABSTRACT';
 
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'VALUE', value => $value);
@@ -259,7 +282,7 @@ sub _coerce_input_value {
 }
 
 sub _complete_object {
-  my ($state, $instruction, $value) = @_;
+  my ($state, $instruction, $value, $path_frame) = @_;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
 
@@ -267,7 +290,7 @@ sub _complete_object {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$child;
 
-  my $child_value = _execute_block($state, $child, $value);
+  my $child_value = _execute_block($state, $child, $value, $path_frame);
   if (_is_promise($state, $child_value)) {
     return then_promise($state->promise_code, $child_value, sub {
       return GraphQL::Houtou::Runtime::Outcome->new(
@@ -284,7 +307,7 @@ sub _complete_object {
 }
 
 sub _complete_list {
-  my ($state, $instruction, $value) = @_;
+  my ($state, $instruction, $value, $path_frame) = @_;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
 
@@ -292,9 +315,14 @@ sub _complete_list {
     if ref($value) ne 'ARRAY';
 
   my $child = $state->program->block_by_name($instruction->child_block_name);
-  my @items = map {
-    $child ? _execute_block($state, $child, $_) : $_
-  } @$value;
+  my @items;
+  for my $i (0 .. $#$value) {
+    my $item_path = GraphQL::Houtou::Runtime::PathFrame->new(
+      parent => $path_frame,
+      key => $i,
+    );
+    push @items, $child ? _execute_block($state, $child, $value->[$i], $item_path) : $value->[$i];
+  }
 
   if (grep { _is_promise($state, $_) } @items) {
     my $aggregate = all_promise($state->promise_code, @items);
@@ -308,11 +336,16 @@ sub _complete_list {
 }
 
 sub _complete_abstract {
-  my ($state, $instruction, $value) = @_;
+  my ($state, $instruction, $value, $path_frame) = @_;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
 
-  my $runtime_type = _resolve_runtime_type($state, $instruction, $value);
+  my ($runtime_type, $error_record) = _resolve_runtime_type($state, $instruction, $value, $path_frame);
+  return GraphQL::Houtou::Runtime::Outcome->new(
+    kind => 'SCALAR',
+    scalar_value => undef,
+    error_records => [ $error_record ],
+  ) if $error_record;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$runtime_type;
 
@@ -321,7 +354,7 @@ sub _complete_abstract {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$child;
 
-  my $child_value = _execute_block($state, $child, $value);
+  my $child_value = _execute_block($state, $child, $value, $path_frame);
   if (_is_promise($state, $child_value)) {
     return then_promise($state->promise_code, $child_value, sub {
       return GraphQL::Houtou::Runtime::Outcome->new(
@@ -338,40 +371,80 @@ sub _complete_abstract {
 }
 
 sub _resolve_runtime_type {
-  my ($state, $instruction, $value) = @_;
+  my ($state, $instruction, $value, $path_frame) = @_;
   my $cache = $state->runtime_schema->runtime_cache;
   my $abstract_name = $instruction->return_type_name;
   my $abstract_type = $cache->{name2type}{$abstract_name} or return;
 
   if (my $tag_resolver = $cache->{tag_resolver_map}{$abstract_name}) {
-    my $tag = $tag_resolver->($value, $state->context, $abstract_type);
+    my ($ok, $tag) = _capture_eval(sub {
+      return $tag_resolver->($value, $state->context, $abstract_type);
+    });
+    return (undef, _error_record($tag, $path_frame)) if !$ok;
     if (defined $tag) {
       my $type = ($cache->{runtime_tag_map}{$abstract_name} || {})->{$tag};
-      return $type if $type;
+      return ($type, undef) if $type;
     }
   }
 
   if (my $resolve_type = $cache->{resolve_type_map}{$abstract_name}) {
-    my $resolved = $resolve_type->($value, $state->context, undef, $abstract_type);
+    my ($ok, $resolved) = _capture_eval(sub {
+      return $resolve_type->($value, $state->context, undef, $abstract_type);
+    });
+    return (undef, _error_record($resolved, $path_frame)) if !$ok;
     return if !defined $resolved;
-    return ref($resolved) ? $resolved : $cache->{name2type}{$resolved};
+    return (ref($resolved) ? $resolved : $cache->{name2type}{$resolved}, undef);
   }
 
   for my $type (@{ $cache->{possible_types}{$abstract_name} || [] }) {
     next if !$type;
     my $cb = $cache->{is_type_of_map}{ $type->name } or next;
-    return $type if $cb->($value, $state->context, undef, $type);
+    my ($ok, $matched) = _capture_eval(sub {
+      return $cb->($value, $state->context, undef, $type);
+    });
+    return (undef, _error_record($matched, $path_frame)) if !$ok;
+    return ($type, undef) if $matched;
   }
 
-  return;
+  return (undef, undef);
 }
 
 sub _consume_outcome {
   my ($writer, $data, $result_name, $outcome) = @_;
   return if !$outcome;
   $data->{$result_name} = $outcome->value;
-  push @{ $writer->errors }, @{ $outcome->errors || [] } if @{ $outcome->errors || [] };
+  push @{ $writer->error_records }, @{ $outcome->error_records || [] } if @{ $outcome->error_records || [] };
   return;
+}
+
+sub _capture_eval {
+  my ($cb) = @_;
+  my $ok = eval { 1 };
+  my ($result, @rest);
+  $ok = eval {
+    $result = $cb->();
+    1;
+  };
+  return (0, $@) if !$ok;
+  return (1, $result);
+}
+
+sub _error_record {
+  my ($error, $path_frame) = @_;
+  chomp $error if defined $error;
+  return GraphQL::Houtou::Runtime::ErrorRecord->new(
+    message => "$error",
+    path_frame => $path_frame,
+  );
+}
+
+sub _error_outcome {
+  my ($error, $path_frame) = @_;
+  return GraphQL::Houtou::Runtime::Outcome->new(
+    kind => 'SCALAR',
+    scalar_value => undef,
+    error_records => [ _error_record($error, $path_frame) ],
+  );
 }
 
 sub _is_promise {

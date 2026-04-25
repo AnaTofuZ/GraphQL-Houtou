@@ -137,11 +137,16 @@ Current greenfield runtime coverage:
     adapter
   - final response envelopes are only materialized after promise resolution at
     the execution boundary
+- lazy path/error skeleton:
+  - resolver and abstract-dispatch exceptions are first captured as native-ish
+    `ErrorRecord` objects
+  - path is carried as parent-linked `PathFrame`
+  - Perl error hashes are materialized only at the final writer boundary
 
 Still intentionally missing:
 
 - directives beyond `@include` / `@skip`
-- lazy `info/path/error` materialization
+- lazy `info` materialization
 - XS VM executor
 
 Latest greenfield checkpoint:

@@ -575,6 +575,8 @@ These should all be boundary-oriented and lazy.
 
 - keep native error sink / aggregation as long as possible
 - Perl error object creation only at the reporting boundary
+- resolver and abstract-dispatch exceptions should first become lightweight
+  native error records carrying a path chain, not immediate Perl hashes
 
 ## Web Application Model
 

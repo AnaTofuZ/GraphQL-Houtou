@@ -116,4 +116,22 @@ subtest 'instruction lowering classifies static and dynamic args' => sub {
   ok exists $dynamic_greet->args_payload->{name}, 'dynamic payload keeps argument key';
 };
 
+subtest 'fragment spreads are normalized into lowered child blocks' => sub {
+  my $runtime = $schema->compile_runtime;
+  my $program = $runtime->compile_operation(<<'GRAPHQL');
+query Q {
+  viewer { ...UserBits }
+}
+
+fragment UserBits on User {
+  id
+  name
+}
+GRAPHQL
+
+  my ($viewer) = grep { $_->field_name eq 'viewer' } @{ $program->root_block->instructions };
+  my $child = $program->block_by_name($viewer->child_block_name);
+  is_deeply [ map { $_->field_name } @{ $child->instructions } ], [ qw(id name) ], 'fragment spread fields are lowered into child block';
+};
+
 done_testing;

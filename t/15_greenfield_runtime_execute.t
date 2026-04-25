@@ -138,4 +138,27 @@ subtest 'variable args are materialized at execution time' => sub {
   }, 'dynamic args are passed to resolver';
 };
 
+subtest 'fragment spreads execute through lowered child blocks' => sub {
+  my $result = $schema->execute_runtime(<<'GRAPHQL');
+query Q {
+  viewer { ...UserBits }
+}
+
+fragment UserBits on User {
+  id
+  name
+}
+GRAPHQL
+
+  is_deeply $result, {
+    data => {
+      viewer => {
+        id => 'u1',
+        name => 'Ana',
+      },
+    },
+    errors => [],
+  }, 'fragment spread path executes in greenfield runtime';
+};
+
 done_testing;

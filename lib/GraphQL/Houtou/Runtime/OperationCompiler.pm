@@ -14,6 +14,8 @@ sub compile_operation {
   my $ast = ref($document) ? $document : parse($document);
   my ($operation) = grep { ($_->{kind} || '') eq 'operation' } @{ $ast || [] };
   die "No operation found for greenfield runtime.\n" if !$operation;
+  my %fragments = map { (($_->{name} || '') => $_) }
+    grep { ($_->{kind} || '') eq 'fragment' } @{ $ast || [] };
 
   my $operation_type = $operation->{operation} || 'query';
   my $schema_block = $runtime_schema->program->root_block($operation_type)
@@ -23,6 +25,7 @@ sub compile_operation {
     runtime_schema => $runtime_schema,
     block_index => 0,
     blocks => [],
+    fragments => \%fragments,
   );
 
   my $root_block = _lower_selection_block(
@@ -45,7 +48,7 @@ sub _lower_selection_block {
   my ($state, $type_name, $schema_block, $selections, $base_name) = @_;
   my %schema_slots = map { ($_->field_name => $_) } @{ $schema_block->slots || [] };
   my @instructions;
-  my $field_selections = _normalize_selections($selections, $type_name);
+  my $field_selections = _normalize_selections($state, $selections, $type_name);
 
   for my $selection (@{ $field_selections || [] }) {
     next if !$selection || ($selection->{kind} || '') ne 'field';
@@ -130,7 +133,8 @@ sub _lower_abstract_child_blocks {
 }
 
 sub _normalize_selections {
-  my ($selections, $type_name) = @_;
+  my ($state, $selections, $type_name, $visited) = @_;
+  $visited ||= {};
   my @normalized;
 
   for my $selection (@{ $selections || [] }) {
@@ -143,7 +147,17 @@ sub _normalize_selections {
     if ($kind eq 'inline_fragment') {
       my $on = $selection->{on};
       next if defined($on) && defined($type_name) && $on ne $type_name;
-      push @normalized, @{ _normalize_selections($selection->{selections} || [], $type_name) };
+      push @normalized, @{ _normalize_selections($state, $selection->{selections} || [], $type_name, $visited) };
+      next;
+    }
+    if ($kind eq 'fragment_spread') {
+      my $name = $selection->{name} || '';
+      next if !$name || $visited->{$name};
+      my $fragment = $state->{fragments}{$name} or next;
+      my $on = $fragment->{on};
+      next if defined($on) && defined($type_name) && $on ne $type_name;
+      local $visited->{$name} = 1;
+      push @normalized, @{ _normalize_selections($state, $fragment->{selections} || [], $type_name, $visited) };
       next;
     }
   }

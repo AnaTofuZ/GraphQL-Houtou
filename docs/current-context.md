@@ -166,6 +166,13 @@ Current greenfield runtime coverage:
     `($source, $args, $context, $info, $return_type)`
     so greenfield can preserve the existing callback surface while keeping
     `info` cold
+  - default resolver and hot execution no longer build the lazy `info`
+    surface unless an explicit resolver or abstract callback actually needs it
+- hot-path metadata binding:
+  - lowered instructions keep a bound schema slot in memory
+  - explicit resolver and return type metadata are read from that slot instead
+    of repeated runtime-cache field-map hash lookups
+  - operation inflate rebinds instructions to schema slots after loading
 
 Still intentionally missing:
 

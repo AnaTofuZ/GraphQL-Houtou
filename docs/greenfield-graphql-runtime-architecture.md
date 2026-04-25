@@ -71,6 +71,8 @@ The same rule applies to resolver metadata:
   be materialized lazily behind that surface
 - hot execution should treat `info` as a cold boundary object, not as part of
   the internal currency
+- even the lazy `info` wrapper should only be created when a resolver or
+  abstract callback actually needs it
 
 ### 3. Keep Perl objects out of the hot path
 
@@ -237,6 +239,11 @@ my $inflated = $runtime->inflate_operation($descriptor);
 That boundary is useful even before introducing a binary serializer because it
 makes "compile once at boot, reuse many times during requests" a first-class
 part of the runtime design.
+
+In practical terms, the compiled operation should also be rebound to
+schema-owned slot metadata before execution. The hot loop should not reconstruct
+resolver and return-type metadata through hash lookups per field when an
+immutable schema slot can be pointed to directly by the lowered instruction.
 
 ### 3. Query Lowering Pipeline
 

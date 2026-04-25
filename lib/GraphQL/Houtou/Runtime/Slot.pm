@@ -16,6 +16,8 @@ sub new {
     arg_defs => $args{arg_defs} || {},
     has_args => $args{has_args} ? 1 : 0,
     has_directives => $args{has_directives} ? 1 : 0,
+    resolve => $args{resolve},
+    return_type => $args{return_type},
   }, $class;
 }
 
@@ -28,6 +30,8 @@ sub dispatch_family { return $_[0]{dispatch_family} }
 sub arg_defs { return $_[0]{arg_defs} }
 sub has_args { return $_[0]{has_args} }
 sub has_directives { return $_[0]{has_directives} }
+sub resolve { return $_[0]{resolve} }
+sub return_type { return $_[0]{return_type} }
 
 sub to_struct {
   my ($self) = @_;

@@ -135,15 +135,15 @@ sub _complete_resolved_value {
 
 sub _resolve_field_value {
   my ($state, $block, $instruction, $source, $path_frame) = @_;
-  my $field_map = $state->runtime_schema->runtime_cache->{field_maps}{ $block->type_name } || {};
-  my $field = $field_map->{ $instruction->field_name } || {};
-  my $resolver = $field->{resolve};
-  my $return_type = $field->{type}
-    || $state->runtime_schema->runtime_cache->{name2type}{ $instruction->return_type_name };
+  my $slot = $instruction->bound_slot;
+  my $resolver = $slot ? $slot->resolve : undef;
+  my $return_type = $slot && $slot->return_type
+    ? $slot->return_type
+    : $state->runtime_schema->runtime_cache->{name2type}{ $instruction->return_type_name };
   my $args = _resolve_instruction_args($state, $instruction);
-  my $info = _build_info($state, $block, $instruction, $path_frame);
 
   if ($resolver) {
+    my $info = _build_info($state, $block, $instruction, $path_frame);
     return $resolver->($source, $args, $state->context, $info, $return_type);
   }
 
@@ -377,11 +377,15 @@ sub _resolve_runtime_type {
   my $cache = $state->runtime_schema->runtime_cache;
   my $abstract_name = $instruction->return_type_name;
   my $abstract_type = $cache->{name2type}{$abstract_name} or return;
-  my $info = _build_info($state, $block, $instruction, $path_frame);
+  my $info;
+  my $build_info = sub {
+    $info ||= _build_info($state, $block, $instruction, $path_frame);
+    return $info;
+  };
 
   if (my $tag_resolver = $cache->{tag_resolver_map}{$abstract_name}) {
     my ($ok, $tag) = _capture_eval(sub {
-      return $tag_resolver->($value, $state->context, $info, $abstract_type);
+      return $tag_resolver->($value, $state->context, $build_info->(), $abstract_type);
     });
     return (undef, _error_record($tag, $path_frame)) if !$ok;
     if (defined $tag) {
@@ -392,7 +396,7 @@ sub _resolve_runtime_type {
 
   if (my $resolve_type = $cache->{resolve_type_map}{$abstract_name}) {
     my ($ok, $resolved) = _capture_eval(sub {
-      return $resolve_type->($value, $state->context, $info, $abstract_type);
+      return $resolve_type->($value, $state->context, $build_info->(), $abstract_type);
     });
     return (undef, _error_record($resolved, $path_frame)) if !$ok;
     return if !defined $resolved;
@@ -403,7 +407,7 @@ sub _resolve_runtime_type {
     next if !$type;
     my $cb = $cache->{is_type_of_map}{ $type->name } or next;
     my ($ok, $matched) = _capture_eval(sub {
-      return $cb->($value, $state->context, $info, $type);
+      return $cb->($value, $state->context, $build_info->(), $type);
     });
     return (undef, _error_record($matched, $path_frame)) if !$ok;
     return ($type, undef) if $matched;

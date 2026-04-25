@@ -32,6 +32,7 @@ sub inflate_schema {
   my ($class, $schema, $struct) = @_;
   my $runtime_cache = $schema->prepare_runtime;
   my $program = _inflate_program($struct->{program} || {});
+  _rebind_program_runtime_metadata($runtime_cache, $program);
 
   return GraphQL::Houtou::Runtime::SchemaGraph->new(
     version => $struct->{version} || 1,
@@ -169,10 +170,32 @@ sub _build_slots_for_object {
       arg_defs => _build_input_defs($field->{args} || {}),
       has_args => ($field->{args} && keys %{ $field->{args} }) ? 1 : 0,
       has_directives => ($field->{directives} && @{ $field->{directives} }) ? 1 : 0,
+      resolve => $field->{resolve},
+      return_type => $return_type,
     );
   }
 
   return \@slots;
+}
+
+sub _rebind_program_runtime_metadata {
+  my ($runtime_cache, $program) = @_;
+
+  for my $block (@{ $program->blocks || [] }) {
+    my $type_name = $block->root_type_name;
+    next if !defined $type_name;
+    my $type = ($runtime_cache->{name2type} || {})->{$type_name} or next;
+    next if !$type->isa('GraphQL::Houtou::Type::Object');
+    my $fields = $type->fields || {};
+
+    for my $slot (@{ $block->slots || [] }) {
+      my $field = $fields->{ $slot->field_name } || {};
+      $slot->{resolve} = $field->{resolve};
+      $slot->{return_type} = $field->{type};
+    }
+  }
+
+  return $program;
 }
 
 sub _type_name {

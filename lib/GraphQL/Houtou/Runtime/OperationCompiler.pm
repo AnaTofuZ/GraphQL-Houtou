@@ -50,6 +50,7 @@ sub inflate_operation {
   my @blocks = map { _inflate_execution_block($_) } @{ $struct->{blocks} || [] };
   my %by_name = map { ($_->name => $_) } @blocks;
   my $root_block = defined $struct->{root_block} ? $by_name{ $struct->{root_block} } : undef;
+  _bind_instructions_to_schema_slots($runtime_schema, \@blocks);
 
   return GraphQL::Houtou::Runtime::ExecutionProgram->new(
     version => $struct->{version} || 1,
@@ -113,6 +114,7 @@ sub _lower_selection_block {
       directives_payload => $directives_payload,
       child_block_name => $child_block ? $child_block->name : undef,
       abstract_child_blocks => $abstract_child_blocks,
+      bound_slot => $slot,
     );
   }
 
@@ -161,6 +163,20 @@ sub _inflate_instruction {
     child_block_name => $struct->{child_block_name},
     abstract_child_blocks => _clone_argument_value($struct->{abstract_child_blocks} || {}),
   );
+}
+
+sub _bind_instructions_to_schema_slots {
+  my ($runtime_schema, $blocks) = @_;
+
+  for my $block (@{ $blocks || [] }) {
+    my $schema_block = $runtime_schema->program->block_by_type_name($block->type_name) or next;
+    my %slots = map { ($_->field_name => $_) } @{ $schema_block->slots || [] };
+    for my $instruction (@{ $block->instructions || [] }) {
+      $instruction->{bound_slot} = $slots{ $instruction->field_name };
+    }
+  }
+
+  return $blocks;
 }
 
 sub _lower_abstract_child_blocks {

@@ -236,6 +236,18 @@ my $root_block = $exec->root_block;
 That operation-lowered artifact should already be immutable and should not
 depend on legacy AST nodes after compilation.
 
+The first executable checkpoint after that should be a deliberately narrow
+sync runtime:
+
+```perl
+my $runtime = $schema->compile_runtime;
+my $program = $runtime->compile_operation('{ viewer { id } }');
+my $result = $runtime->execute_operation($program);
+```
+
+Even this first executor should already use native internal currency
+(`state/cursor/outcome/writer`) instead of Perl completed envelopes.
+
 Internally, a greenfield runtime should own distinct structures for:
 
 - schema graph

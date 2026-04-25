@@ -45,6 +45,7 @@ Greenfield scaffold checkpoint:
   - `GraphQL::Houtou::Runtime::ExecutionProgram`
   - `GraphQL::Houtou::Runtime::ExecutionBlock`
   - `GraphQL::Houtou::Runtime::Instruction`
+  - `GraphQL::Houtou::Runtime::Executor`
   - `GraphQL::Houtou::Runtime::ExecState`
   - `GraphQL::Houtou::Runtime::Cursor`
   - `GraphQL::Houtou::Runtime::Outcome`
@@ -56,13 +57,17 @@ Greenfield scaffold checkpoint:
   - export/import runtime descriptors
   - lower source/AST into execution programs with root/child blocks and
     `RESOLVE_*` / `COMPLETE_*` instruction families
-  - do not yet execute through the new runtime
+  - execute sync/no-promise object/list/default-resolver programs through the
+    new runtime
 
 New greenfield entrypoints now include:
 
 - `GraphQL::Houtou::Runtime::compile_operation($runtime_schema, $document)`
+- `GraphQL::Houtou::Runtime::execute_operation($runtime_schema, $program, %opts)`
 - `$schema->compile_operation($document)`
 - `$runtime_schema->compile_operation($document)`
+- `$runtime_schema->execute_operation($program, %opts)`
+- `$schema->execute_runtime($document, %opts)`
 
 Current operation lowering shape:
 
@@ -83,7 +88,10 @@ This is still structural, but it establishes the key boundary:
 
 - schema compile produces immutable runtime graph
 - operation compile lowers request shape into immutable execution program
-- future VM execution will consume those two artifacts
+- runtime execution consumes those two artifacts through
+  `Outcome` / `Writer` internal currency
+- promise / abstract / arguments / directives / errors are still incomplete
+  and remain next-stage work
 
 ## Pause Snapshot
 

@@ -41,6 +41,12 @@ sub compile_operation {
   return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation($self, $document, %opts);
 }
 
+sub execute_operation {
+  my ($self, $program, %opts) = @_;
+  require GraphQL::Houtou::Runtime::Executor;
+  return GraphQL::Houtou::Runtime::Executor->execute_operation($self, $program, %opts);
+}
+
 sub to_struct {
   my ($self) = @_;
   return {

@@ -96,6 +96,13 @@ sub compile_operation {
   return $self->compile_runtime(%opts)->compile_operation($document, %opts);
 }
 
+sub execute_runtime {
+  my ($self, $document, %opts) = @_;
+  my $runtime = $self->compile_runtime(%opts);
+  my $program = $runtime->compile_operation($document, %opts);
+  return $runtime->execute_operation($program, %opts);
+}
+
 sub runtime_cache {
   my ($self) = @_;
   return $self->{_runtime_cache};

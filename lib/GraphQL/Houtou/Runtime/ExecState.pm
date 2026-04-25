@@ -7,6 +7,7 @@ use warnings;
 sub new {
   my ($class, %args) = @_;
   return bless {
+    runtime_schema => $args{runtime_schema},
     program => $args{program},
     cursor => $args{cursor},
     frame => $args{frame},
@@ -18,6 +19,7 @@ sub new {
   }, $class;
 }
 
+sub runtime_schema { return $_[0]{runtime_schema} }
 sub program { return $_[0]{program} }
 sub cursor { return $_[0]{cursor} }
 sub frame { return $_[0]{frame} }

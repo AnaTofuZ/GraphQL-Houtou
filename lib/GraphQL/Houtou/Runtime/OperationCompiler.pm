@@ -58,6 +58,7 @@ sub _lower_selection_block {
     my $child_block;
     my $abstract_child_blocks;
     my ($args_mode, $args_payload) = _lower_arguments($selection->{arguments});
+    my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
 
     if ($selection->{selections} && @{ $selection->{selections} }) {
       my $child_type_name = $slot->return_type_name;
@@ -90,7 +91,9 @@ sub _lower_selection_block {
       has_args => $slot->has_args,
       args_mode => $args_mode,
       args_payload => $args_payload,
-      has_directives => $slot->has_directives,
+      has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
+      directives_mode => $directives_mode,
+      directives_payload => $directives_payload,
       child_block_name => $child_block ? $child_block->name : undef,
       abstract_child_blocks => $abstract_child_blocks,
     );
@@ -134,21 +137,27 @@ sub _lower_abstract_child_blocks {
 }
 
 sub _normalize_selections {
-  my ($state, $selections, $type_name, $visited) = @_;
+  my ($state, $selections, $type_name, $visited, $inherited_guards) = @_;
   $visited ||= {};
+  $inherited_guards ||= [];
   my @normalized;
 
   for my $selection (@{ $selections || [] }) {
     next if !$selection;
     my $kind = $selection->{kind} || '';
+    my ($allowed, $dynamic_guards) = _partition_runtime_guards($selection->{directives});
+    next if !$allowed;
+    my $combined_guards = [ @$inherited_guards, @$dynamic_guards ];
     if ($kind eq 'field') {
-      push @normalized, $selection;
+      my %copy = %$selection;
+      $copy{_runtime_guards} = $combined_guards if @$combined_guards;
+      push @normalized, \%copy;
       next;
     }
     if ($kind eq 'inline_fragment') {
       my $on = $selection->{on};
       next if defined($on) && defined($type_name) && $on ne $type_name;
-      push @normalized, @{ _normalize_selections($state, $selection->{selections} || [], $type_name, $visited) };
+      push @normalized, @{ _normalize_selections($state, $selection->{selections} || [], $type_name, $visited, $combined_guards) };
       next;
     }
     if ($kind eq 'fragment_spread') {
@@ -158,7 +167,7 @@ sub _normalize_selections {
       my $on = $fragment->{on};
       next if defined($on) && defined($type_name) && $on ne $type_name;
       local $visited->{$name} = 1;
-      push @normalized, @{ _normalize_selections($state, $fragment->{selections} || [], $type_name, $visited) };
+      push @normalized, @{ _normalize_selections($state, $fragment->{selections} || [], $type_name, $visited, $combined_guards) };
       next;
     }
   }
@@ -187,6 +196,43 @@ sub _lower_variable_defs {
     };
   }
   return \%defs;
+}
+
+sub _lower_directives {
+  my ($directives) = @_;
+  return ('NONE', undef) if !$directives || !@$directives;
+  return ('STATIC', _materialize_static_value($directives))
+    if !_contains_variable_refs($directives);
+  return ('DYNAMIC', _clone_argument_value($directives));
+}
+
+sub _partition_runtime_guards {
+  my ($directives) = @_;
+  return (1, []) if !$directives || !@$directives;
+  my @dynamic;
+  for my $directive (@$directives) {
+    next if !$directive;
+    my $name = $directive->{name} || '';
+    next if $name ne 'include' && $name ne 'skip';
+    my $arguments = $directive->{arguments} || {};
+    my $if_value = $arguments->{if};
+    if (!_contains_variable_refs($if_value)) {
+      my $bool = _directive_truthy(_materialize_static_value($if_value));
+      return (0, []) if $name eq 'skip' && $bool;
+      return (0, []) if $name eq 'include' && !$bool;
+      next;
+    }
+    push @dynamic, {
+      name => $name,
+      arguments => _clone_argument_value($arguments),
+    };
+  }
+  return (1, \@dynamic);
+}
+
+sub _directive_truthy {
+  my ($value) = @_;
+  return $value ? 1 : 0;
 }
 
 sub _lower_arguments {

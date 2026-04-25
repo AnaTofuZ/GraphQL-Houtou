@@ -37,6 +37,7 @@ sub _execute_block {
   my %data;
 
   for my $instruction (@{ $block->instructions || [] }) {
+    next if !_should_execute_instruction($state, $instruction);
     my $outcome = _execute_instruction($state, $block, $instruction, $source);
     _consume_outcome($state->writer, \%data, $instruction->result_name, $outcome);
   }
@@ -87,6 +88,28 @@ sub _resolve_instruction_args {
   return $state->empty_args if $mode eq 'NONE';
   return $instruction->args_payload if $mode eq 'STATIC';
   return _materialize_dynamic_args($instruction->args_payload, $state->variables || {});
+}
+
+sub _should_execute_instruction {
+  my ($state, $instruction) = @_;
+  my $mode = $instruction->directives_mode || 'NONE';
+  return 1 if $mode eq 'NONE';
+  my $guards = $instruction->directives_payload || [];
+  return _evaluate_runtime_guards($guards, $state->variables || {});
+}
+
+sub _evaluate_runtime_guards {
+  my ($guards, $variables) = @_;
+  for my $directive (@{ $guards || [] }) {
+    next if !$directive;
+    my $name = $directive->{name} || '';
+    my $arguments = $directive->{arguments} || {};
+    my $if_value = _materialize_dynamic_args($arguments->{if}, $variables);
+    my $bool = $if_value ? 1 : 0;
+    return 0 if $name eq 'skip' && $bool;
+    return 0 if $name eq 'include' && !$bool;
+  }
+  return 1;
 }
 
 sub _prepare_variables {

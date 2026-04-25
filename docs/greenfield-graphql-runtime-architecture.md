@@ -254,6 +254,13 @@ Operation variables should also be part of the execution artifact:
 - full coercion can remain a later typed-runtime step, but the artifact
   boundary should exist from the start
 
+Directive handling should follow the same model:
+
+- static `@include` / `@skip` decisions should prune selections during lowering
+- dynamic `@include` / `@skip` should be preserved as compact instruction guards
+- the hot runtime should evaluate only the compact guard payload, not generic
+  directive nodes
+
 For a practical web application deployment, the expected flow should be:
 
 1. construct schema objects at boot

@@ -1,6 +1,7 @@
 use strict;
 use warnings;
 
+use JSON::PP ();
 use Test::More 0.98;
 
 use GraphQL::Houtou::Schema;
@@ -171,6 +172,38 @@ GRAPHQL
     },
     errors => [],
   }, 'fragment spread path executes in greenfield runtime';
+};
+
+subtest 'dynamic include directives execute through lowered runtime guards' => sub {
+  my $result = $schema->execute_runtime(
+    'query Q($show: Boolean) { viewer { id name @include(if: $show) } }',
+    variables => { show => JSON::PP::true },
+  );
+
+  is_deeply $result, {
+    data => {
+      viewer => {
+        id => 'u1',
+        name => 'Ana',
+      },
+    },
+    errors => [],
+  }, 'dynamic include guard allows field';
+};
+
+subtest 'static skip directives prune fields during lowering' => sub {
+  my $result = $schema->execute_runtime(
+    '{ viewer { id name @skip(if: true) } }',
+  );
+
+  is_deeply $result, {
+    data => {
+      viewer => {
+        id => 'u1',
+      },
+    },
+    errors => [],
+  }, 'static skip removes field from runtime output';
 };
 
 done_testing;

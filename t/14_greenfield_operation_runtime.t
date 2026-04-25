@@ -147,4 +147,15 @@ GRAPHQL
   is_deeply [ map { $_->field_name } @{ $child->instructions } ], [ qw(id name) ], 'fragment spread fields are lowered into child block';
 };
 
+subtest 'include/skip directives are lowered onto instructions as runtime guards' => sub {
+  my $runtime = $schema->compile_runtime;
+  my $program = $runtime->compile_operation('query Q($show: Boolean) { viewer { id name @include(if: $show) } }');
+  my ($viewer) = grep { $_->field_name eq 'viewer' } @{ $program->root_block->instructions };
+  my $child = $program->block_by_name($viewer->child_block_name);
+  my ($name) = grep { $_->field_name eq 'name' } @{ $child->instructions };
+
+  is $name->directives_mode, 'DYNAMIC', 'dynamic include directive is kept as runtime guard payload';
+  ok @{ $name->directives_payload || [] }, 'directive payload is retained on lowered instruction';
+};
+
 done_testing;

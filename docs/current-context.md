@@ -117,13 +117,16 @@ Current greenfield runtime coverage:
   - variable-dependent args are materialized at field execution time
 - operation variable definitions are lowered into immutable program metadata
   - execution merges provided variables with lowered defaults
+- `@include` / `@skip` lowering
+  - static directives prune selections during lowering
+  - dynamic directives are kept as runtime guard payload on instructions
 - explicit resolver ABI matches the existing runtime shape:
   - `($source, $args, $context, $return_type)`
 
 Still intentionally missing:
 
 - full variable/argument coercion into lowered instructions
-- directives
+- directives beyond `@include` / `@skip`
 - lazy `info/path/error` materialization
 - XS VM executor
 

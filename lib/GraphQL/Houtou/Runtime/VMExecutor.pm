@@ -56,7 +56,8 @@ sub _execute_block {
   while (my $op = $state->advance_current_op) {
     next if !_should_execute_op($state, $op);
     $state->enter_current_field($source, $base_path);
-    my $outcome = _execute_op($state);
+    my $dispatch = $op->run_dispatch || \&_execute_op;
+    my $outcome = $dispatch->($state);
     $state->consume_current_field_outcome($outcome);
   }
 
@@ -65,11 +66,25 @@ sub _execute_block {
 
 sub _execute_op {
   my ($state) = @_;
+  return _run_field_via($state, \&_resolve_field_value, \&_complete_resolved_value);
+}
+
+sub _run_default_generic { return _run_field_via($_[0], \&_resolve_default,  \&_complete_generic) }
+sub _run_default_object  { return _run_field_via($_[0], \&_resolve_default,  \&_complete_object) }
+sub _run_default_list    { return _run_field_via($_[0], \&_resolve_default,  \&_complete_list) }
+sub _run_default_abstract { return _run_field_via($_[0], \&_resolve_default,  \&_complete_abstract) }
+sub _run_explicit_generic { return _run_field_via($_[0], \&_resolve_explicit, \&_complete_generic) }
+sub _run_explicit_object { return _run_field_via($_[0], \&_resolve_explicit, \&_complete_object) }
+sub _run_explicit_list   { return _run_field_via($_[0], \&_resolve_explicit, \&_complete_list) }
+sub _run_explicit_abstract { return _run_field_via($_[0], \&_resolve_explicit, \&_complete_abstract) }
+
+sub _run_field_via {
+  my ($state, $resolve_cb, $complete_cb) = @_;
   my $field = $state->current_field_frame;
   my $source = $field->source;
   my $path_frame = $field->path_frame;
   my ($ok, $value) = _capture_eval(sub {
-    return _resolve_field_value($state, $source, $path_frame);
+    return $resolve_cb->($state, $source, $path_frame);
   });
   return _error_outcome($value, $path_frame) if !$ok;
   $field->set_resolved_value($value);
@@ -79,7 +94,7 @@ sub _execute_op {
       my ($resolved_value) = @_;
       $field->set_resolved_value($resolved_value);
       my ($complete_ok, $outcome) = _capture_eval(sub {
-        return _complete_resolved_value($state, $resolved_value, $path_frame);
+        return $complete_cb->($state, $resolved_value, $path_frame);
       });
       return $complete_ok ? $field->set_outcome($outcome) : _error_outcome($outcome, $path_frame);
     }, sub {
@@ -88,7 +103,7 @@ sub _execute_op {
   }
 
   my ($complete_ok, $outcome) = _capture_eval(sub {
-    return _complete_resolved_value($state, $value, $path_frame);
+    return $complete_cb->($state, $value, $path_frame);
   });
   return $complete_ok ? $field->set_outcome($outcome) : _error_outcome($outcome, $path_frame);
 }

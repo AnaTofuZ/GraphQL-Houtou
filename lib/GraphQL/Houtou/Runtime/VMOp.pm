@@ -28,6 +28,7 @@ sub new {
     complete_handler => $args{complete_handler},
     resolve_dispatch => $args{resolve_dispatch},
     complete_dispatch => $args{complete_dispatch},
+    run_dispatch => $args{run_dispatch},
   }, $class;
 }
 
@@ -52,6 +53,7 @@ sub resolve_handler { return $_[0]{resolve_handler} }
 sub complete_handler { return $_[0]{complete_handler} }
 sub resolve_dispatch { return $_[0]{resolve_dispatch} }
 sub complete_dispatch { return $_[0]{complete_dispatch} }
+sub run_dispatch { return $_[0]{run_dispatch} }
 
 sub to_struct {
   my ($self) = @_;

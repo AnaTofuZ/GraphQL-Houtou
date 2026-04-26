@@ -216,6 +216,13 @@ Current greenfield runtime coverage:
   - `VMOp` owns runtime-only `resolve_handler` / `complete_handler`
   - the VM hot path therefore dispatches from bound family handlers instead of
     reinterpreting opcode strings in the loop
+- VM dispatch now also binds a single runtime-only `run_dispatch` per op family:
+  - `VMOp` owns `run_dispatch`
+  - `VMDispatch` binds `run_dispatch` from `(resolve_handler, complete_handler)`
+  - `VMExecutor` hot loop now prefers `run_dispatch` over reconstructing field
+    lifecycle from separate generic helper choices
+  - this keeps the op-family boundary explicit while reducing per-op
+    rediscovery in the loop
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

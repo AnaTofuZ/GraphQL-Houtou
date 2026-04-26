@@ -135,6 +135,9 @@ The next refinement after this split is also in place:
 - the executor loop advances the cursor through state
 - field dispatch helpers consume state-owned views instead of reaching into
   cursor internals directly
+- VM ops can also carry a runtime-only `run_dispatch` binding, so the hot loop
+  can jump directly to a field-family runner rather than re-deciding
+  `resolve_handler` + `complete_handler` on every step
 
 This also implies that promise-aware execution should not fork into a fully
 separate runtime shape. The same lowered program, family contracts, and

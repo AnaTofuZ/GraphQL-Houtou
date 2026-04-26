@@ -277,6 +277,8 @@ Latest greenfield VM checkpoints after that:
   finalization
 - `VMExecutor` block loop now advances the cursor and delegates outcome
   consume/finalize to state-owned frames
+- `ExecState` also owns current block/op/slot accessors, so `VMExecutor`
+  no longer needs to reach into `Cursor` directly for ordinary field dispatch
 - `VMDispatch` binds those coderefs once per lowered / inflated VM program
 - `Cursor` now snapshots/restores nested block execution and owns:
   - current block

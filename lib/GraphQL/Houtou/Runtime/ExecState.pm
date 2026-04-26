@@ -30,6 +30,9 @@ sub new {
 sub runtime_schema { return $_[0]{runtime_schema} }
 sub program { return $_[0]{program} }
 sub cursor { return $_[0]{cursor} }
+sub current_block { return $_[0]{cursor}->block }
+sub current_op { return $_[0]{cursor}->current_op }
+sub current_slot { return $_[0]{cursor}->current_slot }
 sub frame { return $_[0]{frame} }
 sub frame_stack { return $_[0]{frame_stack} }
 sub field_frame { return $_[0]{field_frame} }
@@ -74,10 +77,16 @@ sub leave_field {
 }
 
 sub current_field_frame { return $_[0]{field_frame} }
+sub current_path_frame { return $_[0]{field_frame} ? $_[0]{field_frame}->path_frame : undef }
+
+sub advance_current_op {
+  my ($self) = @_;
+  return $self->{cursor}->advance_op;
+}
 
 sub enter_current_field {
   my ($self, $source, $base_path) = @_;
-  my $op = $self->{cursor}->current_op or return;
+  my $op = $self->current_op or return;
   my $path_frame = GraphQL::Houtou::Runtime::PathFrame->new(
     parent => $base_path,
     key => $op->result_name,
@@ -87,7 +96,7 @@ sub enter_current_field {
 
 sub consume_current_field_outcome {
   my ($self, $outcome) = @_;
-  my $op = $self->{cursor}->current_op or return;
+  my $op = $self->current_op or return;
   my $frame = $self->current_frame or return;
   my $field = $self->current_field_frame;
   $field->set_outcome($outcome) if $field;

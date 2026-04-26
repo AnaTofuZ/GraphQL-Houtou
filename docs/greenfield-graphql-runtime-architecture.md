@@ -129,6 +129,13 @@ In the current greenfield VM this already maps to:
 - `Outcome` as the kind-first value carrier
 - `Writer` as the final response/error sink
 
+The next refinement after this split is also in place:
+
+- `ExecState` provides current block/op/slot accessors
+- the executor loop advances the cursor through state
+- field dispatch helpers consume state-owned views instead of reaching into
+  cursor internals directly
+
 This also implies that promise-aware execution should not fork into a fully
 separate runtime shape. The same lowered program, family contracts, and
 outcome structs should be reused; only the payload transport changes from

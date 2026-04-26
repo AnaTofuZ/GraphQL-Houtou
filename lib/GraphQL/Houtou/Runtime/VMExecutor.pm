@@ -53,8 +53,7 @@ sub execute_program {
 sub _execute_block {
   my ($state, $block, $source, $base_path) = @_;
   my ($snapshot) = $state->enter_block($block);
-  my $cursor = $state->cursor;
-  while (my $op = $cursor->advance_op) {
+  while (my $op = $state->advance_current_op) {
     next if !_should_execute_op($state, $op);
     $state->enter_current_field($source, $base_path);
     my $outcome = _execute_op($state);
@@ -96,17 +95,16 @@ sub _execute_op {
 
 sub _resolve_field_value {
   my ($state, $source, $path_frame) = @_;
-  my $op = $state->cursor->current_op;
+  my $op = $state->current_op;
   my $dispatch = $op->resolve_dispatch;
   return $dispatch->($state, $source, $path_frame);
 }
 
 sub _resolve_default {
   my ($state, $source, $path_frame) = @_;
-  my $cursor = $state->cursor;
-  my $block = $cursor->block;
-  my $op = $cursor->current_op;
-  my $slot = $cursor->current_slot || $op->bound_slot;
+  my $block = $state->current_block;
+  my $op = $state->current_op;
+  my $slot = $state->current_slot || $op->bound_slot;
   my $resolver = $slot ? $slot->resolve : undef;
   my $return_type = $slot ? $slot->return_type : undef;
   $return_type ||= $state->runtime_schema->runtime_cache->{name2type}{ $block->type_name };
@@ -128,7 +126,7 @@ sub _resolve_explicit {
 
 sub _complete_resolved_value {
   my ($state, $value, $path_frame) = @_;
-  my $op = $state->cursor->current_op;
+  my $op = $state->current_op;
   my $dispatch = $op->complete_dispatch;
   return $dispatch->($state, $value, $path_frame);
 }
@@ -140,7 +138,7 @@ sub _complete_generic {
 
 sub _complete_object {
   my ($state, $value, $path_frame) = @_;
-  my $op = $state->cursor->current_op;
+  my $op = $state->current_op;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
 
@@ -161,7 +159,7 @@ sub _complete_object {
 
 sub _complete_list {
   my ($state, $value, $path_frame) = @_;
-  my $op = $state->cursor->current_op;
+  my $op = $state->current_op;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
@@ -188,7 +186,7 @@ sub _complete_list {
 
 sub _complete_abstract {
   my ($state, $value, $path_frame) = @_;
-  my $op = $state->cursor->current_op;
+  my $op = $state->current_op;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
 
@@ -221,12 +219,11 @@ sub _complete_abstract {
 
 sub _resolve_runtime_type {
   my ($state, $value, $path_frame) = @_;
-  my $cursor = $state->cursor;
-  my $block = $cursor->block;
-  my $op = $cursor->current_op;
+  my $block = $state->current_block;
+  my $op = $state->current_op;
   my $dispatch = $op->abstract_dispatch;
   my $cache = $state->runtime_schema->runtime_cache;
-  my $slot = $cursor->current_slot || $op->bound_slot;
+  my $slot = $state->current_slot || $op->bound_slot;
   my $abstract_type = $dispatch ? $dispatch->{abstract_type} : ($slot ? $slot->return_type : undef);
   return if !$abstract_type;
   my $abstract_name = $dispatch ? $dispatch->{abstract_name} : $abstract_type->name;

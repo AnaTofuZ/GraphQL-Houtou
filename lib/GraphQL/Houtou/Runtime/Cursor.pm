@@ -43,7 +43,7 @@ sub enter_block {
   my ($self, $block) = @_;
   $self->{block} = $block;
   $self->{slot_index} = 0;
-  $self->{op_index} = 0;
+  $self->{op_index} = -1;
   $self->{current_slot} = undef;
   $self->{current_op} = undef;
   return $self;
@@ -55,6 +55,22 @@ sub set_current_op {
   $self->{current_op} = $op;
   $self->{current_slot} = $op ? $op->bound_slot : undef;
   return $self;
+}
+
+sub advance_op {
+  my ($self) = @_;
+  my $ops = $self->{block} ? ($self->{block}->ops || []) : [];
+  my $next_index = ($self->{op_index} || 0) + 1;
+  if ($next_index > $#$ops) {
+    $self->set_current_op(undef, $next_index);
+    return;
+  }
+  return $self->set_current_op($ops->[$next_index], $next_index)->current_op;
+}
+
+sub has_current_op {
+  my ($self) = @_;
+  return defined $self->{current_op};
 }
 
 1;

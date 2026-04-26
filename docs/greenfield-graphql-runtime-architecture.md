@@ -87,6 +87,13 @@ For the lowered VM artifact this also means:
   - native VM program descriptor
   where the runtime owns the immutable slot catalog and the VM program owns
   only per-operation block/slot/op state
+- the same boundary should also support:
+  - JSON dump/load of the runtime descriptor
+  - JSON dump/load of the VM bundle descriptor
+  - rebinding the VM bundle back to the runtime slot catalog without
+    rebuilding block/slot metadata from names
+  so the Perl prototype and future XS runtime share the same boot-time cache
+  contract
 
 For the VM layer this implies:
 

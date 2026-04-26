@@ -27,6 +27,12 @@ sub root_types { return $_[0]{root_types} }
 sub slot_catalog { return $_[0]{slot_catalog} }
 sub program { return $_[0]{program} }
 
+sub slot_by_index {
+  my ($self, $index) = @_;
+  return if !defined $index;
+  return $self->{slot_catalog}[$index];
+}
+
 sub root_block {
   my ($self, $name) = @_;
   return $self->{program} ? $self->{program}->root_block($name) : undef;
@@ -67,10 +73,22 @@ sub inflate_vm_program {
   return GraphQL::Houtou::Runtime::VMCompiler->inflate_program($self, $descriptor);
 }
 
+sub inflate_vm_native_bundle {
+  my ($self, $descriptor) = @_;
+  require GraphQL::Houtou::Runtime::VMCompiler;
+  return GraphQL::Houtou::Runtime::VMCompiler->inflate_native_bundle($self, $descriptor);
+}
+
 sub execute_vm_program {
   my ($self, $program, %opts) = @_;
   require GraphQL::Houtou::Runtime::VMExecutor;
   return GraphQL::Houtou::Runtime::VMExecutor->execute_program($self, $program, %opts);
+}
+
+sub execute_vm_native_bundle {
+  my ($self, $descriptor, %opts) = @_;
+  my $program = $self->inflate_vm_native_bundle($descriptor);
+  return $self->execute_vm_program($program, %opts);
 }
 
 sub to_struct {

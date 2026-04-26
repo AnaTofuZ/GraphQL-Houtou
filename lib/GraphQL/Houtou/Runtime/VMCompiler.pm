@@ -68,6 +68,25 @@ sub inflate_program {
   return $vm_program;
 }
 
+sub inflate_native_bundle {
+  my ($class, $runtime_schema, $struct) = @_;
+  my $program_struct = $struct->{program} || {};
+  my @blocks = map { _inflate_native_block($_) } @{ $program_struct->{blocks} || [] };
+  my $root_block = defined $program_struct->{root_block_index}
+    ? $blocks[ $program_struct->{root_block_index} ]
+    : undef;
+  my $vm_program = GraphQL::Houtou::Runtime::VMProgram->new(
+    version => $program_struct->{version} || 1,
+    operation_type => $program_struct->{operation_type} || 'query',
+    operation_name => $program_struct->{operation_name},
+    blocks => \@blocks,
+    root_block => $root_block,
+  );
+  _bind_native_vm_ops($runtime_schema, $vm_program, $program_struct);
+  GraphQL::Houtou::Runtime::VMDispatch->bind_program($vm_program);
+  return $vm_program;
+}
+
 sub _lower_block {
   my ($block) = @_;
   return GraphQL::Houtou::Runtime::VMBlock->new(
@@ -136,6 +155,38 @@ sub _inflate_op {
   );
 }
 
+sub _inflate_native_block {
+  my ($struct) = @_;
+  return GraphQL::Houtou::Runtime::VMBlock->new(
+    name => $struct->{name},
+    type_name => $struct->{type_name},
+    family => $struct->{family} || 'OBJECT',
+    ops => [ map { _inflate_native_op($_) } @{ $struct->{ops} || [] } ],
+  );
+}
+
+sub _inflate_native_op {
+  my ($struct) = @_;
+  my $resolve_family = _resolve_family_from_code($struct->{resolve_code});
+  my $complete_family = _complete_family_from_code($struct->{complete_code});
+  my $op = GraphQL::Houtou::Runtime::VMOp->new(
+    opcode => join(q(:), $resolve_family, $complete_family),
+    opcode_code => $struct->{opcode_code} || 0,
+    resolve_family => $resolve_family,
+    resolve_code => $struct->{resolve_code} || 0,
+    complete_family => $complete_family,
+    complete_code => $struct->{complete_code} || 0,
+    args_mode => $struct->{args_mode} || 'NONE',
+    has_args => $struct->{has_args},
+    directives_mode => $struct->{directives_mode} || 'NONE',
+    has_directives => $struct->{has_directives},
+  );
+  $op->{_native_slot_index} = $struct->{slot_index};
+  $op->{_native_child_block_index} = $struct->{child_block_index};
+  $op->{_native_abstract_child_block_indexes} = $struct->{abstract_child_block_indexes} || {};
+  return $op;
+}
+
 sub _bind_vm_ops {
   my ($runtime_schema, $program) = @_;
   my %blocks = map { ($_->name => $_) } @{ $program->blocks || [] };
@@ -175,6 +226,68 @@ sub _bind_vm_ops {
   }
 
   return $program;
+}
+
+sub _bind_native_vm_ops {
+  my ($runtime_schema, $program, $program_struct) = @_;
+  my @block_structs = @{ $program_struct->{blocks} || [] };
+  my @blocks = @{ $program->blocks || [] };
+  my @runtime_slots = @{ $runtime_schema->slot_catalog || [] };
+
+  for my $block_index (0 .. $#blocks) {
+    my $block = $blocks[$block_index] or next;
+    my $block_struct = $block_structs[$block_index] || {};
+    my @native_slots = @{ $block_struct->{slots} || [] };
+
+    for my $op (@{ $block->ops || [] }) {
+      my $slot_struct = defined $op->{_native_slot_index}
+        ? $native_slots[ $op->{_native_slot_index} ]
+        : undef;
+      my $runtime_slot = $slot_struct && defined $slot_struct->{schema_slot_index}
+        ? $runtime_slots[ $slot_struct->{schema_slot_index} ]
+        : undef;
+
+      $op->{bound_slot} = $runtime_slot if $runtime_slot;
+      $op->{field_name} = $slot_struct->{field_name} if $slot_struct && defined $slot_struct->{field_name};
+      $op->{result_name} = $slot_struct->{result_name} if $slot_struct && defined $slot_struct->{result_name};
+
+      if (!$op->{abstract_dispatch} && (($op->complete_family || q()) eq 'COMPLETE_ABSTRACT')) {
+        my $return_type = $runtime_slot ? $runtime_slot->return_type_name : ($slot_struct ? $slot_struct->{return_type_name} : undef);
+        $op->{abstract_dispatch} = GraphQL::Houtou::Runtime::OperationCompiler::_bind_abstract_dispatch(
+          $runtime_schema,
+          $return_type,
+        ) if defined $return_type;
+      }
+
+      $op->{bound_child_block} = defined $op->{_native_child_block_index}
+        ? $blocks[ $op->{_native_child_block_index} ]
+        : undef;
+      $op->{bound_abstract_child_blocks} = {
+        map {
+          my $idx = $op->{_native_abstract_child_block_indexes}{$_};
+          ($_ => (defined $idx ? $blocks[$idx] : undef))
+        } keys %{ $op->{_native_abstract_child_block_indexes} || {} }
+      };
+      $op->{resolve_handler} ||= $RESOLVE_HANDLER{ $op->resolve_family || q() };
+      $op->{complete_handler} ||= $COMPLETE_HANDLER{ $op->complete_family || q() };
+    }
+  }
+
+  return $program;
+}
+
+sub _resolve_family_from_code {
+  my ($code) = @_;
+  return 'RESOLVE_EXPLICIT' if ($code || 0) == 2;
+  return 'RESOLVE_DEFAULT';
+}
+
+sub _complete_family_from_code {
+  my ($code) = @_;
+  return 'COMPLETE_OBJECT' if ($code || 0) == 2;
+  return 'COMPLETE_LIST' if ($code || 0) == 3;
+  return 'COMPLETE_ABSTRACT' if ($code || 0) == 4;
+  return 'COMPLETE_GENERIC';
 }
 
 1;

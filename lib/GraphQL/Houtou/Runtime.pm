@@ -19,7 +19,9 @@ our @EXPORT_OK = qw(
   execute_operation
   lower_vm_program
   inflate_vm_program
+  inflate_vm_native_bundle
   execute_vm_program
+  execute_vm_native_bundle
 );
 
 sub compile_schema {
@@ -50,8 +52,18 @@ sub inflate_vm_program {
   return GraphQL::Houtou::Runtime::VMCompiler->inflate_program(@_);
 }
 
+sub inflate_vm_native_bundle {
+  return GraphQL::Houtou::Runtime::VMCompiler->inflate_native_bundle(@_);
+}
+
 sub execute_vm_program {
   return GraphQL::Houtou::Runtime::VMExecutor->execute_program(@_);
+}
+
+sub execute_vm_native_bundle {
+  my ($runtime_schema, $descriptor, %opts) = @_;
+  my $program = inflate_vm_native_bundle($runtime_schema, $descriptor);
+  return execute_vm_program($runtime_schema, $program, %opts);
 }
 
 1;

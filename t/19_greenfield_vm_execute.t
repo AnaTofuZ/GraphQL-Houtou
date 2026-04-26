@@ -83,4 +83,21 @@ subtest 'VM descriptor can round-trip and still execute' => sub {
   }, 'inflated VM program executes abstract child blocks';
 };
 
+subtest 'native VM bundle descriptor can execute through schema helper' => sub {
+  my $bundle = $schema->compile_vm_native_bundle_descriptor('{ node { id } }');
+  my $result = $schema->execute_vm_native_bundle_descriptor($bundle);
+  is_deeply $result, {
+    data => { node => { id => 'u3' } },
+    errors => [],
+  }, 'native VM bundle executes through runtime slot catalog binding';
+};
+
+subtest 'schema helper can compile and execute native VM bundle in one call' => sub {
+  my $result = $schema->execute_vm_native_runtime('{ viewer { id } }');
+  is_deeply $result, {
+    data => { viewer => { id => 'u1' } },
+    errors => [],
+  }, 'schema helper executes native VM bundle runtime';
+};
+
 done_testing;

@@ -292,11 +292,16 @@ Current greenfield runtime coverage:
   - `$schema->compile_vm_native_bundle_descriptor(...)`
   - `$schema->dump_runtime_native_descriptor(...)`
   - `$schema->dump_vm_native_bundle_descriptor(...)`
+  - `$schema->inflate_vm_native_bundle_descriptor(...)`
+  - `$schema->execute_vm_native_bundle_descriptor(...)`
+  - `$schema->execute_vm_native_runtime(...)`
   - native runtime descriptors carry `slot_catalog`
   - native VM block slots carry `schema_slot_index`
   - runtime type/dispatch/slot metadata also carry numeric family/type codes
   so an XS executor can consume a boot-time schema catalog plus a compact
-  per-operation VM program without rediscovering field metadata from names
+  per-operation VM program without rediscovering field metadata from names;
+  the Perl prototype can already bind that bundle back to the runtime slot
+  catalog and execute it without re-inflating from string keyed metadata
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

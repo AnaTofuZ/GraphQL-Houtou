@@ -209,6 +209,11 @@ sub inflate_vm_operation {
   return $self->compile_runtime(%opts)->inflate_vm_program($descriptor);
 }
 
+sub inflate_vm_native_bundle_descriptor {
+  my ($self, $descriptor, %opts) = @_;
+  return $self->compile_runtime(%opts)->inflate_vm_native_bundle($descriptor);
+}
+
 sub dump_vm_operation_descriptor {
   my ($self, $document, $path, %opts) = @_;
   my $descriptor = $self->compile_vm_operation_descriptor($document, %opts);
@@ -220,6 +225,17 @@ sub load_vm_operation_descriptor {
   my ($self, $path, %opts) = @_;
   my $descriptor = _read_json_descriptor($path);
   return $self->inflate_vm_operation($descriptor, %opts);
+}
+
+sub execute_vm_native_bundle_descriptor {
+  my ($self, $descriptor, %opts) = @_;
+  return $self->compile_runtime(%opts)->execute_vm_native_bundle($descriptor, %opts);
+}
+
+sub execute_vm_native_runtime {
+  my ($self, $document, %opts) = @_;
+  my $descriptor = $self->compile_vm_native_bundle_descriptor($document, %opts);
+  return $self->execute_vm_native_bundle_descriptor($descriptor, %opts);
 }
 
 sub runtime_cache {

@@ -55,8 +55,8 @@ my $schema = GraphQL::Houtou::Schema->new(
 );
 
 subtest 'schema can execute VM-lowered program' => sub {
-  my $program = $schema->lower_program_to_vm('{ viewer { id name } users { id } node { id } }');
-  my $result = $schema->build_runtime->execute_vm($program);
+  my $program = $schema->compile_operation('{ viewer { id name } users { id } node { id } }');
+  my $result = $schema->build_runtime->execute_program($program);
   is_deeply $result, {
     data => {
       viewer => { id => 'u1', name => 'Alice' },
@@ -71,7 +71,7 @@ subtest 'schema can execute VM-lowered program' => sub {
 };
 
 subtest 'schema helper can compile and execute VM in one call' => sub {
-  my $result = $schema->execute_vm('{ viewer { id } }');
+  my $result = $schema->execute_runtime('{ viewer { id } }');
   is_deeply $result, {
     data => { viewer => { id => 'u1' } },
     errors => [],
@@ -79,9 +79,9 @@ subtest 'schema helper can compile and execute VM in one call' => sub {
 };
 
 subtest 'VM descriptor can round-trip and still execute' => sub {
-  my $descriptor = $schema->compile_vm_program_descriptor('{ node { id } }');
-  my $program = $schema->inflate_vm_program($descriptor);
-  my $result = $schema->build_runtime->execute_vm($program);
+  my $descriptor = $schema->compile_operation_descriptor('{ node { id } }');
+  my $program = $schema->inflate_operation($descriptor);
+  my $result = $schema->build_runtime->execute_program($program);
   is_deeply $result, {
     data => { node => { id => 'u3' } },
     errors => [],
@@ -98,7 +98,7 @@ subtest 'native VM bundle descriptor can execute through schema helper' => sub {
 };
 
 subtest 'schema helper can compile and execute native VM bundle in one call' => sub {
-  my $result = $schema->execute_vm('{ viewer { id } }');
+  my $result = $schema->execute_native_runtime('{ viewer { id } }');
   is_deeply $result, {
     data => { viewer => { id => 'u1' } },
     errors => [],

@@ -53,7 +53,7 @@ my $schema = GraphQL::Houtou::Schema->new(
 );
 
 subtest 'schema can lower operation into VM program' => sub {
-  my $vm = $schema->compile_vm_operation('{ viewer { id } node { id } }');
+  my $vm = $schema->compile_operation('{ viewer { id } node { id } }');
   isa_ok $vm, 'GraphQL::Houtou::Runtime::VMProgram';
   isa_ok $vm->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
   is $vm->operation_type, 'query', 'vm program keeps operation type';
@@ -74,8 +74,8 @@ subtest 'schema can lower operation into VM program' => sub {
 };
 
 subtest 'VM program descriptor can round-trip through schema helpers' => sub {
-  my $descriptor = $schema->compile_vm_operation_descriptor('{ viewer { id } }');
-  my $vm = $schema->inflate_vm_operation($descriptor);
+  my $descriptor = $schema->compile_operation_descriptor('{ viewer { id } }');
+  my $vm = $schema->inflate_operation($descriptor);
   isa_ok $vm, 'GraphQL::Houtou::Runtime::VMProgram';
   isa_ok $vm->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
   is $vm->root_block->ops->[0]->field_name, 'viewer', 'inflated VM program keeps field op';
@@ -83,7 +83,7 @@ subtest 'VM program descriptor can round-trip through schema helpers' => sub {
 };
 
 subtest 'schema can emit XS-friendly native VM descriptor' => sub {
-  my $descriptor = $schema->compile_vm_native_descriptor('{ viewer { id } node { id } }');
+  my $descriptor = $schema->compile_native_operation_descriptor('{ viewer { id } node { id } }');
   ok defined $descriptor->{root_block_index}, 'native descriptor keeps root block index';
   ok ref($descriptor->{blocks}) eq 'ARRAY' && @{$descriptor->{blocks}} >= 2,
     'native descriptor keeps indexed blocks';
@@ -99,7 +99,7 @@ subtest 'schema can emit XS-friendly native VM descriptor' => sub {
 };
 
 subtest 'schema can emit bundled native runtime and VM descriptor' => sub {
-  my $bundle = $schema->compile_vm_native_bundle_descriptor('{ viewer { id } node { id } }');
+  my $bundle = $schema->compile_native_bundle_descriptor('{ viewer { id } node { id } }');
   my $codes = native_codes();
   my %runtime_slots = map { (($_->{schema_slot_key} || '') => $_) } @{ $bundle->{runtime}{slot_catalog} || [] };
   ok ref($bundle->{runtime}{slot_catalog}) eq 'ARRAY' && @{$bundle->{runtime}{slot_catalog}} >= 2,
@@ -128,14 +128,14 @@ subtest 'native VM bundle descriptor can round-trip through JSON helpers' => sub
   my ($fh, $path) = tempfile();
   close $fh;
 
-  my $descriptor = $schema->dump_vm_native_bundle_descriptor('{ viewer { id } node { id } }', $path);
-  my $loaded = $schema->load_vm_native_bundle_descriptor($path);
+  my $descriptor = $schema->dump_native_bundle_descriptor('{ viewer { id } node { id } }', $path);
+  my $loaded = $schema->load_native_bundle_descriptor($path);
 
   is_deeply $loaded, $descriptor, 'native bundle survives JSON file boundary';
 };
 
 subtest 'native VM bundle can inflate back into a VM program' => sub {
-  my $bundle = $schema->compile_vm_native_bundle_descriptor('{ viewer { id } node { id } }');
+  my $bundle = $schema->compile_native_bundle_descriptor('{ viewer { id } node { id } }');
   my $vm = $schema->inflate_vm_native_bundle_descriptor($bundle);
   isa_ok $vm, 'GraphQL::Houtou::Runtime::VMProgram';
   isa_ok $vm->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
@@ -143,7 +143,7 @@ subtest 'native VM bundle can inflate back into a VM program' => sub {
 };
 
 subtest 'XS can inflate native VM bundle descriptor into a native handle' => sub {
-  my $bundle = $schema->compile_vm_native_bundle_descriptor('{ viewer { id } node { id } }');
+  my $bundle = $schema->compile_native_bundle_descriptor('{ viewer { id } node { id } }');
   my $codes = native_codes();
   my $handle = load_native_bundle($bundle);
 

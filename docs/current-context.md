@@ -82,9 +82,13 @@ New runtime entrypoints now include:
 - `$runtime_schema->compile_operation($document)`
 - `$runtime_schema->inflate_operation($descriptor)`
 - `$runtime_schema->execute_operation($program, %opts)`
+- `$runtime_schema->inflate_program($descriptor)`
+- `$runtime_schema->inflate_native_bundle($descriptor)`
+- `$runtime_schema->execute_program($program, %opts)`
+- `$runtime_schema->execute_native_bundle($descriptor, %opts)`
 - `$runtime_schema->lower_vm_program($program)`
 - `$schema->execute_runtime($document, %opts)`
-- `$schema->compile_vm_operation($document)`
+- `$schema->compile_operation($document)`
 
 Current operation lowering shape:
 

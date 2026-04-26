@@ -350,7 +350,7 @@ my $vm_program = $runtime->lower_vm_program($program);
 And the next execution boundary should also be explicit:
 
 ```perl
-my $result = $runtime->execute_vm_program($vm_program, %opts);
+my $result = $runtime->execute_program($vm_program, %opts);
 ```
 
 The first VM checkpoint should therefore be a runnable pure-Perl

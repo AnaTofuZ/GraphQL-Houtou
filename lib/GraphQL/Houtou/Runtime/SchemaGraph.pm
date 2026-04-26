@@ -124,14 +124,18 @@ sub lower_program_to_vm {
 
 sub inflate_vm_program {
   my ($self, $descriptor) = @_;
-  require GraphQL::Houtou::Runtime::VMCompiler;
-  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program($self, $descriptor);
+  return $self->inflate_operation($descriptor);
 }
 
 sub inflate_vm_native_bundle {
   my ($self, $descriptor) = @_;
   require GraphQL::Houtou::Runtime::VMCompiler;
   return GraphQL::Houtou::Runtime::VMCompiler->inflate_native_bundle($self, $descriptor);
+}
+
+sub inflate_native_bundle {
+  my ($self, $descriptor) = @_;
+  return $self->inflate_vm_native_bundle($descriptor);
 }
 
 sub inflate_vm_bundle {
@@ -141,8 +145,7 @@ sub inflate_vm_bundle {
 
 sub execute_vm_program {
   my ($self, $program, %opts) = @_;
-  require GraphQL::Houtou::Runtime;
-  return GraphQL::Houtou::Runtime::execute_vm_program($self, $program, %opts);
+  return $self->execute_operation($program, %opts);
 }
 
 sub execute_vm {
@@ -154,6 +157,11 @@ sub execute_vm_native_bundle {
   my ($self, $descriptor, %opts) = @_;
   require GraphQL::Houtou::Runtime;
   return GraphQL::Houtou::Runtime::execute_vm_native_bundle($self, $descriptor, %opts);
+}
+
+sub execute_native_bundle {
+  my ($self, $descriptor, %opts) = @_;
+  return $self->execute_vm_native_bundle($descriptor, %opts);
 }
 
 sub to_struct {

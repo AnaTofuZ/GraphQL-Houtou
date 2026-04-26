@@ -148,6 +148,9 @@ The next refinement after this split is also in place:
   wrapping can also be owned by `ExecState`, so object/list/abstract families
   share one state-owned corridor instead of each helper rediscovering blocks
   and abstract dispatch metadata
+- resolver-adjacent cold boundaries can also be owned by `ExecState`, so
+  return-type lookup, argument materialization, and lazy-info construction are
+  state-owned services instead of executor-local helper work
 
 This also implies that promise-aware execution should not fork into a fully
 separate runtime shape. The same lowered program, family contracts, and

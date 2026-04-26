@@ -241,6 +241,12 @@ Current greenfield runtime coverage:
   - `ExecState->object_outcome_from_child_block(...)`
   - `ExecState->resolve_runtime_type_for_current_field(...)`
   now own the block/object/abstract lookup side of the VM corridor
+- resolver-side cold/hot boundaries are also moving behind `ExecState`:
+  - `ExecState->current_return_type(...)`
+  - `ExecState->resolve_args_for_current_field(...)`
+  - `ExecState->build_lazy_info_for_current_field(...)`
+  now own return-type, args, and lazy-info construction for the current field
+  instead of keeping that logic in `VMExecutor`
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

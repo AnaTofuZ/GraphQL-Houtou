@@ -11,9 +11,7 @@ use GraphQL::Houtou::Promise::Adapter qw(
   then_promise
 );
 use GraphQL::Houtou::Runtime::Cursor ();
-use GraphQL::Houtou::Runtime::ErrorRecord ();
 use GraphQL::Houtou::Runtime::ExecState ();
-use GraphQL::Houtou::Runtime::LazyInfo ();
 use GraphQL::Houtou::Runtime::Outcome ();
 use GraphQL::Houtou::Runtime::PathFrame ();
 use GraphQL::Houtou::Runtime::Writer ();
@@ -74,16 +72,14 @@ sub _resolve_field_value {
 
 sub _resolve_default {
   my ($state, $source, $path_frame) = @_;
-  my $block = $state->current_block;
   my $op = $state->current_op;
   my $slot = $state->current_slot || $op->bound_slot;
   my $resolver = $slot ? $slot->resolve : undef;
-  my $return_type = $slot ? $slot->return_type : undef;
-  $return_type ||= $state->runtime_schema->runtime_cache->{name2type}{ $block->type_name };
-  my $args = _resolve_op_args($state, $op);
+  my $return_type = $state->current_return_type;
+  my $args = $state->resolve_args_for_current_field;
 
   if ($resolver) {
-    my $info = _build_info($state, $block, $op, $path_frame);
+    my $info = $state->build_lazy_info_for_current_field($path_frame);
     return $resolver->($source, $args, $state->context, $info, $return_type);
   }
 
@@ -166,60 +162,9 @@ sub _complete_abstract {
   return $state->object_outcome_from_child_block($child, $value, $path_frame);
 }
 
-sub _resolve_op_args {
-  my ($state, $op) = @_;
-  my $mode = $op->args_mode || 'NONE';
-  my $arg_defs = $op->arg_defs || {};
-  return $state->empty_args if !keys %$arg_defs;
-  return _coerce_static_args($state, $arg_defs, {})
-    if $mode eq 'STATIC' && !$op->{args_payload};
-  return _coerce_static_args($state, $arg_defs, $op->{args_payload} || {})
-    if $mode eq 'STATIC';
-  return _coerce_dynamic_args($state, $arg_defs, $op->{args_payload} || {})
-    if $mode eq 'DYNAMIC';
-  return _coerce_static_args($state, $arg_defs, {});
-}
-
 sub _prepare_variables {
   my ($runtime_schema, $provided) = @_;
   return $provided || {};
-}
-
-sub _coerce_static_args {
-  my ($state, $arg_defs, $payload) = @_;
-  my %values;
-  for my $name (keys %{$arg_defs || {}}) {
-    my $arg_def = $arg_defs->{$name} || {};
-    next if !exists $payload->{$name} && !$arg_def->{has_default};
-    $values{$name} = exists $payload->{$name} ? $payload->{$name} : $arg_def->{default_value};
-  }
-  return \%values;
-}
-
-sub _coerce_dynamic_args {
-  my ($state, $arg_defs, $payload) = @_;
-  my %values;
-  for my $name (keys %{$arg_defs || {}}) {
-    next if !exists $payload->{$name};
-    my $raw = $payload->{$name};
-    if (ref($raw) eq 'SCALAR') {
-      $values{$name} = $state->variables->{ $$raw };
-      next;
-    }
-    $values{$name} = $raw;
-  }
-  return \%values;
-}
-
-sub _build_info {
-  my ($state, $block, $op, $path_frame) = @_;
-  return GraphQL::Houtou::Runtime::LazyInfo->new(
-    state => $state,
-    runtime_schema => $state->runtime_schema,
-    block => $block,
-    instruction => $op,
-    path_frame => $path_frame,
-  );
 }
 
 sub _is_promise {

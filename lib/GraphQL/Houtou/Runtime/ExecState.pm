@@ -186,6 +186,41 @@ sub current_abstract_child_block {
     };
 }
 
+sub current_return_type {
+  my ($self) = @_;
+  my $slot = $self->current_slot || ($self->current_op ? $self->current_op->bound_slot : undef);
+  return $slot->return_type if $slot && $slot->return_type;
+  my $block = $self->current_block;
+  return if !$block;
+  return $self->runtime_schema->runtime_cache->{name2type}{ $block->type_name };
+}
+
+sub build_lazy_info_for_current_field {
+  my ($self, $path_frame) = @_;
+  return GraphQL::Houtou::Runtime::LazyInfo->new(
+    state => $self,
+    runtime_schema => $self->runtime_schema,
+    block => $self->current_block,
+    instruction => $self->current_op,
+    path_frame => $path_frame,
+  );
+}
+
+sub resolve_args_for_current_field {
+  my ($self) = @_;
+  my $op = $self->current_op or return $self->empty_args;
+  my $mode = $op->args_mode || 'NONE';
+  my $arg_defs = $op->arg_defs || {};
+  return $self->empty_args if !keys %$arg_defs;
+  return $self->_coerce_static_args($arg_defs, {})
+    if $mode eq 'STATIC' && !$op->{args_payload};
+  return $self->_coerce_static_args($arg_defs, $op->{args_payload} || {})
+    if $mode eq 'STATIC';
+  return $self->_coerce_dynamic_args($arg_defs, $op->{args_payload} || {})
+    if $mode eq 'DYNAMIC';
+  return $self->_coerce_static_args($arg_defs, {});
+}
+
 sub object_outcome_from_child_block {
   my ($self, $block, $value, $path_frame) = @_;
   my $child_value = $self->execute_child_block($block, $value, $path_frame);
@@ -273,6 +308,32 @@ sub should_execute_current_op {
   my $mode = $op->directives_mode || 'NONE';
   return 1 if $mode eq 'NONE';
   return 1;
+}
+
+sub _coerce_static_args {
+  my ($self, $arg_defs, $payload) = @_;
+  my %values;
+  for my $name (keys %{$arg_defs || {}}) {
+    my $arg_def = $arg_defs->{$name} || {};
+    next if !exists $payload->{$name} && !$arg_def->{has_default};
+    $values{$name} = exists $payload->{$name} ? $payload->{$name} : $arg_def->{default_value};
+  }
+  return \%values;
+}
+
+sub _coerce_dynamic_args {
+  my ($self, $arg_defs, $payload) = @_;
+  my %values;
+  for my $name (keys %{$arg_defs || {}}) {
+    next if !exists $payload->{$name};
+    my $raw = $payload->{$name};
+    if (ref($raw) eq 'SCALAR') {
+      $values{$name} = $self->variables->{ $$raw };
+      next;
+    }
+    $values{$name} = $raw;
+  }
+  return \%values;
 }
 
 sub _capture_eval {

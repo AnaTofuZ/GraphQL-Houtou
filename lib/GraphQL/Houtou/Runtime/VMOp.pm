@@ -90,10 +90,14 @@ sub to_native_struct {
   my $slot_id = $self->{bound_slot}
     ? join("\x1E", refaddr($self->{bound_slot}), ($self->{result_name} // q()))
     : undef;
+  my $dispatch_family = $self->{abstract_dispatch}
+    ? $self->{abstract_dispatch}{dispatch_family}
+    : $self->{dispatch_family};
   return {
     opcode_code => $self->{opcode_code},
     resolve_code => $self->{resolve_code},
     complete_code => $self->{complete_code},
+    dispatch_family_code => _dispatch_family_code($dispatch_family),
     slot_index => defined $slot_id && exists $slot_index->{$slot_id}
       ? $slot_index->{$slot_id}
       : undef,
@@ -111,6 +115,14 @@ sub to_native_struct {
       } keys %{ $self->{abstract_child_blocks} || {} }
     },
   };
+}
+
+sub _dispatch_family_code {
+  my ($family) = @_;
+  return 2 if ($family || q()) eq 'RESOLVE_TYPE';
+  return 3 if ($family || q()) eq 'TAG';
+  return 4 if ($family || q()) eq 'POSSIBLE_TYPES';
+  return 1;
 }
 
 1;

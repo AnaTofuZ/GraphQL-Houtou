@@ -47,9 +47,18 @@ sub to_native_struct {
     name => $self->{name},
     type_name => $self->{type_name},
     family => $self->{family},
+    family_code => _family_code($self->{family}),
     slots => \@slot_table,
     ops => [ map { $_->to_native_struct($block_index, \%slot_index) } @{ $self->{ops} || [] } ],
   };
+}
+
+sub _family_code {
+  my ($family) = @_;
+  return 2 if ($family || q()) eq 'OBJECT';
+  return 3 if ($family || q()) eq 'LIST';
+  return 4 if ($family || q()) eq 'ABSTRACT';
+  return 1;
 }
 
 1;

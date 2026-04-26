@@ -7,6 +7,7 @@
 #include "execution.h"
 #include "ir_engine.h"
 #include "ir_execution.h"
+#include "greenfield_vm.h"
 #include "legacy_compat.h"
 
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Parser
@@ -639,6 +640,45 @@ _execute_fields_xs(context, parent_type, root_value, path, fields)
     RETVAL = gql_execution_execute_fields(aTHX_ context, parent_type, root_value, path, fields);
   OUTPUT:
     RETVAL
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::GreenfieldVM
+
+SV *
+native_codes_xs()
+  CODE:
+    {
+      HV *hv = newHV();
+      hv_store(hv, "resolve_default", 15, newSViv(GQL_VM_RESOLVE_DEFAULT), 0);
+      hv_store(hv, "resolve_explicit", 16, newSViv(GQL_VM_RESOLVE_EXPLICIT), 0);
+      hv_store(hv, "complete_generic", 16, newSViv(GQL_VM_COMPLETE_GENERIC), 0);
+      hv_store(hv, "complete_object", 15, newSViv(GQL_VM_COMPLETE_OBJECT), 0);
+      hv_store(hv, "complete_list", 13, newSViv(GQL_VM_COMPLETE_LIST), 0);
+      hv_store(hv, "complete_abstract", 17, newSViv(GQL_VM_COMPLETE_ABSTRACT), 0);
+      hv_store(hv, "family_generic", 14, newSViv(GQL_VM_FAMILY_GENERIC), 0);
+      hv_store(hv, "family_object", 13, newSViv(GQL_VM_FAMILY_OBJECT), 0);
+      hv_store(hv, "family_list", 11, newSViv(GQL_VM_FAMILY_LIST), 0);
+      hv_store(hv, "family_abstract", 15, newSViv(GQL_VM_FAMILY_ABSTRACT), 0);
+      hv_store(hv, "dispatch_generic", 16, newSViv(GQL_VM_DISPATCH_GENERIC), 0);
+      hv_store(hv, "dispatch_resolve_type", 21, newSViv(GQL_VM_DISPATCH_RESOLVE_TYPE), 0);
+      hv_store(hv, "dispatch_tag", 12, newSViv(GQL_VM_DISPATCH_TAG), 0);
+      hv_store(hv, "dispatch_possible_types", 23, newSViv(GQL_VM_DISPATCH_POSSIBLE_TYPES), 0);
+      hv_store(hv, "kind_scalar", 11, newSViv(GQL_VM_KIND_SCALAR), 0);
+      hv_store(hv, "kind_object", 11, newSViv(GQL_VM_KIND_OBJECT), 0);
+      hv_store(hv, "kind_list", 9, newSViv(GQL_VM_KIND_LIST), 0);
+      hv_store(hv, "kind_interface", 14, newSViv(GQL_VM_KIND_INTERFACE), 0);
+      hv_store(hv, "kind_union", 10, newSViv(GQL_VM_KIND_UNION), 0);
+      hv_store(hv, "kind_enum", 9, newSViv(GQL_VM_KIND_ENUM), 0);
+      hv_store(hv, "kind_input_object", 17, newSViv(GQL_VM_KIND_INPUT_OBJECT), 0);
+      hv_store(hv, "kind_non_null", 13, newSViv(GQL_VM_KIND_NON_NULL), 0);
+      hv_store(hv, "optype_query", 12, newSViv(GQL_VM_OPTYPE_QUERY), 0);
+      hv_store(hv, "optype_mutation", 15, newSViv(GQL_VM_OPTYPE_MUTATION), 0);
+      hv_store(hv, "optype_subscription", 18, newSViv(GQL_VM_OPTYPE_SUBSCRIPTION), 0);
+      RETVAL = newRV_noinc((SV *)hv);
+    }
+  OUTPUT:
+    RETVAL
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Execution
 
 SV *
 _collect_fields_xs(context, parent_type, selections)

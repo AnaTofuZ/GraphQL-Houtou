@@ -50,10 +50,18 @@ sub to_native_struct {
   return {
     version => $self->{version},
     operation_type => $self->{operation_type},
+    operation_type_code => _operation_type_code($self->{operation_type}),
     operation_name => $self->{operation_name},
     root_block_index => $self->{root_block} ? $block_index{ $self->{root_block}->name } : undef,
     blocks => [ map { $_->to_native_struct(\%block_index) } @blocks ],
   };
+}
+
+sub _operation_type_code {
+  my ($type) = @_;
+  return 2 if ($type || q()) eq 'mutation';
+  return 3 if ($type || q()) eq 'subscription';
+  return 1;
 }
 
 1;

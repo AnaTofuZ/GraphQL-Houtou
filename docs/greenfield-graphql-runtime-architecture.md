@@ -94,6 +94,14 @@ For the lowered VM artifact this also means:
     rebuilding block/slot metadata from names
   so the Perl prototype and future XS runtime share the same boot-time cache
   contract
+- this boundary should also publish a stable numeric code contract for:
+  - resolve families
+  - completion families
+  - dispatch families
+  - return type kinds
+  - operation types
+  so XS can validate/inflate the descriptor without reparsing string family
+  names in its hot path
 
 For the VM layer this implies:
 

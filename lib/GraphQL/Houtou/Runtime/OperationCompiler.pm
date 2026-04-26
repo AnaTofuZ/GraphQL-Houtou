@@ -220,13 +220,21 @@ sub _bind_abstract_dispatch {
   return undef if !defined $abstract_name;
   my $cache = $runtime_schema->runtime_cache || {};
   my $abstract_type = ($cache->{name2type} || {})->{$abstract_name} or return undef;
+  my $tag_resolver = ($cache->{tag_resolver_map} || {})->{$abstract_name};
+  my $resolve_type = ($cache->{resolve_type_map} || {})->{$abstract_name};
+  my $possible_types = ($cache->{possible_types} || {})->{$abstract_name} || [];
   return {
     abstract_name => $abstract_name,
     abstract_type => $abstract_type,
-    tag_resolver => ($cache->{tag_resolver_map} || {})->{$abstract_name},
+    dispatch_family => $tag_resolver
+      ? 'TAG'
+      : $resolve_type
+        ? 'RESOLVE_TYPE'
+        : 'POSSIBLE_TYPES',
+    tag_resolver => $tag_resolver,
     tag_map => ($cache->{runtime_tag_map} || {})->{$abstract_name} || {},
-    resolve_type => ($cache->{resolve_type_map} || {})->{$abstract_name},
-    possible_types => ($cache->{possible_types} || {})->{$abstract_name} || [],
+    resolve_type => $resolve_type,
+    possible_types => $possible_types,
     is_type_of_map => $cache->{is_type_of_map} || {},
     name2type => $cache->{name2type} || {},
   };

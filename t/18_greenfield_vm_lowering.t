@@ -5,6 +5,7 @@ use File::Temp qw(tempfile);
 
 use lib 'lib';
 use GraphQL::Houtou::Schema;
+use GraphQL::Houtou::XS::GreenfieldVM qw(native_codes_xs);
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Scalar qw($String);
@@ -93,14 +94,28 @@ subtest 'schema can emit XS-friendly native VM descriptor' => sub {
 
 subtest 'schema can emit bundled native runtime and VM descriptor' => sub {
   my $bundle = $schema->compile_vm_native_bundle_descriptor('{ viewer { id } node { id } }');
+  my $codes = native_codes_xs();
+  my %runtime_slots = map { (($_->{schema_slot_key} || '') => $_) } @{ $bundle->{runtime}{slot_catalog} || [] };
   ok ref($bundle->{runtime}{slot_catalog}) eq 'ARRAY' && @{$bundle->{runtime}{slot_catalog}} >= 2,
     'native bundle keeps runtime slot catalog';
   ok defined $bundle->{runtime}{slot_catalog}[0]{completion_family_code},
     'native bundle keeps runtime numeric family code';
+  is $runtime_slots{'VmQuery.node'}{completion_family_code}, $codes->{family_abstract},
+    'native runtime family code matches XS header constant';
+  is $runtime_slots{'VmQuery.node'}{return_type_kind_code}, $codes->{kind_interface},
+    'native runtime slot keeps return type kind code';
   ok ref($bundle->{program}{blocks}) eq 'ARRAY' && @{$bundle->{program}{blocks}} >= 2,
     'native bundle keeps vm program blocks';
+  is $bundle->{program}{operation_type_code}, $codes->{optype_query},
+    'native bundle keeps operation type code';
+  is $bundle->{program}{blocks}[ $bundle->{program}{root_block_index} ]{family_code}, $codes->{family_object},
+    'native bundle keeps block family code';
   ok defined $bundle->{program}{blocks}[ $bundle->{program}{root_block_index} ]{ops}[0]{slot_index},
     'native bundle op keeps slot index';
+  is $bundle->{program}{blocks}[ $bundle->{program}{root_block_index} ]{ops}[0]{resolve_code}, $codes->{resolve_explicit},
+    'native op resolve code matches XS header constant';
+  is $bundle->{program}{blocks}[ $bundle->{program}{root_block_index} ]{ops}[1]{dispatch_family_code}, $codes->{dispatch_tag},
+    'native op dispatch family code matches XS header constant';
 };
 
 subtest 'native VM bundle descriptor can round-trip through JSON helpers' => sub {

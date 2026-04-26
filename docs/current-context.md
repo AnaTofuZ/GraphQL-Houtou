@@ -4386,3 +4386,27 @@ Interpretation:
 - `abstract` still trails, which means the remaining gap is now even more
   clearly inside the abstract/object corridor itself rather than in generic
   sync-outcome export/repack
+
+Greenfield VM XS-boundary checkpoint:
+
+- `src/greenfield_vm.h` now defines numeric codes for:
+  - resolve families
+  - completion families
+  - dispatch families
+  - type kinds
+  - operation types
+- `GraphQL::Houtou::XS::GreenfieldVM::native_codes_xs()` exposes those codes to
+  Perl so tests can assert the native descriptor contract without hard-coded
+  magic numbers
+- native VM bundle descriptors now carry:
+  - `operation_type_code`
+  - block `family_code`
+  - slot `return_type_kind_code`
+  - op `dispatch_family_code`
+- abstract dispatch bindings now also carry their own `dispatch_family`, so
+  abstract ops export the correct native dispatch family instead of silently
+  falling back to `GENERIC`
+
+This is the first stable XS-facing contract for the greenfield VM. The next
+stage is a C-side loader that inflates the native bundle descriptor into
+native structs so an XS executor can consume the descriptor directly.

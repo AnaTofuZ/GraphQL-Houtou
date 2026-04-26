@@ -62,6 +62,7 @@ sub to_native_struct {
     field_name => $self->{field_name},
     result_name => $self->{result_name},
     return_type_name => $self->{return_type_name},
+    return_type_kind_code => _type_kind_code($self->{return_type}),
     resolver_shape => $self->{resolver_shape},
     resolver_shape_code => _resolver_shape_code($self->{resolver_shape}),
     completion_family => $self->{completion_family},
@@ -85,6 +86,19 @@ sub _family_code {
   return 2 if ($family || q()) eq 'OBJECT';
   return 3 if ($family || q()) eq 'LIST';
   return 4 if ($family || q()) eq 'ABSTRACT';
+  return 1;
+}
+
+sub _type_kind_code {
+  my ($type) = @_;
+  return 0 if !$type;
+  return 8 if eval { $type->isa('GraphQL::Houtou::Type::NonNull') };
+  return 3 if eval { $type->isa('GraphQL::Houtou::Type::List') };
+  return 2 if eval { $type->isa('GraphQL::Houtou::Type::Object') };
+  return 4 if eval { $type->isa('GraphQL::Houtou::Type::Interface') };
+  return 5 if eval { $type->isa('GraphQL::Houtou::Type::Union') };
+  return 6 if eval { $type->isa('GraphQL::Houtou::Type::Enum') };
+  return 7 if eval { $type->isa('GraphQL::Houtou::Type::InputObject') };
   return 1;
 }
 

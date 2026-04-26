@@ -4,10 +4,11 @@ use 5.014;
 use strict;
 use warnings;
 
-use GraphQL::Houtou::Promise::Adapter qw(is_promise_value);
+use GraphQL::Houtou::Promise::Adapter qw(is_promise_value then_promise);
 use GraphQL::Houtou::Runtime::BlockFrame ();
 use GraphQL::Houtou::Runtime::ErrorRecord ();
 use GraphQL::Houtou::Runtime::FieldFrame ();
+use GraphQL::Houtou::Runtime::LazyInfo ();
 use GraphQL::Houtou::Runtime::Outcome ();
 use GraphQL::Houtou::Runtime::PathFrame ();
 
@@ -162,6 +163,96 @@ sub run_current_field_via {
     return $complete_cb->($self, $value, $path_frame);
   });
   return $complete_ok ? $field->set_outcome($outcome) : $self->_error_outcome($outcome, $path_frame);
+}
+
+sub execute_child_block {
+  my ($self, $block, $source, $path_frame) = @_;
+  return $self->execute_block($block, $source, $path_frame);
+}
+
+sub current_child_block {
+  my ($self) = @_;
+  my $op = $self->current_op or return;
+  return $op->bound_child_block || $self->program->block_by_name($op->child_block_name);
+}
+
+sub current_abstract_child_block {
+  my ($self, $runtime_type_name) = @_;
+  my $op = $self->current_op or return;
+  return ($op->bound_abstract_child_blocks || {})->{$runtime_type_name}
+    || do {
+      my $child_block_name = ($op->abstract_child_blocks || {})->{$runtime_type_name};
+      $child_block_name ? $self->program->block_by_name($child_block_name) : undef;
+    };
+}
+
+sub object_outcome_from_child_block {
+  my ($self, $block, $value, $path_frame) = @_;
+  my $child_value = $self->execute_child_block($block, $value, $path_frame);
+  if ($self->promise_code && is_promise_value($self->promise_code, $child_value)) {
+    return then_promise($self->promise_code, $child_value, sub {
+      return GraphQL::Houtou::Runtime::Outcome->new(kind => 'OBJECT', object_value => $_[0]);
+    });
+  }
+  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'OBJECT', object_value => $child_value);
+}
+
+sub resolve_runtime_type_for_current_field {
+  my ($self, $value, $path_frame, %args) = @_;
+  my $op = $self->current_op;
+  my $dispatch = $args{dispatch} || $op->abstract_dispatch;
+  my $cache = $self->runtime_schema->runtime_cache;
+  my $slot = $args{slot} || $self->current_slot || $op->bound_slot;
+  my $abstract_type = $dispatch ? $dispatch->{abstract_type} : ($slot ? $slot->return_type : undef);
+  return if !$abstract_type;
+  my $abstract_name = $dispatch ? $dispatch->{abstract_name} : $abstract_type->name;
+  my $info;
+  my $build_info = sub {
+    my $built_info = $args{info};
+    if (!$built_info && $args{info_builder}) {
+      $built_info = $args{info_builder}->();
+    }
+    $info ||= $built_info || GraphQL::Houtou::Runtime::LazyInfo->new(
+        state => $self,
+        runtime_schema => $self->runtime_schema,
+        block => $self->current_block,
+        instruction => $op,
+        path_frame => $path_frame,
+      );
+    return $info;
+  };
+
+  if (my $tag_resolver = $dispatch ? $dispatch->{tag_resolver} : $cache->{tag_resolver_map}{$abstract_name}) {
+    my ($ok, $tag) = $self->_capture_eval(sub {
+      return $tag_resolver->($value, $self->context, $build_info->(), $abstract_type);
+    });
+    return (undef, $self->_error_record($tag, $path_frame)) if !$ok;
+    if (defined $tag) {
+      my $type = (($dispatch ? $dispatch->{tag_map} : $cache->{runtime_tag_map}{$abstract_name}) || {})->{$tag};
+      return ($type, undef) if $type;
+    }
+  }
+
+  if (my $resolve_type = $dispatch ? $dispatch->{resolve_type} : $cache->{resolve_type_map}{$abstract_name}) {
+    my ($ok, $resolved) = $self->_capture_eval(sub {
+      return $resolve_type->($value, $self->context, $build_info->(), $abstract_type);
+    });
+    return (undef, $self->_error_record($resolved, $path_frame)) if !$ok;
+    return if !defined $resolved;
+    return (ref($resolved) ? $resolved : (($dispatch ? $dispatch->{name2type} : $cache->{name2type})->{$resolved}), undef);
+  }
+
+  for my $type (@{ ($dispatch ? $dispatch->{possible_types} : $cache->{possible_types}{$abstract_name}) || [] }) {
+    next if !$type;
+    my $cb = ($dispatch ? $dispatch->{is_type_of_map} : $cache->{is_type_of_map})->{ $type->name } or next;
+    my ($ok, $matched) = $self->_capture_eval(sub {
+      return $cb->($value, $self->context, $build_info->(), $type);
+    });
+    return (undef, $self->_error_record($matched, $path_frame)) if !$ok;
+    return ($type, undef) if $matched;
+  }
+
+  return (undef, undef);
 }
 
 sub execute_block {

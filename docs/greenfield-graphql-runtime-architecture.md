@@ -144,6 +144,10 @@ The next refinement after this split is also in place:
 - field execution can also be owned by `ExecState`, so resolve/complete/error
   capture for the current field is state-driven rather than rebuilt by
   executor-local helper stacks
+- child block lookup, abstract runtime-type resolution, and object-outcome
+  wrapping can also be owned by `ExecState`, so object/list/abstract families
+  share one state-owned corridor instead of each helper rediscovering blocks
+  and abstract dispatch metadata
 
 This also implies that promise-aware execution should not fork into a fully
 separate runtime shape. The same lowered program, family contracts, and

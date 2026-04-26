@@ -234,6 +234,13 @@ Current greenfield runtime coverage:
     capture for the current field
   - `VMExecutor` family callbacks now delegate field execution to state-owned
     lifecycle helpers instead of keeping local field orchestration
+- child block and abstract runtime resolution are also moving behind
+  `ExecState`:
+  - `ExecState->current_child_block(...)`
+  - `ExecState->current_abstract_child_block(...)`
+  - `ExecState->object_outcome_from_child_block(...)`
+  - `ExecState->resolve_runtime_type_for_current_field(...)`
+  now own the block/object/abstract lookup side of the VM corridor
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

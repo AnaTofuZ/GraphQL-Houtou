@@ -159,6 +159,11 @@ sub compile_vm_operation_descriptor {
   return $self->compile_vm_operation($document, %opts)->to_struct;
 }
 
+sub compile_vm_native_descriptor {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_vm_operation($document, %opts)->to_native_struct;
+}
+
 sub inflate_vm_operation {
   my ($self, $descriptor, %opts) = @_;
   return $self->compile_runtime(%opts)->inflate_vm_program($descriptor);

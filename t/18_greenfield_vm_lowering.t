@@ -74,4 +74,15 @@ subtest 'VM program descriptor can round-trip through schema helpers' => sub {
   ok $vm->root_block->ops->[0]->opcode_code, 'inflated VM op keeps numeric opcode code';
 };
 
+subtest 'schema can emit XS-friendly native VM descriptor' => sub {
+  my $descriptor = $schema->compile_vm_native_descriptor('{ viewer { id } node { id } }');
+  ok defined $descriptor->{root_block_index}, 'native descriptor keeps root block index';
+  ok ref($descriptor->{blocks}) eq 'ARRAY' && @{$descriptor->{blocks}} >= 2,
+    'native descriptor keeps indexed blocks';
+  my $root = $descriptor->{blocks}[ $descriptor->{root_block_index} ];
+  ok $root->{ops}[0]{opcode_code}, 'native op keeps opcode code';
+  ok exists $root->{ops}[1]{abstract_child_block_indexes}{VmUser},
+    'native op keeps abstract child block indexes';
+};
+
 done_testing;

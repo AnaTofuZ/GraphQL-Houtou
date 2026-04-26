@@ -275,6 +275,13 @@ Current greenfield runtime coverage:
   - `VMOp` keeps `complete_code`
   so the future XS executor can map lowered descriptors to native enums without
   reparsing string opcode families in the hot path
+- VM lowering artifacts now also expose a native descriptor boundary:
+  - `VMProgram->to_native_struct`
+  - `VMBlock->to_native_struct`
+  - `VMOp->to_native_struct`
+  - `$schema->compile_vm_native_descriptor(...)`
+  use block indexes instead of block-name lookups for child refs, which is the
+  first descriptor shape intended to be consumed directly by an XS executor
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

@@ -69,6 +69,9 @@ For the lowered VM artifact this also means:
 - but the hot executor boundary should prefer numeric opcode/family codes
 - a future XS executor should be able to inflate the descriptor directly into
   native enums and dispatch tables without reparsing string families
+- child block references should also be exportable as block indexes rather than
+  name lookups, so an XS executor can consume a compact native descriptor
+  without rebuilding a hash-based block map first
 
 For the VM layer this implies:
 

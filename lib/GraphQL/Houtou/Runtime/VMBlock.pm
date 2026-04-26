@@ -29,4 +29,14 @@ sub to_struct {
   };
 }
 
+sub to_native_struct {
+  my ($self, $block_index) = @_;
+  return {
+    name => $self->{name},
+    type_name => $self->{type_name},
+    family => $self->{family},
+    ops => [ map { $_->to_native_struct($block_index) } @{ $self->{ops} || [] } ],
+  };
+}
+
 1;

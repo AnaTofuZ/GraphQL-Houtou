@@ -83,4 +83,28 @@ sub to_struct {
   };
 }
 
+sub to_native_struct {
+  my ($self, $block_index) = @_;
+  return {
+    opcode_code => $self->{opcode_code},
+    resolve_code => $self->{resolve_code},
+    complete_code => $self->{complete_code},
+    field_name => $self->{field_name},
+    result_name => $self->{result_name},
+    args_mode => $self->{args_mode},
+    has_args => $self->{has_args},
+    directives_mode => $self->{directives_mode},
+    has_directives => $self->{has_directives},
+    child_block_index => defined $self->{child_block_name} && exists $block_index->{ $self->{child_block_name} }
+      ? $block_index->{ $self->{child_block_name} }
+      : undef,
+    abstract_child_block_indexes => {
+      map {
+        my $child_name = $self->{abstract_child_blocks}{$_};
+        ($_ => (defined $child_name && exists $block_index->{$child_name} ? $block_index->{$child_name} : undef))
+      } keys %{ $self->{abstract_child_blocks} || {} }
+    },
+  };
+}
+
 1;

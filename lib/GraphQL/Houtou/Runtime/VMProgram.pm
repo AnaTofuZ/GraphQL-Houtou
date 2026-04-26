@@ -43,4 +43,17 @@ sub to_struct {
   };
 }
 
+sub to_native_struct {
+  my ($self) = @_;
+  my @blocks = @{ $self->{blocks} || [] };
+  my %block_index = map { ($blocks[$_]->name => $_) } 0 .. $#blocks;
+  return {
+    version => $self->{version},
+    operation_type => $self->{operation_type},
+    operation_name => $self->{operation_name},
+    root_block_index => $self->{root_block} ? $block_index{ $self->{root_block}->name } : undef,
+    blocks => [ map { $_->to_native_struct(\%block_index) } @blocks ],
+  };
+}
+
 1;

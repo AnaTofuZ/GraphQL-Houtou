@@ -8,20 +8,21 @@ use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Scalar qw($String);
 
-my $User = GraphQL::Houtou::Type::Object->new(
-  name => 'VmUser',
-  runtime_tag => 'user',
-  fields => {
-    id => { type => $String },
-  },
-);
-
 my $Node = GraphQL::Houtou::Type::Interface->new(
   name => 'VmNode',
   fields => {
     id => { type => $String },
   },
   tag_resolver => sub { $_[0]{kind} },
+);
+
+my $User = GraphQL::Houtou::Type::Object->new(
+  name => 'VmUser',
+  interfaces => [ $Node ],
+  runtime_tag => 'user',
+  fields => {
+    id => { type => $String },
+  },
 );
 
 my $Query = GraphQL::Houtou::Type::Object->new(
@@ -51,6 +52,8 @@ subtest 'schema can lower operation into VM program' => sub {
   my ($viewer, $node) = @{ $vm->root_block->ops || [] };
   like $viewer->opcode, qr/^RESOLVE_.*:COMPLETE_OBJECT$/, 'viewer lowers to object completion opcode';
   like $node->opcode, qr/^RESOLVE_.*:COMPLETE_ABSTRACT$/, 'node lowers to abstract completion opcode';
+  is $node->abstract_child_blocks->{VmUser}, 'QUERY.node.VmUser#1',
+    'abstract op keeps lowered child block mapping';
 };
 
 subtest 'VM program descriptor can round-trip through schema helpers' => sub {

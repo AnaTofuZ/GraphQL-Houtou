@@ -21,6 +21,16 @@ sub operation_name { return $_[0]{operation_name} }
 sub blocks { return $_[0]{blocks} }
 sub root_block { return $_[0]{root_block} }
 
+sub block_by_name {
+  my ($self, $name) = @_;
+  return if !defined $name;
+  return $self->{root_block} if $self->{root_block} && $self->{root_block}->name eq $name;
+  for my $block (@{ $self->{blocks} || [] }) {
+    return $block if $block->name eq $name;
+  }
+  return;
+}
+
 sub to_struct {
   my ($self) = @_;
   return {

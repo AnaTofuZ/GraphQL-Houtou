@@ -115,6 +115,22 @@ Current VM-lowering shape:
   - family / child-block metadata retained alongside the opcode
   - intended as the immediate artifact boundary before the XS-first VM loop
 
+Current VM-execution checkpoint:
+
+- `GraphQL::Houtou::Runtime::VMExecutor` exists as the first runnable VM-side
+  executor
+- `SchemaGraph` / `Schema` now expose:
+  - `execute_vm_program(...)`
+  - `execute_vm_runtime(...)`
+- the current VM executor is intentionally minimal, but already runs:
+  - sync object fields
+  - sync list fields
+  - abstract dispatch through lowered abstract child blocks
+  - promise aggregation through the existing adapter
+- VM lowering currently assumes abstract concrete types are declared as real
+  interface implementors, so narrowed abstract child blocks can be owned by
+  the lowered artifact
+
 This is still structural, but it establishes the key boundary:
 
 - schema compile produces immutable runtime graph

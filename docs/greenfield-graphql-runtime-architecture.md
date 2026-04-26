@@ -242,6 +242,16 @@ And the next lowering stage should also be explicit:
 my $vm_program = $runtime->lower_vm_program($program);
 ```
 
+And the next execution boundary should also be explicit:
+
+```perl
+my $result = $runtime->execute_vm_program($vm_program, %opts);
+```
+
+The first greenfield VM checkpoint should therefore be a runnable pure-Perl
+VM executor that proves the artifact boundary and family-owned block dispatch
+work at all. Only after that should the hot VM loop be replaced with XS.
+
 That boundary is useful even before introducing a binary serializer because it
 makes "compile once at boot, reuse many times during requests" a first-class
 part of the runtime design.

@@ -9,6 +9,7 @@ use GraphQL::Houtou::Runtime::Compiler ();
 use GraphQL::Houtou::Runtime::Executor ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
+use GraphQL::Houtou::Runtime::VMExecutor ();
 
 our @EXPORT_OK = qw(
   compile_schema
@@ -18,6 +19,7 @@ our @EXPORT_OK = qw(
   execute_operation
   lower_vm_program
   inflate_vm_program
+  execute_vm_program
 );
 
 sub compile_schema {
@@ -46,6 +48,10 @@ sub lower_vm_program {
 
 sub inflate_vm_program {
   return GraphQL::Houtou::Runtime::VMCompiler->inflate_program(@_);
+}
+
+sub execute_vm_program {
+  return GraphQL::Houtou::Runtime::VMExecutor->execute_program(@_);
 }
 
 1;

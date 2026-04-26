@@ -147,6 +147,13 @@ sub compile_vm_operation {
   return $runtime->lower_vm_program($program);
 }
 
+sub execute_vm_runtime {
+  my ($self, $document, %opts) = @_;
+  my $runtime = $self->compile_runtime(%opts);
+  my $program = $self->compile_vm_operation($document, %opts);
+  return $runtime->execute_vm_program($program, %opts);
+}
+
 sub compile_vm_operation_descriptor {
   my ($self, $document, %opts) = @_;
   return $self->compile_vm_operation($document, %opts)->to_struct;

@@ -73,4 +73,14 @@ subtest 'schema helper can compile and execute VM in one call' => sub {
   }, 'schema helper executes VM runtime';
 };
 
+subtest 'VM descriptor can round-trip and still execute' => sub {
+  my $descriptor = $schema->compile_vm_operation_descriptor('{ node { id } }');
+  my $program = $schema->inflate_vm_operation($descriptor);
+  my $result = $schema->compile_runtime->execute_vm_program($program);
+  is_deeply $result, {
+    data => { node => { id => 'u3' } },
+    errors => [],
+  }, 'inflated VM program executes abstract child blocks';
+};
+
 done_testing;

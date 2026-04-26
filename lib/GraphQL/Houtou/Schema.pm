@@ -87,6 +87,11 @@ sub compile_runtime_descriptor {
   return $self->compile_runtime(%opts)->to_struct;
 }
 
+sub compile_runtime_native_descriptor {
+  my ($self, %opts) = @_;
+  return $self->compile_runtime(%opts)->to_native_struct;
+}
+
 sub inflate_runtime {
   my ($self, $descriptor) = @_;
   return GraphQL::Houtou::Runtime::inflate_schema($self, $descriptor);
@@ -162,6 +167,17 @@ sub compile_vm_operation_descriptor {
 sub compile_vm_native_descriptor {
   my ($self, $document, %opts) = @_;
   return $self->compile_vm_operation($document, %opts)->to_native_struct;
+}
+
+sub compile_vm_native_bundle_descriptor {
+  my ($self, $document, %opts) = @_;
+  my $runtime = $self->compile_runtime(%opts);
+  my $program = $runtime->compile_operation($document, %opts);
+  my $vm = $runtime->lower_vm_program($program);
+  return {
+    runtime => $runtime->to_native_struct,
+    program => $vm->to_native_struct,
+  };
 }
 
 sub inflate_vm_operation {

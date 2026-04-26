@@ -90,6 +90,16 @@ subtest 'runtime graph can round-trip through descriptor form' => sub {
   is_deeply $inflated->to_struct, $descriptor, 'descriptor round-trip is stable';
 };
 
+subtest 'runtime graph can emit native descriptor' => sub {
+  my $descriptor = $schema->compile_runtime_native_descriptor;
+  ok ref($descriptor->{slot_catalog}) eq 'ARRAY' && @{$descriptor->{slot_catalog}} >= 2,
+    'native runtime descriptor exports slot catalog';
+  ok defined $descriptor->{slot_catalog}[0]{schema_slot_index},
+    'native runtime slot keeps schema slot index';
+  is $descriptor->{slot_catalog}[0]{schema_slot_key}, 'Query.search',
+    'native runtime slot keeps stable schema slot key';
+};
+
 subtest 'runtime descriptor can round-trip through JSON file helpers' => sub {
   my ($fh, $path) = tempfile();
   close $fh;

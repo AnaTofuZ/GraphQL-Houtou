@@ -3,6 +3,7 @@ package GraphQL::Houtou::Runtime::VMBlock;
 use 5.014;
 use strict;
 use warnings;
+use Scalar::Util qw(refaddr);
 
 sub new {
   my ($class, %args) = @_;
@@ -35,12 +36,13 @@ sub to_native_struct {
   my %slot_index;
   for my $op (@{ $self->{ops} || [] }) {
     my $slot = $op->bound_slot or next;
-    my $id = refaddr($slot);
+    my $id = join("\x1E", refaddr($slot), ($op->result_name // q()));
     next if exists $slot_index{$id};
     $slot_index{$id} = scalar @slot_table;
     push @slot_table, {
+      schema_slot_index => $slot->schema_slot_index,
       field_name => $slot->field_name,
-      result_name => $slot->result_name,
+      result_name => $op->result_name,
       return_type_name => $slot->return_type_name,
       resolver_shape => $slot->resolver_shape,
       completion_family => $slot->completion_family,
@@ -59,4 +61,3 @@ sub to_native_struct {
 }
 
 1;
-use Scalar::Util qw(refaddr);

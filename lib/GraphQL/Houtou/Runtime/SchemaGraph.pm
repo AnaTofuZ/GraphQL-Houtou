@@ -13,6 +13,7 @@ sub new {
     type_index => $args{type_index} || {},
     dispatch_index => $args{dispatch_index} || {},
     root_types => $args{root_types} || {},
+    slot_catalog => $args{slot_catalog} || [],
     program => $args{program},
   }, $class;
 }
@@ -23,6 +24,7 @@ sub runtime_cache { return $_[0]{runtime_cache} }
 sub type_index { return $_[0]{type_index} }
 sub dispatch_index { return $_[0]{dispatch_index} }
 sub root_types { return $_[0]{root_types} }
+sub slot_catalog { return $_[0]{slot_catalog} }
 sub program { return $_[0]{program} }
 
 sub root_block {
@@ -78,7 +80,19 @@ sub to_struct {
     root_types => { %{ $self->{root_types} || {} } },
     type_index => { %{ $self->{type_index} || {} } },
     dispatch_index => { %{ $self->{dispatch_index} || {} } },
+    slot_catalog => [ map { $_->to_struct } @{ $self->{slot_catalog} || [] } ],
     program => $self->{program} ? $self->{program}->to_struct : undef,
+  };
+}
+
+sub to_native_struct {
+  my ($self) = @_;
+  return {
+    version => $self->{version},
+    root_types => { %{ $self->{root_types} || {} } },
+    type_index => { %{ $self->{type_index} || {} } },
+    dispatch_index => { %{ $self->{dispatch_index} || {} } },
+    slot_catalog => [ map { $_->to_struct } @{ $self->{slot_catalog} || [] } ],
   };
 }
 

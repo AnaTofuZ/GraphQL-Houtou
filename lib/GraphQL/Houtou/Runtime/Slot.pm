@@ -7,6 +7,8 @@ use warnings;
 sub new {
   my ($class, %args) = @_;
   return bless {
+    schema_slot_key => $args{schema_slot_key},
+    schema_slot_index => $args{schema_slot_index},
     field_name => $args{field_name},
     result_name => $args{result_name},
     return_type_name => $args{return_type_name},
@@ -21,6 +23,8 @@ sub new {
   }, $class;
 }
 
+sub schema_slot_key { return $_[0]{schema_slot_key} }
+sub schema_slot_index { return $_[0]{schema_slot_index} }
 sub field_name { return $_[0]{field_name} }
 sub result_name { return $_[0]{result_name} }
 sub return_type_name { return $_[0]{return_type_name} }
@@ -36,6 +40,8 @@ sub return_type { return $_[0]{return_type} }
 sub to_struct {
   my ($self) = @_;
   return {
+    schema_slot_key => $self->{schema_slot_key},
+    schema_slot_index => $self->{schema_slot_index},
     field_name => $self->{field_name},
     result_name => $self->{result_name},
     return_type_name => $self->{return_type_name},

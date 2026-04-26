@@ -82,10 +82,22 @@ subtest 'schema can emit XS-friendly native VM descriptor' => sub {
   my $root = $descriptor->{blocks}[ $descriptor->{root_block_index} ];
   ok ref($root->{slots}) eq 'ARRAY' && @{$root->{slots}} >= 2,
     'native block keeps compact slot table';
+  ok defined $root->{slots}[0]{schema_slot_index},
+    'native block slot keeps schema slot index';
   ok $root->{ops}[0]{opcode_code}, 'native op keeps opcode code';
   ok defined $root->{ops}[0]{slot_index}, 'native op keeps slot index';
   ok exists $root->{ops}[1]{abstract_child_block_indexes}{VmUser},
     'native op keeps abstract child block indexes';
+};
+
+subtest 'schema can emit bundled native runtime and VM descriptor' => sub {
+  my $bundle = $schema->compile_vm_native_bundle_descriptor('{ viewer { id } node { id } }');
+  ok ref($bundle->{runtime}{slot_catalog}) eq 'ARRAY' && @{$bundle->{runtime}{slot_catalog}} >= 2,
+    'native bundle keeps runtime slot catalog';
+  ok ref($bundle->{program}{blocks}) eq 'ARRAY' && @{$bundle->{program}{blocks}} >= 2,
+    'native bundle keeps vm program blocks';
+  ok defined $bundle->{program}{blocks}[ $bundle->{program}{root_block_index} ]{ops}[0]{slot_index},
+    'native bundle op keeps slot index';
 };
 
 done_testing;

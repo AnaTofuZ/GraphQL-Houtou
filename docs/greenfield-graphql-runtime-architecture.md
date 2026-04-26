@@ -75,6 +75,15 @@ For the lowered VM artifact this also means:
 - block-local slot tables should also be exportable, with per-op `slot_index`
   references, so repeated field metadata can be shared inside the native
   descriptor instead of duplicated across every opcode
+- the schema runtime should also be exportable as a native slot catalog, so
+  the VM program can reference immutable schema-level slot metadata by
+  `schema_slot_index` instead of re-emitting that metadata in every block
+- in practice this means a future XS boundary should accept a bundle shaped
+  like:
+  - native runtime descriptor
+  - native VM program descriptor
+  where the runtime owns the immutable slot catalog and the VM program owns
+  only per-operation block/slot/op state
 
 For the VM layer this implies:
 

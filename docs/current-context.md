@@ -287,6 +287,13 @@ Current greenfield runtime coverage:
   - each native op carries `slot_index`
   so repeated field metadata does not have to be duplicated per op when the
   future XS executor inflates native operand tables
+- the greenfield runtime now also exports a native runtime-side slot catalog:
+  - `$schema->compile_runtime_native_descriptor(...)`
+  - `$schema->compile_vm_native_bundle_descriptor(...)`
+  - native runtime descriptors carry `slot_catalog`
+  - native VM block slots carry `schema_slot_index`
+  so an XS executor can consume a boot-time schema catalog plus a compact
+  per-operation VM program without rediscovering field metadata from names
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

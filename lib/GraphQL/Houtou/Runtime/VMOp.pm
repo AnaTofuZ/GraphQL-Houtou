@@ -87,7 +87,9 @@ sub to_struct {
 
 sub to_native_struct {
   my ($self, $block_index, $slot_index) = @_;
-  my $slot_id = $self->{bound_slot} ? refaddr($self->{bound_slot}) : undef;
+  my $slot_id = $self->{bound_slot}
+    ? join("\x1E", refaddr($self->{bound_slot}), ($self->{result_name} // q()))
+    : undef;
   return {
     opcode_code => $self->{opcode_code},
     resolve_code => $self->{resolve_code},

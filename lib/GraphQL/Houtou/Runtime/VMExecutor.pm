@@ -131,8 +131,7 @@ sub _resolve_field_value {
 
 sub _complete_resolved_value {
   my ($state, $block, $op, $value, $path_frame) = @_;
-  my ($resolve_op, $complete_op) = split /:/, ($op->opcode || q(:)), 2;
-  $complete_op ||= 'COMPLETE_GENERIC';
+  my $complete_op = $op->complete_family || 'COMPLETE_GENERIC';
 
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if $complete_op eq 'COMPLETE_GENERIC';

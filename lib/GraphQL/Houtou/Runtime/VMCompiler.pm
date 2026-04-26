@@ -63,12 +63,12 @@ sub _inflate_block {
 
 sub _lower_instruction {
   my ($instruction) = @_;
+  my $resolve_family = $instruction->resolve_op || 'RESOLVE_DEFAULT';
+  my $complete_family = $instruction->complete_op || 'COMPLETE_GENERIC';
   return GraphQL::Houtou::Runtime::VMOp->new(
-    opcode => join(
-      q(:),
-      ($instruction->resolve_op || 'RESOLVE_DEFAULT'),
-      ($instruction->complete_op || 'COMPLETE_GENERIC'),
-    ),
+    opcode => join(q(:), $resolve_family, $complete_family),
+    resolve_family => $resolve_family,
+    complete_family => $complete_family,
     field_name => $instruction->field_name,
     result_name => $instruction->result_name,
     dispatch_family => $instruction->dispatch_family,
@@ -88,6 +88,8 @@ sub _inflate_op {
   my ($struct) = @_;
   return GraphQL::Houtou::Runtime::VMOp->new(
     opcode => $struct->{opcode},
+    resolve_family => $struct->{resolve_family},
+    complete_family => $struct->{complete_family},
     field_name => $struct->{field_name},
     result_name => $struct->{result_name},
     dispatch_family => $struct->{dispatch_family},

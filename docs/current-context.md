@@ -4458,6 +4458,14 @@ This fixes the first real bridge-design bug we hit in the reboot:
   - mainline runtime path now executes through the Perl VM by default:
     - `Schema->execute_runtime(...)`
     - `Runtime->execute_program(...)`
+  - public operation APIs are now VM-first:
+    - `compile_operation`
+    - `compile_program`
+    - `inflate_operation`
+    - `inflate_program`
+    return VM artifacts
+  - lowered execution artifacts remain available only through explicit
+    `compile_lowered_*` / `inflate_lowered_*` helpers
   - `t/15_runtime_execute.t`, `t/16_runtime_promise.t`,
     `t/17_runtime_errors.t`, `t/18_vm_lowering.t`, and
     `t/19_vm_execute.t` all pass together again after carrying

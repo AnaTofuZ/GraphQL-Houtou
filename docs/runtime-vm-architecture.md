@@ -919,3 +919,24 @@ In practice this means:
 
 This keeps the architecture coherent even after the pure-Perl VM is replaced
 by the native runtime.
+## Public API direction
+
+The runtime-facing public API should treat VM artifacts as the primary
+execution unit.
+
+- `compile_operation` / `compile_program`
+- `inflate_operation` / `inflate_program`
+- `execute_operation` / `execute_program`
+
+These APIs should all return or consume VM programs by default.
+
+Lowered pre-VM artifacts still exist, but only as explicit internal or
+diagnostic escape hatches:
+
+- `compile_lowered_operation`
+- `compile_lowered_program`
+- `inflate_lowered_operation`
+- `inflate_lowered_program`
+
+This keeps callers off intermediate artifact shapes and makes the VM runtime
+the single mainline execution model.

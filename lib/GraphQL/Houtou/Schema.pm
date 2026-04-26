@@ -191,9 +191,7 @@ sub execute_program {
 
 sub compile_vm_operation {
   my ($self, $document, %opts) = @_;
-  my $runtime = delete $opts{runtime_schema} || $self->compile_runtime(%opts);
-  my $program = $runtime->compile_operation($document, %opts);
-  return $runtime->lower_vm_program($program);
+  return $self->compile_operation($document, %opts);
 }
 
 sub lower_program_to_vm {
@@ -230,11 +228,30 @@ sub compile_vm_native_descriptor {
   return $self->compile_vm_operation($document, ($runtime ? (runtime_schema => $runtime) : ()), %opts)->to_native_struct;
 }
 
+sub compile_lowered_operation {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_runtime(%opts)->compile_lowered_operation($document, %opts);
+}
+
+sub compile_lowered_program {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_lowered_operation($document, %opts);
+}
+
+sub inflate_lowered_operation {
+  my ($self, $descriptor, %opts) = @_;
+  return $self->compile_runtime(%opts)->inflate_lowered_operation($descriptor);
+}
+
+sub inflate_lowered_program {
+  my ($self, $descriptor, %opts) = @_;
+  return $self->inflate_lowered_operation($descriptor, %opts);
+}
+
 sub compile_vm_native_bundle_descriptor {
   my ($self, $document, %opts) = @_;
   my $runtime = $self->compile_runtime(%opts);
-  my $program = $runtime->compile_operation($document, %opts);
-  my $vm = $runtime->lower_vm_program($program);
+  my $vm = $runtime->compile_operation($document, %opts);
   return {
     runtime => $runtime->to_native_struct,
     program => $vm->to_native_struct,

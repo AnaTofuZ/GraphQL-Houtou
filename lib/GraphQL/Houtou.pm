@@ -6,6 +6,7 @@ use warnings;
 use Exporter 'import';
 use GraphQL::Houtou::GraphQLJS::Parser ();
 use GraphQL::Houtou::GraphQLPerl::Parser ();
+use GraphQL::Houtou::Runtime ();
 use GraphQL::Houtou::Promise::Adapter qw(
   set_default_promise_code
   get_default_promise_code
@@ -16,6 +17,8 @@ our $VERSION = '0.01';
 our @EXPORT_OK = qw(
   parse
   parse_with_options
+  execute
+  compile_runtime
   set_default_promise_code
   get_default_promise_code
   clear_default_promise_code
@@ -40,6 +43,33 @@ sub parse_with_options {
   die "Unknown parser dialect '$dialect'.\n";
 }
 
+sub compile_runtime {
+  my ($schema, %opts) = @_;
+  return GraphQL::Houtou::Runtime::compile_schema($schema, %opts);
+}
+
+sub execute {
+  my ($schema, $document, $variables_or_opts, @rest) = @_;
+  my %opts;
+
+  if (@rest) {
+    %opts = ($variables_or_opts ? (%{$variables_or_opts}) : (), @rest);
+  } elsif (ref($variables_or_opts) eq 'HASH') {
+    %opts = %{$variables_or_opts};
+    if (!exists $opts{variables}) {
+      $opts{variables} = delete $opts{vars} if exists $opts{vars};
+    } elsif (exists $opts{vars} && !exists $opts{variables}) {
+      $opts{variables} = delete $opts{vars};
+    }
+  } elsif (defined $variables_or_opts) {
+    $opts{variables} = $variables_or_opts;
+  }
+
+  my $runtime = compile_runtime($schema, %opts);
+  my $program = $runtime->compile_operation($document, %opts);
+  return $runtime->execute_operation($program, %opts);
+}
+
 1;
 __END__
 
@@ -54,9 +84,10 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     use GraphQL::Houtou qw(
       parse
       parse_with_options
+      execute
+      compile_runtime
       set_default_promise_code
     );
-    use GraphQL::Houtou::Execution qw(execute);
     use GraphQL::Houtou::Schema;
     use GraphQL::Houtou::Type;
     use GraphQL::Houtou::Type::Object;
@@ -97,6 +128,7 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     );
 
     my $result = execute($schema, '{ hello }');
+    my $runtime = compile_runtime($schema);
 
     set_default_promise_code({
       resolve => sub { ... },
@@ -150,9 +182,9 @@ C<no_location =E<gt> 1> is still recommended.
 
 =head2 Executing Queries
 
-Execution lives under L<GraphQL::Houtou::Execution>. The public entry point is:
+The top-level runtime API is:
 
-    my $result = GraphQL::Houtou::Execution::execute($schema, $document, \%vars);
+    my $result = GraphQL::Houtou::execute($schema, $document, \%vars);
 
 Where C<$document> can be either:
 
@@ -168,9 +200,14 @@ a pre-parsed C<graphql-perl>-compatible AST
 
 =back
 
-In current practical benchmark coverage, the XS-backed execution path is the
-normal fast path and outperforms upstream C<GraphQL::Execution::execute> in
-the benchmarked string and AST cases.
+If you need a reusable compiled runtime, use:
+
+    my $runtime = GraphQL::Houtou::compile_runtime($schema);
+    my $program = $runtime->compile_operation($document);
+    my $result  = $runtime->execute_operation($program, variables => \%vars);
+
+The older C<GraphQL::Houtou::Execution> entry point remains available for
+compatibility, but the intended mainline is the runtime-backed API above.
 
 =head2 Promise Hooks
 

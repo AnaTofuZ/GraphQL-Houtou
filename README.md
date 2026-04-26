@@ -8,9 +8,10 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     use GraphQL::Houtou qw(
       parse
       parse_with_options
+      execute
+      compile_runtime
       set_default_promise_code
     );
-    use GraphQL::Houtou::Execution qw(execute);
     use GraphQL::Houtou::Schema;
     use GraphQL::Houtou::Type;
     use GraphQL::Houtou::Type::Object;
@@ -51,6 +52,7 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     );
 
     my $result = execute($schema, '{ hello }');
+    my $runtime = compile_runtime($schema);
 
     set_default_promise_code({
       resolve => sub { ... },
@@ -104,18 +106,23 @@ For throughput-sensitive parsing where you do not need location data, passing
 
 ## Executing Queries
 
-Execution lives under [GraphQL::Houtou::Execution](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3AExecution). The public entry point is:
+The top-level runtime API is:
 
-    my $result = GraphQL::Houtou::Execution::execute($schema, $document, \%vars);
+    my $result = GraphQL::Houtou::execute($schema, $document, \%vars);
 
 Where `$document` can be either:
 
 - a source string
 - a pre-parsed `graphql-perl`-compatible AST
 
-In current practical benchmark coverage, the XS-backed execution path is the
-normal fast path and outperforms upstream `GraphQL::Execution::execute` in
-the benchmarked string and AST cases.
+If you need a reusable compiled runtime, use:
+
+    my $runtime = GraphQL::Houtou::compile_runtime($schema);
+    my $program = $runtime->compile_operation($document);
+    my $result  = $runtime->execute_operation($program, variables => \%vars);
+
+The older `GraphQL::Houtou::Execution` entry point remains available for
+compatibility, but the intended mainline is the runtime-backed API above.
 
 ## Promise Hooks
 

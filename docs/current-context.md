@@ -89,6 +89,8 @@ New runtime entrypoints now include:
 - `$runtime_schema->lower_vm_program($program)`
 - `$schema->execute_runtime($document, %opts)`
 - `$schema->compile_operation($document)`
+- `GraphQL::Houtou::execute($schema, $document, \%variables?)`
+- `GraphQL::Houtou::compile_runtime($schema, %opts)`
 
 Current operation lowering shape:
 

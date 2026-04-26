@@ -4,14 +4,14 @@ use 5.014;
 use strict;
 use warnings;
 
-use GraphQL::Houtou qw(parse);
+use GraphQL::Houtou::GraphQLPerl::Parser ();
 use GraphQL::Houtou::Runtime::ExecutionProgram ();
 use GraphQL::Houtou::Runtime::ExecutionBlock ();
 use GraphQL::Houtou::Runtime::Instruction ();
 
 sub compile_operation {
   my ($class, $runtime_schema, $document, %opts) = @_;
-  my $ast = ref($document) ? $document : parse($document);
+  my $ast = ref($document) ? $document : GraphQL::Houtou::GraphQLPerl::Parser::parse($document);
   my ($operation) = grep { ($_->{kind} || '') eq 'operation' } @{ $ast || [] };
   die "No operation found for runtime compiler.\n" if !$operation;
   my %fragments = map { (($_->{name} || '') => $_) }

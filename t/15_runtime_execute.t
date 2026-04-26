@@ -95,10 +95,10 @@ my $schema = GraphQL::Houtou::Schema->new(
   types => [ $User, $Node, $SearchResult, $ProfileInput ],
 );
 
-subtest 'schema can execute greenfield runtime program' => sub {
-  my $runtime = $schema->compile_runtime;
-  my $program = $runtime->compile_operation('{ viewer { id name } users { id } }');
-  my $result = $runtime->execute_operation($program);
+subtest 'schema can execute runtime program' => sub {
+  my $runtime = $schema->build_runtime;
+  my $program = $runtime->compile_program('{ viewer { id name } users { id } }');
+  my $result = $runtime->execute_program($program);
 
   is_deeply $result, {
     data => {
@@ -119,7 +119,17 @@ subtest 'schema helper can compile and execute in one call' => sub {
       viewer => { id => 'u1' },
     },
     errors => [],
-  }, 'schema helper executes greenfield runtime';
+  }, 'schema helper executes runtime program';
+};
+
+subtest 'schema helper can still force the Perl executor' => sub {
+  my $result = $schema->execute_runtime_perl('{ viewer { id } }');
+  is_deeply $result, {
+    data => {
+      viewer => { id => 'u1' },
+    },
+    errors => [],
+  }, 'Perl executor remains available as an explicit cold path';
 };
 
 subtest 'default resolver path reads root hash values' => sub {
@@ -129,7 +139,7 @@ subtest 'default resolver path reads root hash values' => sub {
       hello => 'world',
     },
     errors => [],
-  }, 'default resolver path works in greenfield runtime';
+  }, 'default resolver path works in runtime program';
 };
 
 subtest 'abstract fields dispatch through lowered child blocks' => sub {
@@ -320,7 +330,7 @@ GRAPHQL
       },
     },
     errors => [],
-  }, 'fragment spread path executes in greenfield runtime';
+  }, 'fragment spread path executes in runtime program';
 };
 
 subtest 'dynamic include directives execute through lowered runtime guards' => sub {

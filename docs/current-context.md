@@ -10,15 +10,15 @@ Design rule of thumb for the current VM work:
 - prefer widening family-owned corridors over adding local helper shortcuts
 - prefer lightweight abstract discriminators over `is_type_of` when the schema
   can provide them
-- for the greenfield runtime, do not treat PP fallback as a core design
+- for the runtime VM, do not treat PP fallback as a core design
   requirement
 
 For the "if we restarted from zero" architecture that distills the lessons
 from these experiments, see:
 
-- `docs/greenfield-graphql-runtime-architecture.md`
+- `docs/runtime-vm-architecture.md`
 
-Current greenfield direction:
+Current runtime-VM direction:
 
 - boot-time `compile_runtime` / `compile_runtime_graph` API
 - immutable schema graph
@@ -71,7 +71,7 @@ Greenfield scaffold checkpoint:
   - execute sync/no-promise object/list/default-resolver/abstract-tag programs through the
     new runtime
 
-New greenfield entrypoints now include:
+New runtime entrypoints now include:
 
 - `GraphQL::Houtou::Runtime::compile_operation($runtime_schema, $document)`
 - `GraphQL::Houtou::Runtime::inflate_operation($runtime_schema, $descriptor)`
@@ -140,14 +140,14 @@ This is still structural, but it establishes the key boundary:
 - promise / directives / errors are still incomplete
   and remain next-stage work
 
-Current greenfield internal-currency rule:
+Current runtime internal-currency rule:
 
 - `Outcome` is kind-first (`SCALAR` / `OBJECT` / `LIST`)
 - payload stays separated by kind inside the runtime
 - Perl response envelopes are response-boundary artifacts, not hot-path
   execution artifacts
 
-Current greenfield runtime coverage:
+Current runtime coverage:
 
 - sync execution
 - promise adapter integration for promise-returning resolvers and child blocks
@@ -170,7 +170,7 @@ Current greenfield runtime coverage:
   metadata
   - static and dynamic arg payloads are coerced through lowered arg type
     descriptors before resolver dispatch
-  - input object defaults now flow through typed coercion in the greenfield
+  - input object defaults now flow through typed coercion in the runtime
     runtime path
 - `@include` / `@skip` lowering
   - static directives prune selections during lowering
@@ -196,7 +196,7 @@ Current greenfield runtime coverage:
     are materialized on demand
   - explicit field resolvers now receive
     `($source, $args, $context, $info, $return_type)`
-    so greenfield can preserve the existing callback surface while keeping
+    so the runtime can preserve the existing callback surface while keeping
     `info` cold
   - default resolver and hot execution no longer build the lazy `info`
     surface unless an explicit resolver or abstract callback actually needs it
@@ -287,7 +287,7 @@ Current greenfield runtime coverage:
   - each native op carries `slot_index`
   so repeated field metadata does not have to be duplicated per op when the
   future XS executor inflates native operand tables
-- the greenfield runtime now also exports a native runtime-side slot catalog:
+- the runtime now also exports a native runtime-side slot catalog:
   - `$schema->compile_runtime_native_descriptor(...)`
   - `$schema->compile_vm_native_bundle_descriptor(...)`
   - `$schema->dump_runtime_native_descriptor(...)`
@@ -334,26 +334,26 @@ Still intentionally missing:
 - XS VM executor
 - full VM-side specialization for extensions / introspection / hook surfaces
 
-Latest greenfield checkpoint:
+Latest runtime checkpoint:
 
 - lowered variable defs and field arg defs now carry compact type metadata
 - executor coerces variables via lowered program metadata at exec-state build
 - executor coerces static/dynamic args via lowered instruction metadata before
   resolver dispatch
 - `GraphQL::Houtou::Type::InputObject` now preserves field defaults during
-  `graphql_to_perl` / `perl_to_graphql`, which the greenfield runtime relies on
-- promise adapter support now exists in the greenfield executor
+  `graphql_to_perl` / `perl_to_graphql`, which the runtime relies on
+- promise adapter support now exists in the runtime executor
   - promise-returning scalar/object/list/abstract fields resolve through the
     same lowered program
 - validation:
-  - `perl -Ilib t/14_greenfield_operation_runtime.t`
-  - `perl -Ilib t/15_greenfield_runtime_execute.t`
-  - `perl -Ilib t/16_greenfield_runtime_promise.t`
-  - `minil test t/14_greenfield_operation_runtime.t t/15_greenfield_runtime_execute.t`
+  - `perl -Ilib t/14_runtime_operation.t`
+  - `perl -Ilib t/15_runtime_execute.t`
+  - `perl -Ilib t/16_runtime_promise.t`
+  - `minil test t/14_runtime_operation.t t/15_runtime_execute.t`
   - `minil test`
   - latest full test run target is now `Files=18, Tests=229`
 
-Latest greenfield VM checkpoints after that:
+Latest runtime VM checkpoints after that:
 
 - `VMProgram` now owns a direct runtime `block_map`
 - `VMOp` keeps runtime-only `resolve_dispatch` / `complete_dispatch`
@@ -392,10 +392,10 @@ Latest greenfield VM checkpoints after that:
   inside state, instead of treating block-local result state as a purely local
   helper concern
 
-Greenfield VM validation now includes:
+Runtime VM validation now includes:
 
-- `perl -Ilib t/18_greenfield_vm_lowering.t`
-- `perl -Ilib t/19_greenfield_vm_execute.t`
+- `perl -Ilib t/18_vm_lowering.t`
+- `perl -Ilib t/19_vm_execute.t`
 - `minil test`
 - latest full test run target is now `Files=20, Tests=236`
 
@@ -4387,15 +4387,15 @@ Interpretation:
   clearly inside the abstract/object corridor itself rather than in generic
   sync-outcome export/repack
 
-Greenfield VM XS-boundary checkpoint:
+Runtime VM XS-boundary checkpoint:
 
-- `src/greenfield_vm.h` now defines numeric codes for:
+- `src/vm_runtime.h` now defines numeric codes for:
   - resolve families
   - completion families
   - dispatch families
   - type kinds
   - operation types
-- `GraphQL::Houtou::XS::GreenfieldVM::native_codes_xs()` exposes those codes to
+- `GraphQL::Houtou::XS::VM::native_codes_xs()` exposes those codes to
   Perl so tests can assert the native descriptor contract without hard-coded
   magic numbers
 - native VM bundle descriptors now carry:
@@ -4407,14 +4407,14 @@ Greenfield VM XS-boundary checkpoint:
   abstract ops export the correct native dispatch family instead of silently
   falling back to `GENERIC`
 
-This is the first stable XS-facing contract for the greenfield VM. The next
+This is the first stable XS-facing contract for the runtime VM. The next
 stage is a C-side loader that inflates the native bundle descriptor into
 native structs so an XS executor can consume the descriptor directly.
 
-Greenfield VM XS execution checkpoint:
+Runtime VM XS execution checkpoint:
 
 - the native bundle loader is now paired with a first runnable XS executor:
-  - `GraphQL::Houtou::XS::GreenfieldVM::execute_native_bundle_xs(...)`
+  - `GraphQL::Houtou::XS::VM::execute_native_bundle_xs(...)`
 - `Runtime::execute_vm_native_bundle(...)` no longer inflates the bundle back
   into the pure-Perl VM before execution; it now executes the native bundle
   handle directly in XS
@@ -4433,7 +4433,7 @@ Greenfield VM XS execution checkpoint:
   so the XS executor can resolve a runtime object directly into a child block
   without re-inflating the Perl VM program
 
-This is the first end-to-end greenfield runtime path where:
+This is the first end-to-end runtime path where:
 
 - schema/runtime metadata stays in Perl
 - the lowered VM bundle is owned natively

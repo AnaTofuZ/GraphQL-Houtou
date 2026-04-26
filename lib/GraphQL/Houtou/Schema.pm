@@ -77,6 +77,11 @@ sub compile_runtime {
   return GraphQL::Houtou::Runtime::compile_schema($self, %opts);
 }
 
+sub build_runtime {
+  my ($self, %opts) = @_;
+  return $self->compile_runtime(%opts);
+}
+
 sub compile_runtime_graph {
   my ($self, %opts) = @_;
   return $self->compile_runtime(%opts);
@@ -127,14 +132,29 @@ sub compile_operation {
   return $self->compile_runtime(%opts)->compile_operation($document, %opts);
 }
 
+sub compile_program {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_operation($document, %opts);
+}
+
 sub compile_operation_descriptor {
   my ($self, $document, %opts) = @_;
   return $self->compile_operation($document, %opts)->to_struct;
 }
 
+sub compile_program_descriptor {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_operation_descriptor($document, %opts);
+}
+
 sub inflate_operation {
   my ($self, $descriptor, %opts) = @_;
   return $self->compile_runtime(%opts)->inflate_operation($descriptor);
+}
+
+sub inflate_program {
+  my ($self, $descriptor, %opts) = @_;
+  return $self->inflate_operation($descriptor, %opts);
 }
 
 sub dump_operation_descriptor {
@@ -157,11 +177,28 @@ sub execute_runtime {
   return $runtime->execute_operation($program, %opts);
 }
 
+sub execute_runtime_perl {
+  my ($self, $document, %opts) = @_;
+  my $runtime = $self->compile_runtime(%opts);
+  my $program = $runtime->compile_operation($document, %opts);
+  return $runtime->execute_program_perl($program, %opts);
+}
+
+sub execute_program {
+  my ($self, $document, %opts) = @_;
+  return $self->execute_runtime($document, %opts);
+}
+
 sub compile_vm_operation {
   my ($self, $document, %opts) = @_;
   my $runtime = delete $opts{runtime_schema} || $self->compile_runtime(%opts);
   my $program = $runtime->compile_operation($document, %opts);
   return $runtime->lower_vm_program($program);
+}
+
+sub lower_program_to_vm {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_vm_operation($document, %opts);
 }
 
 sub execute_vm_runtime {
@@ -171,10 +208,20 @@ sub execute_vm_runtime {
   return $runtime->execute_vm_program($program, %opts);
 }
 
+sub execute_vm {
+  my ($self, $document, %opts) = @_;
+  return $self->execute_vm_runtime($document, %opts);
+}
+
 sub compile_vm_operation_descriptor {
   my ($self, $document, %opts) = @_;
   my $runtime = delete $opts{runtime_schema};
   return $self->compile_vm_operation($document, ($runtime ? (runtime_schema => $runtime) : ()), %opts)->to_struct;
+}
+
+sub compile_vm_program_descriptor {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_vm_operation_descriptor($document, %opts);
 }
 
 sub compile_vm_native_descriptor {
@@ -194,6 +241,11 @@ sub compile_vm_native_bundle_descriptor {
   };
 }
 
+sub compile_vm_bundle_descriptor {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_vm_native_bundle_descriptor($document, %opts);
+}
+
 sub dump_vm_native_bundle_descriptor {
   my ($self, $document, $path, %opts) = @_;
   my $descriptor = $self->compile_vm_native_bundle_descriptor($document, %opts);
@@ -211,9 +263,19 @@ sub inflate_vm_operation {
   return $self->compile_runtime(%opts)->inflate_vm_program($descriptor);
 }
 
+sub inflate_vm_program {
+  my ($self, $descriptor, %opts) = @_;
+  return $self->inflate_vm_operation($descriptor, %opts);
+}
+
 sub inflate_vm_native_bundle_descriptor {
   my ($self, $descriptor, %opts) = @_;
   return $self->compile_runtime(%opts)->inflate_vm_native_bundle($descriptor);
+}
+
+sub inflate_vm_bundle_descriptor {
+  my ($self, $descriptor, %opts) = @_;
+  return $self->inflate_vm_native_bundle_descriptor($descriptor, %opts);
 }
 
 sub dump_vm_operation_descriptor {
@@ -232,6 +294,11 @@ sub load_vm_operation_descriptor {
 sub execute_vm_native_bundle_descriptor {
   my ($self, $descriptor, %opts) = @_;
   return $self->compile_runtime(%opts)->execute_vm_native_bundle($descriptor, %opts);
+}
+
+sub execute_vm_bundle_descriptor {
+  my ($self, $descriptor, %opts) = @_;
+  return $self->execute_vm_native_bundle_descriptor($descriptor, %opts);
 }
 
 sub execute_vm_native_runtime {

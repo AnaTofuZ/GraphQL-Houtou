@@ -1,4 +1,4 @@
-# Greenfield GraphQL Runtime Architecture
+# Runtime VM Architecture
 
 This document describes the architecture that would be preferable if we were
 designing a new high-performance Perl GraphQL library from scratch today,
@@ -160,7 +160,7 @@ The design target is:
 - keep payload native as long as possible
 - only materialize Perl-facing containers at a real boundary
 
-In the current greenfield VM this already maps to:
+In the current runtime VM this already maps to:
 
 - `ExecState` for process-local runtime state
 - `Cursor` for current block/op/slot
@@ -215,7 +215,7 @@ direct values to adapter-managed promises at the block / instruction boundary.
 
 ### 3.5. Do not let PP fallback shape the runtime
 
-For a greenfield runtime, PP should not be a design constraint.
+For the runtime VM, PP should not be a design constraint.
 
 - boot-time schema compilation may still be written in Perl initially
 - public API glue may still be written in Perl initially
@@ -353,7 +353,7 @@ And the next execution boundary should also be explicit:
 my $result = $runtime->execute_vm_program($vm_program, %opts);
 ```
 
-The first greenfield VM checkpoint should therefore be a runnable pure-Perl
+The first VM checkpoint should therefore be a runnable pure-Perl
 VM executor that proves the artifact boundary and family-owned block dispatch
 work at all. Only after that should the hot VM loop be replaced with XS.
 
@@ -542,7 +542,7 @@ For abstract dispatch, the preferred order remains:
 2. `resolve_type`
 3. `possible_types + is_type_of` as slow fallback
 
-Internally, a greenfield runtime should own distinct structures for:
+Internally, the runtime VM should own distinct structures for:
 
 - schema graph
 - lowered program
@@ -871,10 +871,10 @@ If the project were restarted from zero, the best architecture would be:
 This is the architecture most likely to produce a fast Perl GraphQL library,
 not just a slightly optimized Perl GraphQL executor.
 
-## Current Greenfield Reboot Checkpoint
+## Current Runtime Reboot Checkpoint
 
 The rebooted implementation now has the first end-to-end XS execution path for
-the greenfield VM:
+the runtime VM:
 
 - Perl still owns schema compilation and VM lowering
 - native bundle descriptors are inflated into C-owned structs
@@ -903,7 +903,7 @@ unnecessary for the hot path?”.
 
 ## Native Bridge Rule
 
-The greenfield/native runtime should follow this boundary rule:
+The runtime/native VM should follow this boundary rule:
 
 - child runtime modules do not import XS directly
 - the top-level runtime bridge owns XS entrypoints

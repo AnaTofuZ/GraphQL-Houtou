@@ -1,4 +1,4 @@
-package GraphQL::Houtou::XS::GreenfieldVM;
+package GraphQL::Houtou::XS::VM;
 
 use 5.014;
 use strict;

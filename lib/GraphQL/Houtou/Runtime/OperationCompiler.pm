@@ -13,7 +13,7 @@ sub compile_operation {
   my ($class, $runtime_schema, $document, %opts) = @_;
   my $ast = ref($document) ? $document : parse($document);
   my ($operation) = grep { ($_->{kind} || '') eq 'operation' } @{ $ast || [] };
-  die "No operation found for greenfield runtime.\n" if !$operation;
+  die "No operation found for runtime compiler.\n" if !$operation;
   my %fragments = map { (($_->{name} || '') => $_) }
     grep { ($_->{kind} || '') eq 'fragment' } @{ $ast || [] };
 
@@ -396,7 +396,7 @@ sub _materialize_static_value {
   return $$$value if $ref eq 'REF';
   return [ map { _materialize_static_value($_) } @$value ] if $ref eq 'ARRAY';
   return { map { $_ => _materialize_static_value($value->{$_}) } keys %$value } if $ref eq 'HASH';
-  die "Unsupported static argument value ref '$ref' in greenfield runtime.\n"
+  die "Unsupported static argument value ref '$ref' in runtime compiler.\n"
     if $ref eq 'SCALAR';
   return $value;
 }

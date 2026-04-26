@@ -54,8 +54,8 @@ my $schema = GraphQL::Houtou::Schema->new(
   types => [ $User, $Node, $SearchResult ],
 );
 
-subtest 'schema can compile greenfield runtime graph' => sub {
-  my $compiled = $schema->compile_runtime;
+subtest 'schema can compile runtime graph' => sub {
+  my $compiled = $schema->build_runtime;
 
   isa_ok $compiled, 'GraphQL::Houtou::Runtime::SchemaGraph';
   isa_ok $compiled->program, 'GraphQL::Houtou::Runtime::Program';

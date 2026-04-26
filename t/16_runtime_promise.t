@@ -4,7 +4,7 @@ use warnings;
 use Test::More;
 
 {
-  package Local::Greenfield::Promise;
+  package Local::RuntimePromise;
 
   sub new {
     my ($class, %args) = @_;
@@ -68,21 +68,21 @@ use GraphQL::Houtou::Type::Scalar qw($String);
 use GraphQL::Houtou::Type::Union;
 
 my $promise_code = normalize_promise_code({
-  resolve => sub { Local::Greenfield::Promise->resolve(@_) },
-  reject  => sub { Local::Greenfield::Promise->reject(@_) },
-  all     => sub { Local::Greenfield::Promise->all(@_) },
+  resolve => sub { Local::RuntimePromise->resolve(@_) },
+  reject  => sub { Local::RuntimePromise->reject(@_) },
+  all     => sub { Local::RuntimePromise->all(@_) },
   then    => sub {
     my ($promise, $on_fulfilled, $on_rejected) = @_;
     return $promise->then($on_fulfilled, $on_rejected);
   },
   is_promise => sub {
     my ($value) = @_;
-    return ref($value) eq 'Local::Greenfield::Promise';
+    return ref($value) eq 'Local::RuntimePromise';
   },
 });
 
 my $User = GraphQL::Houtou::Type::Object->new(
-  name => 'GreenfieldPromiseUser',
+  name => 'RuntimePromiseUser',
   runtime_tag => 'user',
   fields => {
     id => { type => $String->non_null },
@@ -91,38 +91,38 @@ my $User = GraphQL::Houtou::Type::Object->new(
 );
 
 my $SearchResult = GraphQL::Houtou::Type::Union->new(
-  name => 'GreenfieldPromiseSearchResult',
+  name => 'RuntimePromiseSearchResult',
   types => [ $User ],
   tag_resolver => sub { $_[0]{kind} },
 );
 
 my $schema = GraphQL::Houtou::Schema->new(
   query => GraphQL::Houtou::Type::Object->new(
-    name => 'GreenfieldPromiseQuery',
+    name => 'RuntimePromiseQuery',
     fields => {
       later => {
         type => $String->non_null,
-        resolve => sub { Local::Greenfield::Promise->resolve('world') },
+        resolve => sub { Local::RuntimePromise->resolve('world') },
       },
       later_user => {
         type => $User,
         resolve => sub {
-          Local::Greenfield::Promise->resolve({ id => '41', name => 'async:41' });
+          Local::RuntimePromise->resolve({ id => '41', name => 'async:41' });
         },
       },
       later_list => {
         type => $String->non_null->list->non_null,
         resolve => sub {
           [
-            Local::Greenfield::Promise->resolve('alpha'),
-            Local::Greenfield::Promise->resolve('beta'),
+            Local::RuntimePromise->resolve('alpha'),
+            Local::RuntimePromise->resolve('beta'),
           ];
         },
       },
       later_search => {
         type => $SearchResult,
         resolve => sub {
-          Local::Greenfield::Promise->resolve({
+          Local::RuntimePromise->resolve({
             kind => 'user',
             id => '42',
             name => 'async:42',
@@ -134,13 +134,13 @@ my $schema = GraphQL::Houtou::Schema->new(
   types => [ $User, $SearchResult ],
 );
 
-subtest 'greenfield runtime returns promise when promise_code is supplied' => sub {
+subtest 'runtime program returns promise when promise_code is supplied' => sub {
   my $result = $schema->execute_runtime(
-    '{ later later_user { id name } later_list later_search { ... on GreenfieldPromiseUser { id name } } }',
+    '{ later later_user { id name } later_list later_search { ... on RuntimePromiseUser { id name } } }',
     promise_code => $promise_code,
   );
 
-  isa_ok $result, 'Local::Greenfield::Promise';
+  isa_ok $result, 'Local::RuntimePromise';
   is_deeply $result->get, {
     data => {
       later => 'world',
@@ -155,7 +155,7 @@ subtest 'greenfield runtime returns promise when promise_code is supplied' => su
       },
     },
     errors => [],
-  }, 'greenfield runtime resolves promise-backed scalar/object/list/abstract fields';
+  }, 'runtime program resolves promise-backed scalar/object/list/abstract fields';
 };
 
 done_testing;

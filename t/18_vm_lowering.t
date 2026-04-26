@@ -5,7 +5,7 @@ use File::Temp qw(tempfile);
 
 use lib 'lib';
 use GraphQL::Houtou::Schema;
-use GraphQL::Houtou::XS::GreenfieldVM qw(
+use GraphQL::Houtou::XS::VM qw(
   load_native_bundle_xs
   load_native_runtime_xs
   native_bundle_summary_xs
@@ -147,7 +147,7 @@ subtest 'XS can inflate native VM bundle descriptor into a native handle' => sub
   my $codes = native_codes_xs();
   my $handle = load_native_bundle_xs($bundle);
 
-  isa_ok $handle, 'GraphQL::Houtou::XS::GreenfieldVM::NativeBundle';
+  isa_ok $handle, 'GraphQL::Houtou::XS::VM::NativeBundle';
 
   my $summary = native_bundle_summary_xs($handle);
   is $summary->{runtime_slot_count}, scalar(@{ $bundle->{runtime}{slot_catalog} || [] }),
@@ -165,10 +165,10 @@ subtest 'XS can inflate native VM bundle descriptor into a native handle' => sub
 };
 
 subtest 'XS can inflate runtime schema into a native runtime handle' => sub {
-  my $runtime = $schema->compile_runtime;
+  my $runtime = $schema->build_runtime;
   my $handle = load_native_runtime_xs($runtime->to_native_exec_struct);
 
-  isa_ok $handle, 'GraphQL::Houtou::XS::GreenfieldVM::NativeRuntime';
+  isa_ok $handle, 'GraphQL::Houtou::XS::VM::NativeRuntime';
 
   my $summary = native_runtime_summary_xs($handle);
   is $summary->{runtime_slot_count}, scalar(@{ $runtime->slot_catalog || [] }),

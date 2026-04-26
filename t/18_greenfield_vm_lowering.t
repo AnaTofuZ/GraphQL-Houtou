@@ -54,6 +54,10 @@ subtest 'schema can lower operation into VM program' => sub {
   like $node->opcode, qr/^RESOLVE_.*:COMPLETE_ABSTRACT$/, 'node lowers to abstract completion opcode';
   is $node->abstract_child_blocks->{VmUser}, 'QUERY.node.VmUser#1',
     'abstract op keeps lowered child block mapping';
+  ok $viewer->resolve_handler, 'viewer op binds resolve handler';
+  ok $viewer->complete_handler, 'viewer op binds complete handler';
+  isa_ok $vm->block_by_name('QUERY.node.VmUser#1'), 'GraphQL::Houtou::Runtime::VMBlock',
+    'vm program keeps direct block map';
 };
 
 subtest 'VM program descriptor can round-trip through schema helpers' => sub {

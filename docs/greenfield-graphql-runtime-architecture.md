@@ -63,6 +63,14 @@ In execution terms:
 - promise presence should also be treated as a first-class kind transition,
   not as a reason to immediately rebuild Perl response envelopes
 
+For the VM layer this implies:
+
+- the lowered op should carry bound dispatch family metadata
+- runtime should avoid re-parsing opcode strings or rediscovering schema/block
+  links in the hot loop
+- runtime-only handler bindings are preferable to repeated generic branching
+  when the artifact boundary can still serialize the structural opcode cleanly
+
 The same rule applies to resolver metadata:
 
 - callbacks should receive an `info` surface that is compatible enough for
@@ -276,6 +284,16 @@ This leads naturally to a second artifact boundary:
 The first keeps source-level structure convenient for correctness work. The
 second should collapse that structure into compact opcodes and immutable block
 metadata that an XS-first runtime can execute directly.
+
+In practice, the fused VM layer should already bind runtime-only hot metadata
+after inflate/lowering:
+
+- block-name lookup should become block pointer lookup
+- field-name lookup should become slot pointer lookup
+- opcode family dispatch should become table-driven handler dispatch
+
+The serialized artifact still stores structural opcode data, but the in-memory
+VM should not keep paying the cost of rediscovering those relationships.
 
 ### 3. Query Lowering Pipeline
 

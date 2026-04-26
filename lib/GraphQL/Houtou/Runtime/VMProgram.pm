@@ -6,12 +6,17 @@ use warnings;
 
 sub new {
   my ($class, %args) = @_;
+  my $root_block = $args{root_block};
+  my @blocks = @{ $args{blocks} || [] };
+  my %block_map = map { ($_->name => $_) } @blocks;
+  $block_map{ $root_block->name } = $root_block if $root_block;
   return bless {
     version => $args{version} || 1,
     operation_type => $args{operation_type} || 'query',
     operation_name => $args{operation_name},
-    blocks => $args{blocks} || [],
-    root_block => $args{root_block},
+    blocks => \@blocks,
+    root_block => $root_block,
+    block_map => \%block_map,
   }, $class;
 }
 
@@ -24,11 +29,7 @@ sub root_block { return $_[0]{root_block} }
 sub block_by_name {
   my ($self, $name) = @_;
   return if !defined $name;
-  return $self->{root_block} if $self->{root_block} && $self->{root_block}->name eq $name;
-  for my $block (@{ $self->{blocks} || [] }) {
-    return $block if $block->name eq $name;
-  }
-  return;
+  return $self->{block_map}{$name};
 }
 
 sub to_struct {

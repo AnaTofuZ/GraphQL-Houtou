@@ -24,6 +24,8 @@ sub new {
     bound_child_block => $args{bound_child_block},
     bound_abstract_child_blocks => $args{bound_abstract_child_blocks} || {},
     abstract_dispatch => $args{abstract_dispatch},
+    resolve_handler => $args{resolve_handler},
+    complete_handler => $args{complete_handler},
   }, $class;
 }
 
@@ -44,6 +46,8 @@ sub bound_slot { return $_[0]{bound_slot} }
 sub bound_child_block { return $_[0]{bound_child_block} }
 sub bound_abstract_child_blocks { return $_[0]{bound_abstract_child_blocks} }
 sub abstract_dispatch { return $_[0]{abstract_dispatch} }
+sub resolve_handler { return $_[0]{resolve_handler} }
+sub complete_handler { return $_[0]{complete_handler} }
 
 sub to_struct {
   my ($self) = @_;

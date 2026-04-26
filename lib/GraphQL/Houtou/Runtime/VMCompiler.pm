@@ -9,6 +9,18 @@ use GraphQL::Houtou::Runtime::VMBlock ();
 use GraphQL::Houtou::Runtime::VMOp ();
 use GraphQL::Houtou::Runtime::VMProgram ();
 
+my %RESOLVE_HANDLER = (
+  RESOLVE_DEFAULT => 'resolve_default',
+  RESOLVE_EXPLICIT => 'resolve_explicit',
+);
+
+my %COMPLETE_HANDLER = (
+  COMPLETE_GENERIC => 'complete_generic',
+  COMPLETE_OBJECT => 'complete_object',
+  COMPLETE_LIST => 'complete_list',
+  COMPLETE_ABSTRACT => 'complete_abstract',
+);
+
 sub lower_program {
   my ($class, $runtime_schema, $program) = @_;
   my @blocks = map { _lower_block($_) } @{ $program->blocks || [] };
@@ -136,6 +148,8 @@ sub _bind_vm_ops {
           ($_ => ($child_name ? $blocks{$child_name} : undef))
         } keys %{ $op->abstract_child_blocks || {} }
       };
+      $op->{resolve_handler} ||= $RESOLVE_HANDLER{ $op->resolve_family || '' };
+      $op->{complete_handler} ||= $COMPLETE_HANDLER{ $op->complete_family || '' };
     }
   }
 

@@ -114,6 +114,12 @@ sub _execute_op {
 
 sub _resolve_field_value {
   my ($state, $block, $op, $source, $path_frame) = @_;
+  my $handler = $op->resolve_handler || 'resolve_default';
+  return __PACKAGE__->can("_$handler")->($state, $block, $op, $source, $path_frame);
+}
+
+sub _resolve_default {
+  my ($state, $block, $op, $source, $path_frame) = @_;
   my $slot = $op->bound_slot;
   my $resolver = $slot ? $slot->resolve : undef;
   my $return_type = $slot ? $slot->return_type : undef;
@@ -129,20 +135,20 @@ sub _resolve_field_value {
   return;
 }
 
+sub _resolve_explicit {
+  my ($state, $block, $op, $source, $path_frame) = @_;
+  return _resolve_default(@_);
+}
+
 sub _complete_resolved_value {
   my ($state, $block, $op, $value, $path_frame) = @_;
-  my $complete_op = $op->complete_family || 'COMPLETE_GENERIC';
+  my $handler = $op->complete_handler || 'complete_generic';
+  return __PACKAGE__->can("_$handler")->($state, $block, $op, $value, $path_frame);
+}
 
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
-    if $complete_op eq 'COMPLETE_GENERIC';
-  return _complete_object($state, $block, $op, $value, $path_frame)
-    if $complete_op eq 'COMPLETE_OBJECT';
-  return _complete_list($state, $block, $op, $value, $path_frame)
-    if $complete_op eq 'COMPLETE_LIST';
-  return _complete_abstract($state, $block, $op, $value, $path_frame)
-    if $complete_op eq 'COMPLETE_ABSTRACT';
-
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'VALUE', value => $value);
+sub _complete_generic {
+  my ($state, $block, $op, $value, $path_frame) = @_;
+  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value);
 }
 
 sub _complete_object {

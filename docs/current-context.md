@@ -209,8 +209,13 @@ Current greenfield runtime coverage:
     `tag_resolver`, `tag_map`, `resolve_type`, and `possible_types` metadata,
     so abstract execution does not need to rediscover those through
     runtime-cache hash lookups per field
-  - child object/list/abstract blocks are also rebound onto instructions, so
-    hot execution does not linearly search `block_by_name` per child dispatch
+- child object/list/abstract blocks are also rebound onto instructions, so
+  hot execution does not linearly search `block_by_name` per child dispatch
+- VM lowering/runtime now also bind runtime-only dispatch metadata:
+  - `VMProgram` owns a direct `block_map`
+  - `VMOp` owns runtime-only `resolve_handler` / `complete_handler`
+  - the VM hot path therefore dispatches from bound family handlers instead of
+    reinterpreting opcode strings in the loop
 
 Still intentionally missing:
 

@@ -216,6 +216,12 @@ Current greenfield runtime coverage:
   - `VMOp` owns runtime-only `resolve_handler` / `complete_handler`
   - the VM hot path therefore dispatches from bound family handlers instead of
     reinterpreting opcode strings in the loop
+- VM execution is also moving from argument-threaded helpers to cursor-owned
+  state:
+  - `Cursor` now snapshots/restores nested block execution
+  - current block / op / slot are owned by the cursor
+  - object/list/abstract child execution reuse the same cursor machine across
+    root and child blocks
 
 Still intentionally missing:
 

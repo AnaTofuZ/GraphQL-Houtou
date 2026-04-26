@@ -53,17 +53,23 @@ sub execute_program {
 
 sub _execute_block {
   my ($state, $block, $source, $base_path) = @_;
+  my $cursor = $state->cursor;
+  my $snapshot = $cursor->snapshot;
+  $cursor->enter_block($block);
   my %data;
   my @pending_names;
   my @pending_outcomes;
 
-  for my $op (@{ $block->ops || [] }) {
+  my $ops = $cursor->block ? ($cursor->block->ops || []) : [];
+  for my $i (0 .. $#$ops) {
+    my $op = $ops->[$i];
+    $cursor->set_current_op($op, $i);
     next if !_should_execute_op($state, $op);
     my $path_frame = GraphQL::Houtou::Runtime::PathFrame->new(
       parent => $base_path,
       key => $op->result_name,
     );
-    my $outcome = _execute_op($state, $block, $op, $source, $path_frame);
+    my $outcome = _execute_op($state, $source, $path_frame);
     if (_is_promise($state, $outcome)) {
       push @pending_names, $op->result_name;
       push @pending_outcomes, $outcome;
@@ -74,7 +80,7 @@ sub _execute_block {
 
   if (@pending_outcomes) {
     my $aggregate = all_promise($state->promise_code, @pending_outcomes);
-    return then_promise($state->promise_code, $aggregate, sub {
+    my $promise = then_promise($state->promise_code, $aggregate, sub {
       my @resolved = _promise_all_values_to_array(@_);
       my %merged = %data;
       for my $i (0 .. $#resolved) {
@@ -82,15 +88,18 @@ sub _execute_block {
       }
       return \%merged;
     });
+    $cursor->restore($snapshot);
+    return $promise;
   }
 
+  $cursor->restore($snapshot);
   return \%data;
 }
 
 sub _execute_op {
-  my ($state, $block, $op, $source, $path_frame) = @_;
+  my ($state, $source, $path_frame) = @_;
   my ($ok, $value) = _capture_eval(sub {
-    return _resolve_field_value($state, $block, $op, $source, $path_frame);
+    return _resolve_field_value($state, $source, $path_frame);
   });
   return _error_outcome($value, $path_frame) if !$ok;
 
@@ -98,7 +107,7 @@ sub _execute_op {
     return then_promise($state->promise_code, $value, sub {
       my ($resolved_value) = @_;
       my ($complete_ok, $outcome) = _capture_eval(sub {
-        return _complete_resolved_value($state, $block, $op, $resolved_value, $path_frame);
+        return _complete_resolved_value($state, $resolved_value, $path_frame);
       });
       return $complete_ok ? $outcome : _error_outcome($outcome, $path_frame);
     }, sub {
@@ -107,20 +116,24 @@ sub _execute_op {
   }
 
   my ($complete_ok, $outcome) = _capture_eval(sub {
-    return _complete_resolved_value($state, $block, $op, $value, $path_frame);
+    return _complete_resolved_value($state, $value, $path_frame);
   });
   return $complete_ok ? $outcome : _error_outcome($outcome, $path_frame);
 }
 
 sub _resolve_field_value {
-  my ($state, $block, $op, $source, $path_frame) = @_;
+  my ($state, $source, $path_frame) = @_;
+  my $op = $state->cursor->current_op;
   my $handler = $op->resolve_handler || 'resolve_default';
-  return __PACKAGE__->can("_$handler")->($state, $block, $op, $source, $path_frame);
+  return __PACKAGE__->can("_$handler")->($state, $source, $path_frame);
 }
 
 sub _resolve_default {
-  my ($state, $block, $op, $source, $path_frame) = @_;
-  my $slot = $op->bound_slot;
+  my ($state, $source, $path_frame) = @_;
+  my $cursor = $state->cursor;
+  my $block = $cursor->block;
+  my $op = $cursor->current_op;
+  my $slot = $cursor->current_slot || $op->bound_slot;
   my $resolver = $slot ? $slot->resolve : undef;
   my $return_type = $slot ? $slot->return_type : undef;
   $return_type ||= $state->runtime_schema->runtime_cache->{name2type}{ $block->type_name };
@@ -136,23 +149,25 @@ sub _resolve_default {
 }
 
 sub _resolve_explicit {
-  my ($state, $block, $op, $source, $path_frame) = @_;
+  my ($state, $source, $path_frame) = @_;
   return _resolve_default(@_);
 }
 
 sub _complete_resolved_value {
-  my ($state, $block, $op, $value, $path_frame) = @_;
+  my ($state, $value, $path_frame) = @_;
+  my $op = $state->cursor->current_op;
   my $handler = $op->complete_handler || 'complete_generic';
-  return __PACKAGE__->can("_$handler")->($state, $block, $op, $value, $path_frame);
+  return __PACKAGE__->can("_$handler")->($state, $value, $path_frame);
 }
 
 sub _complete_generic {
-  my ($state, $block, $op, $value, $path_frame) = @_;
+  my ($state, $value, $path_frame) = @_;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value);
 }
 
 sub _complete_object {
-  my ($state, $block, $op, $value, $path_frame) = @_;
+  my ($state, $value, $path_frame) = @_;
+  my $op = $state->cursor->current_op;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
 
@@ -172,7 +187,8 @@ sub _complete_object {
 }
 
 sub _complete_list {
-  my ($state, $block, $op, $value, $path_frame) = @_;
+  my ($state, $value, $path_frame) = @_;
+  my $op = $state->cursor->current_op;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
@@ -198,11 +214,12 @@ sub _complete_list {
 }
 
 sub _complete_abstract {
-  my ($state, $block, $op, $value, $path_frame) = @_;
+  my ($state, $value, $path_frame) = @_;
+  my $op = $state->cursor->current_op;
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
 
-  my ($runtime_type, $error_record) = _resolve_runtime_type($state, $block, $op, $value, $path_frame);
+  my ($runtime_type, $error_record) = _resolve_runtime_type($state, $value, $path_frame);
   return GraphQL::Houtou::Runtime::Outcome->new(
     kind => 'SCALAR',
     scalar_value => undef,
@@ -230,10 +247,13 @@ sub _complete_abstract {
 }
 
 sub _resolve_runtime_type {
-  my ($state, $block, $op, $value, $path_frame) = @_;
+  my ($state, $value, $path_frame) = @_;
+  my $cursor = $state->cursor;
+  my $block = $cursor->block;
+  my $op = $cursor->current_op;
   my $dispatch = $op->abstract_dispatch;
   my $cache = $state->runtime_schema->runtime_cache;
-  my $slot = $op->bound_slot;
+  my $slot = $cursor->current_slot || $op->bound_slot;
   my $abstract_type = $dispatch ? $dispatch->{abstract_type} : ($slot ? $slot->return_type : undef);
   return if !$abstract_type;
   my $abstract_name = $dispatch ? $dispatch->{abstract_name} : $abstract_type->name;

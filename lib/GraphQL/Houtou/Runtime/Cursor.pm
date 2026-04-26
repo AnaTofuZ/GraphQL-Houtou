@@ -11,6 +11,7 @@ sub new {
     slot_index => $args{slot_index} || 0,
     op_index => $args{op_index} || 0,
     current_slot => $args{current_slot},
+    current_op => $args{current_op},
   }, $class;
 }
 
@@ -18,5 +19,42 @@ sub block { return $_[0]{block} }
 sub slot_index { return $_[0]{slot_index} }
 sub op_index { return $_[0]{op_index} }
 sub current_slot { return $_[0]{current_slot} }
+sub current_op { return $_[0]{current_op} }
+
+sub snapshot {
+  my ($self) = @_;
+  return {
+    block => $self->{block},
+    slot_index => $self->{slot_index},
+    op_index => $self->{op_index},
+    current_slot => $self->{current_slot},
+    current_op => $self->{current_op},
+  };
+}
+
+sub restore {
+  my ($self, $snapshot) = @_;
+  @{$self}{qw(block slot_index op_index current_slot current_op)} =
+    @{$snapshot}{qw(block slot_index op_index current_slot current_op)};
+  return $self;
+}
+
+sub enter_block {
+  my ($self, $block) = @_;
+  $self->{block} = $block;
+  $self->{slot_index} = 0;
+  $self->{op_index} = 0;
+  $self->{current_slot} = undef;
+  $self->{current_op} = undef;
+  return $self;
+}
+
+sub set_current_op {
+  my ($self, $op, $index) = @_;
+  $self->{op_index} = $index if defined $index;
+  $self->{current_op} = $op;
+  $self->{current_slot} = $op ? $op->bound_slot : undef;
+  return $self;
+}
 
 1;

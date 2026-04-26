@@ -295,6 +295,15 @@ after inflate/lowering:
 The serialized artifact still stores structural opcode data, but the in-memory
 VM should not keep paying the cost of rediscovering those relationships.
 
+The same applies to execution state:
+
+- nested child execution should not pass block/op metadata as free arguments
+- a cursor/state machine should own current block, current op, and current slot
+- block entry/exit should snapshot and restore cursor state
+
+This keeps root and child execution on the same VM-shaped control path instead
+of rebuilding ad hoc helper call stacks.
+
 ### 3. Query Lowering Pipeline
 
 The parser output should not remain the runtime's internal shape.

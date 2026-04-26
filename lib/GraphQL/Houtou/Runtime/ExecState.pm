@@ -11,6 +11,7 @@ sub new {
     program => $args{program},
     cursor => $args{cursor},
     frame => $args{frame},
+    frame_stack => $args{frame_stack} || [],
     writer => $args{writer},
     context => $args{context},
     variables => $args{variables} || {},
@@ -24,11 +25,28 @@ sub runtime_schema { return $_[0]{runtime_schema} }
 sub program { return $_[0]{program} }
 sub cursor { return $_[0]{cursor} }
 sub frame { return $_[0]{frame} }
+sub frame_stack { return $_[0]{frame_stack} }
 sub writer { return $_[0]{writer} }
 sub context { return $_[0]{context} }
 sub variables { return $_[0]{variables} }
 sub root_value { return $_[0]{root_value} }
 sub promise_code { return $_[0]{promise_code} }
 sub empty_args { return $_[0]{empty_args} }
+
+sub push_frame {
+  my ($self, $frame) = @_;
+  push @{ $self->{frame_stack} }, $frame;
+  $self->{frame} = $frame;
+  return $frame;
+}
+
+sub pop_frame {
+  my ($self) = @_;
+  my $frame = pop @{ $self->{frame_stack} };
+  $self->{frame} = $self->{frame_stack}[-1];
+  return $frame;
+}
+
+sub current_frame { return $_[0]{frame} }
 
 1;

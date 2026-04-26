@@ -272,6 +272,15 @@ Latest greenfield VM checkpoints after that:
 - `Writer` now consumes outcomes through a dedicated
   `consume_outcome(...)` boundary, so block execution no longer hand-rolls
   `%data` / pending arrays in ad hoc local variables
+- `ExecState` now also owns the active block frame stack:
+  - `push_frame`
+  - `pop_frame`
+  - `current_frame`
+- `VMExecutor` enters/exits blocks by mutating:
+  - cursor
+  - current frame
+  inside state, instead of treating block-local result state as a purely
+  local helper concern
 
 Greenfield VM validation now includes:
 

@@ -272,6 +272,15 @@ dedicated block-frame object that carries:
 
 and exposes a narrow writer-facing consume boundary.
 
+The same ownership rule should continue upward into execution state itself:
+
+- `cursor` owns the current block/op/slot view
+- `block frame` owns block-local values and pending outcomes
+- `exec state` owns the current frame stack
+
+That keeps the VM closer to a real state machine and prevents block execution
+from drifting back into ad hoc local Perl aggregates.
+
 That boundary is useful even before introducing a binary serializer because it
 makes "compile once at boot, reuse many times during requests" a first-class
 part of the runtime design.

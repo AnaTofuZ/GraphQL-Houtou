@@ -57,7 +57,7 @@ sub _execute_block {
   my $cursor = $state->cursor;
   my $snapshot = $cursor->snapshot;
   $cursor->enter_block($block);
-  my $frame = GraphQL::Houtou::Runtime::BlockFrame->new;
+  my $frame = $state->push_frame(GraphQL::Houtou::Runtime::BlockFrame->new);
 
   my $ops = $cursor->block ? ($cursor->block->ops || []) : [];
   for my $i (0 .. $#$ops) {
@@ -82,10 +82,12 @@ sub _execute_block {
       my @resolved = _promise_all_values_to_array(@_);
       return $frame->merge_resolved_pending($state->writer, \@resolved);
     });
+    $state->pop_frame;
     $cursor->restore($snapshot);
     return $promise;
   }
 
+  $state->pop_frame;
   $cursor->restore($snapshot);
   return $frame->values;
 }

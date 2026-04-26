@@ -120,6 +120,15 @@ The design target is:
 - keep payload native as long as possible
 - only materialize Perl-facing containers at a real boundary
 
+In the current greenfield VM this already maps to:
+
+- `ExecState` for process-local runtime state
+- `Cursor` for current block/op/slot
+- `BlockFrame` for block-local values and pending promise outcomes
+- `FieldFrame` for field-local source/path/resolved value/outcome
+- `Outcome` as the kind-first value carrier
+- `Writer` as the final response/error sink
+
 This also implies that promise-aware execution should not fork into a fully
 separate runtime shape. The same lowered program, family contracts, and
 outcome structs should be reused; only the payload transport changes from
@@ -156,6 +165,14 @@ The preferred architecture is therefore:
 
 as first-class completion families with owned contracts, owned narrow paths,
 and cold fallback escape hatches.
+
+The same lesson applies inside the VM itself:
+
+- prefer block-owned and field-owned frames over ad hoc local hashes/arrays
+- prefer state-machine ownership (`ExecState`, `Cursor`, `BlockFrame`,
+  `FieldFrame`) over generic helper stacks
+- keep pending promise aggregation in block-owned state, not in free
+  local variables inside the executor loop
 
 ### 5. `is_type_of` should be a slow fallback
 

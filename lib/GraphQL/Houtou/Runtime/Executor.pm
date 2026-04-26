@@ -130,7 +130,7 @@ sub _complete_resolved_value {
   return _complete_abstract($state, $block, $instruction, $value, $path_frame)
     if $op eq 'COMPLETE_ABSTRACT';
 
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'VALUE', value => $value);
+  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value);
 }
 
 sub _resolve_field_value {

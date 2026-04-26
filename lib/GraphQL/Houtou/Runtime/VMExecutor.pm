@@ -5,7 +5,6 @@ use strict;
 use warnings;
 
 use GraphQL::Houtou::Promise::Adapter qw(
-  all_promise
   is_promise_value
   normalize_promise_code
   then_promise
@@ -53,54 +52,37 @@ sub execute_program {
 
 sub _execute_block {
   my ($state, $block, $source, $base_path) = @_;
-  my ($snapshot, $frame) = $state->enter_block($block);
+  my ($snapshot) = $state->enter_block($block);
   my $cursor = $state->cursor;
-
-  my $ops = $cursor->block ? ($cursor->block->ops || []) : [];
-  for my $i (0 .. $#$ops) {
-    my $op = $ops->[$i];
-    $cursor->set_current_op($op, $i);
+  while (my $op = $cursor->advance_op) {
     next if !_should_execute_op($state, $op);
-    my $path_frame = GraphQL::Houtou::Runtime::PathFrame->new(
-      parent => $base_path,
-      key => $op->result_name,
-    );
-    my $outcome = _execute_op($state, $source, $path_frame);
-    if (_is_promise($state, $outcome)) {
-      $frame->add_pending($op->result_name, $outcome);
-      next;
-    }
-    $frame->consume_outcome($state->writer, $op->result_name, $outcome);
+    $state->enter_current_field($source, $base_path);
+    my $outcome = _execute_op($state);
+    $state->consume_current_field_outcome($outcome);
   }
 
-  if (@{ $frame->pending_outcomes || [] }) {
-    my $aggregate = all_promise($state->promise_code, @{ $frame->pending_outcomes });
-    my $promise = then_promise($state->promise_code, $aggregate, sub {
-      my @resolved = _promise_all_values_to_array(@_);
-      return $frame->merge_resolved_pending($state->writer, \@resolved);
-    });
-    $state->leave_block($snapshot);
-    return $promise;
-  }
-
-  $state->leave_block($snapshot);
-  return $frame->values;
+  return $state->finalize_current_block($snapshot);
 }
 
 sub _execute_op {
-  my ($state, $source, $path_frame) = @_;
+  my ($state) = @_;
+  my $field = $state->current_field_frame;
+  my $source = $field->source;
+  my $path_frame = $field->path_frame;
   my ($ok, $value) = _capture_eval(sub {
     return _resolve_field_value($state, $source, $path_frame);
   });
   return _error_outcome($value, $path_frame) if !$ok;
+  $field->set_resolved_value($value);
 
   if (_is_promise($state, $value)) {
     return then_promise($state->promise_code, $value, sub {
       my ($resolved_value) = @_;
+      $field->set_resolved_value($resolved_value);
       my ($complete_ok, $outcome) = _capture_eval(sub {
         return _complete_resolved_value($state, $resolved_value, $path_frame);
       });
-      return $complete_ok ? $outcome : _error_outcome($outcome, $path_frame);
+      return $complete_ok ? $field->set_outcome($outcome) : _error_outcome($outcome, $path_frame);
     }, sub {
       return _error_outcome($_[0], $path_frame);
     });
@@ -109,7 +91,7 @@ sub _execute_op {
   my ($complete_ok, $outcome) = _capture_eval(sub {
     return _complete_resolved_value($state, $value, $path_frame);
   });
-  return $complete_ok ? $outcome : _error_outcome($outcome, $path_frame);
+  return $complete_ok ? $field->set_outcome($outcome) : _error_outcome($outcome, $path_frame);
 }
 
 sub _resolve_field_value {
@@ -383,11 +365,6 @@ sub _error_outcome {
 sub _is_promise {
   my ($state, $value) = @_;
   return is_promise_value($state->promise_code, $value);
-}
-
-sub _promise_all_values_to_array {
-  return @{ $_[0] } if @_ == 1 && ref($_[0]) eq 'ARRAY';
-  return @_;
 }
 
 1;

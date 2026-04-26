@@ -31,7 +31,7 @@ sub consume_outcome {
     $data->{$result_name} = $outcome->list_value;
   }
   else {
-    $data->{$result_name} = $outcome->value;
+    $data->{$result_name} = undef;
   }
   push @{ $self->{error_records} }, @{ $outcome->error_records || [] }
     if @{ $outcome->error_records || [] };

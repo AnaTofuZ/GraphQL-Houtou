@@ -228,12 +228,25 @@ Current greenfield runtime coverage:
     program
   - the hot loop dispatches directly from bound coderefs instead of
     name-to-method resolution
+- VM block/field lifecycle is now moving behind state-owned frames:
+  - `BlockFrame` owns block-local values and pending promise outcomes
+  - `FieldFrame` owns per-field source/path/resolved-value/outcome state
+  - `ExecState` now owns block enter/leave and current field enter/leave
+  - `VMExecutor` is becoming a thin shell that advances the cursor and asks
+    state-owned frames to consume/finalize outcomes
+- internal currency was tightened further:
+  - `Outcome` is now strictly kind-first (`SCALAR` / `OBJECT` / `LIST`)
+  - ad hoc fallback payload/state is no longer part of the hot-path outcome
+    shape
+  - `BlockFrame->finalize(...)` now owns pending promise aggregation instead
+    of keeping that logic inside the VM block loop
 
 Still intentionally missing:
 
 - directives beyond `@include` / `@skip`
-- lazy `info` materialization
+- richer lazy `info` surface coverage beyond the current skeleton
 - XS VM executor
+- full VM-side specialization for extensions / introspection / hook surfaces
 
 Latest greenfield checkpoint:
 
@@ -258,6 +271,12 @@ Latest greenfield VM checkpoints after that:
 
 - `VMProgram` now owns a direct runtime `block_map`
 - `VMOp` keeps runtime-only `resolve_dispatch` / `complete_dispatch`
+- `BlockFrame` now owns block-local values/pending outcomes
+- `FieldFrame` now owns field-local source/path/resolved-value/outcome
+- `ExecState` now owns block enter/leave, field enter/leave, and block
+  finalization
+- `VMExecutor` block loop now advances the cursor and delegates outcome
+  consume/finalize to state-owned frames
 - `VMDispatch` binds those coderefs once per lowered / inflated VM program
 - `Cursor` now snapshots/restores nested block execution and owns:
   - current block

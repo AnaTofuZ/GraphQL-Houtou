@@ -247,6 +247,16 @@ Current greenfield runtime coverage:
   - `ExecState->build_lazy_info_for_current_field(...)`
   now own return-type, args, and lazy-info construction for the current field
   instead of keeping that logic in `VMExecutor`
+- completion-family bodies are now also moving behind `ExecState`:
+  - `ExecState->scalar_outcome(...)`
+  - `ExecState->complete_object_value(...)`
+  - `ExecState->complete_list_value(...)`
+  - `ExecState->complete_abstract_value(...)`
+  now own kind-first outcome construction for the current field
+- the top-level response boundary is also moving behind `ExecState`:
+  - `ExecState->finalize_response(...)` now owns promise-aware response
+    materialization and final error export
+  - `VMExecutor` therefore no longer keeps local response-envelope assembly
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

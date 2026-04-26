@@ -232,6 +232,60 @@ sub object_outcome_from_child_block {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'OBJECT', object_value => $child_value);
 }
 
+sub scalar_outcome {
+  my ($self, $value, $error_record) = @_;
+  return GraphQL::Houtou::Runtime::Outcome->new(
+    kind => 'SCALAR',
+    scalar_value => $value,
+    error_records => $error_record ? [ $error_record ] : [],
+  );
+}
+
+sub complete_object_value {
+  my ($self, $value, $path_frame) = @_;
+  return $self->scalar_outcome(undef) if !defined $value;
+  my $child = $self->current_child_block;
+  return $self->scalar_outcome($value) if !$child;
+  return $self->object_outcome_from_child_block($child, $value, $path_frame);
+}
+
+sub complete_list_value {
+  my ($self, $value, $path_frame) = @_;
+  return $self->scalar_outcome(undef) if !defined $value;
+  return $self->scalar_outcome($value) if ref($value) ne 'ARRAY';
+
+  my $child = $self->current_child_block;
+  my @items;
+  for my $i (0 .. $#$value) {
+    my $item_path = GraphQL::Houtou::Runtime::PathFrame->new(parent => $path_frame, key => $i);
+    push @items, $child ? $self->execute_block($child, $value->[$i], $item_path) : $value->[$i];
+  }
+
+  if ($self->promise_code && grep { is_promise_value($self->promise_code, $_) } @items) {
+    my $aggregate = GraphQL::Houtou::Promise::Adapter::all_promise($self->promise_code, @items);
+    return then_promise($self->promise_code, $aggregate, sub {
+      my @resolved = _promise_all_values_to_array(@_);
+      return GraphQL::Houtou::Runtime::Outcome->new(kind => 'LIST', list_value => \@resolved);
+    });
+  }
+
+  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'LIST', list_value => \@items);
+}
+
+sub complete_abstract_value {
+  my ($self, $value, $path_frame) = @_;
+  return $self->scalar_outcome(undef) if !defined $value;
+
+  my ($runtime_type, $error_record) = $self->resolve_runtime_type_for_current_field($value, $path_frame);
+  return $self->scalar_outcome(undef, $error_record) if $error_record;
+  return $self->scalar_outcome($value) if !$runtime_type;
+
+  my $child = $self->current_abstract_child_block($runtime_type->name);
+  return $self->scalar_outcome($value) if !$child;
+
+  return $self->object_outcome_from_child_block($child, $value, $path_frame);
+}
+
 sub resolve_runtime_type_for_current_field {
   my ($self, $value, $path_frame, %args) = @_;
   my $op = $self->current_op;
@@ -303,6 +357,22 @@ sub execute_block {
   return $self->finalize_current_block($snapshot);
 }
 
+sub finalize_response {
+  my ($self, $data) = @_;
+  if ($self->promise_code && is_promise_value($self->promise_code, $data)) {
+    return then_promise($self->promise_code, $data, sub {
+      return {
+        data => $_[0],
+        errors => $self->writer->materialize_errors,
+      };
+    });
+  }
+  return {
+    data => $data,
+    errors => $self->writer->materialize_errors,
+  };
+}
+
 sub should_execute_current_op {
   my ($self, $op) = @_;
   my $mode = $op->directives_mode || 'NONE';
@@ -364,6 +434,11 @@ sub _error_outcome {
     scalar_value => undef,
     error_records => [ $self->_error_record($error, $path_frame) ],
   );
+}
+
+sub _promise_all_values_to_array {
+  return @{ $_[0] } if @_ == 1 && ref($_[0]) eq 'ARRAY';
+  return @_;
 }
 
 1;

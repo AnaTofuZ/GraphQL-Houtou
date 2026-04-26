@@ -151,6 +151,12 @@ The next refinement after this split is also in place:
 - resolver-adjacent cold boundaries can also be owned by `ExecState`, so
   return-type lookup, argument materialization, and lazy-info construction are
   state-owned services instead of executor-local helper work
+- completion-family bodies can also be owned by `ExecState`, so scalar/object/
+  list/abstract outcome construction becomes state-machine work instead of
+  executor-local helper branching
+- final response materialization can also be owned by `ExecState`, so
+  promise-aware response envelopes and final error export are emitted from the
+  same state machine that owns block and field execution
 
 This also implies that promise-aware execution should not fork into a fully
 separate runtime shape. The same lowered program, family contracts, and

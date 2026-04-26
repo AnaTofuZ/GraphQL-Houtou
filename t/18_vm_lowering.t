@@ -5,12 +5,12 @@ use File::Temp qw(tempfile);
 
 use lib 'lib';
 use GraphQL::Houtou::Schema;
-use GraphQL::Houtou::XS::VM qw(
-  load_native_bundle_xs
-  load_native_runtime_xs
-  native_bundle_summary_xs
-  native_codes_xs
-  native_runtime_summary_xs
+use GraphQL::Houtou::Runtime qw(
+  load_native_bundle
+  load_native_runtime
+  native_bundle_summary
+  native_codes
+  native_runtime_summary
 );
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Interface;
@@ -100,7 +100,7 @@ subtest 'schema can emit XS-friendly native VM descriptor' => sub {
 
 subtest 'schema can emit bundled native runtime and VM descriptor' => sub {
   my $bundle = $schema->compile_vm_native_bundle_descriptor('{ viewer { id } node { id } }');
-  my $codes = native_codes_xs();
+  my $codes = native_codes();
   my %runtime_slots = map { (($_->{schema_slot_key} || '') => $_) } @{ $bundle->{runtime}{slot_catalog} || [] };
   ok ref($bundle->{runtime}{slot_catalog}) eq 'ARRAY' && @{$bundle->{runtime}{slot_catalog}} >= 2,
     'native bundle keeps runtime slot catalog';
@@ -144,12 +144,12 @@ subtest 'native VM bundle can inflate back into a VM program' => sub {
 
 subtest 'XS can inflate native VM bundle descriptor into a native handle' => sub {
   my $bundle = $schema->compile_vm_native_bundle_descriptor('{ viewer { id } node { id } }');
-  my $codes = native_codes_xs();
-  my $handle = load_native_bundle_xs($bundle);
+  my $codes = native_codes();
+  my $handle = load_native_bundle($bundle);
 
   isa_ok $handle, 'GraphQL::Houtou::XS::VM::NativeBundle';
 
-  my $summary = native_bundle_summary_xs($handle);
+  my $summary = native_bundle_summary($handle);
   is $summary->{runtime_slot_count}, scalar(@{ $bundle->{runtime}{slot_catalog} || [] }),
     'XS native handle sees runtime slot count';
   is $summary->{block_count}, scalar(@{ $bundle->{program}{blocks} || [] }),
@@ -166,11 +166,11 @@ subtest 'XS can inflate native VM bundle descriptor into a native handle' => sub
 
 subtest 'XS can inflate runtime schema into a native runtime handle' => sub {
   my $runtime = $schema->build_runtime;
-  my $handle = load_native_runtime_xs($runtime->to_native_exec_struct);
+  my $handle = load_native_runtime($runtime->to_native_exec_struct);
 
   isa_ok $handle, 'GraphQL::Houtou::XS::VM::NativeRuntime';
 
-  my $summary = native_runtime_summary_xs($handle);
+  my $summary = native_runtime_summary($handle);
   is $summary->{runtime_slot_count}, scalar(@{ $runtime->slot_catalog || [] }),
     'native runtime handle sees slot catalog count';
   ok $summary->{has_runtime_cache}, 'native runtime handle keeps runtime cache';

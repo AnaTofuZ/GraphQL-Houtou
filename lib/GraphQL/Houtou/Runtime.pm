@@ -9,6 +9,9 @@ use GraphQL::Houtou::XS::VM qw(
   execute_native_bundle_xs
   load_native_bundle_xs
   load_native_runtime_xs
+  native_bundle_summary_xs
+  native_codes_xs
+  native_runtime_summary_xs
 );
 use GraphQL::Houtou::Runtime::Compiler ();
 use GraphQL::Houtou::Runtime::Executor ();
@@ -42,6 +45,12 @@ our @EXPORT_OK = qw(
   execute_vm
   execute_vm_program
   execute_vm_native_bundle
+  native_codes
+  load_native_bundle
+  load_native_runtime
+  native_bundle_summary
+  native_runtime_summary
+  execute_native_bundle
 );
 
 sub compile_schema {
@@ -165,7 +174,7 @@ sub execute_vm_program {
 
 sub execute_vm_native_bundle {
   my ($runtime_schema, $descriptor, %opts) = @_;
-  my $bundle = load_native_bundle_xs($descriptor);
+  my $bundle = load_native_bundle($descriptor);
   my $runtime_struct = $runtime_schema->can('to_native_exec_struct')
     ? $runtime_schema->to_native_exec_struct
     : (
@@ -173,6 +182,31 @@ sub execute_vm_native_bundle {
         ? $descriptor->{runtime}
         : $runtime_schema
     );
+  return execute_native_bundle($runtime_struct, $bundle, %opts);
+}
+
+sub native_codes {
+  return native_codes_xs(@_);
+}
+
+sub load_native_bundle {
+  return load_native_bundle_xs(@_);
+}
+
+sub load_native_runtime {
+  return load_native_runtime_xs(@_);
+}
+
+sub native_bundle_summary {
+  return native_bundle_summary_xs(@_);
+}
+
+sub native_runtime_summary {
+  return native_runtime_summary_xs(@_);
+}
+
+sub execute_native_bundle {
+  my ($runtime_struct, $bundle, %opts) = @_;
   return execute_native_bundle_xs(
     $runtime_struct,
     $bundle,

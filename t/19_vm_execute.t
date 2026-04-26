@@ -4,10 +4,10 @@ use Test::More;
 
 use lib 'lib';
 use GraphQL::Houtou::Schema;
-use GraphQL::Houtou::XS::VM qw(
-  execute_native_bundle_xs
-  load_native_bundle_xs
-  load_native_runtime_xs
+use GraphQL::Houtou::Runtime qw(
+  execute_native_bundle
+  load_native_bundle
+  load_native_runtime
 );
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
@@ -89,8 +89,8 @@ subtest 'VM descriptor can round-trip and still execute' => sub {
 };
 
 subtest 'native VM bundle descriptor can execute through schema helper' => sub {
-  my $bundle = $schema->compile_vm_bundle_descriptor('{ node { id } }');
-  my $result = $schema->execute_vm_bundle_descriptor($bundle);
+  my $bundle = $schema->compile_native_bundle_descriptor('{ node { id } }');
+  my $result = $schema->execute_native_bundle_descriptor($bundle);
   is_deeply $result, {
     data => { node => { id => 'u3' } },
     errors => [],
@@ -107,11 +107,11 @@ subtest 'schema helper can compile and execute native VM bundle in one call' => 
 
 subtest 'XS native bundle handle can execute directly' => sub {
   my $runtime = $schema->build_runtime;
-  my $native_runtime = load_native_runtime_xs($runtime->to_native_exec_struct);
-  my $bundle = load_native_bundle_xs(
-    $schema->compile_vm_bundle_descriptor('{ viewer { id name } node { id } }')
+  my $native_runtime = load_native_runtime($runtime->to_native_exec_struct);
+  my $bundle = load_native_bundle(
+    $schema->compile_native_bundle_descriptor('{ viewer { id name } node { id } }')
   );
-  my $result = execute_native_bundle_xs($native_runtime, $bundle);
+  my $result = execute_native_bundle($native_runtime, $bundle);
   is_deeply $result, {
     data => {
       viewer => { id => 'u1', name => 'Alice' },

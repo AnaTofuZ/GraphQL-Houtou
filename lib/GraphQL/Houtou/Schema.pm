@@ -228,6 +228,16 @@ sub compile_vm_native_descriptor {
   return $self->compile_vm_operation($document, ($runtime ? (runtime_schema => $runtime) : ()), %opts)->to_native_struct;
 }
 
+sub compile_native_operation_descriptor {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_vm_native_descriptor($document, %opts);
+}
+
+sub compile_native_program_descriptor {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_native_operation_descriptor($document, %opts);
+}
+
 sub compile_lowered_operation {
   my ($self, $document, %opts) = @_;
   return $self->compile_runtime(%opts)->compile_lowered_operation($document, %opts);
@@ -258,6 +268,11 @@ sub compile_vm_native_bundle_descriptor {
   };
 }
 
+sub compile_native_bundle_descriptor {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_vm_native_bundle_descriptor($document, %opts);
+}
+
 sub compile_vm_bundle_descriptor {
   my ($self, $document, %opts) = @_;
   return $self->compile_vm_native_bundle_descriptor($document, %opts);
@@ -273,6 +288,16 @@ sub dump_vm_native_bundle_descriptor {
 sub load_vm_native_bundle_descriptor {
   my ($self, $path) = @_;
   return _read_json_descriptor($path);
+}
+
+sub load_native_bundle_descriptor {
+  my ($self, $path) = @_;
+  return $self->load_vm_native_bundle_descriptor($path);
+}
+
+sub dump_native_bundle_descriptor {
+  my ($self, $document, $path, %opts) = @_;
+  return $self->dump_vm_native_bundle_descriptor($document, $path, %opts);
 }
 
 sub inflate_vm_operation {
@@ -318,10 +343,20 @@ sub execute_vm_bundle_descriptor {
   return $self->execute_vm_native_bundle_descriptor($descriptor, %opts);
 }
 
+sub execute_native_bundle_descriptor {
+  my ($self, $descriptor, %opts) = @_;
+  return $self->execute_vm_native_bundle_descriptor($descriptor, %opts);
+}
+
 sub execute_vm_native_runtime {
   my ($self, $document, %opts) = @_;
   my $descriptor = $self->compile_vm_native_bundle_descriptor($document, %opts);
   return $self->execute_vm_native_bundle_descriptor($descriptor, %opts);
+}
+
+sub execute_native_runtime {
+  my ($self, $document, %opts) = @_;
+  return $self->execute_vm_native_runtime($document, %opts);
 }
 
 sub runtime_cache {

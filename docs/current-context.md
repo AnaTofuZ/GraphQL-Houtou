@@ -223,6 +223,26 @@ Current runtime coverage:
     lifecycle from separate generic helper choices
   - this keeps the op-family boundary explicit while reducing per-op
     rediscovery in the loop
+- top-level native bridge checkpoint:
+  - tests and public helpers now prefer `GraphQL::Houtou::Runtime`
+    wrappers instead of importing `GraphQL::Houtou::XS::VM` directly
+  - native-facing runtime helpers are:
+    - `native_codes(...)`
+    - `load_native_bundle(...)`
+    - `load_native_runtime(...)`
+    - `native_bundle_summary(...)`
+    - `native_runtime_summary(...)`
+    - `execute_native_bundle(...)`
+  - schema now also exposes native-first aliases:
+    - `compile_native_operation_descriptor(...)`
+    - `compile_native_program_descriptor(...)`
+    - `compile_native_bundle_descriptor(...)`
+    - `load_native_bundle_descriptor(...)`
+    - `dump_native_bundle_descriptor(...)`
+    - `execute_native_bundle_descriptor(...)`
+    - `execute_native_runtime(...)`
+  - legacy `compile_vm_*` / `execute_vm_*` names remain only as compatibility
+    aliases while the runtime surface migrates to `native_*`
 - block execution is now also moving behind `ExecState`:
   - `ExecState->execute_block(...)` owns block enter/advance/field-consume/finalize
   - child object/list/abstract completion reuses the same state-owned block

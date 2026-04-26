@@ -11,6 +11,7 @@ use GraphQL::Houtou::Promise::Adapter qw(
   then_promise
 );
 use GraphQL::Houtou::Runtime::Cursor ();
+use GraphQL::Houtou::Runtime::BlockFrame ();
 use GraphQL::Houtou::Runtime::ErrorRecord ();
 use GraphQL::Houtou::Runtime::ExecState ();
 use GraphQL::Houtou::Runtime::LazyInfo ();
@@ -56,9 +57,7 @@ sub _execute_block {
   my $cursor = $state->cursor;
   my $snapshot = $cursor->snapshot;
   $cursor->enter_block($block);
-  my %data;
-  my @pending_names;
-  my @pending_outcomes;
+  my $frame = GraphQL::Houtou::Runtime::BlockFrame->new;
 
   my $ops = $cursor->block ? ($cursor->block->ops || []) : [];
   for my $i (0 .. $#$ops) {
@@ -71,29 +70,24 @@ sub _execute_block {
     );
     my $outcome = _execute_op($state, $source, $path_frame);
     if (_is_promise($state, $outcome)) {
-      push @pending_names, $op->result_name;
-      push @pending_outcomes, $outcome;
+      $frame->add_pending($op->result_name, $outcome);
       next;
     }
-    _consume_outcome($state->writer, \%data, $op->result_name, $outcome);
+    $frame->consume_outcome($state->writer, $op->result_name, $outcome);
   }
 
-  if (@pending_outcomes) {
-    my $aggregate = all_promise($state->promise_code, @pending_outcomes);
+  if (@{ $frame->pending_outcomes || [] }) {
+    my $aggregate = all_promise($state->promise_code, @{ $frame->pending_outcomes });
     my $promise = then_promise($state->promise_code, $aggregate, sub {
       my @resolved = _promise_all_values_to_array(@_);
-      my %merged = %data;
-      for my $i (0 .. $#resolved) {
-        _consume_outcome($state->writer, \%merged, $pending_names[$i], $resolved[$i]);
-      }
-      return \%merged;
+      return $frame->merge_resolved_pending($state->writer, \@resolved);
     });
     $cursor->restore($snapshot);
     return $promise;
   }
 
   $cursor->restore($snapshot);
-  return \%data;
+  return $frame->values;
 }
 
 sub _execute_op {
@@ -357,14 +351,6 @@ sub _build_info {
     instruction => $op,
     path_frame => $path_frame,
   );
-}
-
-sub _consume_outcome {
-  my ($writer, $data, $result_name, $outcome) = @_;
-  return if !$outcome;
-  $data->{$result_name} = $outcome->value;
-  push @{ $writer->error_records }, @{ $outcome->error_records || [] } if @{ $outcome->error_records || [] };
-  return;
 }
 
 sub _capture_eval {

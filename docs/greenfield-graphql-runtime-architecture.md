@@ -109,6 +109,7 @@ It is instead a small set of runtime-native structs such as:
 - execution state
 - cursor / slot
 - field frame
+- block frame
 - child outcome
 - sync outcome
 - result writer
@@ -259,6 +260,17 @@ my $result = $runtime->execute_vm_program($vm_program, %opts);
 The first greenfield VM checkpoint should therefore be a runnable pure-Perl
 VM executor that proves the artifact boundary and family-owned block dispatch
 work at all. Only after that should the hot VM loop be replaced with XS.
+
+Even at that pure-Perl checkpoint, block-local result ownership should already
+be explicit. A block executor should not rebuild ad hoc `%data`,
+`@pending_names`, and `@pending_outcomes` locals per block. It should own a
+dedicated block-frame object that carries:
+
+- finalized field values
+- pending promise labels
+- pending outcomes
+
+and exposes a narrow writer-facing consume boundary.
 
 That boundary is useful even before introducing a binary serializer because it
 makes "compile once at boot, reuse many times during requests" a first-class

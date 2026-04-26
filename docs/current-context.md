@@ -254,6 +254,32 @@ Latest greenfield checkpoint:
   - `minil test`
   - latest full test run target is now `Files=18, Tests=229`
 
+Latest greenfield VM checkpoints after that:
+
+- `VMProgram` now owns a direct runtime `block_map`
+- `VMOp` keeps runtime-only `resolve_dispatch` / `complete_dispatch`
+- `VMDispatch` binds those coderefs once per lowered / inflated VM program
+- `Cursor` now snapshots/restores nested block execution and owns:
+  - current block
+  - current op
+  - current slot
+- `VMExecutor` now dispatches through cursor-owned state plus bound dispatch
+  coderefs rather than name-to-method resolution
+- `BlockFrame` now owns block-local result state:
+  - `values`
+  - `pending_names`
+  - `pending_outcomes`
+- `Writer` now consumes outcomes through a dedicated
+  `consume_outcome(...)` boundary, so block execution no longer hand-rolls
+  `%data` / pending arrays in ad hoc local variables
+
+Greenfield VM validation now includes:
+
+- `perl -Ilib t/18_greenfield_vm_lowering.t`
+- `perl -Ilib t/19_greenfield_vm_execute.t`
+- `minil test`
+- latest full test run target is now `Files=20, Tests=236`
+
 ## Pause Snapshot
 
 Current pause point for `proj/compiled-ir-vm-runtime`:

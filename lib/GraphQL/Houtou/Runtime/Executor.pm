@@ -434,10 +434,7 @@ sub _build_info {
 
 sub _consume_outcome {
   my ($writer, $data, $result_name, $outcome) = @_;
-  return if !$outcome;
-  $data->{$result_name} = $outcome->value;
-  push @{ $writer->error_records }, @{ $outcome->error_records || [] } if @{ $outcome->error_records || [] };
-  return;
+  return $writer->consume_outcome($data, $result_name, $outcome);
 }
 
 sub _capture_eval {

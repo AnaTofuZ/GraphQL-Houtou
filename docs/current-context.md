@@ -223,6 +223,12 @@ Current greenfield runtime coverage:
     lifecycle from separate generic helper choices
   - this keeps the op-family boundary explicit while reducing per-op
     rediscovery in the loop
+- block execution is now also moving behind `ExecState`:
+  - `ExecState->execute_block(...)` owns block enter/advance/field-consume/finalize
+  - child object/list/abstract completion reuses the same state-owned block
+    executor
+  - `VMExecutor` therefore becomes more of a dispatch shell around
+    `ExecState + Cursor + BlockFrame + FieldFrame + Writer`
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

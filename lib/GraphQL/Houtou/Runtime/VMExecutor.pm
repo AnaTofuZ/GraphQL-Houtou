@@ -5,6 +5,7 @@ use strict;
 use warnings;
 
 use GraphQL::Houtou::Promise::Adapter qw(
+  all_promise
   is_promise_value
   normalize_promise_code
   then_promise
@@ -34,7 +35,7 @@ sub execute_program {
     empty_args => {},
   );
 
-  my $data = _execute_block($state, $program->root_block, $opts{root_value});
+  my $data = $state->execute_block($program->root_block, $opts{root_value});
   if (_is_promise($state, $data)) {
     return then_promise($promise_code, $data, sub {
       return {
@@ -48,20 +49,6 @@ sub execute_program {
     data => $data,
     errors => $writer->materialize_errors,
   };
-}
-
-sub _execute_block {
-  my ($state, $block, $source, $base_path) = @_;
-  my ($snapshot) = $state->enter_block($block);
-  while (my $op = $state->advance_current_op) {
-    next if !_should_execute_op($state, $op);
-    $state->enter_current_field($source, $base_path);
-    my $dispatch = $op->run_dispatch || \&_execute_op;
-    my $outcome = $dispatch->($state);
-    $state->consume_current_field_outcome($outcome);
-  }
-
-  return $state->finalize_current_block($snapshot);
 }
 
 sub _execute_op {
@@ -162,7 +149,7 @@ sub _complete_object {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$child;
 
-  my $child_value = _execute_block($state, $child, $value, $path_frame);
+  my $child_value = $state->execute_block($child, $value, $path_frame);
   if (_is_promise($state, $child_value)) {
     return then_promise($state->promise_code, $child_value, sub {
       return GraphQL::Houtou::Runtime::Outcome->new(kind => 'OBJECT', object_value => $_[0]);
@@ -185,7 +172,7 @@ sub _complete_list {
   my @items;
   for my $i (0 .. $#$value) {
     my $item_path = GraphQL::Houtou::Runtime::PathFrame->new(parent => $path_frame, key => $i);
-    push @items, $child ? _execute_block($state, $child, $value->[$i], $item_path) : $value->[$i];
+    push @items, $child ? $state->execute_block($child, $value->[$i], $item_path) : $value->[$i];
   }
 
   if (grep { _is_promise($state, $_) } @items) {
@@ -222,7 +209,7 @@ sub _complete_abstract {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$child;
 
-  my $child_value = _execute_block($state, $child, $value, $path_frame);
+  my $child_value = $state->execute_block($child, $value, $path_frame);
   if (_is_promise($state, $child_value)) {
     return then_promise($state->promise_code, $child_value, sub {
       return GraphQL::Houtou::Runtime::Outcome->new(kind => 'OBJECT', object_value => $_[0]);
@@ -293,13 +280,6 @@ sub _resolve_op_args {
   return _coerce_dynamic_args($state, $arg_defs, $op->{args_payload} || {})
     if $mode eq 'DYNAMIC';
   return _coerce_static_args($state, $arg_defs, {});
-}
-
-sub _should_execute_op {
-  my ($state, $op) = @_;
-  my $mode = $op->directives_mode || 'NONE';
-  return 1 if $mode eq 'NONE';
-  return 1; # VM lowering keeps directive metadata; execution semantics can tighten later.
 }
 
 sub _prepare_variables {
@@ -377,6 +357,11 @@ sub _error_outcome {
 sub _is_promise {
   my ($state, $value) = @_;
   return is_promise_value($state->promise_code, $value);
+}
+
+sub _promise_all_values_to_array {
+  return @{ $_[0] } if @_ == 1 && ref($_[0]) eq 'ARRAY';
+  return @_;
 }
 
 1;

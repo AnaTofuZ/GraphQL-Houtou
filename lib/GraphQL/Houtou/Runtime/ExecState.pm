@@ -132,4 +132,24 @@ sub finalize_current_block {
   return $self->leave_block($snapshot, $result);
 }
 
+sub execute_block {
+  my ($self, $block, $source, $base_path) = @_;
+  my ($snapshot) = $self->enter_block($block);
+  while (my $op = $self->advance_current_op) {
+    next if !$self->should_execute_current_op($op);
+    $self->enter_current_field($source, $base_path);
+    my $dispatch = $op->run_dispatch || \&GraphQL::Houtou::Runtime::VMExecutor::_execute_op;
+    my $outcome = $dispatch->($self);
+    $self->consume_current_field_outcome($outcome);
+  }
+  return $self->finalize_current_block($snapshot);
+}
+
+sub should_execute_current_op {
+  my ($self, $op) = @_;
+  my $mode = $op->directives_mode || 'NONE';
+  return 1 if $mode eq 'NONE';
+  return 1;
+}
+
 1;

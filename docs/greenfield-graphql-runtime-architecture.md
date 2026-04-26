@@ -138,6 +138,9 @@ The next refinement after this split is also in place:
 - VM ops can also carry a runtime-only `run_dispatch` binding, so the hot loop
   can jump directly to a field-family runner rather than re-deciding
   `resolve_handler` + `complete_handler` on every step
+- block execution itself can be owned by `ExecState`, so child object/list/
+  abstract completion reuses the same state-machine entrypoint instead of
+  rebuilding a second block loop inside the executor
 
 This also implies that promise-aware execution should not fork into a fully
 separate runtime shape. The same lowered program, family contracts, and

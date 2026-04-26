@@ -39,17 +39,9 @@ sub to_native_struct {
     my $id = join("\x1E", refaddr($slot), ($op->result_name // q()));
     next if exists $slot_index{$id};
     $slot_index{$id} = scalar @slot_table;
-    push @slot_table, {
-      schema_slot_index => $slot->schema_slot_index,
-      field_name => $slot->field_name,
-      result_name => $op->result_name,
-      return_type_name => $slot->return_type_name,
-      resolver_shape => $slot->resolver_shape,
-      completion_family => $slot->completion_family,
-      dispatch_family => $slot->dispatch_family,
-      has_args => $slot->has_args,
-      has_directives => $slot->has_directives,
-    };
+    my $native_slot = $slot->to_native_struct;
+    $native_slot->{result_name} = $op->result_name;
+    push @slot_table, $native_slot;
   }
   return {
     name => $self->{name},

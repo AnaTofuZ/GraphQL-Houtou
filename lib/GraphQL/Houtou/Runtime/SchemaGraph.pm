@@ -90,10 +90,56 @@ sub to_native_struct {
   return {
     version => $self->{version},
     root_types => { %{ $self->{root_types} || {} } },
-    type_index => { %{ $self->{type_index} || {} } },
-    dispatch_index => { %{ $self->{dispatch_index} || {} } },
-    slot_catalog => [ map { $_->to_struct } @{ $self->{slot_catalog} || [] } ],
+    type_index => {
+      map {
+        my $entry = $self->{type_index}{$_} || {};
+        ($_ => {
+          %$entry,
+          kind_code => _type_kind_code($entry->{kind}),
+          completion_family_code => _family_code($entry->{completion_family}),
+        });
+      } keys %{ $self->{type_index} || {} }
+    },
+    dispatch_index => {
+      map {
+        my $entry = $self->{dispatch_index}{$_} || {};
+        ($_ => {
+          %$entry,
+          dispatch_family_code => _dispatch_family_code($entry->{dispatch_family}),
+        });
+      } keys %{ $self->{dispatch_index} || {} }
+    },
+    slot_catalog => [ map { $_->to_native_struct } @{ $self->{slot_catalog} || [] } ],
   };
+}
+
+sub _type_kind_code {
+  my ($kind) = @_;
+  return 1 if ($kind || q()) eq 'SCALAR';
+  return 2 if ($kind || q()) eq 'OBJECT';
+  return 3 if ($kind || q()) eq 'LIST';
+  return 4 if ($kind || q()) eq 'INTERFACE';
+  return 5 if ($kind || q()) eq 'UNION';
+  return 6 if ($kind || q()) eq 'ENUM';
+  return 7 if ($kind || q()) eq 'INPUT_OBJECT';
+  return 8 if ($kind || q()) eq 'NON_NULL';
+  return 0;
+}
+
+sub _family_code {
+  my ($family) = @_;
+  return 2 if ($family || q()) eq 'OBJECT';
+  return 3 if ($family || q()) eq 'LIST';
+  return 4 if ($family || q()) eq 'ABSTRACT';
+  return 1;
+}
+
+sub _dispatch_family_code {
+  my ($family) = @_;
+  return 2 if ($family || q()) eq 'RESOLVE_TYPE';
+  return 3 if ($family || q()) eq 'TAG';
+  return 4 if ($family || q()) eq 'POSSIBLE_TYPES';
+  return 1;
 }
 
 1;

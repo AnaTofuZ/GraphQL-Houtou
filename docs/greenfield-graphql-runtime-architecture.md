@@ -78,6 +78,9 @@ For the lowered VM artifact this also means:
 - the schema runtime should also be exportable as a native slot catalog, so
   the VM program can reference immutable schema-level slot metadata by
   `schema_slot_index` instead of re-emitting that metadata in every block
+- that native slot catalog should also carry numeric family/type codes, so a
+  future XS executor can bind dispatch and completion families without
+  reparsing string metadata
 - in practice this means a future XS boundary should accept a bundle shaped
   like:
   - native runtime descriptor

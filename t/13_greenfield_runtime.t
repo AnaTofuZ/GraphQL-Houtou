@@ -96,6 +96,8 @@ subtest 'runtime graph can emit native descriptor' => sub {
     'native runtime descriptor exports slot catalog';
   ok defined $descriptor->{slot_catalog}[0]{schema_slot_index},
     'native runtime slot keeps schema slot index';
+  ok defined $descriptor->{slot_catalog}[0]{completion_family_code},
+    'native runtime slot keeps numeric family code';
   is $descriptor->{slot_catalog}[0]{schema_slot_key}, 'Query.search',
     'native runtime slot keeps stable schema slot key';
 };
@@ -109,6 +111,16 @@ subtest 'runtime descriptor can round-trip through JSON file helpers' => sub {
 
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::SchemaGraph';
   is_deeply $inflated->to_struct, $descriptor, 'schema helper preserves runtime descriptor through file boundary';
+};
+
+subtest 'runtime native descriptor can round-trip through JSON file helpers' => sub {
+  my ($fh, $path) = tempfile();
+  close $fh;
+
+  my $descriptor = $schema->dump_runtime_native_descriptor($path);
+  my $loaded = $schema->load_runtime_native_descriptor($path);
+
+  is_deeply $loaded, $descriptor, 'schema helper preserves native runtime descriptor through file boundary';
 };
 
 done_testing;

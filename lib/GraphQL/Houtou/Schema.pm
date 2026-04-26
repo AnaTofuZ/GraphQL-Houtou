@@ -104,10 +104,22 @@ sub dump_runtime_descriptor {
   return $descriptor;
 }
 
+sub dump_runtime_native_descriptor {
+  my ($self, $path, %opts) = @_;
+  my $descriptor = $self->compile_runtime_native_descriptor(%opts);
+  _write_json_descriptor($path, $descriptor);
+  return $descriptor;
+}
+
 sub load_runtime_descriptor {
   my ($self, $path) = @_;
   my $descriptor = _read_json_descriptor($path);
   return $self->inflate_runtime($descriptor);
+}
+
+sub load_runtime_native_descriptor {
+  my ($self, $path) = @_;
+  return _read_json_descriptor($path);
 }
 
 sub compile_operation {
@@ -178,6 +190,18 @@ sub compile_vm_native_bundle_descriptor {
     runtime => $runtime->to_native_struct,
     program => $vm->to_native_struct,
   };
+}
+
+sub dump_vm_native_bundle_descriptor {
+  my ($self, $document, $path, %opts) = @_;
+  my $descriptor = $self->compile_vm_native_bundle_descriptor($document, %opts);
+  _write_json_descriptor($path, $descriptor);
+  return $descriptor;
+}
+
+sub load_vm_native_bundle_descriptor {
+  my ($self, $path) = @_;
+  return _read_json_descriptor($path);
 }
 
 sub inflate_vm_operation {

@@ -290,8 +290,11 @@ Current greenfield runtime coverage:
 - the greenfield runtime now also exports a native runtime-side slot catalog:
   - `$schema->compile_runtime_native_descriptor(...)`
   - `$schema->compile_vm_native_bundle_descriptor(...)`
+  - `$schema->dump_runtime_native_descriptor(...)`
+  - `$schema->dump_vm_native_bundle_descriptor(...)`
   - native runtime descriptors carry `slot_catalog`
   - native VM block slots carry `schema_slot_index`
+  - runtime type/dispatch/slot metadata also carry numeric family/type codes
   so an XS executor can consume a boot-time schema catalog plus a compact
   per-operation VM program without rediscovering field metadata from names
 - VM execution is also moving from argument-threaded helpers to cursor-owned

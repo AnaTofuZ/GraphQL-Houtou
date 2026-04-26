@@ -54,6 +54,40 @@ sub to_struct {
   };
 }
 
+sub to_native_struct {
+  my ($self) = @_;
+  return {
+    schema_slot_key => $self->{schema_slot_key},
+    schema_slot_index => $self->{schema_slot_index},
+    field_name => $self->{field_name},
+    result_name => $self->{result_name},
+    return_type_name => $self->{return_type_name},
+    resolver_shape => $self->{resolver_shape},
+    resolver_shape_code => _resolver_shape_code($self->{resolver_shape}),
+    completion_family => $self->{completion_family},
+    completion_family_code => _family_code($self->{completion_family}),
+    dispatch_family => $self->{dispatch_family},
+    dispatch_family_code => _family_code($self->{dispatch_family}),
+    arg_defs => _clone_value($self->{arg_defs}),
+    has_args => $self->{has_args},
+    has_directives => $self->{has_directives},
+  };
+}
+
+sub _resolver_shape_code {
+  my ($shape) = @_;
+  return 2 if ($shape || q()) eq 'EXPLICIT';
+  return 1;
+}
+
+sub _family_code {
+  my ($family) = @_;
+  return 2 if ($family || q()) eq 'OBJECT';
+  return 3 if ($family || q()) eq 'LIST';
+  return 4 if ($family || q()) eq 'ABSTRACT';
+  return 1;
+}
+
 sub _clone_value {
   my ($value) = @_;
   my $ref = ref($value);

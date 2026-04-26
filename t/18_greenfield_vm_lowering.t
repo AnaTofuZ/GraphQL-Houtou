@@ -1,6 +1,7 @@
 use strict;
 use warnings;
 use Test::More;
+use File::Temp qw(tempfile);
 
 use lib 'lib';
 use GraphQL::Houtou::Schema;
@@ -94,10 +95,22 @@ subtest 'schema can emit bundled native runtime and VM descriptor' => sub {
   my $bundle = $schema->compile_vm_native_bundle_descriptor('{ viewer { id } node { id } }');
   ok ref($bundle->{runtime}{slot_catalog}) eq 'ARRAY' && @{$bundle->{runtime}{slot_catalog}} >= 2,
     'native bundle keeps runtime slot catalog';
+  ok defined $bundle->{runtime}{slot_catalog}[0]{completion_family_code},
+    'native bundle keeps runtime numeric family code';
   ok ref($bundle->{program}{blocks}) eq 'ARRAY' && @{$bundle->{program}{blocks}} >= 2,
     'native bundle keeps vm program blocks';
   ok defined $bundle->{program}{blocks}[ $bundle->{program}{root_block_index} ]{ops}[0]{slot_index},
     'native bundle op keeps slot index';
+};
+
+subtest 'native VM bundle descriptor can round-trip through JSON helpers' => sub {
+  my ($fh, $path) = tempfile();
+  close $fh;
+
+  my $descriptor = $schema->dump_vm_native_bundle_descriptor('{ viewer { id } node { id } }', $path);
+  my $loaded = $schema->load_vm_native_bundle_descriptor($path);
+
+  is_deeply $loaded, $descriptor, 'native bundle survives JSON file boundary';
 };
 
 done_testing;

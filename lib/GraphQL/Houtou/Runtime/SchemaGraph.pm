@@ -67,8 +67,8 @@ sub inflate_program {
 
 sub execute_operation {
   my ($self, $program, %opts) = @_;
-  require GraphQL::Houtou::Runtime::Executor;
-  return GraphQL::Houtou::Runtime::Executor->execute_operation($self, $program, %opts);
+  require GraphQL::Houtou::Runtime;
+  return GraphQL::Houtou::Runtime::execute_operation($self, $program, %opts);
 }
 
 sub execute_program {

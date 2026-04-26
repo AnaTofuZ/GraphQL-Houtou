@@ -1,5 +1,5 @@
-#ifndef GQL_GREENFIELD_VM_H
-#define GQL_GREENFIELD_VM_H
+#ifndef GQL_RUNTIME_VM_H
+#define GQL_RUNTIME_VM_H
 
 #include <stdlib.h>
 
@@ -60,7 +60,7 @@ typedef struct {
   IV return_type_kind_code;
   U8 has_args;
   U8 has_directives;
-} gql_greenfield_vm_native_slot_t;
+} gql_runtime_vm_native_slot_t;
 
 typedef struct {
   char **abstract_child_names;
@@ -74,15 +74,15 @@ typedef struct {
   IV abstract_child_count;
   U8 has_args;
   U8 has_directives;
-} gql_greenfield_vm_native_op_t;
+} gql_runtime_vm_native_op_t;
 
 typedef struct {
   IV family_code;
   IV slot_count;
   IV op_count;
-  gql_greenfield_vm_native_slot_t *slots;
-  gql_greenfield_vm_native_op_t *ops;
-} gql_greenfield_vm_native_block_t;
+  gql_runtime_vm_native_slot_t *slots;
+  gql_runtime_vm_native_op_t *ops;
+} gql_runtime_vm_native_block_t;
 
 typedef struct {
   IV runtime_slot_count;
@@ -97,30 +97,30 @@ typedef struct {
   HV *name2type_hv;
   HV *dispatch_index_hv;
   HV *is_type_of_map_hv;
-} gql_greenfield_vm_native_runtime_t;
+} gql_runtime_vm_native_runtime_t;
 
 typedef struct {
   IV operation_type_code;
   IV root_block_index;
   IV runtime_slot_count;
   IV block_count;
-  gql_greenfield_vm_native_slot_t *runtime_slots;
-  gql_greenfield_vm_native_block_t *blocks;
-} gql_greenfield_vm_native_bundle_t;
+  gql_runtime_vm_native_slot_t *runtime_slots;
+  gql_runtime_vm_native_block_t *blocks;
+} gql_runtime_vm_native_bundle_t;
 
 typedef struct {
-  gql_greenfield_vm_native_runtime_t *runtime;
-  gql_greenfield_vm_native_bundle_t *bundle;
+  gql_runtime_vm_native_runtime_t *runtime;
+  gql_runtime_vm_native_bundle_t *bundle;
   SV *context;
-  const gql_greenfield_vm_native_block_t *block;
-  const gql_greenfield_vm_native_op_t *op;
-  const gql_greenfield_vm_native_slot_t *slot;
+  const gql_runtime_vm_native_block_t *block;
+  const gql_runtime_vm_native_op_t *op;
+  const gql_runtime_vm_native_slot_t *slot;
   IV block_index;
   IV op_index;
-} gql_greenfield_vm_exec_state_t;
+} gql_runtime_vm_exec_state_t;
 
 static void
-gql_greenfield_vm_native_bundle_destroy(gql_greenfield_vm_native_bundle_t *bundle)
+gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
 {
   IV i;
   IV j;
@@ -159,7 +159,7 @@ gql_greenfield_vm_native_bundle_destroy(gql_greenfield_vm_native_bundle_t *bundl
 }
 
 static void
-gql_greenfield_vm_native_runtime_destroy(gql_greenfield_vm_native_runtime_t *runtime)
+gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
 {
   IV i;
   if (!runtime) {
@@ -213,7 +213,7 @@ gql_greenfield_vm_native_runtime_destroy(gql_greenfield_vm_native_runtime_t *run
 }
 
 static int
-gql_greenfield_vm_fetch_hv_string(pTHX_ HV *hv, const char *key, I32 keylen, char **out)
+gql_runtime_vm_fetch_hv_string(pTHX_ HV *hv, const char *key, I32 keylen, char **out)
 {
   SV **svp = hv_fetch(hv, key, keylen, 0);
   STRLEN len;
@@ -229,7 +229,7 @@ gql_greenfield_vm_fetch_hv_string(pTHX_ HV *hv, const char *key, I32 keylen, cha
 }
 
 static int
-gql_greenfield_vm_fetch_hv_iv(pTHX_ HV *hv, const char *key, I32 keylen, IV *out)
+gql_runtime_vm_fetch_hv_iv(pTHX_ HV *hv, const char *key, I32 keylen, IV *out)
 {
   SV **svp = hv_fetch(hv, key, keylen, 0);
   if (!svp || !SvOK(*svp)) {
@@ -240,10 +240,10 @@ gql_greenfield_vm_fetch_hv_iv(pTHX_ HV *hv, const char *key, I32 keylen, IV *out
 }
 
 static int
-gql_greenfield_vm_fetch_hv_bool(pTHX_ HV *hv, const char *key, I32 keylen, U8 *out)
+gql_runtime_vm_fetch_hv_bool(pTHX_ HV *hv, const char *key, I32 keylen, U8 *out)
 {
   IV value = 0;
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ hv, key, keylen, &value)) {
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, key, keylen, &value)) {
     return 0;
   }
   *out = value ? 1 : 0;
@@ -251,7 +251,7 @@ gql_greenfield_vm_fetch_hv_bool(pTHX_ HV *hv, const char *key, I32 keylen, U8 *o
 }
 
 static int
-gql_greenfield_vm_sv_to_hv(pTHX_ SV *sv, HV **out)
+gql_runtime_vm_sv_to_hv(pTHX_ SV *sv, HV **out)
 {
   if (!sv || !SvOK(sv) || !SvROK(sv) || SvTYPE(SvRV(sv)) != SVt_PVHV) {
     return 0;
@@ -261,7 +261,7 @@ gql_greenfield_vm_sv_to_hv(pTHX_ SV *sv, HV **out)
 }
 
 static int
-gql_greenfield_vm_sv_to_av(pTHX_ SV *sv, AV **out)
+gql_runtime_vm_sv_to_av(pTHX_ SV *sv, AV **out)
 {
   if (!sv || !SvOK(sv) || !SvROK(sv) || SvTYPE(SvRV(sv)) != SVt_PVAV) {
     return 0;
@@ -271,76 +271,76 @@ gql_greenfield_vm_sv_to_av(pTHX_ SV *sv, AV **out)
 }
 
 static int
-gql_greenfield_vm_parse_native_slot(pTHX_ SV *sv, gql_greenfield_vm_native_slot_t *out)
+gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out)
 {
   HV *hv;
-  if (!gql_greenfield_vm_sv_to_hv(aTHX_ sv, &hv)) {
+  if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &hv)) {
     croak("native VM slot entry must be a hash reference");
   }
-  if (!gql_greenfield_vm_fetch_hv_string(aTHX_ hv, "field_name", 10, &out->field_name)) {
+  if (!gql_runtime_vm_fetch_hv_string(aTHX_ hv, "field_name", 10, &out->field_name)) {
     croak("native VM slot entry is missing field_name");
   }
-  if (!gql_greenfield_vm_fetch_hv_string(aTHX_ hv, "result_name", 11, &out->result_name)) {
+  if (!gql_runtime_vm_fetch_hv_string(aTHX_ hv, "result_name", 11, &out->result_name)) {
     croak("native VM slot entry is missing result_name");
   }
-  if (!gql_greenfield_vm_fetch_hv_string(aTHX_ hv, "return_type_name", 16, &out->return_type_name)) {
+  if (!gql_runtime_vm_fetch_hv_string(aTHX_ hv, "return_type_name", 16, &out->return_type_name)) {
     croak("native VM slot entry is missing return_type_name");
   }
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ hv, "schema_slot_index", 17, &out->schema_slot_index)) {
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "schema_slot_index", 17, &out->schema_slot_index)) {
     croak("native VM slot entry is missing schema_slot_index");
   }
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ hv, "resolver_shape_code", 19, &out->resolver_shape_code)) {
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "resolver_shape_code", 19, &out->resolver_shape_code)) {
     croak("native VM slot entry is missing resolver_shape_code");
   }
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ hv, "completion_family_code", 22, &out->completion_family_code)) {
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "completion_family_code", 22, &out->completion_family_code)) {
     croak("native VM slot entry is missing completion_family_code");
   }
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ hv, "dispatch_family_code", 20, &out->dispatch_family_code)) {
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "dispatch_family_code", 20, &out->dispatch_family_code)) {
     croak("native VM slot entry is missing dispatch_family_code");
   }
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ hv, "return_type_kind_code", 21, &out->return_type_kind_code)) {
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "return_type_kind_code", 21, &out->return_type_kind_code)) {
     croak("native VM slot entry is missing return_type_kind_code");
   }
-  if (!gql_greenfield_vm_fetch_hv_bool(aTHX_ hv, "has_args", 8, &out->has_args)) {
+  if (!gql_runtime_vm_fetch_hv_bool(aTHX_ hv, "has_args", 8, &out->has_args)) {
     croak("native VM slot entry is missing has_args");
   }
-  if (!gql_greenfield_vm_fetch_hv_bool(aTHX_ hv, "has_directives", 14, &out->has_directives)) {
+  if (!gql_runtime_vm_fetch_hv_bool(aTHX_ hv, "has_directives", 14, &out->has_directives)) {
     croak("native VM slot entry is missing has_directives");
   }
   return 1;
 }
 
 static int
-gql_greenfield_vm_parse_native_op(pTHX_ SV *sv, gql_greenfield_vm_native_op_t *out)
+gql_runtime_vm_parse_native_op(pTHX_ SV *sv, gql_runtime_vm_native_op_t *out)
 {
   HV *hv;
   HV *children_hv;
   HE *he;
   SV **svp;
   IV idx;
-  if (!gql_greenfield_vm_sv_to_hv(aTHX_ sv, &hv)) {
+  if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &hv)) {
     croak("native VM op entry must be a hash reference");
   }
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ hv, "opcode_code", 11, &out->opcode_code)) {
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "opcode_code", 11, &out->opcode_code)) {
     croak("native VM op entry is missing opcode_code");
   }
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ hv, "resolve_code", 12, &out->resolve_code)) {
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "resolve_code", 12, &out->resolve_code)) {
     croak("native VM op entry is missing resolve_code");
   }
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ hv, "complete_code", 13, &out->complete_code)) {
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "complete_code", 13, &out->complete_code)) {
     croak("native VM op entry is missing complete_code");
   }
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ hv, "dispatch_family_code", 20, &out->dispatch_family_code)) {
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "dispatch_family_code", 20, &out->dispatch_family_code)) {
     croak("native VM op entry is missing dispatch_family_code");
   }
   svp = hv_fetch(hv, "slot_index", 10, 0);
   out->slot_index = (svp && SvOK(*svp)) ? SvIV(*svp) : -1;
   svp = hv_fetch(hv, "child_block_index", 17, 0);
   out->child_block_index = (svp && SvOK(*svp)) ? SvIV(*svp) : -1;
-  if (!gql_greenfield_vm_fetch_hv_bool(aTHX_ hv, "has_args", 8, &out->has_args)) {
+  if (!gql_runtime_vm_fetch_hv_bool(aTHX_ hv, "has_args", 8, &out->has_args)) {
     croak("native VM op entry is missing has_args");
   }
-  if (!gql_greenfield_vm_fetch_hv_bool(aTHX_ hv, "has_directives", 14, &out->has_directives)) {
+  if (!gql_runtime_vm_fetch_hv_bool(aTHX_ hv, "has_directives", 14, &out->has_directives)) {
     croak("native VM op entry is missing has_directives");
   }
   svp = hv_fetch(hv, "abstract_child_block_indexes", 28, 0);
@@ -372,25 +372,25 @@ gql_greenfield_vm_parse_native_op(pTHX_ SV *sv, gql_greenfield_vm_native_op_t *o
 }
 
 static int
-gql_greenfield_vm_parse_native_block(pTHX_ SV *sv, gql_greenfield_vm_native_block_t *out)
+gql_runtime_vm_parse_native_block(pTHX_ SV *sv, gql_runtime_vm_native_block_t *out)
 {
   HV *hv;
   AV *slots_av;
   AV *ops_av;
   IV i;
   SV **svp;
-  if (!gql_greenfield_vm_sv_to_hv(aTHX_ sv, &hv)) {
+  if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &hv)) {
     return 0;
   }
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ hv, "family_code", 11, &out->family_code)) {
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "family_code", 11, &out->family_code)) {
     return 0;
   }
   svp = hv_fetch(hv, "slots", 5, 0);
-  if (!svp || !gql_greenfield_vm_sv_to_av(aTHX_ *svp, &slots_av)) {
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &slots_av)) {
     return 0;
   }
   svp = hv_fetch(hv, "ops", 3, 0);
-  if (!svp || !gql_greenfield_vm_sv_to_av(aTHX_ *svp, &ops_av)) {
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &ops_av)) {
     return 0;
   }
   out->slot_count = av_count(slots_av);
@@ -398,19 +398,19 @@ gql_greenfield_vm_parse_native_block(pTHX_ SV *sv, gql_greenfield_vm_native_bloc
   out->slots = NULL;
   out->ops = NULL;
   if (out->slot_count > 0) {
-    Newxz(out->slots, out->slot_count, gql_greenfield_vm_native_slot_t);
+    Newxz(out->slots, out->slot_count, gql_runtime_vm_native_slot_t);
     for (i = 0; i < out->slot_count; i++) {
       SV **slot_svp = av_fetch(slots_av, i, 0);
-      if (!slot_svp || !gql_greenfield_vm_parse_native_slot(aTHX_ *slot_svp, &out->slots[i])) {
+      if (!slot_svp || !gql_runtime_vm_parse_native_slot(aTHX_ *slot_svp, &out->slots[i])) {
         return 0;
       }
     }
   }
   if (out->op_count > 0) {
-    Newxz(out->ops, out->op_count, gql_greenfield_vm_native_op_t);
+    Newxz(out->ops, out->op_count, gql_runtime_vm_native_op_t);
     for (i = 0; i < out->op_count; i++) {
       SV **op_svp = av_fetch(ops_av, i, 0);
-      if (!op_svp || !gql_greenfield_vm_parse_native_op(aTHX_ *op_svp, &out->ops[i])) {
+      if (!op_svp || !gql_runtime_vm_parse_native_op(aTHX_ *op_svp, &out->ops[i])) {
         return 0;
       }
     }
@@ -418,8 +418,8 @@ gql_greenfield_vm_parse_native_block(pTHX_ SV *sv, gql_greenfield_vm_native_bloc
   return 1;
 }
 
-static gql_greenfield_vm_native_bundle_t *
-gql_greenfield_vm_native_bundle_from_sv(pTHX_ SV *sv)
+static gql_runtime_vm_native_bundle_t *
+gql_runtime_vm_native_bundle_from_sv(pTHX_ SV *sv)
 {
   HV *bundle_hv;
   HV *runtime_hv;
@@ -428,69 +428,69 @@ gql_greenfield_vm_native_bundle_from_sv(pTHX_ SV *sv)
   AV *blocks_av;
   IV i;
   SV **svp;
-  gql_greenfield_vm_native_bundle_t *bundle;
+  gql_runtime_vm_native_bundle_t *bundle;
 
-  if (!gql_greenfield_vm_sv_to_hv(aTHX_ sv, &bundle_hv)) {
+  if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &bundle_hv)) {
     croak("native VM bundle descriptor must be a hash reference");
   }
 
   svp = hv_fetch(bundle_hv, "runtime", 7, 0);
-  if (!svp || !gql_greenfield_vm_sv_to_hv(aTHX_ *svp, &runtime_hv)) {
+  if (!svp || !gql_runtime_vm_sv_to_hv(aTHX_ *svp, &runtime_hv)) {
     croak("native VM bundle descriptor is missing runtime");
   }
   svp = hv_fetch(bundle_hv, "program", 7, 0);
-  if (!svp || !gql_greenfield_vm_sv_to_hv(aTHX_ *svp, &program_hv)) {
+  if (!svp || !gql_runtime_vm_sv_to_hv(aTHX_ *svp, &program_hv)) {
     croak("native VM bundle descriptor is missing program");
   }
 
-  Newxz(bundle, 1, gql_greenfield_vm_native_bundle_t);
+  Newxz(bundle, 1, gql_runtime_vm_native_bundle_t);
 
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ program_hv, "operation_type_code", 19, &bundle->operation_type_code)) {
-    gql_greenfield_vm_native_bundle_destroy(bundle);
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ program_hv, "operation_type_code", 19, &bundle->operation_type_code)) {
+    gql_runtime_vm_native_bundle_destroy(bundle);
     croak("native VM program descriptor is missing operation_type_code");
   }
-  if (!gql_greenfield_vm_fetch_hv_iv(aTHX_ program_hv, "root_block_index", 16, &bundle->root_block_index)) {
-    gql_greenfield_vm_native_bundle_destroy(bundle);
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ program_hv, "root_block_index", 16, &bundle->root_block_index)) {
+    gql_runtime_vm_native_bundle_destroy(bundle);
     croak("native VM program descriptor is missing root_block_index");
   }
 
   svp = hv_fetch(runtime_hv, "slot_catalog", 12, 0);
-  if (!svp || !gql_greenfield_vm_sv_to_av(aTHX_ *svp, &runtime_slots_av)) {
-    gql_greenfield_vm_native_bundle_destroy(bundle);
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &runtime_slots_av)) {
+    gql_runtime_vm_native_bundle_destroy(bundle);
     croak("native VM runtime descriptor is missing slot_catalog");
   }
   bundle->runtime_slot_count = av_count(runtime_slots_av);
   if (bundle->runtime_slot_count > 0) {
-    Newxz(bundle->runtime_slots, bundle->runtime_slot_count, gql_greenfield_vm_native_slot_t);
+    Newxz(bundle->runtime_slots, bundle->runtime_slot_count, gql_runtime_vm_native_slot_t);
     for (i = 0; i < bundle->runtime_slot_count; i++) {
       SV **slot_svp = av_fetch(runtime_slots_av, i, 0);
       if (!slot_svp) {
-        gql_greenfield_vm_native_bundle_destroy(bundle);
+        gql_runtime_vm_native_bundle_destroy(bundle);
         croak("native VM runtime slot entry %ld is missing", (long)i);
       }
-      if (!gql_greenfield_vm_parse_native_slot(aTHX_ *slot_svp, &bundle->runtime_slots[i])) {
-        gql_greenfield_vm_native_bundle_destroy(bundle);
+      if (!gql_runtime_vm_parse_native_slot(aTHX_ *slot_svp, &bundle->runtime_slots[i])) {
+        gql_runtime_vm_native_bundle_destroy(bundle);
         croak("native VM runtime slot entry %ld is invalid", (long)i);
       }
     }
   }
 
   svp = hv_fetch(program_hv, "blocks", 6, 0);
-  if (!svp || !gql_greenfield_vm_sv_to_av(aTHX_ *svp, &blocks_av)) {
-    gql_greenfield_vm_native_bundle_destroy(bundle);
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &blocks_av)) {
+    gql_runtime_vm_native_bundle_destroy(bundle);
     croak("native VM program descriptor is missing blocks");
   }
   bundle->block_count = av_count(blocks_av);
   if (bundle->block_count > 0) {
-    Newxz(bundle->blocks, bundle->block_count, gql_greenfield_vm_native_block_t);
+    Newxz(bundle->blocks, bundle->block_count, gql_runtime_vm_native_block_t);
     for (i = 0; i < bundle->block_count; i++) {
       SV **block_svp = av_fetch(blocks_av, i, 0);
       if (!block_svp) {
-        gql_greenfield_vm_native_bundle_destroy(bundle);
+        gql_runtime_vm_native_bundle_destroy(bundle);
         croak("native VM block entry %ld is missing", (long)i);
       }
-      if (!gql_greenfield_vm_parse_native_block(aTHX_ *block_svp, &bundle->blocks[i])) {
-        gql_greenfield_vm_native_bundle_destroy(bundle);
+      if (!gql_runtime_vm_parse_native_block(aTHX_ *block_svp, &bundle->blocks[i])) {
+        gql_runtime_vm_native_bundle_destroy(bundle);
         croak("native VM block entry %ld is invalid", (long)i);
       }
     }

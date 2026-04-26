@@ -67,11 +67,15 @@ sub inflate_operation {
 }
 
 sub execute_program {
-  return GraphQL::Houtou::Runtime::Executor->execute_operation(@_);
+  my ($runtime_schema, $program, %opts) = @_;
+  my $vm_program = lower_program_to_vm($runtime_schema, $program);
+  $opts{vm_engine} = 'perl' if !defined $opts{vm_engine};
+  return execute_vm($runtime_schema, $vm_program, %opts);
 }
 
 sub execute_operation {
-  return GraphQL::Houtou::Runtime::Executor->execute_operation(@_);
+  my ($runtime_schema, $program, %opts) = @_;
+  return execute_program($runtime_schema, $program, %opts);
 }
 
 sub execute_program_perl {

@@ -38,7 +38,7 @@ Current runtime-VM direction:
     - `dump_runtime_descriptor`
     - `load_runtime_descriptor`
 
-Greenfield scaffold checkpoint:
+Runtime scaffold checkpoint:
 
 - `GraphQL::Houtou::Schema` now exposes:
   - `compile_runtime`
@@ -4454,3 +4454,19 @@ This fixes the first real bridge-design bug we hit in the reboot:
 - dump/load-safe native descriptors should stay cold and serializable
 - execution-only bindings belong at the top-level bridge, not in child modules
 - child runtime modules should not re-enter XS directly
+- 2026-04-26
+  - mainline runtime path now executes through the Perl VM by default:
+    - `Schema->execute_runtime(...)`
+    - `Runtime->execute_program(...)`
+  - `t/15_runtime_execute.t`, `t/16_runtime_promise.t`,
+    `t/17_runtime_errors.t`, `t/18_vm_lowering.t`, and
+    `t/19_vm_execute.t` all pass together again after carrying
+    `return_type_name` through VM ops and falling back to op metadata
+    when slot-bound return types are absent.
+  - this restores lazy `info` compatibility for:
+    - explicit resolver callbacks
+    - abstract tag/resolve_type/is_type_of callbacks
+  - next consolidation target:
+    - keep `VM*` as internal implementation names
+    - move public/runtime-facing APIs toward runtime/program/block
+      terminology

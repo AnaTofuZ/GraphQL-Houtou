@@ -7,11 +7,13 @@ use warnings;
 sub new {
   my ($class, %args) = @_;
   return bless {
+    variable_defs => $args{variable_defs} || {},
     blocks => $args{blocks} || [],
     root_blocks => $args{root_blocks} || {},
   }, $class;
 }
 
+sub variable_defs { return $_[0]{variable_defs} }
 sub blocks { return $_[0]{blocks} }
 sub root_blocks { return $_[0]{root_blocks} }
 
@@ -39,6 +41,7 @@ sub to_struct {
   } keys %{ $self->{root_blocks} || {} };
 
   return {
+    variable_defs => { %{ $self->{variable_defs} || {} } },
     blocks => \@blocks,
     root_blocks => \%root_blocks,
   };

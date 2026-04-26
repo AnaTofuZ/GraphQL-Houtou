@@ -11,6 +11,7 @@ use GraphQL::Houtou::Runtime::FieldFrame ();
 use GraphQL::Houtou::Runtime::LazyInfo ();
 use GraphQL::Houtou::Runtime::Outcome ();
 use GraphQL::Houtou::Runtime::PathFrame ();
+use GraphQL::Houtou::Schema ();
 
 sub new {
   my ($class, %args) = @_;
@@ -38,7 +39,7 @@ sub build_for_program {
     cursor => GraphQL::Houtou::Runtime::Cursor->new(block => $program->root_block),
     writer => GraphQL::Houtou::Runtime::Writer->new,
     context => $opts{context},
-    variables => _prepare_variables($runtime_schema, $opts{variables} || {}),
+    variables => _prepare_variables($runtime_schema, $program, $opts{variables} || {}),
     root_value => $opts{root_value},
     promise_code => normalize_promise_code($opts{promise_code}),
     empty_args => {},
@@ -295,6 +296,11 @@ sub current_return_type {
   my ($self) = @_;
   my $slot = $self->current_slot || ($self->current_op ? $self->current_op->bound_slot : undef);
   return $slot->return_type if $slot && $slot->return_type;
+  if (my $op = $self->current_op) {
+    my $type_name = $op->return_type_name;
+    return $self->runtime_schema->runtime_cache->{name2type}{$type_name}
+      if defined $type_name;
+  }
   my $block = $self->current_block;
   return if !$block;
   return $self->runtime_schema->runtime_cache->{name2type}{ $block->type_name };
@@ -482,7 +488,8 @@ sub should_execute_current_op {
   my ($self, $op) = @_;
   my $mode = $op->directives_mode || 'NONE';
   return 1 if $mode eq 'NONE';
-  return 1;
+  my $guards = $op->directives_payload || [];
+  return $self->_evaluate_runtime_guards($guards, $self->variables || {});
 }
 
 sub _coerce_static_args {
@@ -490,8 +497,10 @@ sub _coerce_static_args {
   my %values;
   for my $name (keys %{$arg_defs || {}}) {
     my $arg_def = $arg_defs->{$name} || {};
+    my $type = $self->_lookup_input_type($arg_def->{type});
     next if !exists $payload->{$name} && !$arg_def->{has_default};
-    $values{$name} = exists $payload->{$name} ? $payload->{$name} : $arg_def->{default_value};
+    my $raw = exists $payload->{$name} ? $payload->{$name} : $arg_def->{default_value};
+    $values{$name} = $self->_coerce_input_value($type, $raw);
   }
   return \%values;
 }
@@ -500,13 +509,20 @@ sub _coerce_dynamic_args {
   my ($self, $arg_defs, $payload) = @_;
   my %values;
   for my $name (keys %{$arg_defs || {}}) {
-    next if !exists $payload->{$name};
+    my $arg_def = $arg_defs->{$name} || {};
+    my $type = $self->_lookup_input_type($arg_def->{type});
+    next if !exists $payload->{$name} && !$arg_def->{has_default};
     my $raw = $payload->{$name};
     if (ref($raw) eq 'SCALAR') {
-      $values{$name} = $self->variables->{ $$raw };
+      $values{$name} = exists $self->variables->{ $$raw }
+        ? $self->variables->{ $$raw }
+        : (defined $arg_def->{default_value} ? $self->_coerce_input_value($type, $arg_def->{default_value}) : undef);
       next;
     }
-    $values{$name} = $raw;
+    my $materialized = defined($raw)
+      ? $self->_materialize_dynamic_args($raw, $self->variables || {})
+      : $arg_def->{default_value};
+    $values{$name} = $self->_coerce_input_value($type, $materialized);
   }
   return \%values;
 }
@@ -547,8 +563,63 @@ sub _promise_all_values_to_array {
 }
 
 sub _prepare_variables {
-  my ($runtime_schema, $provided) = @_;
-  return $provided || {};
+  my ($runtime_schema, $program, $provided) = @_;
+  my $defs = $program && $program->can('variable_defs') ? ($program->variable_defs || {}) : {};
+  my %resolved = %{ $provided || {} };
+  for my $name (keys %{$defs || {}}) {
+    next if exists $resolved{$name};
+    my $def = $defs->{$name} || {};
+    next if !$def->{has_default};
+    $resolved{$name} = $def->{default_value};
+  }
+  my %coerced;
+  for my $name (keys %{$defs || {}}) {
+    my $def = $defs->{$name} || {};
+    next if !exists $resolved{$name};
+    my $type = GraphQL::Houtou::Schema::lookup_type($def->{type}, $runtime_schema->runtime_cache->{name2type});
+    $coerced{$name} = defined $type ? $type->graphql_to_perl($resolved{$name}) : $resolved{$name};
+  }
+  for my $name (keys %resolved) {
+    next if exists $coerced{$name};
+    $coerced{$name} = $resolved{$name};
+  }
+  return \%coerced;
+}
+
+sub _lookup_input_type {
+  my ($self, $typedef) = @_;
+  return GraphQL::Houtou::Schema::lookup_type($typedef, $self->runtime_schema->runtime_cache->{name2type});
+}
+
+sub _coerce_input_value {
+  my ($self, $type, $value) = @_;
+  return $value if !defined $type;
+  return $type->graphql_to_perl($value);
+}
+
+sub _materialize_dynamic_args {
+  my ($self, $value, $variables) = @_;
+  my $ref = ref($value);
+  return $value if !$ref;
+  return (exists $variables->{ $$value } ? $variables->{ $$value } : undef) if $ref eq 'SCALAR';
+  return $$$value if $ref eq 'REF';
+  return [ map { $self->_materialize_dynamic_args($_, $variables) } @$value ] if $ref eq 'ARRAY';
+  return { map { $_ => $self->_materialize_dynamic_args($value->{$_}, $variables) } keys %$value } if $ref eq 'HASH';
+  return $value;
+}
+
+sub _evaluate_runtime_guards {
+  my ($self, $guards, $variables) = @_;
+  for my $directive (@{ $guards || [] }) {
+    next if !$directive;
+    my $name = $directive->{name} || '';
+    my $arguments = $directive->{arguments} || {};
+    my $if_value = $self->_materialize_dynamic_args($arguments->{if}, $variables);
+    my $bool = $if_value ? 1 : 0;
+    return 0 if $name eq 'skip' && $bool;
+    return 0 if $name eq 'include' && !$bool;
+  }
+  return 1;
 }
 
 1;

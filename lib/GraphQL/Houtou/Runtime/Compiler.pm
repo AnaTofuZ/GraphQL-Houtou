@@ -111,6 +111,7 @@ sub _build_program {
   }
 
   my $program = GraphQL::Houtou::Runtime::Program->new(
+    variable_defs => {},
     blocks => \@blocks,
     root_blocks => \%root_blocks,
   );
@@ -127,6 +128,7 @@ sub _inflate_program {
   } keys %{ $struct->{root_blocks} || {} };
 
   return GraphQL::Houtou::Runtime::Program->new(
+    variable_defs => $struct->{variable_defs} || {},
     blocks => \@blocks,
     root_blocks => \%root_blocks,
   );

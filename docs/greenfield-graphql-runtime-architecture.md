@@ -157,6 +157,9 @@ The next refinement after this split is also in place:
 - final response materialization can also be owned by `ExecState`, so
   promise-aware response envelopes and final error export are emitted from the
   same state machine that owns block and field execution
+- once those boundaries move into `ExecState`, the dispatch binder itself can
+  target state methods rather than executor-local family callbacks, leaving the
+  executor as a thin top-level shell
 
 This also implies that promise-aware execution should not fork into a fully
 separate runtime shape. The same lowered program, family contracts, and

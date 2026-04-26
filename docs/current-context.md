@@ -257,6 +257,11 @@ Current greenfield runtime coverage:
   - `ExecState->finalize_response(...)` now owns promise-aware response
     materialization and final error export
   - `VMExecutor` therefore no longer keeps local response-envelope assembly
+- VM dispatch binding no longer targets `VMExecutor` family callbacks:
+  - `VMDispatch` now binds run/resolve/complete dispatch directly to
+    `ExecState` methods
+  - `VMExecutor` is therefore closer to a pure entry shell around
+    `ExecState + Cursor + BlockFrame + FieldFrame + Writer`
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

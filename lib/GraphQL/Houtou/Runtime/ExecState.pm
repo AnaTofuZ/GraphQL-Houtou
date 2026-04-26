@@ -165,6 +165,89 @@ sub run_current_field_via {
   return $complete_ok ? $field->set_outcome($outcome) : $self->_error_outcome($outcome, $path_frame);
 }
 
+sub execute_current_op {
+  my ($self) = @_;
+  return $self->run_current_field_via(
+    sub {
+      my ($state, $source, $path_frame) = @_;
+      my $op = $state->current_op;
+      my $dispatch = $op->resolve_dispatch;
+      return $dispatch->($state, $source, $path_frame);
+    },
+    sub {
+      my ($state, $value, $path_frame) = @_;
+      my $op = $state->current_op;
+      my $dispatch = $op->complete_dispatch;
+      return $dispatch->($state, $value, $path_frame);
+    },
+  );
+}
+
+sub run_default_generic { return $_[0]->run_current_field_via(\&resolve_default,  \&complete_generic) }
+sub run_default_object  { return $_[0]->run_current_field_via(\&resolve_default,  \&complete_object) }
+sub run_default_list    { return $_[0]->run_current_field_via(\&resolve_default,  \&complete_list) }
+sub run_default_abstract { return $_[0]->run_current_field_via(\&resolve_default,  \&complete_abstract) }
+sub run_explicit_generic { return $_[0]->run_current_field_via(\&resolve_explicit, \&complete_generic) }
+sub run_explicit_object { return $_[0]->run_current_field_via(\&resolve_explicit, \&complete_object) }
+sub run_explicit_list   { return $_[0]->run_current_field_via(\&resolve_explicit, \&complete_list) }
+sub run_explicit_abstract { return $_[0]->run_current_field_via(\&resolve_explicit, \&complete_abstract) }
+
+sub resolve_field_value {
+  my ($self, $source, $path_frame) = @_;
+  my $op = $self->current_op;
+  my $dispatch = $op->resolve_dispatch;
+  return $dispatch->($self, $source, $path_frame);
+}
+
+sub resolve_default {
+  my ($self, $source, $path_frame) = @_;
+  my $op = $self->current_op;
+  my $slot = $self->current_slot || $op->bound_slot;
+  my $resolver = $slot ? $slot->resolve : undef;
+  my $return_type = $self->current_return_type;
+  my $args = $self->resolve_args_for_current_field;
+
+  if ($resolver) {
+    my $info = $self->build_lazy_info_for_current_field($path_frame);
+    return $resolver->($source, $args, $self->context, $info, $return_type);
+  }
+
+  return $source->{ $op->field_name } if ref($source) eq 'HASH';
+  return;
+}
+
+sub resolve_explicit {
+  my ($self, $source, $path_frame) = @_;
+  return $self->resolve_default($source, $path_frame);
+}
+
+sub complete_resolved_value {
+  my ($self, $value, $path_frame) = @_;
+  my $op = $self->current_op;
+  my $dispatch = $op->complete_dispatch;
+  return $dispatch->($self, $value, $path_frame);
+}
+
+sub complete_generic {
+  my ($self, $value, $path_frame) = @_;
+  return $self->scalar_outcome($value);
+}
+
+sub complete_object {
+  my ($self, $value, $path_frame) = @_;
+  return $self->complete_object_value($value, $path_frame);
+}
+
+sub complete_list {
+  my ($self, $value, $path_frame) = @_;
+  return $self->complete_list_value($value, $path_frame);
+}
+
+sub complete_abstract {
+  my ($self, $value, $path_frame) = @_;
+  return $self->complete_abstract_value($value, $path_frame);
+}
+
 sub execute_child_block {
   my ($self, $block, $source, $path_frame) = @_;
   return $self->execute_block($block, $source, $path_frame);

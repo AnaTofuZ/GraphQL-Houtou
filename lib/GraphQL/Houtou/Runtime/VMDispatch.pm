@@ -24,19 +24,19 @@ sub bind_program {
 sub _resolve_dispatch_for {
   my ($op) = @_;
   return ($op->resolve_handler || '') eq 'resolve_explicit'
-    ? \&GraphQL::Houtou::Runtime::VMExecutor::_resolve_explicit
-    : \&GraphQL::Houtou::Runtime::VMExecutor::_resolve_default;
+    ? \&GraphQL::Houtou::Runtime::ExecState::resolve_explicit
+    : \&GraphQL::Houtou::Runtime::ExecState::resolve_default;
 }
 
 sub _complete_dispatch_for {
   my ($op) = @_;
   return ($op->complete_handler || '') eq 'complete_object'
-    ? \&GraphQL::Houtou::Runtime::VMExecutor::_complete_object
+    ? \&GraphQL::Houtou::Runtime::ExecState::complete_object
     : ($op->complete_handler || '') eq 'complete_list'
-      ? \&GraphQL::Houtou::Runtime::VMExecutor::_complete_list
+      ? \&GraphQL::Houtou::Runtime::ExecState::complete_list
       : ($op->complete_handler || '') eq 'complete_abstract'
-        ? \&GraphQL::Houtou::Runtime::VMExecutor::_complete_abstract
-        : \&GraphQL::Houtou::Runtime::VMExecutor::_complete_generic;
+        ? \&GraphQL::Houtou::Runtime::ExecState::complete_abstract
+        : \&GraphQL::Houtou::Runtime::ExecState::complete_generic;
 }
 
 sub _run_dispatch_for {
@@ -44,25 +44,25 @@ sub _run_dispatch_for {
   my $resolve = $op->resolve_handler || 'resolve_default';
   my $complete = $op->complete_handler || 'complete_generic';
 
-  return \&GraphQL::Houtou::Runtime::VMExecutor::_run_default_generic
+  return \&GraphQL::Houtou::Runtime::ExecState::run_default_generic
     if $resolve eq 'resolve_default' && $complete eq 'complete_generic';
-  return \&GraphQL::Houtou::Runtime::VMExecutor::_run_default_object
+  return \&GraphQL::Houtou::Runtime::ExecState::run_default_object
     if $resolve eq 'resolve_default' && $complete eq 'complete_object';
-  return \&GraphQL::Houtou::Runtime::VMExecutor::_run_default_list
+  return \&GraphQL::Houtou::Runtime::ExecState::run_default_list
     if $resolve eq 'resolve_default' && $complete eq 'complete_list';
-  return \&GraphQL::Houtou::Runtime::VMExecutor::_run_default_abstract
+  return \&GraphQL::Houtou::Runtime::ExecState::run_default_abstract
     if $resolve eq 'resolve_default' && $complete eq 'complete_abstract';
 
-  return \&GraphQL::Houtou::Runtime::VMExecutor::_run_explicit_generic
+  return \&GraphQL::Houtou::Runtime::ExecState::run_explicit_generic
     if $resolve eq 'resolve_explicit' && $complete eq 'complete_generic';
-  return \&GraphQL::Houtou::Runtime::VMExecutor::_run_explicit_object
+  return \&GraphQL::Houtou::Runtime::ExecState::run_explicit_object
     if $resolve eq 'resolve_explicit' && $complete eq 'complete_object';
-  return \&GraphQL::Houtou::Runtime::VMExecutor::_run_explicit_list
+  return \&GraphQL::Houtou::Runtime::ExecState::run_explicit_list
     if $resolve eq 'resolve_explicit' && $complete eq 'complete_list';
-  return \&GraphQL::Houtou::Runtime::VMExecutor::_run_explicit_abstract
+  return \&GraphQL::Houtou::Runtime::ExecState::run_explicit_abstract
     if $resolve eq 'resolve_explicit' && $complete eq 'complete_abstract';
 
-  return \&GraphQL::Houtou::Runtime::VMExecutor::_execute_op;
+  return \&GraphQL::Houtou::Runtime::ExecState::execute_current_op;
 }
 
 1;

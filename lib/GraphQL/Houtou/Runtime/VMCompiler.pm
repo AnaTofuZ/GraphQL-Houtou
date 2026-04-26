@@ -4,6 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 
+use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::VMBlock ();
 use GraphQL::Houtou::Runtime::VMOp ();
 use GraphQL::Houtou::Runtime::VMProgram ();
@@ -13,14 +14,15 @@ sub lower_program {
   my @blocks = map { _lower_block($_) } @{ $program->blocks || [] };
   my %by_name = map { ($_->name => $_) } @blocks;
   my $root_block = $program->root_block ? $by_name{ $program->root_block->name } : undef;
-
-  return GraphQL::Houtou::Runtime::VMProgram->new(
+  my $vm_program = GraphQL::Houtou::Runtime::VMProgram->new(
     version => 1,
     operation_type => $program->operation_type,
     operation_name => $program->operation_name,
     blocks => \@blocks,
     root_block => $root_block,
   );
+  _bind_vm_ops($runtime_schema, $vm_program);
+  return $vm_program;
 }
 
 sub inflate_program {
@@ -28,14 +30,15 @@ sub inflate_program {
   my @blocks = map { _inflate_block($_) } @{ $struct->{blocks} || [] };
   my %by_name = map { ($_->name => $_) } @blocks;
   my $root_block = defined $struct->{root_block} ? $by_name{ $struct->{root_block} } : undef;
-
-  return GraphQL::Houtou::Runtime::VMProgram->new(
+  my $vm_program = GraphQL::Houtou::Runtime::VMProgram->new(
     version => $struct->{version} || 1,
     operation_type => $struct->{operation_type} || 'query',
     operation_name => $struct->{operation_name},
     blocks => \@blocks,
     root_block => $root_block,
   );
+  _bind_vm_ops($runtime_schema, $vm_program);
+  return $vm_program;
 }
 
 sub _lower_block {
@@ -76,6 +79,8 @@ sub _lower_instruction {
     has_args => $instruction->has_args,
     directives_mode => $instruction->directives_mode,
     has_directives => $instruction->has_directives,
+    bound_slot => $instruction->bound_slot,
+    abstract_dispatch => $instruction->abstract_dispatch,
   );
 }
 
@@ -94,6 +99,45 @@ sub _inflate_op {
     directives_mode => $struct->{directives_mode} || 'NONE',
     has_directives => $struct->{has_directives},
   );
+}
+
+sub _bind_vm_ops {
+  my ($runtime_schema, $program) = @_;
+  my %blocks = map { ($_->name => $_) } @{ $program->blocks || [] };
+  if (my $root = $program->root_block) {
+    $blocks{ $root->name } = $root;
+  }
+
+  for my $block (@{ $program->blocks || [] }, ($program->root_block || ())) {
+    next if !$block;
+    my $schema_block = $runtime_schema->program->block_by_type_name($block->type_name);
+    my %slots = $schema_block
+      ? map { ($_->field_name => $_) } @{ $schema_block->slots || [] }
+      : ();
+
+    for my $op (@{ $block->ops || [] }) {
+      $op->{bound_slot} ||= $slots{ $op->field_name };
+      if (!$op->{abstract_dispatch} && (($op->opcode || q()) =~ /:COMPLETE_ABSTRACT$/)) {
+        my $slot = $op->{bound_slot};
+        my $return_type = $slot ? $slot->return_type_name : undef;
+        $op->{abstract_dispatch} = GraphQL::Houtou::Runtime::OperationCompiler::_bind_abstract_dispatch(
+          $runtime_schema,
+          $return_type,
+        ) if defined $return_type;
+      }
+      $op->{bound_child_block} = $op->child_block_name
+        ? $blocks{ $op->child_block_name }
+        : undef;
+      $op->{bound_abstract_child_blocks} = {
+        map {
+          my $child_name = $op->abstract_child_blocks->{$_};
+          ($_ => ($child_name ? $blocks{$child_name} : undef))
+        } keys %{ $op->abstract_child_blocks || {} }
+      };
+    }
+  }
+
+  return $program;
 }
 
 1;

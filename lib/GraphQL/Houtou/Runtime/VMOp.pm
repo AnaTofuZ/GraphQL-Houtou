@@ -18,6 +18,10 @@ sub new {
     has_args => $args{has_args} ? 1 : 0,
     directives_mode => $args{directives_mode} || 'NONE',
     has_directives => $args{has_directives} ? 1 : 0,
+    bound_slot => $args{bound_slot},
+    bound_child_block => $args{bound_child_block},
+    bound_abstract_child_blocks => $args{bound_abstract_child_blocks} || {},
+    abstract_dispatch => $args{abstract_dispatch},
   }, $class;
 }
 
@@ -32,6 +36,10 @@ sub args_mode { return $_[0]{args_mode} }
 sub has_args { return $_[0]{has_args} }
 sub directives_mode { return $_[0]{directives_mode} }
 sub has_directives { return $_[0]{has_directives} }
+sub bound_slot { return $_[0]{bound_slot} }
+sub bound_child_block { return $_[0]{bound_child_block} }
+sub bound_abstract_child_blocks { return $_[0]{bound_abstract_child_blocks} }
+sub abstract_dispatch { return $_[0]{abstract_dispatch} }
 
 sub to_struct {
   my ($self) = @_;

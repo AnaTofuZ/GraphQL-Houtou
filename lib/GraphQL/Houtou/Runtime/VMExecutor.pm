@@ -114,11 +114,10 @@ sub _execute_op {
 
 sub _resolve_field_value {
   my ($state, $block, $op, $source, $path_frame) = @_;
-  my $field_map = $state->runtime_schema->runtime_cache->{field_maps}{ $block->type_name } || {};
-  my $field = $field_map->{ $op->field_name } || {};
-  my $resolver = $field->{resolve};
-  my $return_type = $field->{type}
-    || $state->runtime_schema->runtime_cache->{name2type}{ $block->type_name };
+  my $slot = $op->bound_slot;
+  my $resolver = $slot ? $slot->resolve : undef;
+  my $return_type = $slot ? $slot->return_type : undef;
+  $return_type ||= $state->runtime_schema->runtime_cache->{name2type}{ $block->type_name };
   my $args = _resolve_op_args($state, $op);
 
   if ($resolver) {
@@ -152,7 +151,8 @@ sub _complete_object {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
     if !defined $value;
 
-  my $child = $state->program->block_by_name($op->child_block_name);
+  my $child = $op->bound_child_block
+    || $state->program->block_by_name($op->child_block_name);
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$child;
 
@@ -173,7 +173,8 @@ sub _complete_list {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if ref($value) ne 'ARRAY';
 
-  my $child = $state->program->block_by_name($op->child_block_name);
+  my $child = $op->bound_child_block
+    || $state->program->block_by_name($op->child_block_name);
   my @items;
   for my $i (0 .. $#$value) {
     my $item_path = GraphQL::Houtou::Runtime::PathFrame->new(parent => $path_frame, key => $i);
@@ -205,8 +206,11 @@ sub _complete_abstract {
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$runtime_type;
 
-  my $child_block_name = ($op->abstract_child_blocks || {})->{ $runtime_type->name };
-  my $child = $child_block_name ? $state->program->block_by_name($child_block_name) : undef;
+  my $child = ($op->bound_abstract_child_blocks || {})->{ $runtime_type->name };
+  if (!$child) {
+    my $child_block_name = ($op->abstract_child_blocks || {})->{ $runtime_type->name };
+    $child = $child_block_name ? $state->program->block_by_name($child_block_name) : undef;
+  }
   return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
     if !$child;
 
@@ -222,40 +226,41 @@ sub _complete_abstract {
 
 sub _resolve_runtime_type {
   my ($state, $block, $op, $value, $path_frame) = @_;
+  my $dispatch = $op->abstract_dispatch;
   my $cache = $state->runtime_schema->runtime_cache;
-  my $field_map = $cache->{field_maps}{ $block->type_name } || {};
-  my $field = $field_map->{ $op->field_name } || {};
-  my $abstract_type = $field->{type} or return;
-  my $abstract_name = $abstract_type->name;
+  my $slot = $op->bound_slot;
+  my $abstract_type = $dispatch ? $dispatch->{abstract_type} : ($slot ? $slot->return_type : undef);
+  return if !$abstract_type;
+  my $abstract_name = $dispatch ? $dispatch->{abstract_name} : $abstract_type->name;
   my $info;
   my $build_info = sub {
     $info ||= _build_info($state, $block, $op, $path_frame);
     return $info;
   };
 
-  if (my $tag_resolver = $cache->{tag_resolver_map}{$abstract_name}) {
+  if (my $tag_resolver = $dispatch ? $dispatch->{tag_resolver} : $cache->{tag_resolver_map}{$abstract_name}) {
     my ($ok, $tag) = _capture_eval(sub {
       return $tag_resolver->($value, $state->context, $build_info->(), $abstract_type);
     });
     return (undef, _error_record($tag, $path_frame)) if !$ok;
     if (defined $tag) {
-      my $type = ($cache->{runtime_tag_map}{$abstract_name} || {})->{$tag};
+      my $type = (($dispatch ? $dispatch->{tag_map} : $cache->{runtime_tag_map}{$abstract_name}) || {})->{$tag};
       return ($type, undef) if $type;
     }
   }
 
-  if (my $resolve_type = $cache->{resolve_type_map}{$abstract_name}) {
+  if (my $resolve_type = $dispatch ? $dispatch->{resolve_type} : $cache->{resolve_type_map}{$abstract_name}) {
     my ($ok, $resolved) = _capture_eval(sub {
       return $resolve_type->($value, $state->context, $build_info->(), $abstract_type);
     });
     return (undef, _error_record($resolved, $path_frame)) if !$ok;
     return if !defined $resolved;
-    return (ref($resolved) ? $resolved : $cache->{name2type}{$resolved}, undef);
+    return (ref($resolved) ? $resolved : (($dispatch ? $dispatch->{name2type} : $cache->{name2type})->{$resolved}), undef);
   }
 
-  for my $type (@{ $cache->{possible_types}{$abstract_name} || [] }) {
+  for my $type (@{ ($dispatch ? $dispatch->{possible_types} : $cache->{possible_types}{$abstract_name}) || [] }) {
     next if !$type;
-    my $cb = $cache->{is_type_of_map}{ $type->name } or next;
+    my $cb = ($dispatch ? $dispatch->{is_type_of_map} : $cache->{is_type_of_map})->{ $type->name } or next;
     my ($ok, $matched) = _capture_eval(sub {
       return $cb->($value, $state->context, $build_info->(), $type);
     });

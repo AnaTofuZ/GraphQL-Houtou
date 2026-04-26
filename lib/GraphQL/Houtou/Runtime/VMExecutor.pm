@@ -20,6 +20,7 @@ use GraphQL::Houtou::Runtime::Writer ();
 
 sub execute_program {
   my ($class, $runtime_schema, $program, %opts) = @_;
+  _bind_program_dispatch($program);
   my $writer = GraphQL::Houtou::Runtime::Writer->new;
   my $promise_code = normalize_promise_code($opts{promise_code});
   my $variables = _prepare_variables($runtime_schema, $opts{variables} || {});
@@ -124,8 +125,8 @@ sub _execute_op {
 sub _resolve_field_value {
   my ($state, $source, $path_frame) = @_;
   my $op = $state->cursor->current_op;
-  my $handler = $op->resolve_handler || 'resolve_default';
-  return __PACKAGE__->can("_$handler")->($state, $source, $path_frame);
+  my $dispatch = $op->resolve_dispatch || _bind_resolve_dispatch($op);
+  return $dispatch->($state, $source, $path_frame);
 }
 
 sub _resolve_default {
@@ -156,8 +157,8 @@ sub _resolve_explicit {
 sub _complete_resolved_value {
   my ($state, $value, $path_frame) = @_;
   my $op = $state->cursor->current_op;
-  my $handler = $op->complete_handler || 'complete_generic';
-  return __PACKAGE__->can("_$handler")->($state, $value, $path_frame);
+  my $dispatch = $op->complete_dispatch || _bind_complete_dispatch($op);
+  return $dispatch->($state, $value, $path_frame);
 }
 
 sub _complete_generic {
@@ -405,6 +406,42 @@ sub _is_promise {
 sub _promise_all_values_to_array {
   return @{ $_[0] } if @_ == 1 && ref($_[0]) eq 'ARRAY';
   return @_;
+}
+
+sub _bind_program_dispatch {
+  my ($program) = @_;
+  return if $program->{dispatch_bound};
+  for my $block ($program->root_block, @{ $program->blocks || [] }) {
+    next if !$block;
+    for my $op (@{ $block->ops || [] }) {
+      _bind_resolve_dispatch($op);
+      _bind_complete_dispatch($op);
+    }
+  }
+  $program->{dispatch_bound} = 1;
+  return;
+}
+
+sub _bind_resolve_dispatch {
+  my ($op) = @_;
+  my $dispatch = ($op->resolve_handler || '') eq 'resolve_explicit'
+    ? \&_resolve_explicit
+    : \&_resolve_default;
+  $op->{resolve_dispatch} = $dispatch;
+  return $dispatch;
+}
+
+sub _bind_complete_dispatch {
+  my ($op) = @_;
+  my $dispatch = ($op->complete_handler || '') eq 'complete_object'
+    ? \&_complete_object
+    : ($op->complete_handler || '') eq 'complete_list'
+      ? \&_complete_list
+      : ($op->complete_handler || '') eq 'complete_abstract'
+        ? \&_complete_abstract
+        : \&_complete_generic;
+  $op->{complete_dispatch} = $dispatch;
+  return $dispatch;
 }
 
 1;

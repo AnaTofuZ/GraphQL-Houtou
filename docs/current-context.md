@@ -222,6 +222,12 @@ Current greenfield runtime coverage:
   - current block / op / slot are owned by the cursor
   - object/list/abstract child execution reuse the same cursor machine across
     root and child blocks
+- the next step of that same work is now in place:
+  - `VMOp` keeps runtime-only `resolve_dispatch` / `complete_dispatch`
+  - `VMExecutor` binds those coderef handlers once per inflated/lowered
+    program
+  - the hot loop dispatches directly from bound coderefs instead of
+    name-to-method resolution
 
 Still intentionally missing:
 

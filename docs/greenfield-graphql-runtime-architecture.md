@@ -304,6 +304,16 @@ The same applies to execution state:
 This keeps root and child execution on the same VM-shaped control path instead
 of rebuilding ad hoc helper call stacks.
 
+At the pure-Perl VM checkpoint, the equivalent of direct-threaded dispatch is:
+
+- structural opcodes remain serializable strings in the artifact
+- but the inflated/lowered in-memory op binds runtime-only resolver and
+  completion coderefs
+- execution then dispatches through those bound handlers and cursor-owned state
+
+This keeps the artifact boundary stable while moving the hot loop closer to the
+shape an XS VM will eventually use.
+
 ### 3. Query Lowering Pipeline
 
 The parser output should not remain the runtime's internal shape.

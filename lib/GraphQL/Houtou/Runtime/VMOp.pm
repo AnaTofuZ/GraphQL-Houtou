@@ -26,6 +26,8 @@ sub new {
     abstract_dispatch => $args{abstract_dispatch},
     resolve_handler => $args{resolve_handler},
     complete_handler => $args{complete_handler},
+    resolve_dispatch => $args{resolve_dispatch},
+    complete_dispatch => $args{complete_dispatch},
   }, $class;
 }
 
@@ -48,6 +50,8 @@ sub bound_abstract_child_blocks { return $_[0]{bound_abstract_child_blocks} }
 sub abstract_dispatch { return $_[0]{abstract_dispatch} }
 sub resolve_handler { return $_[0]{resolve_handler} }
 sub complete_handler { return $_[0]{complete_handler} }
+sub resolve_dispatch { return $_[0]{resolve_dispatch} }
+sub complete_dispatch { return $_[0]{complete_dispatch} }
 
 sub to_struct {
   my ($self) = @_;

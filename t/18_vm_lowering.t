@@ -147,7 +147,7 @@ subtest 'XS can inflate native VM bundle descriptor into a native handle' => sub
   my $codes = native_codes();
   my $handle = load_native_bundle($bundle);
 
-  isa_ok $handle, 'GraphQL::Houtou::XS::VM::NativeBundle';
+  isa_ok $handle, 'GraphQL::Houtou::Runtime::NativeBundle';
 
   my $summary = native_bundle_summary($handle);
   is $summary->{runtime_slot_count}, scalar(@{ $bundle->{runtime}{slot_catalog} || [] }),
@@ -168,7 +168,7 @@ subtest 'XS can inflate runtime schema into a native runtime handle' => sub {
   my $runtime = $schema->build_runtime;
   my $handle = load_native_runtime($runtime->to_native_exec_struct);
 
-  isa_ok $handle, 'GraphQL::Houtou::XS::VM::NativeRuntime';
+  isa_ok $handle, 'GraphQL::Houtou::Runtime::NativeRuntime';
 
   my $summary = native_runtime_summary($handle);
   is $summary->{runtime_slot_count}, scalar(@{ $runtime->slot_catalog || [] }),

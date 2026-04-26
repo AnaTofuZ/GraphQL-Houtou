@@ -1318,7 +1318,7 @@ load_native_bundle_xs(descriptor)
         gql_runtime_vm_native_bundle_from_sv(aTHX_ descriptor);
       SV *inner = newSVuv(PTR2UV(bundle));
       RETVAL = newRV_noinc(inner);
-      sv_bless(RETVAL, gv_stashpv("GraphQL::Houtou::XS::VM::NativeBundle", GV_ADD));
+      sv_bless(RETVAL, gv_stashpv("GraphQL::Houtou::Runtime::NativeBundle", GV_ADD));
     }
   OUTPUT:
     RETVAL
@@ -1333,8 +1333,8 @@ native_bundle_summary_xs(bundle_sv)
       AV *dispatch_codes;
       IV i;
 
-      if (!bundle_sv || !SvROK(bundle_sv) || !sv_derived_from(bundle_sv, "GraphQL::Houtou::XS::VM::NativeBundle")) {
-        croak("expected a GraphQL::Houtou::XS::VM::NativeBundle");
+      if (!bundle_sv || !SvROK(bundle_sv) || !sv_derived_from(bundle_sv, "GraphQL::Houtou::Runtime::NativeBundle")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeBundle");
       }
       bundle = INT2PTR(gql_runtime_vm_native_bundle_t *, SvUV(SvRV(bundle_sv)));
       if (!bundle) {
@@ -1375,7 +1375,7 @@ load_native_runtime_xs(runtime_schema)
         gql_runtime_vm_native_runtime_from_runtime_schema_sv(aTHX_ runtime_schema);
       SV *inner = newSVuv(PTR2UV(runtime));
       RETVAL = newRV_noinc(inner);
-      sv_bless(RETVAL, gv_stashpv("GraphQL::Houtou::XS::VM::NativeRuntime", GV_ADD));
+      sv_bless(RETVAL, gv_stashpv("GraphQL::Houtou::Runtime::NativeRuntime", GV_ADD));
     }
   OUTPUT:
     RETVAL
@@ -1388,8 +1388,8 @@ native_runtime_summary_xs(runtime_sv)
       gql_runtime_vm_native_runtime_t *runtime;
       HV *hv;
 
-      if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::XS::VM::NativeRuntime")) {
-        croak("expected a GraphQL::Houtou::XS::VM::NativeRuntime");
+      if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
       }
       runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
       if (!runtime) {
@@ -1422,15 +1422,15 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
       AV *errors;
       SV *data_sv;
 
-      if (!bundle_sv || !SvROK(bundle_sv) || !sv_derived_from(bundle_sv, "GraphQL::Houtou::XS::VM::NativeBundle")) {
-        croak("expected a GraphQL::Houtou::XS::VM::NativeBundle");
+      if (!bundle_sv || !SvROK(bundle_sv) || !sv_derived_from(bundle_sv, "GraphQL::Houtou::Runtime::NativeBundle")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeBundle");
       }
       bundle = INT2PTR(gql_runtime_vm_native_bundle_t *, SvUV(SvRV(bundle_sv)));
       if (!bundle) {
         croak("native VM bundle handle is no longer valid");
       }
 
-      if (runtime_schema && SvROK(runtime_schema) && sv_derived_from(runtime_schema, "GraphQL::Houtou::XS::VM::NativeRuntime")) {
+      if (runtime_schema && SvROK(runtime_schema) && sv_derived_from(runtime_schema, "GraphQL::Houtou::Runtime::NativeRuntime")) {
         runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_schema)));
         if (!runtime) {
           croak("native VM runtime handle is no longer valid");
@@ -1465,7 +1465,7 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
   OUTPUT:
     RETVAL
 
-MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::VM::NativeBundle
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::Runtime::NativeBundle
 
 void
 DESTROY(self)
@@ -1481,7 +1481,7 @@ DESTROY(self)
       }
     }
 
-MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::VM::NativeRuntime
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::Runtime::NativeRuntime
 
 void
 DESTROY(self)

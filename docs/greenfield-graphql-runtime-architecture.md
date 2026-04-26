@@ -276,7 +276,7 @@ The same ownership rule should continue upward into execution state itself:
 
 - `cursor` owns the current block/op/slot view
 - `block frame` owns block-local values and pending outcomes
-- `exec state` owns the current frame stack
+- `exec state` owns the current frame stack and block enter/leave lifecycle
 
 That keeps the VM closer to a real state machine and prevents block execution
 from drifting back into ad hoc local Perl aggregates.

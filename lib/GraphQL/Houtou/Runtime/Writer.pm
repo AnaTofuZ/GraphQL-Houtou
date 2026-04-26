@@ -20,7 +20,19 @@ sub pending { return $_[0]{pending} }
 sub consume_outcome {
   my ($self, $data, $result_name, $outcome) = @_;
   return if !$outcome;
-  $data->{$result_name} = $outcome->value;
+  my $kind = $outcome->kind || '';
+  if ($kind eq 'SCALAR') {
+    $data->{$result_name} = $outcome->scalar_value;
+  }
+  elsif ($kind eq 'OBJECT') {
+    $data->{$result_name} = $outcome->object_value;
+  }
+  elsif ($kind eq 'LIST') {
+    $data->{$result_name} = $outcome->list_value;
+  }
+  else {
+    $data->{$result_name} = $outcome->value;
+  }
   push @{ $self->{error_records} }, @{ $outcome->error_records || [] }
     if @{ $outcome->error_records || [] };
   return;

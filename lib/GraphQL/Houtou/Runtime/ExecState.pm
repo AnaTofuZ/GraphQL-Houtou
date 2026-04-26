@@ -4,6 +4,8 @@ use 5.014;
 use strict;
 use warnings;
 
+use GraphQL::Houtou::Runtime::BlockFrame ();
+
 sub new {
   my ($class, %args) = @_;
   return bless {
@@ -48,5 +50,22 @@ sub pop_frame {
 }
 
 sub current_frame { return $_[0]{frame} }
+
+sub enter_block {
+  my ($self, $block) = @_;
+  my $snapshot = {
+    cursor => $self->{cursor}->snapshot,
+  };
+  $self->{cursor}->enter_block($block);
+  my $frame = $self->push_frame(GraphQL::Houtou::Runtime::BlockFrame->new);
+  return ($snapshot, $frame);
+}
+
+sub leave_block {
+  my ($self, $snapshot) = @_;
+  $self->pop_frame;
+  $self->{cursor}->restore($snapshot->{cursor}) if $snapshot && $snapshot->{cursor};
+  return;
+}
 
 1;

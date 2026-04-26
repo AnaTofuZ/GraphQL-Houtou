@@ -11,7 +11,6 @@ use GraphQL::Houtou::Promise::Adapter qw(
   then_promise
 );
 use GraphQL::Houtou::Runtime::Cursor ();
-use GraphQL::Houtou::Runtime::BlockFrame ();
 use GraphQL::Houtou::Runtime::ErrorRecord ();
 use GraphQL::Houtou::Runtime::ExecState ();
 use GraphQL::Houtou::Runtime::LazyInfo ();
@@ -54,10 +53,8 @@ sub execute_program {
 
 sub _execute_block {
   my ($state, $block, $source, $base_path) = @_;
+  my ($snapshot, $frame) = $state->enter_block($block);
   my $cursor = $state->cursor;
-  my $snapshot = $cursor->snapshot;
-  $cursor->enter_block($block);
-  my $frame = $state->push_frame(GraphQL::Houtou::Runtime::BlockFrame->new);
 
   my $ops = $cursor->block ? ($cursor->block->ops || []) : [];
   for my $i (0 .. $#$ops) {
@@ -82,13 +79,11 @@ sub _execute_block {
       my @resolved = _promise_all_values_to_array(@_);
       return $frame->merge_resolved_pending($state->writer, \@resolved);
     });
-    $state->pop_frame;
-    $cursor->restore($snapshot);
+    $state->leave_block($snapshot);
     return $promise;
   }
 
-  $state->pop_frame;
-  $cursor->restore($snapshot);
+  $state->leave_block($snapshot);
   return $frame->values;
 }
 

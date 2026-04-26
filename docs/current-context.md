@@ -276,11 +276,14 @@ Latest greenfield VM checkpoints after that:
   - `push_frame`
   - `pop_frame`
   - `current_frame`
+- `ExecState` also owns block entry/exit now:
+  - `enter_block`
+  - `leave_block`
 - `VMExecutor` enters/exits blocks by mutating:
   - cursor
   - current frame
-  inside state, instead of treating block-local result state as a purely
-  local helper concern
+  inside state, instead of treating block-local result state as a purely local
+  helper concern
 
 Greenfield VM validation now includes:
 

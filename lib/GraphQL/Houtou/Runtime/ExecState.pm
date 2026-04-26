@@ -4,7 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 
-use GraphQL::Houtou::Promise::Adapter qw(is_promise_value then_promise);
+use GraphQL::Houtou::Promise::Adapter qw(is_promise_value normalize_promise_code then_promise);
 use GraphQL::Houtou::Runtime::BlockFrame ();
 use GraphQL::Houtou::Runtime::ErrorRecord ();
 use GraphQL::Houtou::Runtime::FieldFrame ();
@@ -28,6 +28,28 @@ sub new {
     promise_code => $args{promise_code},
     empty_args => $args{empty_args} || {},
   }, $class;
+}
+
+sub build_for_program {
+  my ($class, $runtime_schema, $program, %opts) = @_;
+  return $class->new(
+    runtime_schema => $runtime_schema,
+    program => $program,
+    cursor => GraphQL::Houtou::Runtime::Cursor->new(block => $program->root_block),
+    writer => GraphQL::Houtou::Runtime::Writer->new,
+    context => $opts{context},
+    variables => _prepare_variables($runtime_schema, $opts{variables} || {}),
+    root_value => $opts{root_value},
+    promise_code => normalize_promise_code($opts{promise_code}),
+    empty_args => {},
+  );
+}
+
+sub run_program {
+  my ($class, $runtime_schema, $program, %opts) = @_;
+  my $state = $class->build_for_program($runtime_schema, $program, %opts);
+  my $data = $state->execute_block($program->root_block, $opts{root_value});
+  return $state->finalize_response($data);
 }
 
 sub runtime_schema { return $_[0]{runtime_schema} }
@@ -522,6 +544,11 @@ sub _error_outcome {
 sub _promise_all_values_to_array {
   return @{ $_[0] } if @_ == 1 && ref($_[0]) eq 'ARRAY';
   return @_;
+}
+
+sub _prepare_variables {
+  my ($runtime_schema, $provided) = @_;
+  return $provided || {};
 }
 
 1;

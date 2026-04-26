@@ -262,6 +262,13 @@ Current greenfield runtime coverage:
     `ExecState` methods
   - `VMExecutor` is therefore closer to a pure entry shell around
     `ExecState + Cursor + BlockFrame + FieldFrame + Writer`
+- VM top-level initialization is also moving behind `ExecState`:
+  - `ExecState->build_for_program(...)` now owns cursor/writer/promise/variable
+    setup for a VM program
+  - `ExecState->run_program(...)` now owns top-level block execution plus final
+    response emission
+  - `VMExecutor` therefore acts as an API-compatible façade over the state
+    machine rather than a second runtime owner
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

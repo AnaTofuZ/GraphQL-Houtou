@@ -160,6 +160,13 @@ The next refinement after this split is also in place:
 - once those boundaries move into `ExecState`, the dispatch binder itself can
   target state methods rather than executor-local family callbacks, leaving the
   executor as a thin top-level shell
+- the same applies to program bootstrap:
+  - a state-owned factory should build cursor/writer/promise/variable state for
+    a lowered program
+  - a state-owned top-level runner should execute the root block and emit the
+    final response boundary
+  - the executor object can then remain as a façade/API shell rather than a
+    second owner of runtime state
 
 This also implies that promise-aware execution should not fork into a fully
 separate runtime shape. The same lowered program, family contracts, and

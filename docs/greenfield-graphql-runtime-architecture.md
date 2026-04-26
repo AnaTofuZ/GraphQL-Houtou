@@ -141,6 +141,9 @@ The next refinement after this split is also in place:
 - block execution itself can be owned by `ExecState`, so child object/list/
   abstract completion reuses the same state-machine entrypoint instead of
   rebuilding a second block loop inside the executor
+- field execution can also be owned by `ExecState`, so resolve/complete/error
+  capture for the current field is state-driven rather than rebuilt by
+  executor-local helper stacks
 
 This also implies that promise-aware execution should not fork into a fully
 separate runtime shape. The same lowered program, family contracts, and

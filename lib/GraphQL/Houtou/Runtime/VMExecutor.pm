@@ -53,47 +53,17 @@ sub execute_program {
 
 sub _execute_op {
   my ($state) = @_;
-  return _run_field_via($state, \&_resolve_field_value, \&_complete_resolved_value);
+  return $state->run_current_field_via(\&_resolve_field_value, \&_complete_resolved_value);
 }
 
-sub _run_default_generic { return _run_field_via($_[0], \&_resolve_default,  \&_complete_generic) }
-sub _run_default_object  { return _run_field_via($_[0], \&_resolve_default,  \&_complete_object) }
-sub _run_default_list    { return _run_field_via($_[0], \&_resolve_default,  \&_complete_list) }
-sub _run_default_abstract { return _run_field_via($_[0], \&_resolve_default,  \&_complete_abstract) }
-sub _run_explicit_generic { return _run_field_via($_[0], \&_resolve_explicit, \&_complete_generic) }
-sub _run_explicit_object { return _run_field_via($_[0], \&_resolve_explicit, \&_complete_object) }
-sub _run_explicit_list   { return _run_field_via($_[0], \&_resolve_explicit, \&_complete_list) }
-sub _run_explicit_abstract { return _run_field_via($_[0], \&_resolve_explicit, \&_complete_abstract) }
-
-sub _run_field_via {
-  my ($state, $resolve_cb, $complete_cb) = @_;
-  my $field = $state->current_field_frame;
-  my $source = $field->source;
-  my $path_frame = $field->path_frame;
-  my ($ok, $value) = _capture_eval(sub {
-    return $resolve_cb->($state, $source, $path_frame);
-  });
-  return _error_outcome($value, $path_frame) if !$ok;
-  $field->set_resolved_value($value);
-
-  if (_is_promise($state, $value)) {
-    return then_promise($state->promise_code, $value, sub {
-      my ($resolved_value) = @_;
-      $field->set_resolved_value($resolved_value);
-      my ($complete_ok, $outcome) = _capture_eval(sub {
-        return $complete_cb->($state, $resolved_value, $path_frame);
-      });
-      return $complete_ok ? $field->set_outcome($outcome) : _error_outcome($outcome, $path_frame);
-    }, sub {
-      return _error_outcome($_[0], $path_frame);
-    });
-  }
-
-  my ($complete_ok, $outcome) = _capture_eval(sub {
-    return $complete_cb->($state, $value, $path_frame);
-  });
-  return $complete_ok ? $field->set_outcome($outcome) : _error_outcome($outcome, $path_frame);
-}
+sub _run_default_generic { return $_[0]->run_current_field_via(\&_resolve_default,  \&_complete_generic) }
+sub _run_default_object  { return $_[0]->run_current_field_via(\&_resolve_default,  \&_complete_object) }
+sub _run_default_list    { return $_[0]->run_current_field_via(\&_resolve_default,  \&_complete_list) }
+sub _run_default_abstract { return $_[0]->run_current_field_via(\&_resolve_default,  \&_complete_abstract) }
+sub _run_explicit_generic { return $_[0]->run_current_field_via(\&_resolve_explicit, \&_complete_generic) }
+sub _run_explicit_object { return $_[0]->run_current_field_via(\&_resolve_explicit, \&_complete_object) }
+sub _run_explicit_list   { return $_[0]->run_current_field_via(\&_resolve_explicit, \&_complete_list) }
+sub _run_explicit_abstract { return $_[0]->run_current_field_via(\&_resolve_explicit, \&_complete_abstract) }
 
 sub _resolve_field_value {
   my ($state, $source, $path_frame) = @_;
@@ -236,10 +206,10 @@ sub _resolve_runtime_type {
   };
 
   if (my $tag_resolver = $dispatch ? $dispatch->{tag_resolver} : $cache->{tag_resolver_map}{$abstract_name}) {
-    my ($ok, $tag) = _capture_eval(sub {
+    my ($ok, $tag) = $state->_capture_eval(sub {
       return $tag_resolver->($value, $state->context, $build_info->(), $abstract_type);
     });
-    return (undef, _error_record($tag, $path_frame)) if !$ok;
+    return (undef, $state->_error_record($tag, $path_frame)) if !$ok;
     if (defined $tag) {
       my $type = (($dispatch ? $dispatch->{tag_map} : $cache->{runtime_tag_map}{$abstract_name}) || {})->{$tag};
       return ($type, undef) if $type;
@@ -247,10 +217,10 @@ sub _resolve_runtime_type {
   }
 
   if (my $resolve_type = $dispatch ? $dispatch->{resolve_type} : $cache->{resolve_type_map}{$abstract_name}) {
-    my ($ok, $resolved) = _capture_eval(sub {
+    my ($ok, $resolved) = $state->_capture_eval(sub {
       return $resolve_type->($value, $state->context, $build_info->(), $abstract_type);
     });
-    return (undef, _error_record($resolved, $path_frame)) if !$ok;
+    return (undef, $state->_error_record($resolved, $path_frame)) if !$ok;
     return if !defined $resolved;
     return (ref($resolved) ? $resolved : (($dispatch ? $dispatch->{name2type} : $cache->{name2type})->{$resolved}), undef);
   }
@@ -258,10 +228,10 @@ sub _resolve_runtime_type {
   for my $type (@{ ($dispatch ? $dispatch->{possible_types} : $cache->{possible_types}{$abstract_name}) || [] }) {
     next if !$type;
     my $cb = ($dispatch ? $dispatch->{is_type_of_map} : $cache->{is_type_of_map})->{ $type->name } or next;
-    my ($ok, $matched) = _capture_eval(sub {
+    my ($ok, $matched) = $state->_capture_eval(sub {
       return $cb->($value, $state->context, $build_info->(), $type);
     });
-    return (undef, _error_record($matched, $path_frame)) if !$ok;
+    return (undef, $state->_error_record($matched, $path_frame)) if !$ok;
     return ($type, undef) if $matched;
   }
 
@@ -321,36 +291,6 @@ sub _build_info {
     block => $block,
     instruction => $op,
     path_frame => $path_frame,
-  );
-}
-
-sub _capture_eval {
-  my ($cb) = @_;
-  my $ok = eval { 1 };
-  my $result;
-  $ok = eval {
-    $result = $cb->();
-    1;
-  };
-  return (0, $@) if !$ok;
-  return (1, $result);
-}
-
-sub _error_record {
-  my ($error, $path_frame) = @_;
-  chomp $error if defined $error;
-  return GraphQL::Houtou::Runtime::ErrorRecord->new(
-    message => "$error",
-    path_frame => $path_frame,
-  );
-}
-
-sub _error_outcome {
-  my ($error, $path_frame) = @_;
-  return GraphQL::Houtou::Runtime::Outcome->new(
-    kind => 'SCALAR',
-    scalar_value => undef,
-    error_records => [ _error_record($error, $path_frame) ],
   );
 }
 

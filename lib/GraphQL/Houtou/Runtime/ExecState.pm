@@ -6,7 +6,9 @@ use warnings;
 
 use GraphQL::Houtou::Promise::Adapter qw(is_promise_value);
 use GraphQL::Houtou::Runtime::BlockFrame ();
+use GraphQL::Houtou::Runtime::ErrorRecord ();
 use GraphQL::Houtou::Runtime::FieldFrame ();
+use GraphQL::Houtou::Runtime::Outcome ();
 use GraphQL::Houtou::Runtime::PathFrame ();
 
 sub new {
@@ -132,6 +134,36 @@ sub finalize_current_block {
   return $self->leave_block($snapshot, $result);
 }
 
+sub run_current_field_via {
+  my ($self, $resolve_cb, $complete_cb) = @_;
+  my $field = $self->current_field_frame;
+  my $source = $field->source;
+  my $path_frame = $field->path_frame;
+  my ($ok, $value) = $self->_capture_eval(sub {
+    return $resolve_cb->($self, $source, $path_frame);
+  });
+  return $self->_error_outcome($value, $path_frame) if !$ok;
+  $field->set_resolved_value($value);
+
+  if ($self->promise_code && is_promise_value($self->promise_code, $value)) {
+    return GraphQL::Houtou::Promise::Adapter::then_promise($self->promise_code, $value, sub {
+      my ($resolved_value) = @_;
+      $field->set_resolved_value($resolved_value);
+      my ($complete_ok, $outcome) = $self->_capture_eval(sub {
+        return $complete_cb->($self, $resolved_value, $path_frame);
+      });
+      return $complete_ok ? $field->set_outcome($outcome) : $self->_error_outcome($outcome, $path_frame);
+    }, sub {
+      return $self->_error_outcome($_[0], $path_frame);
+    });
+  }
+
+  my ($complete_ok, $outcome) = $self->_capture_eval(sub {
+    return $complete_cb->($self, $value, $path_frame);
+  });
+  return $complete_ok ? $field->set_outcome($outcome) : $self->_error_outcome($outcome, $path_frame);
+}
+
 sub execute_block {
   my ($self, $block, $source, $base_path) = @_;
   my ($snapshot) = $self->enter_block($block);
@@ -150,6 +182,36 @@ sub should_execute_current_op {
   my $mode = $op->directives_mode || 'NONE';
   return 1 if $mode eq 'NONE';
   return 1;
+}
+
+sub _capture_eval {
+  my ($self, $cb) = @_;
+  my $ok = eval { 1 };
+  my $result;
+  $ok = eval {
+    $result = $cb->();
+    1;
+  };
+  return (0, $@) if !$ok;
+  return (1, $result);
+}
+
+sub _error_record {
+  my ($self, $error, $path_frame) = @_;
+  chomp $error if defined $error;
+  return GraphQL::Houtou::Runtime::ErrorRecord->new(
+    message => "$error",
+    path_frame => $path_frame,
+  );
+}
+
+sub _error_outcome {
+  my ($self, $error, $path_frame) = @_;
+  return GraphQL::Houtou::Runtime::Outcome->new(
+    kind => 'SCALAR',
+    scalar_value => undef,
+    error_records => [ $self->_error_record($error, $path_frame) ],
+  );
 }
 
 1;

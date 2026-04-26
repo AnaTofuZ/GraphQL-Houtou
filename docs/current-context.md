@@ -229,6 +229,11 @@ Current greenfield runtime coverage:
     executor
   - `VMExecutor` therefore becomes more of a dispatch shell around
     `ExecState + Cursor + BlockFrame + FieldFrame + Writer`
+- field lifecycle is also moving behind `ExecState`:
+  - `ExecState->run_current_field_via(...)` now owns resolve/complete/error
+    capture for the current field
+  - `VMExecutor` family callbacks now delegate field execution to state-owned
+    lifecycle helpers instead of keeping local field orchestration
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

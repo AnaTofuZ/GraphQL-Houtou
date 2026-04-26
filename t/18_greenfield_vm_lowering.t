@@ -80,7 +80,10 @@ subtest 'schema can emit XS-friendly native VM descriptor' => sub {
   ok ref($descriptor->{blocks}) eq 'ARRAY' && @{$descriptor->{blocks}} >= 2,
     'native descriptor keeps indexed blocks';
   my $root = $descriptor->{blocks}[ $descriptor->{root_block_index} ];
+  ok ref($root->{slots}) eq 'ARRAY' && @{$root->{slots}} >= 2,
+    'native block keeps compact slot table';
   ok $root->{ops}[0]{opcode_code}, 'native op keeps opcode code';
+  ok defined $root->{ops}[0]{slot_index}, 'native op keeps slot index';
   ok exists $root->{ops}[1]{abstract_child_block_indexes}{VmUser},
     'native op keeps abstract child block indexes';
 };

@@ -72,6 +72,9 @@ For the lowered VM artifact this also means:
 - child block references should also be exportable as block indexes rather than
   name lookups, so an XS executor can consume a compact native descriptor
   without rebuilding a hash-based block map first
+- block-local slot tables should also be exportable, with per-op `slot_index`
+  references, so repeated field metadata can be shared inside the native
+  descriptor instead of duplicated across every opcode
 
 For the VM layer this implies:
 

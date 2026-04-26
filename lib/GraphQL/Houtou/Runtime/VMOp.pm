@@ -4,6 +4,8 @@ use 5.014;
 use strict;
 use warnings;
 
+use Scalar::Util qw(refaddr);
+
 sub new {
   my ($class, %args) = @_;
   return bless {
@@ -84,13 +86,15 @@ sub to_struct {
 }
 
 sub to_native_struct {
-  my ($self, $block_index) = @_;
+  my ($self, $block_index, $slot_index) = @_;
+  my $slot_id = $self->{bound_slot} ? refaddr($self->{bound_slot}) : undef;
   return {
     opcode_code => $self->{opcode_code},
     resolve_code => $self->{resolve_code},
     complete_code => $self->{complete_code},
-    field_name => $self->{field_name},
-    result_name => $self->{result_name},
+    slot_index => defined $slot_id && exists $slot_index->{$slot_id}
+      ? $slot_index->{$slot_id}
+      : undef,
     args_mode => $self->{args_mode},
     has_args => $self->{has_args},
     directives_mode => $self->{directives_mode},

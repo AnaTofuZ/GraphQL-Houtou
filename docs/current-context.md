@@ -282,6 +282,11 @@ Current greenfield runtime coverage:
   - `$schema->compile_vm_native_descriptor(...)`
   use block indexes instead of block-name lookups for child refs, which is the
   first descriptor shape intended to be consumed directly by an XS executor
+- the native descriptor also now exports block-local slot tables:
+  - each native block carries `slots`
+  - each native op carries `slot_index`
+  so repeated field metadata does not have to be duplicated per op when the
+  future XS executor inflates native operand tables
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

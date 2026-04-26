@@ -56,6 +56,8 @@ subtest 'schema can lower operation into VM program' => sub {
     'abstract op keeps lowered child block mapping';
   ok $viewer->resolve_handler, 'viewer op binds resolve handler';
   ok $viewer->complete_handler, 'viewer op binds complete handler';
+  ok $viewer->resolve_dispatch, 'viewer op binds resolve dispatch coderef';
+  ok $viewer->complete_dispatch, 'viewer op binds complete dispatch coderef';
   isa_ok $vm->block_by_name('QUERY.node.VmUser#1'), 'GraphQL::Houtou::Runtime::VMBlock',
     'vm program keeps direct block map';
 };

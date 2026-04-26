@@ -309,6 +309,8 @@ At the pure-Perl VM checkpoint, the equivalent of direct-threaded dispatch is:
 - structural opcodes remain serializable strings in the artifact
 - but the inflated/lowered in-memory op binds runtime-only resolver and
   completion coderefs
+- a dedicated `VMDispatch` phase owns those bindings rather than letting the
+  executor rediscover them lazily
 - execution then dispatches through those bound handlers and cursor-owned state
 
 This keeps the artifact boundary stable while moving the hot loop closer to the

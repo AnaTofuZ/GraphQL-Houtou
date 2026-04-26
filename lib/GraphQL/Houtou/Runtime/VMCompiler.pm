@@ -6,6 +6,7 @@ use warnings;
 
 use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::VMBlock ();
+use GraphQL::Houtou::Runtime::VMDispatch ();
 use GraphQL::Houtou::Runtime::VMOp ();
 use GraphQL::Houtou::Runtime::VMProgram ();
 
@@ -34,6 +35,7 @@ sub lower_program {
     root_block => $root_block,
   );
   _bind_vm_ops($runtime_schema, $vm_program);
+  GraphQL::Houtou::Runtime::VMDispatch->bind_program($vm_program);
   return $vm_program;
 }
 
@@ -50,6 +52,7 @@ sub inflate_program {
     root_block => $root_block,
   );
   _bind_vm_ops($runtime_schema, $vm_program);
+  GraphQL::Houtou::Runtime::VMDispatch->bind_program($vm_program);
   return $vm_program;
 }
 

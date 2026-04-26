@@ -224,7 +224,7 @@ Current greenfield runtime coverage:
     root and child blocks
 - the next step of that same work is now in place:
   - `VMOp` keeps runtime-only `resolve_dispatch` / `complete_dispatch`
-  - `VMExecutor` binds those coderef handlers once per inflated/lowered
+  - `VMDispatch` binds those coderef handlers once per inflated/lowered
     program
   - the hot loop dispatches directly from bound coderefs instead of
     name-to-method resolution

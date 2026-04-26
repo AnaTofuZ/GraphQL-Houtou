@@ -137,7 +137,8 @@ gql_greenfield_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema
     runtime->runtime_cache_hv = (HV *)SvREFCNT_inc((SV *)runtime_cache_hv);
 
     if ((runtime_cache_sv = gql_greenfield_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "name2type", 9))) {
-      runtime->name2type_hv = gql_greenfield_vm_expect_hashref(aTHX_ SvREFCNT_inc(runtime_cache_sv), "runtime_cache name2type");
+      runtime->name2type_hv = gql_greenfield_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache name2type");
+      SvREFCNT_inc((SV *)runtime->name2type_hv);
     }
     if ((runtime_cache_sv = gql_greenfield_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "tag_resolver_map", 16))) {
       tag_resolver_map_hv = gql_greenfield_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache tag_resolver_map");
@@ -152,7 +153,8 @@ gql_greenfield_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema
       possible_types_hv = gql_greenfield_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache possible_types");
     }
     if ((runtime_cache_sv = gql_greenfield_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "is_type_of_map", 14))) {
-      runtime->is_type_of_map_hv = gql_greenfield_vm_expect_hashref(aTHX_ SvREFCNT_inc(runtime_cache_sv), "runtime_cache is_type_of_map");
+      runtime->is_type_of_map_hv = gql_greenfield_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache is_type_of_map");
+      SvREFCNT_inc((SV *)runtime->is_type_of_map_hv);
     }
 
     if (runtime->runtime_slot_count > 0 && runtime->name2type_hv) {
@@ -198,7 +200,8 @@ gql_greenfield_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema
 
   runtime_cache_sv = gql_greenfield_vm_fetch_hash_entry_sv(aTHX_ schema_hv, "dispatch_index", 14);
   if (runtime_cache_sv) {
-    runtime->dispatch_index_hv = gql_greenfield_vm_expect_hashref(aTHX_ SvREFCNT_inc(runtime_cache_sv), "runtime schema dispatch_index");
+    runtime->dispatch_index_hv = gql_greenfield_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime schema dispatch_index");
+    SvREFCNT_inc((SV *)runtime->dispatch_index_hv);
   }
 
   return runtime;
@@ -270,10 +273,12 @@ gql_greenfield_vm_clone_value_sv(pTHX_ SV *value)
 }
 
 static SV *
-gql_greenfield_vm_resolve_field_value(pTHX_ gql_greenfield_vm_native_runtime_t *runtime, const gql_greenfield_vm_native_slot_t *slot, SV *source, SV *context)
+gql_greenfield_vm_resolve_current_field_default(pTHX_ gql_greenfield_vm_exec_state_t *state, SV *source)
 {
   SV *resolver_sv;
   SV *return_type_sv;
+  gql_greenfield_vm_native_runtime_t *runtime = state->runtime;
+  const gql_greenfield_vm_native_slot_t *slot = state->slot;
 
   if (!runtime || slot->schema_slot_index < 0 || slot->schema_slot_index >= runtime->runtime_slot_count) {
     croak("native VM schema slot index %ld is invalid", (long)slot->schema_slot_index);
@@ -283,7 +288,7 @@ gql_greenfield_vm_resolve_field_value(pTHX_ gql_greenfield_vm_native_runtime_t *
 
   if (resolver_sv && SvOK(resolver_sv)) {
     SV *args = sv_2mortal(newRV_noinc((SV *)newHV()));
-    return gql_greenfield_vm_call_cb4(aTHX_ resolver_sv, source, args, context, return_type_sv ? return_type_sv : &PL_sv_undef);
+    return gql_greenfield_vm_call_cb4(aTHX_ resolver_sv, source, args, state->context, return_type_sv ? return_type_sv : &PL_sv_undef);
   }
 
   if (source && SvROK(source) && SvTYPE(SvRV(source)) == SVt_PVHV) {
@@ -295,12 +300,15 @@ gql_greenfield_vm_resolve_field_value(pTHX_ gql_greenfield_vm_native_runtime_t *
   return newSVsv(&PL_sv_undef);
 }
 
-static SV *gql_greenfield_vm_execute_block_sv(pTHX_ gql_greenfield_vm_native_runtime_t *runtime, gql_greenfield_vm_native_bundle_t *bundle, IV block_index, SV *source, SV *context);
+static SV *gql_greenfield_vm_execute_block_sv(pTHX_ gql_greenfield_vm_exec_state_t *state, IV block_index, SV *source);
 
 static SV *
-gql_greenfield_vm_complete_abstract_sv(pTHX_ gql_greenfield_vm_native_runtime_t *runtime, const gql_greenfield_vm_native_slot_t *slot, const gql_greenfield_vm_native_op_t *op, gql_greenfield_vm_native_bundle_t *bundle, SV *value, SV *context)
+gql_greenfield_vm_complete_current_abstract(pTHX_ gql_greenfield_vm_exec_state_t *state, SV *value)
 {
   IV child_block_index = -1;
+  gql_greenfield_vm_native_runtime_t *runtime = state->runtime;
+  const gql_greenfield_vm_native_slot_t *slot = state->slot;
+  const gql_greenfield_vm_native_op_t *op = state->op;
   IV slot_index;
 
   if (!runtime || !runtime->runtime_cache_hv || !runtime->name2type_hv) {
@@ -320,7 +328,7 @@ gql_greenfield_vm_complete_abstract_sv(pTHX_ gql_greenfield_vm_native_runtime_t 
     if (!tag_resolver || !tag_map_hv) {
       return newSVsv(&PL_sv_undef);
     }
-    tag_sv = gql_greenfield_vm_call_cb4(aTHX_ tag_resolver, value, context, abstract_type ? abstract_type : &PL_sv_undef, &PL_sv_undef);
+    tag_sv = gql_greenfield_vm_call_cb4(aTHX_ tag_resolver, value, state->context, abstract_type ? abstract_type : &PL_sv_undef, &PL_sv_undef);
     type_he = hv_fetch_ent(tag_map_hv, tag_sv, 0, 0);
     type_name = (type_he && SvOK(HeVAL(type_he))) ? gql_greenfield_vm_type_name_from_sv(aTHX_ HeVAL(type_he)) : NULL;
     child_block_index = gql_greenfield_vm_find_abstract_child_block_index(op, type_name);
@@ -333,7 +341,7 @@ gql_greenfield_vm_complete_abstract_sv(pTHX_ gql_greenfield_vm_native_runtime_t 
     if (!resolve_type) {
       return newSVsv(&PL_sv_undef);
     }
-    type_sv = gql_greenfield_vm_call_cb4(aTHX_ resolve_type, value, context, &PL_sv_undef, abstract_type ? abstract_type : &PL_sv_undef);
+    type_sv = gql_greenfield_vm_call_cb4(aTHX_ resolve_type, value, state->context, &PL_sv_undef, abstract_type ? abstract_type : &PL_sv_undef);
     type_name = gql_greenfield_vm_type_name_from_sv(aTHX_ type_sv);
     child_block_index = gql_greenfield_vm_find_abstract_child_block_index(op, type_name);
     SvREFCNT_dec(type_sv);
@@ -361,7 +369,7 @@ gql_greenfield_vm_complete_abstract_sv(pTHX_ gql_greenfield_vm_native_runtime_t 
         if (!cb) {
           continue;
         }
-        ok_sv = gql_greenfield_vm_call_cb4(aTHX_ cb, value, context, &PL_sv_undef, type_sv);
+        ok_sv = gql_greenfield_vm_call_cb4(aTHX_ cb, value, state->context, &PL_sv_undef, type_sv);
         if (SvTRUE(ok_sv)) {
           child_block_index = gql_greenfield_vm_find_abstract_child_block_index(op, type_name);
           SvREFCNT_dec(ok_sv);
@@ -375,15 +383,30 @@ gql_greenfield_vm_complete_abstract_sv(pTHX_ gql_greenfield_vm_native_runtime_t 
   if (child_block_index < 0) {
     return newSVsv(&PL_sv_undef);
   }
-  return gql_greenfield_vm_execute_block_sv(aTHX_ runtime, bundle, child_block_index, value, context);
+  return gql_greenfield_vm_execute_block_sv(aTHX_ state, child_block_index, value);
 }
 
 static SV *
-gql_greenfield_vm_complete_value_sv(pTHX_ gql_greenfield_vm_native_runtime_t *runtime, const gql_greenfield_vm_native_slot_t *slot, const gql_greenfield_vm_native_op_t *op, gql_greenfield_vm_native_bundle_t *bundle, SV *value, SV *context)
+gql_greenfield_vm_complete_current_generic(pTHX_ gql_greenfield_vm_exec_state_t *state, SV *value)
 {
+  PERL_UNUSED_ARG(state);
+  return gql_greenfield_vm_clone_value_sv(aTHX_ value);
+}
+
+static SV *
+gql_greenfield_vm_complete_current_object(pTHX_ gql_greenfield_vm_exec_state_t *state, SV *value)
+{
+  const gql_greenfield_vm_native_op_t *op = state->op;
   if (op->complete_code == GQL_VM_COMPLETE_OBJECT && op->child_block_index >= 0) {
-    return gql_greenfield_vm_execute_block_sv(aTHX_ runtime, bundle, op->child_block_index, value, context);
+    return gql_greenfield_vm_execute_block_sv(aTHX_ state, op->child_block_index, value);
   }
+  return gql_greenfield_vm_clone_value_sv(aTHX_ value);
+}
+
+static SV *
+gql_greenfield_vm_complete_current_list(pTHX_ gql_greenfield_vm_exec_state_t *state, SV *value)
+{
+  const gql_greenfield_vm_native_op_t *op = state->op;
   if (op->complete_code == GQL_VM_COMPLETE_LIST) {
     AV *in_av;
     AV *out_av;
@@ -398,48 +421,222 @@ gql_greenfield_vm_complete_value_sv(pTHX_ gql_greenfield_vm_native_runtime_t *ru
       SV **item_svp = av_fetch(in_av, i, 0);
       SV *item = (item_svp && SvOK(*item_svp)) ? *item_svp : &PL_sv_undef;
       SV *completed = (op->child_block_index >= 0)
-        ? gql_greenfield_vm_execute_block_sv(aTHX_ runtime, bundle, op->child_block_index, item, context)
+        ? gql_greenfield_vm_execute_block_sv(aTHX_ state, op->child_block_index, item)
         : gql_greenfield_vm_clone_value_sv(aTHX_ item);
       av_store(out_av, i, completed);
     }
     return newRV_noinc((SV *)out_av);
   }
-  if (op->complete_code == GQL_VM_COMPLETE_ABSTRACT) {
-    return gql_greenfield_vm_complete_abstract_sv(aTHX_ runtime, slot, op, bundle, value, context);
-  }
   return gql_greenfield_vm_clone_value_sv(aTHX_ value);
 }
 
 static SV *
-gql_greenfield_vm_execute_block_sv(pTHX_ gql_greenfield_vm_native_runtime_t *runtime, gql_greenfield_vm_native_bundle_t *bundle, IV block_index, SV *source, SV *context)
+gql_greenfield_vm_complete_current_value(pTHX_ gql_greenfield_vm_exec_state_t *state, SV *value)
+{
+  switch (state->op->complete_code) {
+    case GQL_VM_COMPLETE_OBJECT:
+      return gql_greenfield_vm_complete_current_object(aTHX_ state, value);
+    case GQL_VM_COMPLETE_LIST:
+      return gql_greenfield_vm_complete_current_list(aTHX_ state, value);
+    case GQL_VM_COMPLETE_ABSTRACT:
+      return gql_greenfield_vm_complete_current_abstract(aTHX_ state, value);
+    case GQL_VM_COMPLETE_GENERIC:
+    default:
+      return gql_greenfield_vm_complete_current_generic(aTHX_ state, value);
+  }
+}
+
+static SV *
+gql_greenfield_vm_resolve_current_field_explicit(pTHX_ gql_greenfield_vm_exec_state_t *state, SV *source)
+{
+  SV *resolver_sv;
+  SV *return_type_sv;
+  gql_greenfield_vm_native_runtime_t *runtime = state->runtime;
+  const gql_greenfield_vm_native_slot_t *slot = state->slot;
+
+  if (!runtime || slot->schema_slot_index < 0 || slot->schema_slot_index >= runtime->runtime_slot_count) {
+    croak("native VM schema slot index %ld is invalid", (long)slot->schema_slot_index);
+  }
+  resolver_sv = runtime->slot_resolvers ? runtime->slot_resolvers[slot->schema_slot_index] : NULL;
+  return_type_sv = runtime->slot_return_types ? runtime->slot_return_types[slot->schema_slot_index] : NULL;
+
+  if (!resolver_sv || !SvOK(resolver_sv)) {
+    return gql_greenfield_vm_clone_value_sv(aTHX_ &PL_sv_undef);
+  }
+
+  {
+    SV *args = sv_2mortal(newRV_noinc((SV *)newHV()));
+    return gql_greenfield_vm_call_cb4(
+      aTHX_
+      resolver_sv,
+      source,
+      args,
+      state->context,
+      return_type_sv ? return_type_sv : &PL_sv_undef
+    );
+  }
+}
+
+static IV
+gql_greenfield_vm_dispatch_index_from_opcode(IV opcode_code)
+{
+  switch (opcode_code) {
+    case GQL_VM_OPCODE(GQL_VM_RESOLVE_DEFAULT, GQL_VM_COMPLETE_GENERIC): return 0;
+    case GQL_VM_OPCODE(GQL_VM_RESOLVE_DEFAULT, GQL_VM_COMPLETE_OBJECT): return 1;
+    case GQL_VM_OPCODE(GQL_VM_RESOLVE_DEFAULT, GQL_VM_COMPLETE_LIST): return 2;
+    case GQL_VM_OPCODE(GQL_VM_RESOLVE_DEFAULT, GQL_VM_COMPLETE_ABSTRACT): return 3;
+    case GQL_VM_OPCODE(GQL_VM_RESOLVE_EXPLICIT, GQL_VM_COMPLETE_GENERIC): return 4;
+    case GQL_VM_OPCODE(GQL_VM_RESOLVE_EXPLICIT, GQL_VM_COMPLETE_OBJECT): return 5;
+    case GQL_VM_OPCODE(GQL_VM_RESOLVE_EXPLICIT, GQL_VM_COMPLETE_LIST): return 6;
+    case GQL_VM_OPCODE(GQL_VM_RESOLVE_EXPLICIT, GQL_VM_COMPLETE_ABSTRACT): return 7;
+    default: return -1;
+  }
+}
+
+static SV *
+gql_greenfield_vm_execute_current_op_sv(pTHX_ gql_greenfield_vm_exec_state_t *state, SV *source)
+{
+  SV *resolved = NULL;
+  SV *completed = NULL;
+  IV dispatch_index = gql_greenfield_vm_dispatch_index_from_opcode(state->op->opcode_code);
+
+#if defined(__GNUC__) || defined(__clang__)
+  static void *dispatch_table[] = {
+    &&OP_DEFAULT_GENERIC,
+    &&OP_DEFAULT_OBJECT,
+    &&OP_DEFAULT_LIST,
+    &&OP_DEFAULT_ABSTRACT,
+    &&OP_EXPLICIT_GENERIC,
+    &&OP_EXPLICIT_OBJECT,
+    &&OP_EXPLICIT_LIST,
+    &&OP_EXPLICIT_ABSTRACT
+  };
+#endif
+
+  if (dispatch_index < 0) {
+    croak("native VM opcode_code %ld is unsupported", (long)state->op->opcode_code);
+  }
+
+#if defined(__GNUC__) || defined(__clang__)
+  goto *dispatch_table[dispatch_index];
+OP_DEFAULT_GENERIC:
+  resolved = gql_greenfield_vm_resolve_current_field_default(aTHX_ state, source);
+  completed = gql_greenfield_vm_complete_current_generic(aTHX_ state, resolved);
+  goto DISPATCH_DONE;
+OP_DEFAULT_OBJECT:
+  resolved = gql_greenfield_vm_resolve_current_field_default(aTHX_ state, source);
+  completed = gql_greenfield_vm_complete_current_object(aTHX_ state, resolved);
+  goto DISPATCH_DONE;
+OP_DEFAULT_LIST:
+  resolved = gql_greenfield_vm_resolve_current_field_default(aTHX_ state, source);
+  completed = gql_greenfield_vm_complete_current_list(aTHX_ state, resolved);
+  goto DISPATCH_DONE;
+OP_DEFAULT_ABSTRACT:
+  resolved = gql_greenfield_vm_resolve_current_field_default(aTHX_ state, source);
+  completed = gql_greenfield_vm_complete_current_abstract(aTHX_ state, resolved);
+  goto DISPATCH_DONE;
+OP_EXPLICIT_GENERIC:
+  resolved = gql_greenfield_vm_resolve_current_field_explicit(aTHX_ state, source);
+  completed = gql_greenfield_vm_complete_current_generic(aTHX_ state, resolved);
+  goto DISPATCH_DONE;
+OP_EXPLICIT_OBJECT:
+  resolved = gql_greenfield_vm_resolve_current_field_explicit(aTHX_ state, source);
+  completed = gql_greenfield_vm_complete_current_object(aTHX_ state, resolved);
+  goto DISPATCH_DONE;
+OP_EXPLICIT_LIST:
+  resolved = gql_greenfield_vm_resolve_current_field_explicit(aTHX_ state, source);
+  completed = gql_greenfield_vm_complete_current_list(aTHX_ state, resolved);
+  goto DISPATCH_DONE;
+OP_EXPLICIT_ABSTRACT:
+  resolved = gql_greenfield_vm_resolve_current_field_explicit(aTHX_ state, source);
+  completed = gql_greenfield_vm_complete_current_abstract(aTHX_ state, resolved);
+  goto DISPATCH_DONE;
+DISPATCH_DONE:
+#else
+  switch (dispatch_index) {
+    case 0:
+      resolved = gql_greenfield_vm_resolve_current_field_default(aTHX_ state, source);
+      completed = gql_greenfield_vm_complete_current_generic(aTHX_ state, resolved);
+      break;
+    case 1:
+      resolved = gql_greenfield_vm_resolve_current_field_default(aTHX_ state, source);
+      completed = gql_greenfield_vm_complete_current_object(aTHX_ state, resolved);
+      break;
+    case 2:
+      resolved = gql_greenfield_vm_resolve_current_field_default(aTHX_ state, source);
+      completed = gql_greenfield_vm_complete_current_list(aTHX_ state, resolved);
+      break;
+    case 3:
+      resolved = gql_greenfield_vm_resolve_current_field_default(aTHX_ state, source);
+      completed = gql_greenfield_vm_complete_current_abstract(aTHX_ state, resolved);
+      break;
+    case 4:
+      resolved = gql_greenfield_vm_resolve_current_field_explicit(aTHX_ state, source);
+      completed = gql_greenfield_vm_complete_current_generic(aTHX_ state, resolved);
+      break;
+    case 5:
+      resolved = gql_greenfield_vm_resolve_current_field_explicit(aTHX_ state, source);
+      completed = gql_greenfield_vm_complete_current_object(aTHX_ state, resolved);
+      break;
+    case 6:
+      resolved = gql_greenfield_vm_resolve_current_field_explicit(aTHX_ state, source);
+      completed = gql_greenfield_vm_complete_current_list(aTHX_ state, resolved);
+      break;
+    case 7:
+      resolved = gql_greenfield_vm_resolve_current_field_explicit(aTHX_ state, source);
+      completed = gql_greenfield_vm_complete_current_abstract(aTHX_ state, resolved);
+      break;
+  }
+#endif
+
+  if (resolved) {
+    SvREFCNT_dec(resolved);
+  }
+  return completed ? completed : newSVsv(&PL_sv_undef);
+}
+
+static SV *
+gql_greenfield_vm_execute_block_sv(pTHX_ gql_greenfield_vm_exec_state_t *state, IV block_index, SV *source)
 {
   gql_greenfield_vm_native_block_t *block;
   HV *data_hv;
   IV i;
+  gql_greenfield_vm_native_block_t *saved_block = (gql_greenfield_vm_native_block_t *)state->block;
+  const gql_greenfield_vm_native_op_t *saved_op = state->op;
+  const gql_greenfield_vm_native_slot_t *saved_slot = state->slot;
+  IV saved_block_index = state->block_index;
+  IV saved_op_index = state->op_index;
 
-  if (!bundle || block_index < 0 || block_index >= bundle->block_count) {
+  if (!state->bundle || block_index < 0 || block_index >= state->bundle->block_count) {
     croak("native VM block index %ld is invalid", (long)block_index);
   }
 
-  block = &bundle->blocks[block_index];
+  block = &state->bundle->blocks[block_index];
+  state->block = block;
+  state->block_index = block_index;
   data_hv = newHV();
 
   for (i = 0; i < block->op_count; i++) {
     gql_greenfield_vm_native_op_t *op = &block->ops[i];
     gql_greenfield_vm_native_slot_t *slot;
-    SV *resolved;
     SV *completed;
 
     if (op->slot_index < 0 || op->slot_index >= block->slot_count) {
       croak("native VM op slot_index %ld is invalid in block %ld", (long)op->slot_index, (long)block_index);
     }
     slot = &block->slots[op->slot_index];
-
-    resolved = gql_greenfield_vm_resolve_field_value(aTHX_ runtime, slot, source, context);
-    completed = gql_greenfield_vm_complete_value_sv(aTHX_ runtime, slot, op, bundle, resolved, context);
-    SvREFCNT_dec(resolved);
+    state->op = op;
+    state->slot = slot;
+    state->op_index = i;
+    completed = gql_greenfield_vm_execute_current_op_sv(aTHX_ state, source);
     hv_store(data_hv, slot->result_name, (I32)strlen(slot->result_name), completed, 0);
   }
+
+  state->block = saved_block;
+  state->op = saved_op;
+  state->slot = saved_slot;
+  state->block_index = saved_block_index;
+  state->op_index = saved_op_index;
 
   return newRV_noinc((SV *)data_hv);
 }
@@ -1219,6 +1416,7 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
     {
       gql_greenfield_vm_native_bundle_t *bundle;
       gql_greenfield_vm_native_runtime_t *runtime = NULL;
+      gql_greenfield_vm_exec_state_t state;
       int owns_runtime = 0;
       HV *hv;
       AV *errors;
@@ -1242,13 +1440,16 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
         owns_runtime = 1;
       }
 
+      Zero(&state, 1, gql_greenfield_vm_exec_state_t);
+      state.runtime = runtime;
+      state.bundle = bundle;
+      state.context = context_value;
+
       data_sv = gql_greenfield_vm_execute_block_sv(
         aTHX_
-        runtime,
-        bundle,
+        &state,
         bundle->root_block_index,
-        root_value,
-        context_value
+        root_value
       );
 
       hv = newHV();

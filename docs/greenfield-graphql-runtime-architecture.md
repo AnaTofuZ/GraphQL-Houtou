@@ -900,3 +900,22 @@ This checkpoint matters because it changes the architectural boundary:
 From here, the remaining work is no longer “how do we design a VM?” but
 “how do we widen the native executor until the pure-Perl VM becomes
 unnecessary for the hot path?”.
+
+## Native Bridge Rule
+
+The greenfield/native runtime should follow this boundary rule:
+
+- child runtime modules do not import XS directly
+- the top-level runtime bridge owns XS entrypoints
+- serializable descriptors remain cold artifacts
+- execution-only bindings are attached only at execution time
+
+In practice this means:
+
+- `SchemaGraph`, slots, blocks, and programs may describe native payloads
+- but they should delegate native execution through the runtime bridge
+- dump/load-friendly descriptor payloads must not be polluted with
+  execution-only Perl objects or bindings
+
+This keeps the architecture coherent even after the pure-Perl VM is replaced
+by the native runtime.

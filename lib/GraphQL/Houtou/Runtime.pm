@@ -62,17 +62,29 @@ sub inflate_vm_native_bundle {
 }
 
 sub execute_vm_program {
-  return GraphQL::Houtou::Runtime::VMExecutor->execute_program(@_);
+  my ($runtime_schema, $program, %opts) = @_;
+  if (($opts{vm_engine} || q()) eq 'perl') {
+    return GraphQL::Houtou::Runtime::VMExecutor->execute_program($runtime_schema, $program, %opts);
+  }
+  my $descriptor = {
+    runtime => $runtime_schema->to_native_exec_struct,
+    program => $program->to_native_struct,
+  };
+  return execute_vm_native_bundle($runtime_schema, $descriptor, %opts);
 }
 
 sub execute_vm_native_bundle {
   my ($runtime_schema, $descriptor, %opts) = @_;
   my $bundle = load_native_bundle_xs($descriptor);
-  my $native_runtime = $runtime_schema->can('native_vm_runtime_handle')
-    ? $runtime_schema->native_vm_runtime_handle
-    : load_native_runtime_xs($runtime_schema);
+  my $runtime_struct = $runtime_schema->can('to_native_exec_struct')
+    ? $runtime_schema->to_native_exec_struct
+    : (
+      ref($descriptor) eq 'HASH' && $descriptor->{runtime}
+        ? $descriptor->{runtime}
+        : $runtime_schema
+    );
   return execute_native_bundle_xs(
-    $native_runtime,
+    $runtime_struct,
     $bundle,
     $opts{root_value},
     $opts{context},

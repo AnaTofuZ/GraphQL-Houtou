@@ -4438,3 +4438,19 @@ This is the first end-to-end greenfield runtime path where:
 - schema/runtime metadata stays in Perl
 - the lowered VM bundle is owned natively
 - execution itself runs in XS without first reconstructing the Perl VM
+
+Latest native-runtime checkpoint:
+
+- native VM runtime descriptors are now split into two boundaries:
+  - serializable descriptor payloads for dump/load
+  - execution-only payloads that include slot/runtime-cache bindings
+- `SchemaGraph` no longer imports the XS bridge directly; the top-level
+  runtime module owns the native bridge boundary
+- schema helpers now prefer the runtime schema's execution struct at run time,
+  instead of trusting descriptor-side runtime payloads
+
+This fixes the first real bridge-design bug we hit in the reboot:
+
+- dump/load-safe native descriptors should stay cold and serializable
+- execution-only bindings belong at the top-level bridge, not in child modules
+- child runtime modules should not re-enter XS directly

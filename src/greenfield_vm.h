@@ -108,6 +108,17 @@ typedef struct {
   gql_greenfield_vm_native_block_t *blocks;
 } gql_greenfield_vm_native_bundle_t;
 
+typedef struct {
+  gql_greenfield_vm_native_runtime_t *runtime;
+  gql_greenfield_vm_native_bundle_t *bundle;
+  SV *context;
+  const gql_greenfield_vm_native_block_t *block;
+  const gql_greenfield_vm_native_op_t *op;
+  const gql_greenfield_vm_native_slot_t *slot;
+  IV block_index;
+  IV op_index;
+} gql_greenfield_vm_exec_state_t;
+
 static void
 gql_greenfield_vm_native_bundle_destroy(gql_greenfield_vm_native_bundle_t *bundle)
 {

@@ -75,6 +75,14 @@ sub to_native_struct {
   };
 }
 
+sub to_native_exec_struct {
+  my ($self) = @_;
+  my $struct = $self->to_native_struct;
+  $struct->{resolve} = $self->{resolve} if exists $self->{resolve};
+  $struct->{return_type} = $self->{return_type} if exists $self->{return_type};
+  return $struct;
+}
+
 sub _resolver_shape_code {
   my ($shape) = @_;
   return 2 if ($shape || q()) eq 'EXPLICIT';

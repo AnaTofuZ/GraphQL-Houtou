@@ -166,7 +166,7 @@ subtest 'XS can inflate native VM bundle descriptor into a native handle' => sub
 
 subtest 'XS can inflate runtime schema into a native runtime handle' => sub {
   my $runtime = $schema->compile_runtime;
-  my $handle = load_native_runtime_xs($runtime);
+  my $handle = load_native_runtime_xs($runtime->to_native_exec_struct);
 
   isa_ok $handle, 'GraphQL::Houtou::XS::GreenfieldVM::NativeRuntime';
 

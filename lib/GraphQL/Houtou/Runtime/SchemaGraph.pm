@@ -4,8 +4,6 @@ use 5.014;
 use strict;
 use warnings;
 
-use GraphQL::Houtou::XS::GreenfieldVM qw(load_native_runtime_xs);
-
 sub new {
   my ($class, %args) = @_;
   return bless {
@@ -28,11 +26,6 @@ sub dispatch_index { return $_[0]{dispatch_index} }
 sub root_types { return $_[0]{root_types} }
 sub slot_catalog { return $_[0]{slot_catalog} }
 sub program { return $_[0]{program} }
-
-sub native_vm_runtime_handle {
-  my ($self) = @_;
-  return $self->{_native_vm_runtime_handle} ||= load_native_runtime_xs($self);
-}
 
 sub slot_by_index {
   my ($self, $index) = @_;
@@ -88,14 +81,14 @@ sub inflate_vm_native_bundle {
 
 sub execute_vm_program {
   my ($self, $program, %opts) = @_;
-  require GraphQL::Houtou::Runtime::VMExecutor;
-  return GraphQL::Houtou::Runtime::VMExecutor->execute_program($self, $program, %opts);
+  require GraphQL::Houtou::Runtime;
+  return GraphQL::Houtou::Runtime::execute_vm_program($self, $program, %opts);
 }
 
 sub execute_vm_native_bundle {
   my ($self, $descriptor, %opts) = @_;
-  my $program = $self->inflate_vm_native_bundle($descriptor);
-  return $self->execute_vm_program($program, %opts);
+  require GraphQL::Houtou::Runtime;
+  return GraphQL::Houtou::Runtime::execute_vm_native_bundle($self, $descriptor, %opts);
 }
 
 sub to_struct {
@@ -136,6 +129,14 @@ sub to_native_struct {
     },
     slot_catalog => [ map { $_->to_native_struct } @{ $self->{slot_catalog} || [] } ],
   };
+}
+
+sub to_native_exec_struct {
+  my ($self) = @_;
+  my $struct = $self->to_native_struct;
+  $struct->{slot_catalog} = [ map { $_->to_native_exec_struct } @{ $self->{slot_catalog} || [] } ];
+  $struct->{runtime_cache} = $self->{runtime_cache};
+  return $struct;
 }
 
 sub _type_kind_code {

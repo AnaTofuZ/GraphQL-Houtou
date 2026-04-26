@@ -107,7 +107,7 @@ subtest 'schema helper can compile and execute native VM bundle in one call' => 
 
 subtest 'XS native bundle handle can execute directly' => sub {
   my $runtime = $schema->compile_runtime;
-  my $native_runtime = load_native_runtime_xs($runtime);
+  my $native_runtime = load_native_runtime_xs($runtime->to_native_exec_struct);
   my $bundle = load_native_bundle_xs(
     $schema->compile_vm_native_bundle_descriptor('{ viewer { id name } node { id } }')
   );

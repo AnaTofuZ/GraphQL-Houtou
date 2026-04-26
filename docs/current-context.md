@@ -269,6 +269,12 @@ Current greenfield runtime coverage:
     response emission
   - `VMExecutor` therefore acts as an API-compatible façade over the state
     machine rather than a second runtime owner
+- VM lowering artifacts now also carry numeric opcode/family codes:
+  - `VMOp` keeps `opcode_code`
+  - `VMOp` keeps `resolve_code`
+  - `VMOp` keeps `complete_code`
+  so the future XS executor can map lowered descriptors to native enums without
+  reparsing string opcode families in the hot path
 - VM execution is also moving from argument-threaded helpers to cursor-owned
   state:
   - `Cursor` now snapshots/restores nested block execution

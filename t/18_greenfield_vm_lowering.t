@@ -58,6 +58,9 @@ subtest 'schema can lower operation into VM program' => sub {
   ok $viewer->complete_handler, 'viewer op binds complete handler';
   ok $viewer->resolve_dispatch, 'viewer op binds resolve dispatch coderef';
   ok $viewer->complete_dispatch, 'viewer op binds complete dispatch coderef';
+  ok $viewer->opcode_code, 'viewer op binds numeric opcode code';
+  is $viewer->resolve_code, 2, 'viewer op binds resolve family code';
+  is $viewer->complete_code, 2, 'viewer op binds complete family code';
   isa_ok $vm->block_by_name('QUERY.node.VmUser#1'), 'GraphQL::Houtou::Runtime::VMBlock',
     'vm program keeps direct block map';
 };
@@ -68,6 +71,7 @@ subtest 'VM program descriptor can round-trip through schema helpers' => sub {
   isa_ok $vm, 'GraphQL::Houtou::Runtime::VMProgram';
   isa_ok $vm->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
   is $vm->root_block->ops->[0]->field_name, 'viewer', 'inflated VM program keeps field op';
+  ok $vm->root_block->ops->[0]->opcode_code, 'inflated VM op keeps numeric opcode code';
 };
 
 done_testing;

@@ -15,11 +15,23 @@ my %RESOLVE_HANDLER = (
   RESOLVE_EXPLICIT => 'resolve_explicit',
 );
 
+my %RESOLVE_CODE = (
+  RESOLVE_DEFAULT => 1,
+  RESOLVE_EXPLICIT => 2,
+);
+
 my %COMPLETE_HANDLER = (
   COMPLETE_GENERIC => 'complete_generic',
   COMPLETE_OBJECT => 'complete_object',
   COMPLETE_LIST => 'complete_list',
   COMPLETE_ABSTRACT => 'complete_abstract',
+);
+
+my %COMPLETE_CODE = (
+  COMPLETE_GENERIC => 1,
+  COMPLETE_OBJECT => 2,
+  COMPLETE_LIST => 3,
+  COMPLETE_ABSTRACT => 4,
 );
 
 sub lower_program {
@@ -82,8 +94,11 @@ sub _lower_instruction {
   my $complete_family = $instruction->complete_op || 'COMPLETE_GENERIC';
   return GraphQL::Houtou::Runtime::VMOp->new(
     opcode => join(q(:), $resolve_family, $complete_family),
+    opcode_code => (($RESOLVE_CODE{$resolve_family} || 0) * 16) + ($COMPLETE_CODE{$complete_family} || 0),
     resolve_family => $resolve_family,
+    resolve_code => $RESOLVE_CODE{$resolve_family} || 0,
     complete_family => $complete_family,
+    complete_code => $COMPLETE_CODE{$complete_family} || 0,
     field_name => $instruction->field_name,
     result_name => $instruction->result_name,
     dispatch_family => $instruction->dispatch_family,
@@ -103,8 +118,11 @@ sub _inflate_op {
   my ($struct) = @_;
   return GraphQL::Houtou::Runtime::VMOp->new(
     opcode => $struct->{opcode},
+    opcode_code => $struct->{opcode_code} || 0,
     resolve_family => $struct->{resolve_family},
+    resolve_code => $struct->{resolve_code} || 0,
     complete_family => $struct->{complete_family},
+    complete_code => $struct->{complete_code} || 0,
     field_name => $struct->{field_name},
     result_name => $struct->{result_name},
     dispatch_family => $struct->{dispatch_family},

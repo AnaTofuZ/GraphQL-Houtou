@@ -63,6 +63,13 @@ In execution terms:
 - promise presence should also be treated as a first-class kind transition,
   not as a reason to immediately rebuild Perl response envelopes
 
+For the lowered VM artifact this also means:
+
+- structural opcode strings may still exist for descriptor/debug readability
+- but the hot executor boundary should prefer numeric opcode/family codes
+- a future XS executor should be able to inflate the descriptor directly into
+  native enums and dispatch tables without reparsing string families
+
 For the VM layer this implies:
 
 - the lowered op should carry bound dispatch family metadata

@@ -8,8 +8,11 @@ sub new {
   my ($class, %args) = @_;
   return bless {
     opcode => $args{opcode},
+    opcode_code => $args{opcode_code} || 0,
     resolve_family => $args{resolve_family},
+    resolve_code => $args{resolve_code} || 0,
     complete_family => $args{complete_family},
+    complete_code => $args{complete_code} || 0,
     field_name => $args{field_name},
     result_name => $args{result_name},
     dispatch_family => $args{dispatch_family},
@@ -33,8 +36,11 @@ sub new {
 }
 
 sub opcode { return $_[0]{opcode} }
+sub opcode_code { return $_[0]{opcode_code} }
 sub resolve_family { return $_[0]{resolve_family} }
+sub resolve_code { return $_[0]{resolve_code} }
 sub complete_family { return $_[0]{complete_family} }
+sub complete_code { return $_[0]{complete_code} }
 sub field_name { return $_[0]{field_name} }
 sub result_name { return $_[0]{result_name} }
 sub dispatch_family { return $_[0]{dispatch_family} }
@@ -59,8 +65,11 @@ sub to_struct {
   my ($self) = @_;
   return {
     opcode => $self->{opcode},
+    opcode_code => $self->{opcode_code},
     resolve_family => $self->{resolve_family},
+    resolve_code => $self->{resolve_code},
     complete_family => $self->{complete_family},
+    complete_code => $self->{complete_code},
     field_name => $self->{field_name},
     result_name => $self->{result_name},
     dispatch_family => $self->{dispatch_family},

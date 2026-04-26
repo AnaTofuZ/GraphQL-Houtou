@@ -105,7 +105,10 @@ sub execute_program {
   my $vm_program = _is_vm_program($program)
     ? $program
     : lower_program_to_vm($runtime_schema, $program);
-  $opts{vm_engine} = 'perl' if !defined $opts{vm_engine};
+  $opts{engine} = delete $opts{vm_engine}
+    if !defined $opts{engine} && exists $opts{vm_engine};
+  $opts{engine} = _preferred_engine_for_program($vm_program, %opts)
+    if !defined $opts{engine};
   return execute_vm($runtime_schema, $vm_program, %opts);
 }
 
@@ -116,7 +119,7 @@ sub execute_operation {
 
 sub execute_program_perl {
   my ($runtime_schema, $program, %opts) = @_;
-  $opts{vm_engine} = 'perl';
+  $opts{engine} = 'perl';
   return execute_program($runtime_schema, $program, %opts);
 }
 
@@ -157,7 +160,11 @@ sub inflate_vm_native_bundle {
 
 sub execute_vm {
   my ($runtime_schema, $program, %opts) = @_;
-  if (($opts{vm_engine} || q()) eq 'perl') {
+  my $engine = $opts{engine};
+  $engine = delete $opts{vm_engine} if !defined $engine && exists $opts{vm_engine};
+  $engine = 'native' if !defined $engine;
+
+  if ($engine eq 'perl') {
     return GraphQL::Houtou::Runtime::VMExecutor->execute_program($runtime_schema, $program, %opts);
   }
   my $descriptor = {
@@ -218,6 +225,25 @@ sub execute_native_bundle {
 sub _is_vm_program {
   my ($program) = @_;
   return !!(defined $program && ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::VMProgram') });
+}
+
+sub _preferred_engine_for_program {
+  my ($program, %opts) = @_;
+  return 'perl' if $opts{promise_code};
+  return 'perl' if !$program || !$program->can('blocks');
+  return 'perl' if keys %{ $program->variable_defs || {} };
+
+  for my $block (@{ $program->blocks || [] }) {
+    for my $op (@{ $block->ops || [] }) {
+      return 'perl' if $op->has_args || $op->has_directives;
+      my $slot = $op->bound_slot or next;
+      return 'perl' if ($slot->resolver_shape || q()) ne 'DEFAULT';
+      my $dispatch = $slot->dispatch_family || q();
+      return 'perl' if $dispatch ne 'GENERIC' && $dispatch ne 'TAG';
+    }
+  }
+
+  return 'native';
 }
 
 1;

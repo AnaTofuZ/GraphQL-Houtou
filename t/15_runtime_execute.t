@@ -112,6 +112,19 @@ subtest 'schema can execute runtime program' => sub {
   }, 'runtime executes object/list program';
 };
 
+subtest 'runtime execute_program uses native engine by default' => sub {
+  my $runtime = $schema->build_runtime;
+  my $program = $runtime->compile_program('{ viewer { id } }');
+  my $result = $runtime->execute_program($program);
+
+  is_deeply $result, {
+    data => {
+      viewer => { id => 'u1' },
+    },
+    errors => [],
+  }, 'default execute_program path stays on native runtime';
+};
+
 subtest 'schema helper can compile and execute in one call' => sub {
   my $result = $schema->execute_runtime('{ viewer { id } }');
   is_deeply $result, {

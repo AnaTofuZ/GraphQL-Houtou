@@ -92,6 +92,18 @@ New runtime entrypoints now include:
 - `GraphQL::Houtou::execute($schema, $document, \%variables?)`
 - `GraphQL::Houtou::compile_runtime($schema, %opts)`
 
+Mainline execution policy:
+
+- `GraphQL::Houtou::execute(...)`
+- `$schema->execute_runtime(...)`
+- `$runtime->execute_operation(...)`
+
+now prefer the native XS engine when the lowered program stays within the
+current native-safe subset.
+Programs outside that subset automatically fall back to the Perl VM.
+`execute_runtime_perl(...)` / `execute_program_perl(...)` remain as explicit
+cold-path validation hooks.
+
 Current operation lowering shape:
 
 - input:

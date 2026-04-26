@@ -121,6 +121,12 @@ If you need a reusable compiled runtime, use:
     my $program = $runtime->compile_operation($document);
     my $result  = $runtime->execute_operation($program, variables => \%vars);
 
+This runtime-backed API prefers the native XS engine when the lowered program
+stays within the current native-safe subset. Programs that still require
+features not yet lowered into the native engine automatically fall back to the
+Perl VM. The Perl VM remains available as an explicit cold path via
+`execute_runtime_perl(...)`/`execute_program_perl(...)`.
+
 The older `GraphQL::Houtou::Execution` entry point remains available for
 compatibility, but the intended mainline is the runtime-backed API above.
 

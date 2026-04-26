@@ -21,6 +21,15 @@ The goal is:
 - keep the runtime's internal currency native, small, and specialized
 - not design around a Pure Perl fallback for the hot runtime
 
+Public execution policy for this design:
+
+- the public runtime API should prefer the native XS engine when the lowered
+  program stays within the current native-safe subset
+- programs outside that subset should fall back automatically to the Perl VM
+- the Perl VM should remain available as an explicit validation / bring-up path
+- child runtime modules should not `use` XS directly; the XS boundary should
+  live at the top-level runtime/native API
+
 ## Design Principles
 
 ### 1. Cache execution plans, not resolver results

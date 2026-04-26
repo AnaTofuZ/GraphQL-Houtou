@@ -51,15 +51,29 @@ sub compile_runtime {
 sub execute {
   my ($schema, $document, $variables_or_opts, @rest) = @_;
   my %opts;
+  my %known_option = map { ($_ => 1) } qw(
+    variables
+    vars
+    root_value
+    context
+    operation_name
+    promise_code
+    engine
+    vm_engine
+  );
 
   if (@rest) {
     %opts = ($variables_or_opts ? (%{$variables_or_opts}) : (), @rest);
   } elsif (ref($variables_or_opts) eq 'HASH') {
-    %opts = %{$variables_or_opts};
-    if (!exists $opts{variables}) {
-      $opts{variables} = delete $opts{vars} if exists $opts{vars};
-    } elsif (exists $opts{vars} && !exists $opts{variables}) {
-      $opts{variables} = delete $opts{vars};
+    if (grep { $known_option{$_} } keys %{$variables_or_opts}) {
+      %opts = %{$variables_or_opts};
+      if (!exists $opts{variables}) {
+        $opts{variables} = delete $opts{vars} if exists $opts{vars};
+      } elsif (exists $opts{vars} && !exists $opts{variables}) {
+        $opts{variables} = delete $opts{vars};
+      }
+    } else {
+      $opts{variables} = $variables_or_opts;
     }
   } elsif (defined $variables_or_opts) {
     $opts{variables} = $variables_or_opts;
@@ -205,6 +219,12 @@ If you need a reusable compiled runtime, use:
     my $runtime = GraphQL::Houtou::compile_runtime($schema);
     my $program = $runtime->compile_operation($document);
     my $result  = $runtime->execute_operation($program, variables => \%vars);
+
+This runtime-backed API prefers the native XS engine when the lowered program
+stays within the current native-safe subset. Programs that still require
+features not yet lowered into the native engine automatically fall back to the
+Perl VM. The Perl VM remains available as an explicit cold path via
+C<execute_runtime_perl(...)>/C<execute_program_perl(...)>.
 
 The older C<GraphQL::Houtou::Execution> entry point remains available for
 compatibility, but the intended mainline is the runtime-backed API above.

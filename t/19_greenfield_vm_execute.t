@@ -4,6 +4,11 @@ use Test::More;
 
 use lib 'lib';
 use GraphQL::Houtou::Schema;
+use GraphQL::Houtou::XS::GreenfieldVM qw(
+  execute_native_bundle_xs
+  load_native_bundle_xs
+  load_native_runtime_xs
+);
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);
@@ -98,6 +103,22 @@ subtest 'schema helper can compile and execute native VM bundle in one call' => 
     data => { viewer => { id => 'u1' } },
     errors => [],
   }, 'schema helper executes native VM bundle runtime';
+};
+
+subtest 'XS native bundle handle can execute directly' => sub {
+  my $runtime = $schema->compile_runtime;
+  my $native_runtime = load_native_runtime_xs($runtime);
+  my $bundle = load_native_bundle_xs(
+    $schema->compile_vm_native_bundle_descriptor('{ viewer { id name } node { id } }')
+  );
+  my $result = execute_native_bundle_xs($native_runtime, $bundle);
+  is_deeply $result, {
+    data => {
+      viewer => { id => 'u1', name => 'Alice' },
+      node => { id => 'u3' },
+    },
+    errors => [],
+  }, 'direct XS native bundle execution works';
 };
 
 done_testing;

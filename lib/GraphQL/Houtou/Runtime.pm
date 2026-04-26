@@ -5,6 +5,11 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use GraphQL::Houtou::XS::GreenfieldVM qw(
+  execute_native_bundle_xs
+  load_native_bundle_xs
+  load_native_runtime_xs
+);
 use GraphQL::Houtou::Runtime::Compiler ();
 use GraphQL::Houtou::Runtime::Executor ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
@@ -62,8 +67,16 @@ sub execute_vm_program {
 
 sub execute_vm_native_bundle {
   my ($runtime_schema, $descriptor, %opts) = @_;
-  my $program = inflate_vm_native_bundle($runtime_schema, $descriptor);
-  return execute_vm_program($runtime_schema, $program, %opts);
+  my $bundle = load_native_bundle_xs($descriptor);
+  my $native_runtime = $runtime_schema->can('native_vm_runtime_handle')
+    ? $runtime_schema->native_vm_runtime_handle
+    : load_native_runtime_xs($runtime_schema);
+  return execute_native_bundle_xs(
+    $native_runtime,
+    $bundle,
+    $opts{root_value},
+    $opts{context},
+  );
 }
 
 1;

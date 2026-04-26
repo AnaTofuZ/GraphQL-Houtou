@@ -870,3 +870,33 @@ If the project were restarted from zero, the best architecture would be:
 
 This is the architecture most likely to produce a fast Perl GraphQL library,
 not just a slightly optimized Perl GraphQL executor.
+
+## Current Greenfield Reboot Checkpoint
+
+The rebooted implementation now has the first end-to-end XS execution path for
+the greenfield VM:
+
+- Perl still owns schema compilation and VM lowering
+- native bundle descriptors are inflated into C-owned structs
+- XS now executes those native bundles directly for the first supported slice
+
+The currently supported native execution slice is intentionally narrow:
+
+- sync / no-promise execution
+- default and explicit resolver calls
+- object child blocks
+- list child blocks
+- abstract dispatch through:
+  - `tag_resolver`
+  - `resolve_type`
+  - `possible_types + is_type_of`
+
+This checkpoint matters because it changes the architectural boundary:
+
+- the project no longer only *describes* a VM in Perl
+- it now has a real native runtime entrypoint that consumes the lowered
+  program artifact directly
+
+From here, the remaining work is no longer “how do we design a VM?” but
+“how do we widen the native executor until the pure-Perl VM becomes
+unnecessary for the hot path?”.

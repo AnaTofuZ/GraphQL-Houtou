@@ -4,6 +4,8 @@ use 5.014;
 use strict;
 use warnings;
 
+use GraphQL::Houtou::XS::GreenfieldVM qw(load_native_runtime_xs);
+
 sub new {
   my ($class, %args) = @_;
   return bless {
@@ -26,6 +28,11 @@ sub dispatch_index { return $_[0]{dispatch_index} }
 sub root_types { return $_[0]{root_types} }
 sub slot_catalog { return $_[0]{slot_catalog} }
 sub program { return $_[0]{program} }
+
+sub native_vm_runtime_handle {
+  my ($self) = @_;
+  return $self->{_native_vm_runtime_handle} ||= load_native_runtime_xs($self);
+}
 
 sub slot_by_index {
   my ($self, $index) = @_;

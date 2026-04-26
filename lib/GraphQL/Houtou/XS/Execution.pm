@@ -13,6 +13,8 @@ use GraphQL::Houtou::Promise::Adapter qw(
   then_promise
 );
 
+require GraphQL::Houtou::XS::Parser;
+
 our $VERSION = '0.01';
 our @EXPORT_OK = qw(
   execute_xs
@@ -59,8 +61,6 @@ our @EXPORT_OK = qw(
   _then_merge_hash_with_head_xs
   _then_resolve_operation_error_xs
 );
-
-require GraphQL::Houtou::XS::Parser;
 
 sub _promise_all_value_to_scalar {
   my ($value) = @_;

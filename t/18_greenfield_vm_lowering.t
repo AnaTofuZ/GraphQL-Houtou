@@ -5,7 +5,13 @@ use File::Temp qw(tempfile);
 
 use lib 'lib';
 use GraphQL::Houtou::Schema;
-use GraphQL::Houtou::XS::GreenfieldVM qw(native_codes_xs);
+use GraphQL::Houtou::XS::GreenfieldVM qw(
+  load_native_bundle_xs
+  load_native_runtime_xs
+  native_bundle_summary_xs
+  native_codes_xs
+  native_runtime_summary_xs
+);
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Scalar qw($String);
@@ -134,6 +140,42 @@ subtest 'native VM bundle can inflate back into a VM program' => sub {
   isa_ok $vm, 'GraphQL::Houtou::Runtime::VMProgram';
   isa_ok $vm->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
   is $vm->root_block->ops->[0]->field_name, 'viewer', 'inflated native bundle restores field name';
+};
+
+subtest 'XS can inflate native VM bundle descriptor into a native handle' => sub {
+  my $bundle = $schema->compile_vm_native_bundle_descriptor('{ viewer { id } node { id } }');
+  my $codes = native_codes_xs();
+  my $handle = load_native_bundle_xs($bundle);
+
+  isa_ok $handle, 'GraphQL::Houtou::XS::GreenfieldVM::NativeBundle';
+
+  my $summary = native_bundle_summary_xs($handle);
+  is $summary->{runtime_slot_count}, scalar(@{ $bundle->{runtime}{slot_catalog} || [] }),
+    'XS native handle sees runtime slot count';
+  is $summary->{block_count}, scalar(@{ $bundle->{program}{blocks} || [] }),
+    'XS native handle sees block count';
+  is $summary->{root_block_index}, $bundle->{program}{root_block_index},
+    'XS native handle keeps root block index';
+  is $summary->{operation_type_code}, $codes->{optype_query},
+    'XS native handle keeps operation type code';
+  is $summary->{root_family_code}, $codes->{family_object},
+    'XS native handle keeps root block family code';
+  is_deeply $summary->{root_dispatch_family_codes}, [ $codes->{dispatch_generic}, $codes->{dispatch_tag} ],
+    'XS native handle keeps root op dispatch family codes';
+};
+
+subtest 'XS can inflate runtime schema into a native runtime handle' => sub {
+  my $runtime = $schema->compile_runtime;
+  my $handle = load_native_runtime_xs($runtime);
+
+  isa_ok $handle, 'GraphQL::Houtou::XS::GreenfieldVM::NativeRuntime';
+
+  my $summary = native_runtime_summary_xs($handle);
+  is $summary->{runtime_slot_count}, scalar(@{ $runtime->slot_catalog || [] }),
+    'native runtime handle sees slot catalog count';
+  ok $summary->{has_runtime_cache}, 'native runtime handle keeps runtime cache';
+  ok $summary->{has_name2type}, 'native runtime handle keeps name2type map';
+  ok $summary->{has_dispatch_index}, 'native runtime handle keeps dispatch index';
 };
 
 done_testing;

@@ -4410,3 +4410,31 @@ Greenfield VM XS-boundary checkpoint:
 This is the first stable XS-facing contract for the greenfield VM. The next
 stage is a C-side loader that inflates the native bundle descriptor into
 native structs so an XS executor can consume the descriptor directly.
+
+Greenfield VM XS execution checkpoint:
+
+- the native bundle loader is now paired with a first runnable XS executor:
+  - `GraphQL::Houtou::XS::GreenfieldVM::execute_native_bundle_xs(...)`
+- `Runtime::execute_vm_native_bundle(...)` no longer inflates the bundle back
+  into the pure-Perl VM before execution; it now executes the native bundle
+  handle directly in XS
+- the current native executor owns:
+  - sync / no-promise execution
+  - default and explicit resolver calls
+  - object child block execution
+  - list child block execution
+  - abstract dispatch via `tag_resolver`, `resolve_type`, and
+    `possible_types + is_type_of`
+- native slots now retain the strings that the executor actually needs:
+  - `field_name`
+  - `result_name`
+  - `return_type_name`
+- abstract child block indexes are also retained as native name/index pairs,
+  so the XS executor can resolve a runtime object directly into a child block
+  without re-inflating the Perl VM program
+
+This is the first end-to-end greenfield runtime path where:
+
+- schema/runtime metadata stays in Perl
+- the lowered VM bundle is owned natively
+- execution itself runs in XS without first reconstructing the Perl VM

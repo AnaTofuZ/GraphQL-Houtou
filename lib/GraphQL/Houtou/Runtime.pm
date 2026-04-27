@@ -5,7 +5,6 @@ use strict;
 use warnings;
 
 use Exporter 'import';
-use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Runtime::Compiler ();
 use GraphQL::Houtou::Runtime::NativeRuntime ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
@@ -21,12 +20,6 @@ our @EXPORT_OK = qw(
   inflate_program
   execute_program
   execute_vm
-  native_codes
-  load_native_bundle
-  load_native_runtime
-  native_bundle_summary
-  native_runtime_summary
-  execute_native_bundle
 );
 
 sub compile_schema {
@@ -95,36 +88,6 @@ sub execute_vm {
     runtime_schema => $runtime_schema,
   );
   return $native_runtime->execute_compact_program($program, %opts);
-}
-
-sub native_codes {
-  return GraphQL::Houtou::Native::native_codes(@_);
-}
-
-sub load_native_bundle {
-  return GraphQL::Houtou::Native::load_native_bundle(@_);
-}
-
-sub load_native_runtime {
-  return GraphQL::Houtou::Native::load_native_runtime(@_);
-}
-
-sub native_bundle_summary {
-  return GraphQL::Houtou::Native::native_bundle_summary(@_);
-}
-
-sub native_runtime_summary {
-  return GraphQL::Houtou::Native::native_runtime_summary(@_);
-}
-
-sub execute_native_bundle {
-  my ($runtime_struct, $bundle, %opts) = @_;
-  return GraphQL::Houtou::Native::execute_native_bundle(
-    $runtime_struct,
-    $bundle,
-    $opts{root_value},
-    $opts{context},
-  );
 }
 
 sub _is_vm_program {

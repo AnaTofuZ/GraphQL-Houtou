@@ -4,14 +4,14 @@ use Test::More;
 use File::Temp qw(tempfile);
 
 use lib 'lib';
-use GraphQL::Houtou::Schema;
-use GraphQL::Houtou::Runtime qw(
+use GraphQL::Houtou::Native qw(
   load_native_bundle
   load_native_runtime
   native_bundle_summary
   native_codes
   native_runtime_summary
 );
+use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Scalar qw($String);

@@ -3,12 +3,12 @@ use warnings;
 use Test::More;
 
 use lib 'lib';
-use GraphQL::Houtou::Schema;
-use GraphQL::Houtou::Runtime qw(
+use GraphQL::Houtou::Native qw(
   execute_native_bundle
   load_native_bundle
   load_native_runtime
 );
+use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);

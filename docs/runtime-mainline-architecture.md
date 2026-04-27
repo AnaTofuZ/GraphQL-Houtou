@@ -43,7 +43,6 @@
 主なモジュール:
 
 - `GraphQL::Houtou::Runtime::SchemaGraph`
-- `GraphQL::Houtou::Runtime::SchemaGraph`
 - `GraphQL::Houtou::Runtime::SchemaBlock`
 - `GraphQL::Houtou::Runtime::Slot`
 

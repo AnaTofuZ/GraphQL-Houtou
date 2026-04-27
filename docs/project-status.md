@@ -24,19 +24,16 @@
 
 - `GraphQL::Houtou::Validation`
 
-## Compatibility Policy
+## Parser Policy
 
-互換性の扱いは次の通りです。
+parser の扱いは次の通りです。
 
-- parser surface では、必要な範囲で
-  - `graphql-perl` 互換 AST
-  を維持する
-- execution mainline は旧 mixed executor ではなく runtime / VM を優先する
-- Pure Perl fallback は mainline の前提にしない
-- ただし legacy XS integration がまだ依存している内部互換モジュールは一時的に残す
+- 公開 parser surface は canonical parser AST の 1 dialect に固定する
+- dialect 切替や graphql-js 互換 path は mainline 要件に含めない
+- parser-internal helper は残しても、runtime / VM mainline とは分離して扱う
 
-現時点では validation 側の internal PP bridge は削除済みで、旧 path に残る
-互換層は主に execution 側です。
+実行系の mainline は旧 mixed executor ではなく runtime / VM です。
+Pure Perl fallback も mainline の前提にはしません。
 
 ## Runtime / VM Status
 

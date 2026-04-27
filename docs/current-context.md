@@ -12,6 +12,9 @@ Design rule of thumb for the current VM work:
   can provide them
 - for the runtime VM, do not treat PP fallback as a core design
   requirement
+- active runtime / VM mainline does not depend on `GraphQL::Houtou::XS::Execution`
+  helpers anymore; promise helpers are now owned by the Perl adapter and the
+  old execution Perl shim is legacy-only
 
 For the "if we restarted from zero" architecture that distills the lessons
 from these experiments, see:

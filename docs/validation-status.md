@@ -54,7 +54,7 @@ work should focus on:
 
 - directive validation parity
 - richer input coercion edge cases
-- alignment with the greenfield runtime / VM mainline
+- alignment with the runtime / VM mainline
 
 ## Verification
 

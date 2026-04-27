@@ -170,6 +170,7 @@ fresh `./Build build` 済み環境で、
   - `src/legacy_compat.h`
   は source tree から削除済み
 - parser public surface は canonical parser AST の 1 dialect に整理した
+- type model の `Moo` 依存削減を開始し、`Type`, `Type::List`, `Type::NonNull` は plain Perl object に置き換えた
 - `SchemaGraph` は compile / lower ownership のみを持ち、native eligibility 判定は `NativeRuntime` に委譲する
 - `ExecState` と `NativeRuntime` が別々に持っていた variable / arg coercion は `InputCoercion` に集約した
 - historical / internal parser 資料は docs にのみ残し、mainline の API からは `graphql-js` dialect を外した

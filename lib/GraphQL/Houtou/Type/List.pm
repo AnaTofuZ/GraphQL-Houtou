@@ -4,11 +4,29 @@ use 5.014;
 use strict;
 use warnings;
 
-use Moo;
+use Carp qw(croak);
+use parent 'GraphQL::Houtou::Type';
 use Role::Tiny ();
-use Types::Standard qw(Object Any ArrayRef Bool HashRef);
 
-extends 'GraphQL::Houtou::Type';
+sub new {
+  my ($class, %args) = @_;
+  croak "Type::List->new requires 'of'\n" if !exists $args{of};
+
+  my $self = bless {
+    of => $args{of},
+    is_introspection => $args{is_introspection} ? 1 : 0,
+  }, $class;
+
+  my $of = $self->{of};
+  my @roles;
+  push @roles, 'GraphQL::Houtou::Role::Input'
+    if $of->DOES('GraphQL::Houtou::Role::Input') || $of->DOES('GraphQL::Role::Input');
+  push @roles, 'GraphQL::Houtou::Role::Output'
+    if $of->DOES('GraphQL::Houtou::Role::Output') || $of->DOES('GraphQL::Role::Output');
+  Role::Tiny->apply_roles_to_object($self, @roles) if @roles;
+
+  return $self;
+}
 
 sub list {
   $_[0]->{_houtou_list} ||= __PACKAGE__->new(of => $_[0]);
@@ -19,31 +37,17 @@ sub non_null {
   $_[0]->{_houtou_non_null} ||= GraphQL::Houtou::Type::NonNull->new(of => $_[0]);
 }
 
-has of => (
-  is => 'ro',
-  isa => Object,
-  required => 1,
-  handles => [ qw(name) ],
-);
-
-sub BUILD {
-my ($self) = @_;
-  my $of = $self->of;
-  my @roles;
-  push @roles, 'GraphQL::Houtou::Role::Input'
-    if $of->DOES('GraphQL::Houtou::Role::Input') || $of->DOES('GraphQL::Role::Input');
-  push @roles, 'GraphQL::Houtou::Role::Output'
-    if $of->DOES('GraphQL::Houtou::Role::Output') || $of->DOES('GraphQL::Role::Output');
-  Role::Tiny->apply_roles_to_object($self, @roles) if @roles;
+sub of {
+  return $_[0]->{of};
 }
 
-has to_string => (
-  is => 'lazy',
-  builder => sub {
-    my ($self) = @_;
-    '[' . $self->of->to_string . ']';
-  },
-);
+sub name {
+  return $_[0]->of->name;
+}
+
+sub to_string {
+  $_[0]->{to_string} ||= '[' . $_[0]->of->to_string . ']';
+}
 
 sub is_valid {
   my ($self, $item) = @_;

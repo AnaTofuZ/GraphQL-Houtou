@@ -4,14 +4,17 @@ use 5.014;
 use strict;
 use warnings;
 
-use Moo;
-use Types::Standard qw(Bool);
+sub new {
+  my ($class, %args) = @_;
+  my $self = bless {
+    is_introspection => $args{is_introspection} ? 1 : 0,
+  }, $class;
+  return $self;
+}
 
-has is_introspection => (
-  is => 'ro',
-  isa => Bool,
-  default => sub { 0 },
-);
+sub is_introspection {
+  return $_[0]->{is_introspection};
+}
 
 sub list {
   require GraphQL::Houtou::Type::List;

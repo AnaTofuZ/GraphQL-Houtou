@@ -35,6 +35,7 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 
 - `GraphQL::Houtou::Runtime::SchemaGraph`
 - `GraphQL::Houtou::Runtime::NativeRuntime`
+- `GraphQL::Houtou::Runtime::InputCoercion`
 - opaque native bundle handle (`GraphQL::Houtou::Runtime::NativeBundle` package is provided by XS only)
 
 役割:
@@ -45,6 +46,7 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 - request-time specialization と native bundle descriptor 組み立てを `NativeRuntime` が所有する
 - native bundle descriptor の inflate/execute も `SchemaGraph` 経由の wrapper ではなく `NativeRuntime` が所有する
 - `Runtime::execute_vm(...)` からの compact program 実行も `NativeRuntime` が所有する
+- variable / argument coercion と runtime guard evaluation の shared logic は `InputCoercion` に集約する
 - hot path では `runtime + program` の Perl descriptor hash を組み立てず、
   compact runtime struct と compact program struct を別引数のまま XS に渡して bundle を inflate する
 - compact program の実行時は、一時的な native bundle handle を Perl 側で組み立てず、

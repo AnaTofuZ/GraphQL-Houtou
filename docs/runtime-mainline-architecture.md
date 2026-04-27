@@ -62,12 +62,14 @@
 主なモジュール:
 
 - `GraphQL::Houtou::Runtime::OperationCompiler`
+- `GraphQL::Houtou::Runtime::InputCoercion`
 
 責務:
 
 - query document を schema-aware な lowered program に変換
 - variables / args / directives / fragments を実行しやすい shape に lower
 - block / op family / child block 参照を固定
+- variable / argument coercion と runtime guard evaluation の shared helper を提供
 
 ### 4. VM Lowering
 
@@ -127,6 +129,8 @@
 
 - `Runtime::ProgramSpecializer` は削除済み
 - request-time specialization は `NativeRuntime` に統合済み
+- variable / argument coercion と runtime guard evaluation は `InputCoercion` に集約し、
+  `ExecState` と `NativeRuntime` の重複実装を持たない
 - `Runtime::NativeBundle` の Perl wrapper は削除済み
 - native bundle は XS が提供する opaque handle
 - `Schema` が native bundle descriptor を手組みする経路は削除済み

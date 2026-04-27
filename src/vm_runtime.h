@@ -129,6 +129,99 @@ typedef struct {
 } gql_runtime_vm_exec_state_t;
 
 static SV *
+gql_runtime_vm_new_outcome_sv(pTHX_ const char *kind, STRLEN kind_len, SV *value, SV *error_records)
+{
+  AV *av = newAV();
+  HV *stash = gv_stashpv("GraphQL::Houtou::Runtime::Outcome", GV_ADD);
+  SV *errors_sv;
+
+  av_extend(av, 4);
+  av_store(av, 0, newSVpvn(kind, kind_len));
+  if (kind_len == 6 && memEQ(kind, "SCALAR", 6)) {
+    av_store(av, 1, value ? newSVsv(value) : newSV(0));
+    av_store(av, 2, newSV(0));
+    av_store(av, 3, newSV(0));
+  }
+  else if (kind_len == 6 && memEQ(kind, "OBJECT", 6)) {
+    av_store(av, 1, newSV(0));
+    av_store(av, 2, value ? newSVsv(value) : newSV(0));
+    av_store(av, 3, newSV(0));
+  }
+  else if (kind_len == 4 && memEQ(kind, "LIST", 4)) {
+    av_store(av, 1, newSV(0));
+    av_store(av, 2, newSV(0));
+    av_store(av, 3, value ? newSVsv(value) : newSV(0));
+  }
+  else {
+    av_store(av, 1, newSV(0));
+    av_store(av, 2, newSV(0));
+    av_store(av, 3, newSV(0));
+  }
+
+  errors_sv = error_records ? newSVsv(error_records) : newRV_noinc((SV *)newAV());
+  av_store(av, 4, errors_sv);
+  return sv_bless(newRV_noinc((SV *)av), stash);
+}
+
+static void
+gql_runtime_vm_consume_outcome_sv(pTHX_ HV *data_hv, SV *result_name_sv, SV *outcome_sv, AV *writer_errors_av)
+{
+  AV *outcome_av;
+  SV **kind_svp;
+  SV **value_svp = NULL;
+  SV **errors_svp;
+  AV *errors_av;
+  const char *kind;
+  STRLEN kind_len;
+  SSize_t i;
+
+  if (!data_hv || !result_name_sv || !outcome_sv || !SvOK(outcome_sv) || !SvROK(outcome_sv) || SvTYPE(SvRV(outcome_sv)) != SVt_PVAV) {
+    return;
+  }
+
+  outcome_av = (AV *)SvRV(outcome_sv);
+  kind_svp = av_fetch(outcome_av, 0, 0);
+  if (!kind_svp || !SvOK(*kind_svp)) {
+    return;
+  }
+
+  kind = SvPV(*kind_svp, kind_len);
+  if (kind_len == 6 && memEQ(kind, "SCALAR", 6)) {
+    value_svp = av_fetch(outcome_av, 1, 0);
+  }
+  else if (kind_len == 6 && memEQ(kind, "OBJECT", 6)) {
+    value_svp = av_fetch(outcome_av, 2, 0);
+  }
+  else if (kind_len == 4 && memEQ(kind, "LIST", 4)) {
+    value_svp = av_fetch(outcome_av, 3, 0);
+  }
+
+  hv_store_ent(
+    data_hv,
+    result_name_sv,
+    (value_svp && *value_svp) ? newSVsv(*value_svp) : newSV(0),
+    0
+  );
+
+  if (!writer_errors_av) {
+    return;
+  }
+
+  errors_svp = av_fetch(outcome_av, 4, 0);
+  if (!errors_svp || !SvOK(*errors_svp) || !SvROK(*errors_svp) || SvTYPE(SvRV(*errors_svp)) != SVt_PVAV) {
+    return;
+  }
+
+  errors_av = (AV *)SvRV(*errors_svp);
+  for (i = 0; i <= av_len(errors_av); i++) {
+    SV **err_svp = av_fetch(errors_av, i, 0);
+    if (err_svp && *err_svp) {
+      av_push(writer_errors_av, newSVsv(*err_svp));
+    }
+  }
+}
+
+static SV *
 gql_runtime_vm_materialize_dynamic_value_sv(pTHX_ SV *value, HV *variables)
 {
   SV *inner;

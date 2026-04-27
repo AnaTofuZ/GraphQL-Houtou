@@ -3,6 +3,7 @@ package GraphQL::Houtou::Runtime::Writer;
 use 5.014;
 use strict;
 use warnings;
+use GraphQL::Houtou ();
 
 use constant {
   VALUES_SLOT => 0,
@@ -26,21 +27,13 @@ sub pending { return $_[0][PENDING_SLOT] }
 sub consume_outcome {
   my ($self, $data, $result_name, $outcome) = @_;
   return if !$outcome;
-  my $kind = $outcome->kind || '';
-  if ($kind eq 'SCALAR') {
-    $data->{$result_name} = $outcome->scalar_value;
-  }
-  elsif ($kind eq 'OBJECT') {
-    $data->{$result_name} = $outcome->object_value;
-  }
-  elsif ($kind eq 'LIST') {
-    $data->{$result_name} = $outcome->list_value;
-  }
-  else {
-    $data->{$result_name} = undef;
-  }
-  push @{ $self->[ERROR_RECORDS_SLOT] }, @{ $outcome->error_records || [] }
-    if @{ $outcome->error_records || [] };
+  GraphQL::Houtou::_bootstrap_xs();
+  GraphQL::Houtou::XS::VM::consume_outcome_xs(
+    $data,
+    $result_name,
+    $outcome,
+    $self->[ERROR_RECORDS_SLOT],
+  );
   return;
 }
 

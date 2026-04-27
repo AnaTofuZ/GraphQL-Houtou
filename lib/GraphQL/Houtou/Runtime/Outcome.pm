@@ -3,6 +3,7 @@ package GraphQL::Houtou::Runtime::Outcome;
 use 5.014;
 use strict;
 use warnings;
+use GraphQL::Houtou ();
 
 use constant {
   KIND_SLOT          => 0,
@@ -26,17 +27,20 @@ sub new {
 
 sub scalar {
   my ($class, $value, $error_records) = @_;
-  return bless [ 'SCALAR', $value, undef, undef, ($error_records || []) ], $class;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::outcome_scalar_xs($value, ($error_records || []));
 }
 
 sub object {
   my ($class, $value, $error_records) = @_;
-  return bless [ 'OBJECT', undef, $value, undef, ($error_records || []) ], $class;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::outcome_object_xs($value, ($error_records || []));
 }
 
 sub list {
   my ($class, $value, $error_records) = @_;
-  return bless [ 'LIST', undef, undef, $value, ($error_records || []) ], $class;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::outcome_list_xs($value, ($error_records || []));
 }
 
 sub kind { return $_[0][KIND_SLOT] }

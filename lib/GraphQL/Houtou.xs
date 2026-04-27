@@ -993,6 +993,52 @@ evaluate_runtime_guards_xs(guards, variables)
     RETVAL
 
 SV *
+outcome_scalar_xs(value, error_records = &PL_sv_undef)
+    SV *value
+    SV *error_records
+  CODE:
+    RETVAL = gql_runtime_vm_new_outcome_sv(aTHX_ "SCALAR", 6, value, error_records);
+  OUTPUT:
+    RETVAL
+
+SV *
+outcome_object_xs(value, error_records = &PL_sv_undef)
+    SV *value
+    SV *error_records
+  CODE:
+    RETVAL = gql_runtime_vm_new_outcome_sv(aTHX_ "OBJECT", 6, value, error_records);
+  OUTPUT:
+    RETVAL
+
+SV *
+outcome_list_xs(value, error_records = &PL_sv_undef)
+    SV *value
+    SV *error_records
+  CODE:
+    RETVAL = gql_runtime_vm_new_outcome_sv(aTHX_ "LIST", 4, value, error_records);
+  OUTPUT:
+    RETVAL
+
+void
+consume_outcome_xs(data, result_name, outcome, error_records)
+    SV *data
+    SV *result_name
+    SV *outcome
+    SV *error_records
+  PPCODE:
+    {
+      HV *data_hv = NULL;
+      AV *errors_av = NULL;
+      if (data && SvOK(data) && SvROK(data) && SvTYPE(SvRV(data)) == SVt_PVHV) {
+        data_hv = (HV *)SvRV(data);
+      }
+      if (error_records && SvOK(error_records) && SvROK(error_records) && SvTYPE(SvRV(error_records)) == SVt_PVAV) {
+        errors_av = (AV *)SvRV(error_records);
+      }
+      gql_runtime_vm_consume_outcome_sv(aTHX_ data_hv, result_name, outcome, errors_av);
+    }
+
+SV *
 execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef)
     SV *runtime_schema
     SV *bundle_sv

@@ -69,7 +69,7 @@ subtest 'top-level compile helper returns same graph kind' => sub {
 };
 
 subtest 'runtime graph records field families and dispatch shapes' => sub {
-  my $compiled = $schema->compile_runtime_graph;
+  my $compiled = $schema->compile_runtime;
   my $block = $compiled->root_block('query');
   my %slots = map { ($_->field_name => $_) } @{ $block->slots };
 

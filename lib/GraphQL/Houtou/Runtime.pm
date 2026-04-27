@@ -20,11 +20,7 @@ our @EXPORT_OK = qw(
   compile_program
   inflate_program
   execute_program
-  inflate_vm_bundle
-  inflate_vm_program
-  inflate_vm_native_bundle
   execute_vm
-  execute_vm_native_bundle
   native_codes
   load_native_bundle
   load_native_runtime
@@ -86,18 +82,6 @@ sub execute_program {
   return execute_vm($runtime_schema, $program_for_exec, %opts);
 }
 
-sub inflate_vm_bundle {
-  return GraphQL::Houtou::Runtime::VMCompiler->inflate_native_bundle(@_);
-}
-
-sub inflate_vm_program {
-  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program(@_);
-}
-
-sub inflate_vm_native_bundle {
-  return GraphQL::Houtou::Runtime::VMCompiler->inflate_native_bundle(@_);
-}
-
 sub execute_vm {
   my ($runtime_schema, $program, %opts) = @_;
   my $engine = $opts{engine};
@@ -111,19 +95,6 @@ sub execute_vm {
     runtime_schema => $runtime_schema,
   );
   return $native_runtime->execute_compact_program($program, %opts);
-}
-
-sub execute_vm_native_bundle {
-  my ($runtime_schema, $descriptor, %opts) = @_;
-  my $bundle = GraphQL::Houtou::Native::load_native_bundle($descriptor);
-  my $runtime_struct = $runtime_schema->can('to_native_exec_struct')
-    ? $runtime_schema->to_native_exec_struct
-    : (
-      ref($descriptor) eq 'HASH' && $descriptor->{runtime}
-        ? $descriptor->{runtime}
-        : $runtime_schema
-    );
-  return execute_native_bundle($runtime_struct, $bundle, %opts);
 }
 
 sub native_codes {

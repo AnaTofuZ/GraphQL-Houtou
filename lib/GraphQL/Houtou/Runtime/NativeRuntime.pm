@@ -134,7 +134,10 @@ sub load_bundle_descriptor {
 
 sub inflate_bundle_descriptor {
   my ($self, $descriptor) = @_;
-  return $self->runtime_schema->inflate_vm_native_bundle($descriptor);
+  return GraphQL::Houtou::Runtime::VMCompiler->inflate_native_bundle(
+    $self->runtime_schema,
+    $descriptor,
+  );
 }
 
 sub dump_bundle_descriptor {

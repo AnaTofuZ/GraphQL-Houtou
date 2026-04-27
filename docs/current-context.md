@@ -203,6 +203,12 @@ fresh `./Build build` 済み環境で、
   は XSUB owner へ移し、Perl 側は orchestrator だけを残す形に移行した
 - `Cursor` の snapshot / restore は XSUB 関数名呼び出しではなく `src/vm_runtime.h` の C helper に降ろし、
   `ExecState` の block lifecycle も native helper から直接扱えるようにした
+- `BlockFrame` の pending queue は raw outcome pointer ではなく generic `SV*` queue として持ち、
+  promise SV と XS-owned outcome handle を同じ queue で扱えるようにした
+- `Runtime::ErrorRecord` は XS-owned native record を本体とする thin facade に寄せ、
+  resolver/runtime error の message cleanup と path capture は `src/vm_runtime.h` 側で処理する
+- 現在の runtime hot path では、`Outcome` / `Writer` / `ErrorRecord` / `FieldFrame` などの
+  Perl hash/array は内部通貨ではなく、境界用の facade に限定する方向で再実装している
 - historical / internal parser 資料は docs にのみ残し、mainline の API からは `graphql-js` dialect を外した
 - parser compatibility 自体は要件から外し、parser 本体と旧互換層が共有していた helper は
   `src/parser_shared_ast.h` へ切り出したうえで parser-internal 層に閉じ込めた

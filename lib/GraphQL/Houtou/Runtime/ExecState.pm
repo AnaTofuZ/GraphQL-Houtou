@@ -155,6 +155,14 @@ sub advance_current_op {
 
 sub enter_current_field {
   my ($self, $source, $base_path) = @_;
+  if (!$self->promise_code) {
+    GraphQL::Houtou::_bootstrap_xs();
+    return GraphQL::Houtou::XS::VM::exec_state_enter_current_field_xs(
+      $self,
+      $source,
+      $base_path,
+    );
+  }
   my $op = $self->current_op or return;
   my $path_frame = GraphQL::Houtou::Runtime::PathFrame->new(
     parent => $base_path,
@@ -165,6 +173,11 @@ sub enter_current_field {
 
 sub consume_current_field_outcome {
   my ($self, $outcome) = @_;
+  if (!$self->promise_code) {
+    GraphQL::Houtou::_bootstrap_xs();
+    GraphQL::Houtou::XS::VM::exec_state_consume_current_field_outcome_xs($self, $outcome);
+    return $self->field_frame;
+  }
   my $op = $self->current_op or return;
   my $frame = $self->current_frame or return;
   my $field = $self->current_field_frame;
@@ -194,6 +207,10 @@ sub leave_block {
 
 sub finalize_current_block {
   my ($self, $snapshot) = @_;
+  if (!$self->promise_code) {
+    GraphQL::Houtou::_bootstrap_xs();
+    return GraphQL::Houtou::XS::VM::exec_state_finalize_current_block_xs($self, $snapshot);
+  }
   my $frame = $self->current_frame;
   my $result = $frame->finalize($self->promise_code, $self->writer);
   return $self->leave_block($snapshot, $result);

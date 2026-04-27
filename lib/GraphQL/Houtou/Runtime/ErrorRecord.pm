@@ -3,30 +3,31 @@ package GraphQL::Houtou::Runtime::ErrorRecord;
 use 5.014;
 use strict;
 use warnings;
+use GraphQL::Houtou ();
 
 sub new {
   my ($class, %args) = @_;
-  return bless {
-    message => $args{message},
-    path_frame => $args{path_frame},
-  }, $class;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::error_record_new_xs(
+    $class,
+    $args{message},
+    $args{path_frame},
+  );
 }
 
-sub message { return $_[0]{message} }
-sub path_frame { return $_[0]{path_frame} }
+sub message {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::error_record_message_xs($_[0]);
+}
+
+sub path_frame {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::error_record_path_frame_xs($_[0]);
+}
 
 sub to_error {
-  my ($self) = @_;
-  my $error = {
-    message => $self->{message},
-  };
-
-  if (my $path_frame = $self->{path_frame}) {
-    my $path = $path_frame->materialize_path;
-    $error->{path} = $path if @$path;
-  }
-
-  return $error;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::error_record_to_error_xs($_[0]);
 }
 
 1;

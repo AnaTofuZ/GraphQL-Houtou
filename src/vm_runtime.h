@@ -152,32 +152,49 @@ typedef struct {
   SV *current_op;
 } gql_runtime_vm_cursor_t;
 
+typedef struct gql_runtime_vm_path_frame gql_runtime_vm_path_frame_t;
+
 typedef struct {
   SV *source;
-  SV *path_frame;
+  gql_runtime_vm_path_frame_t *path_frame;
   SV *resolved_value;
   SV *outcome;
 } gql_runtime_vm_field_frame_t;
 
+struct gql_runtime_vm_path_frame {
+  UV refcount;
+  struct gql_runtime_vm_path_frame *parent;
+  IV key_kind;
+  IV key_iv;
+  char *key_pv;
+};
+
 typedef struct {
-  SV *parent;
-  SV *key;
-} gql_runtime_vm_path_frame_t;
+  UV refcount;
+  char *message_pv;
+  gql_runtime_vm_path_frame_t *path_frame;
+} gql_runtime_vm_error_record_t;
 
 typedef struct {
   HV *values_hv;
-  AV *pending_names_av;
-  AV *pending_outcomes_av;
+  IV pending_count;
+  IV pending_capacity;
+  SV **pending_names;
+  SV **pending_outcomes;
 } gql_runtime_vm_block_frame_t;
 
-typedef struct {
+typedef struct gql_runtime_vm_outcome {
+  UV refcount;
   U8 kind_code;
   SV *value_sv;
-  AV *error_records_av;
+  IV error_record_count;
+  gql_runtime_vm_error_record_t **error_records;
 } gql_runtime_vm_outcome_t;
 
 typedef struct {
-  AV *error_records_av;
+  IV error_record_count;
+  IV error_record_capacity;
+  gql_runtime_vm_error_record_t **error_records;
 } gql_runtime_vm_writer_t;
 
 static AV *gql_runtime_vm_expect_op_array(pTHX_ SV *op_sv);
@@ -185,6 +202,18 @@ static SV *gql_runtime_vm_op_slot_sv(pTHX_ SV *op_sv, IV index);
 static SV *gql_runtime_vm_op_result_name_sv(pTHX_ SV *op_sv);
 static SV *gql_runtime_vm_new_handle_sv(pTHX_ const char *pkg, void *ptr);
 static gql_runtime_vm_cursor_t *gql_runtime_vm_expect_cursor(pTHX_ SV *self);
+static gql_runtime_vm_error_record_t *gql_runtime_vm_expect_error_record(pTHX_ SV *self);
+static gql_runtime_vm_outcome_t *gql_runtime_vm_expect_outcome(pTHX_ SV *self);
+static void gql_runtime_vm_error_record_incref(gql_runtime_vm_error_record_t *record);
+static void gql_runtime_vm_error_record_decref(pTHX_ gql_runtime_vm_error_record_t *record);
+static void gql_runtime_vm_outcome_incref(gql_runtime_vm_outcome_t *outcome);
+static void gql_runtime_vm_outcome_decref(pTHX_ gql_runtime_vm_outcome_t *outcome);
+static void gql_runtime_vm_writer_push_error_record(gql_runtime_vm_writer_t *writer, gql_runtime_vm_error_record_t *record);
+static void gql_runtime_vm_maybe_incref_outcome_handle(pTHX_ SV *sv);
+static void gql_runtime_vm_maybe_decref_outcome_handle(pTHX_ SV *sv);
+static void gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, SV *result_name, SV *outcome_sv);
+static void gql_runtime_vm_block_frame_clear_pending(pTHX_ gql_runtime_vm_block_frame_t *frame);
+static void gql_runtime_vm_path_frame_decref(gql_runtime_vm_path_frame_t *frame);
 
 static AV *
 gql_runtime_vm_expect_op_array(pTHX_ SV *op_sv)
@@ -219,6 +248,125 @@ static SV *
 gql_runtime_vm_new_cursor_handle(pTHX_ const char *pkg, gql_runtime_vm_cursor_t *cursor)
 {
   return gql_runtime_vm_new_handle_sv(aTHX_ pkg, cursor);
+}
+
+static void
+gql_runtime_vm_error_record_incref(gql_runtime_vm_error_record_t *record)
+{
+  if (record) {
+    record->refcount++;
+  }
+}
+
+static void
+gql_runtime_vm_error_record_decref(pTHX_ gql_runtime_vm_error_record_t *record)
+{
+  if (!record) {
+    return;
+  }
+  if (record->refcount > 1) {
+    record->refcount--;
+    return;
+  }
+  if (record->message_pv) {
+    Safefree(record->message_pv);
+  }
+  gql_runtime_vm_path_frame_decref(record->path_frame);
+  Safefree(record);
+}
+
+static void
+gql_runtime_vm_outcome_incref(gql_runtime_vm_outcome_t *outcome)
+{
+  if (outcome) {
+    outcome->refcount++;
+  }
+}
+
+static void
+gql_runtime_vm_outcome_decref(pTHX_ gql_runtime_vm_outcome_t *outcome)
+{
+  IV i;
+  if (!outcome) {
+    return;
+  }
+  if (outcome->refcount > 1) {
+    outcome->refcount--;
+    return;
+  }
+  SvREFCNT_dec(outcome->value_sv);
+  for (i = 0; i < outcome->error_record_count; i++) {
+    gql_runtime_vm_error_record_decref(aTHX_ outcome->error_records[i]);
+  }
+  Safefree(outcome->error_records);
+  Safefree(outcome);
+}
+
+static void
+gql_runtime_vm_writer_push_error_record(gql_runtime_vm_writer_t *writer, gql_runtime_vm_error_record_t *record)
+{
+  if (!writer || !record) {
+    return;
+  }
+  if (writer->error_record_count == writer->error_record_capacity) {
+    writer->error_record_capacity = writer->error_record_capacity ? writer->error_record_capacity * 2 : 4;
+    Renew(writer->error_records, writer->error_record_capacity, gql_runtime_vm_error_record_t *);
+  }
+  gql_runtime_vm_error_record_incref(record);
+  writer->error_records[writer->error_record_count++] = record;
+}
+
+static void
+gql_runtime_vm_maybe_incref_outcome_handle(pTHX_ SV *sv)
+{
+  if (sv && SvOK(sv) && SvROK(sv) && sv_derived_from(sv, "GraphQL::Houtou::Runtime::Outcome")) {
+    gql_runtime_vm_outcome_incref(gql_runtime_vm_expect_outcome(aTHX_ sv));
+  }
+}
+
+static void
+gql_runtime_vm_maybe_decref_outcome_handle(pTHX_ SV *sv)
+{
+  if (sv && SvOK(sv) && SvROK(sv) && sv_derived_from(sv, "GraphQL::Houtou::Runtime::Outcome")) {
+    gql_runtime_vm_outcome_decref(aTHX_ gql_runtime_vm_expect_outcome(aTHX_ sv));
+  }
+}
+
+static void
+gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, SV *result_name, SV *outcome_sv)
+{
+  if (!frame || !result_name || !outcome_sv) {
+    return;
+  }
+  if (frame->pending_count == frame->pending_capacity) {
+    frame->pending_capacity = frame->pending_capacity ? frame->pending_capacity * 2 : 4;
+    Renew(frame->pending_names, frame->pending_capacity, SV *);
+    Renew(frame->pending_outcomes, frame->pending_capacity, SV *);
+  }
+  frame->pending_names[frame->pending_count] = newSVsv(result_name);
+  gql_runtime_vm_maybe_incref_outcome_handle(aTHX_ outcome_sv);
+  frame->pending_outcomes[frame->pending_count] = newSVsv(outcome_sv);
+  frame->pending_count++;
+}
+
+static void
+gql_runtime_vm_block_frame_clear_pending(pTHX_ gql_runtime_vm_block_frame_t *frame)
+{
+  IV i;
+  if (!frame) {
+    return;
+  }
+  for (i = 0; i < frame->pending_count; i++) {
+    SvREFCNT_dec(frame->pending_names[i]);
+    gql_runtime_vm_maybe_decref_outcome_handle(aTHX_ frame->pending_outcomes[i]);
+    SvREFCNT_dec(frame->pending_outcomes[i]);
+  }
+  Safefree(frame->pending_names);
+  Safefree(frame->pending_outcomes);
+  frame->pending_names = NULL;
+  frame->pending_outcomes = NULL;
+  frame->pending_count = 0;
+  frame->pending_capacity = 0;
 }
 
 static SV *
@@ -271,16 +419,136 @@ gql_runtime_vm_expect_error_records_av(pTHX_ SV *error_records)
   return newAV();
 }
 
+static gql_runtime_vm_error_record_t *
+gql_runtime_vm_new_error_record_struct(pTHX_ SV *message, SV *path_frame)
+{
+  gql_runtime_vm_error_record_t *record;
+  STRLEN len = 0;
+  const char *pv = NULL;
+
+  Newxz(record, 1, gql_runtime_vm_error_record_t);
+  record->refcount = 1;
+  if (message && SvOK(message)) {
+    pv = SvPV(message, len);
+    Newxz(record->message_pv, len + 1, char);
+    Copy(pv, record->message_pv, len, char);
+    record->message_pv[len] = '\0';
+  }
+  if (path_frame && SvOK(path_frame) && SvROK(path_frame) && SvIOK(SvRV(path_frame)) && SvUV(SvRV(path_frame)) != 0) {
+    record->path_frame = INT2PTR(gql_runtime_vm_path_frame_t *, SvUV(SvRV(path_frame)));
+    record->path_frame->refcount++;
+  } else {
+    record->path_frame = NULL;
+  }
+  return record;
+}
+
+static SV *
+gql_runtime_vm_path_frame_key_sv(pTHX_ const gql_runtime_vm_path_frame_t *frame)
+{
+  if (!frame) {
+    return newSV(0);
+  }
+  if (frame->key_kind == 1) {
+    return newSViv(frame->key_iv);
+  }
+  if (frame->key_pv) {
+    return newSVpv(frame->key_pv, 0);
+  }
+  return newSV(0);
+}
+
+static void
+gql_runtime_vm_path_frame_decref(gql_runtime_vm_path_frame_t *frame)
+{
+  if (!frame) {
+    return;
+  }
+  if (frame->refcount > 0) {
+    frame->refcount--;
+  }
+  if (frame->refcount == 0) {
+    gql_runtime_vm_path_frame_t *parent = frame->parent;
+    Safefree(frame->key_pv);
+    Safefree(frame);
+    gql_runtime_vm_path_frame_decref(parent);
+  }
+}
+
+static SV *
+gql_runtime_vm_path_frame_to_path_sv(pTHX_ gql_runtime_vm_path_frame_t *path_frame)
+{
+  AV *segments = newAV();
+  AV *path_av = newAV();
+  gql_runtime_vm_path_frame_t *cursor = path_frame;
+  SSize_t i;
+
+  while (cursor) {
+    av_push(segments, gql_runtime_vm_path_frame_key_sv(aTHX_ cursor));
+    cursor = cursor->parent;
+  }
+
+  for (i = av_len(segments); i >= 0; i--) {
+    SV **svp = av_fetch(segments, i, 0);
+    if (svp && *svp) {
+      av_push(path_av, newSVsv(*svp));
+    }
+  }
+
+  SvREFCNT_dec((SV *)segments);
+  return newRV_noinc((SV *)path_av);
+}
+
+static SV *
+gql_runtime_vm_error_record_to_error_sv(pTHX_ const gql_runtime_vm_error_record_t *record)
+{
+  HV *error_hv = newHV();
+  SV *path_sv = NULL;
+
+  if (!record) {
+    return newRV_noinc((SV *)error_hv);
+  }
+
+  hv_store(error_hv, "message", 7, record->message_pv ? newSVpv(record->message_pv, 0) : newSVsv(&PL_sv_undef), 0);
+
+  if (record->path_frame) {
+    path_sv = gql_runtime_vm_path_frame_to_path_sv(aTHX_ record->path_frame);
+    if (path_sv && SvOK(path_sv) && SvROK(path_sv) && SvTYPE(SvRV(path_sv)) == SVt_PVAV && av_count((AV *)SvRV(path_sv)) > 0) {
+      hv_store(error_hv, "path", 4, path_sv, 0);
+      path_sv = NULL;
+    }
+  }
+
+  if (path_sv) {
+    SvREFCNT_dec(path_sv);
+  }
+
+  return newRV_noinc((SV *)error_hv);
+}
+
 static gql_runtime_vm_outcome_t *
 gql_runtime_vm_new_outcome_struct(pTHX_ U8 kind_code, SV *value, SV *error_records)
 {
   gql_runtime_vm_outcome_t *outcome;
   AV *errors_av = gql_runtime_vm_expect_error_records_av(aTHX_ error_records);
+  SSize_t i;
 
   Newxz(outcome, 1, gql_runtime_vm_outcome_t);
+  outcome->refcount = 1;
   outcome->kind_code = kind_code;
   outcome->value_sv = value ? newSVsv(value) : newSV(0);
-  outcome->error_records_av = (AV *)SvREFCNT_inc((SV *)errors_av);
+  outcome->error_record_count = av_count(errors_av);
+  if (outcome->error_record_count > 0) {
+    Newxz(outcome->error_records, outcome->error_record_count, gql_runtime_vm_error_record_t *);
+    for (i = 0; i < outcome->error_record_count; i++) {
+      SV **svp = av_fetch(errors_av, i, 0);
+      if (svp && *svp && SvOK(*svp)) {
+        gql_runtime_vm_error_record_t *record = gql_runtime_vm_expect_error_record(aTHX_ *svp);
+        gql_runtime_vm_error_record_incref(record);
+        outcome->error_records[i] = record;
+      }
+    }
+  }
 
   return outcome;
 }
@@ -309,14 +577,13 @@ gql_runtime_vm_new_writer_struct(pTHX_)
   gql_runtime_vm_writer_t *writer;
 
   Newxz(writer, 1, gql_runtime_vm_writer_t);
-  writer->error_records_av = newAV();
   return writer;
 }
 
 static void
 gql_runtime_vm_consume_outcome_struct(pTHX_ HV *data_hv, SV *result_name_sv, const gql_runtime_vm_outcome_t *outcome, gql_runtime_vm_writer_t *writer)
 {
-  SSize_t i;
+  IV i;
 
   if (!data_hv || !result_name_sv || !outcome) {
     return;
@@ -329,16 +596,30 @@ gql_runtime_vm_consume_outcome_struct(pTHX_ HV *data_hv, SV *result_name_sv, con
     0
   );
 
-  if (!writer || !writer->error_records_av || !outcome->error_records_av) {
+  if (!writer) {
     return;
   }
 
-  for (i = 0; i <= av_len(outcome->error_records_av); i++) {
-    SV **err_svp = av_fetch(outcome->error_records_av, i, 0);
-    if (err_svp && *err_svp) {
-      av_push(writer->error_records_av, newSVsv(*err_svp));
-    }
+  for (i = 0; i < outcome->error_record_count; i++) {
+    gql_runtime_vm_writer_push_error_record(writer, outcome->error_records[i]);
   }
+}
+
+static SV *
+gql_runtime_vm_writer_materialize_errors_sv(pTHX_ const gql_runtime_vm_writer_t *writer)
+{
+  AV *errors_av = newAV();
+  IV i;
+
+  if (!writer) {
+    return newRV_noinc((SV *)errors_av);
+  }
+
+  for (i = 0; i < writer->error_record_count; i++) {
+    av_push(errors_av, gql_runtime_vm_error_record_to_error_sv(aTHX_ writer->error_records[i]));
+  }
+
+  return newRV_noinc((SV *)errors_av);
 }
 
 static SV *

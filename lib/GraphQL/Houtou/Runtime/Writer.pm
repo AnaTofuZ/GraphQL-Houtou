@@ -30,8 +30,8 @@ sub consume_outcome {
 }
 
 sub materialize_errors {
-  my ($self) = @_;
-  return [ map { $_->to_error } @{ $self->error_records || [] } ];
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::writer_materialize_errors_xs($_[0]);
 }
 
 1;

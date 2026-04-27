@@ -218,6 +218,27 @@ The next refinement after this split is also in place:
 - the same applies to program bootstrap:
   - a state-owned factory should build cursor/writer/promise/variable state for
     a lowered program
+
+The same slot-first rule should also apply to immutable VM artifacts:
+
+- `VMOp`
+- `VMBlock`
+- `VMProgram`
+
+These should prefer:
+
+- fixed slots
+- opcode / family ids as primary runtime shape
+- setter-based runtime binding
+
+and treat:
+
+- names
+- debug strings
+- descriptor-only payloads
+
+as cold metadata. This keeps the Perl prototype aligned with the eventual XS
+layout and avoids reintroducing hash-based artifact mutation in the hot path.
   - a state-owned top-level runner should execute the root block and emit the
     final response boundary
   - the executor object can then remain as a façade/API shell rather than a

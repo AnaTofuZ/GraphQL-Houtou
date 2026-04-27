@@ -192,9 +192,9 @@ sub _inflate_native_op {
     directives_mode => $struct->{directives_mode} || 'NONE',
     has_directives => $struct->{has_directives},
   );
-  $op->{_native_slot_index} = $struct->{slot_index};
-  $op->{_native_child_block_index} = $struct->{child_block_index};
-  $op->{_native_abstract_child_block_indexes} = $struct->{abstract_child_block_indexes} || {};
+  $op->set_native_slot_index($struct->{slot_index});
+  $op->set_native_child_block_index($struct->{child_block_index});
+  $op->set_native_abstract_child_block_indexes($struct->{abstract_child_block_indexes} || {});
   return $op;
 }
 
@@ -213,27 +213,27 @@ sub _bind_vm_ops {
       : ();
 
     for my $op (@{ $block->ops || [] }) {
-      $op->{bound_slot} ||= $slots{ $op->field_name };
-      $op->{bound_slot} ||= _bind_typename_slot($runtime_schema, $block, $op);
-      if (!$op->{abstract_dispatch} && (($op->opcode || q()) =~ /:COMPLETE_ABSTRACT$/)) {
-        my $slot = $op->{bound_slot};
+      $op->set_bound_slot($op->bound_slot || $slots{ $op->field_name });
+      $op->set_bound_slot($op->bound_slot || _bind_typename_slot($runtime_schema, $block, $op));
+      if (!$op->abstract_dispatch && (($op->opcode || q()) =~ /:COMPLETE_ABSTRACT$/)) {
+        my $slot = $op->bound_slot;
         my $return_type = $slot ? $slot->return_type_name : undef;
-        $op->{abstract_dispatch} = GraphQL::Houtou::Runtime::OperationCompiler::_bind_abstract_dispatch(
+        $op->set_abstract_dispatch(GraphQL::Houtou::Runtime::OperationCompiler::_bind_abstract_dispatch(
           $runtime_schema,
           $return_type,
-        ) if defined $return_type;
+        )) if defined $return_type;
       }
-      $op->{bound_child_block} = $op->child_block_name
+      $op->set_bound_child_block($op->child_block_name
         ? $blocks{ $op->child_block_name }
-        : undef;
-      $op->{bound_abstract_child_blocks} = {
+        : undef);
+      $op->set_bound_abstract_child_blocks({
         map {
           my $child_name = $op->abstract_child_blocks->{$_};
           ($_ => ($child_name ? $blocks{$child_name} : undef))
         } keys %{ $op->abstract_child_blocks || {} }
-      };
-      $op->{resolve_handler} ||= $RESOLVE_HANDLER{ $op->resolve_family || '' };
-      $op->{complete_handler} ||= $COMPLETE_HANDLER{ $op->complete_family || '' };
+      });
+      $op->set_resolve_handler($op->resolve_handler || $RESOLVE_HANDLER{ $op->resolve_family || '' });
+      $op->set_complete_handler($op->complete_handler || $COMPLETE_HANDLER{ $op->complete_family || '' });
     }
   }
 
@@ -252,37 +252,37 @@ sub _bind_native_vm_ops {
     my @native_slots = @{ $block_struct->{slots} || [] };
 
     for my $op (@{ $block->ops || [] }) {
-      my $slot_struct = defined $op->{_native_slot_index}
-        ? $native_slots[ $op->{_native_slot_index} ]
+      my $slot_struct = defined $op->native_slot_index
+        ? $native_slots[ $op->native_slot_index ]
         : undef;
       my $runtime_slot = $slot_struct && defined $slot_struct->{schema_slot_index}
         ? $runtime_slots[ $slot_struct->{schema_slot_index} ]
         : undef;
 
-      $op->{bound_slot} = $runtime_slot if $runtime_slot;
-      $op->{field_name} = $slot_struct->{field_name} if $slot_struct && defined $slot_struct->{field_name};
-      $op->{result_name} = $slot_struct->{result_name} if $slot_struct && defined $slot_struct->{result_name};
-      $op->{bound_slot} ||= _bind_typename_slot($runtime_schema, $block, $op, $slot_struct);
+      $op->set_bound_slot($runtime_slot) if $runtime_slot;
+      $op->set_field_name($slot_struct->{field_name}) if $slot_struct && defined $slot_struct->{field_name};
+      $op->set_result_name($slot_struct->{result_name}) if $slot_struct && defined $slot_struct->{result_name};
+      $op->set_bound_slot($op->bound_slot || _bind_typename_slot($runtime_schema, $block, $op, $slot_struct));
 
-      if (!$op->{abstract_dispatch} && (($op->complete_family || q()) eq 'COMPLETE_ABSTRACT')) {
+      if (!$op->abstract_dispatch && (($op->complete_family || q()) eq 'COMPLETE_ABSTRACT')) {
         my $return_type = $runtime_slot ? $runtime_slot->return_type_name : ($slot_struct ? $slot_struct->{return_type_name} : undef);
-        $op->{abstract_dispatch} = GraphQL::Houtou::Runtime::OperationCompiler::_bind_abstract_dispatch(
+        $op->set_abstract_dispatch(GraphQL::Houtou::Runtime::OperationCompiler::_bind_abstract_dispatch(
           $runtime_schema,
           $return_type,
-        ) if defined $return_type;
+        )) if defined $return_type;
       }
 
-      $op->{bound_child_block} = defined $op->{_native_child_block_index}
-        ? $blocks[ $op->{_native_child_block_index} ]
-        : undef;
-      $op->{bound_abstract_child_blocks} = {
+      $op->set_bound_child_block(defined $op->native_child_block_index
+        ? $blocks[ $op->native_child_block_index ]
+        : undef);
+      $op->set_bound_abstract_child_blocks({
         map {
-          my $idx = $op->{_native_abstract_child_block_indexes}{$_};
+          my $idx = $op->native_abstract_child_block_indexes->{$_};
           ($_ => (defined $idx ? $blocks[$idx] : undef))
-        } keys %{ $op->{_native_abstract_child_block_indexes} || {} }
-      };
-      $op->{resolve_handler} ||= $RESOLVE_HANDLER{ $op->resolve_family || q() };
-      $op->{complete_handler} ||= $COMPLETE_HANDLER{ $op->complete_family || q() };
+        } keys %{ $op->native_abstract_child_block_indexes || {} }
+      });
+      $op->set_resolve_handler($op->resolve_handler || $RESOLVE_HANDLER{ $op->resolve_family || q() });
+      $op->set_complete_handler($op->complete_handler || $COMPLETE_HANDLER{ $op->complete_family || q() });
     }
   }
 

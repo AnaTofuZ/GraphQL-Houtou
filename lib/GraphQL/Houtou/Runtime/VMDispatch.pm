@@ -6,18 +6,18 @@ use warnings;
 
 sub bind_program {
   my ($class, $program) = @_;
-  return if !$program || $program->{dispatch_bound};
+  return if !$program || $program->dispatch_bound;
 
   for my $block ($program->root_block, @{ $program->blocks || [] }) {
     next if !$block;
     for my $op (@{ $block->ops || [] }) {
-      $op->{resolve_dispatch} ||= _resolve_dispatch_for($op);
-      $op->{complete_dispatch} ||= _complete_dispatch_for($op);
-      $op->{run_dispatch} ||= _run_dispatch_for($op);
+      $op->set_resolve_dispatch($op->resolve_dispatch || _resolve_dispatch_for($op));
+      $op->set_complete_dispatch($op->complete_dispatch || _complete_dispatch_for($op));
+      $op->set_run_dispatch($op->run_dispatch || _run_dispatch_for($op));
     }
   }
 
-  $program->{dispatch_bound} = 1;
+  $program->set_dispatch_bound(1);
   return $program;
 }
 

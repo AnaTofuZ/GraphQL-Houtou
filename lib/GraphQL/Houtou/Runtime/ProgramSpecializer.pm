@@ -24,10 +24,10 @@ sub specialize_for_native {
       _specialize_args($runtime_schema, $op, $variables);
       push @ops, $op;
     }
-    $block->{ops} = \@ops;
+    $block->set_ops(\@ops);
   }
 
-  $clone->{variable_defs} = {};
+  $clone->set_variable_defs({});
   return $clone;
 }
 
@@ -39,9 +39,9 @@ sub _specialize_directives {
   my $guards = $op->directives_payload || [];
   return 0 if !_evaluate_runtime_guards($guards, $variables);
 
-  $op->{has_directives} = 0;
-  $op->{directives_mode} = 'NONE';
-  $op->{directives_payload} = undef;
+  $op->set_has_directives(0);
+  $op->set_directives_mode('NONE');
+  $op->set_directives_payload(undef);
   return 1;
 }
 
@@ -49,9 +49,9 @@ sub _specialize_args {
   my ($runtime_schema, $op, $variables) = @_;
   my $arg_defs = $op->arg_defs || {};
   if (!keys %$arg_defs) {
-    $op->{has_args} = 0;
-    $op->{args_mode} = 'NONE';
-    $op->{args_payload} = undef;
+    $op->set_has_args(0);
+    $op->set_args_mode('NONE');
+    $op->set_args_payload(undef);
     return;
   }
 
@@ -61,9 +61,10 @@ sub _specialize_args {
     ? _coerce_dynamic_args($runtime_schema, $arg_defs, $payload, $variables)
     : _coerce_static_args($runtime_schema, $arg_defs, $payload);
 
-  $op->{has_args} = keys %$coerced ? 1 : 0;
-  $op->{args_mode} = $op->{has_args} ? 'STATIC' : 'NONE';
-  $op->{args_payload} = $op->{has_args} ? $coerced : undef;
+  my $has_args = keys %$coerced ? 1 : 0;
+  $op->set_has_args($has_args);
+  $op->set_args_mode($has_args ? 'STATIC' : 'NONE');
+  $op->set_args_payload($has_args ? $coerced : undef);
 }
 
 sub _evaluate_runtime_guards {

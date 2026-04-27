@@ -4648,6 +4648,15 @@ This fixes the first real bridge-design bug we hit in the reboot:
       - `VMBlock`
       - `VMProgram`
       の artifact 側を slot/opcode-first に寄せること。
+  - 上記の次の XS-ready checkpoint として、VM artifact 側も slot/opcode-first に寄せた。
+    - `Runtime::VMOp`
+    - `Runtime::VMBlock`
+    - `Runtime::VMProgram`
+      を fixed-slot array object に変更。
+    - `VMCompiler` / `VMDispatch` / `ProgramSpecializer` / `ExecState`
+      は hash mutation ではなく accessor/setter 経由で VM artifact を bind する。
+    - これで hot path state だけでなく、XS に渡す前の immutable artifact 側も
+      slot-first な内部通貨へ揃い始めた。
   - runtime schema 側で `__typename` を first-class slot として扱うようにした。
     - object block は `__typename` slot を必ず先頭に持つ。
     - operation lowering も pseudo field ではなく real runtime slot を優先して bind する。
@@ -4664,6 +4673,16 @@ This fixes the first real bridge-design bug we hit in the reboot:
     - `abstract_with_fragment`
       - `houtou_runtime_cached_perl` median `15428/s`
       - `houtou_runtime_native_bundle` median `488490/s`
+  - VM artifact slotification 後の repeat checkpoint は:
+    - `nested_variable_object`
+      - `houtou_runtime_cached_perl` median `17761/s`
+      - `houtou_runtime_native_bundle` median `510838/s`
+    - `list_of_objects`
+      - `houtou_runtime_cached_perl` median `13569/s`
+      - `houtou_runtime_native_bundle` median `442547/s`
+    - `abstract_with_fragment`
+      - `houtou_runtime_cached_perl` median `16036/s`
+      - `houtou_runtime_native_bundle` median `490021/s`
   - ここで重要なのは、benchmark が workspace の `blib/arch` XS artifact を使うこと。
     local の `.xs` 変更後に `./Build build` を忘れると、Perl 側と native 側の
     shape がずれて誤った benchmark failure を起こす。

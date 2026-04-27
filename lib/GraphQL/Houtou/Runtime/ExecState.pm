@@ -326,10 +326,10 @@ sub resolve_args_for_current_field {
   my $arg_defs = $op->arg_defs || {};
   return $self->empty_args if !keys %$arg_defs;
   return $self->_coerce_static_args($arg_defs, {})
-    if $mode eq 'STATIC' && !$op->{args_payload};
-  return $self->_coerce_static_args($arg_defs, $op->{args_payload} || {})
+    if $mode eq 'STATIC' && !$op->args_payload;
+  return $self->_coerce_static_args($arg_defs, $op->args_payload || {})
     if $mode eq 'STATIC';
-  return $self->_coerce_dynamic_args($arg_defs, $op->{args_payload} || {})
+  return $self->_coerce_dynamic_args($arg_defs, $op->args_payload || {})
     if $mode eq 'DYNAMIC';
   return $self->_coerce_static_args($arg_defs, {});
 }

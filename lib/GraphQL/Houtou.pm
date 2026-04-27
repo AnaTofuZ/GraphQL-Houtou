@@ -35,9 +35,9 @@ sub _bootstrap_xs {
 }
 
 sub parse {
-  my ($source, $no_location) = @_;
+  my ($source) = @_;
   require GraphQL::Houtou::XS::Parser;
-  return GraphQL::Houtou::XS::Parser::parse_xs($source, $no_location);
+  return GraphQL::Houtou::XS::Parser::parse_xs($source, undef);
 }
 
 sub parse_with_options {

@@ -14,6 +14,13 @@ subtest 'top-level parse returns legacy AST shape' => sub {
   is $ast->[0]{selections}[0]{name}, 'viewer', 'legacy field name is preserved';
 };
 
+subtest 'parse rejects parser options and stays minimal' => sub {
+  my $error;
+  eval { parse('{ viewer { id } }', 1) };
+  $error = $@;
+  ok !$error, 'extra positional parser flags are ignored by Perl signature truncation';
+};
+
 subtest 'parse_with_options exposes only parser-local options' => sub {
   my $ast = parse_with_options('{ viewer { id } }', {
     no_location => 1,

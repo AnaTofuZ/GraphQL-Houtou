@@ -984,6 +984,7 @@ The current public wrappers for this are:
 
 - `build_native_runtime($schema)`
 - `Schema->build_native_runtime`
+- `Schema->build_runtime`
 - `Runtime::NativeRuntime->compile_program(...)`
 - `Runtime::NativeRuntime->execute_program(...)`
 - `Runtime::NativeRuntime->compile_bundle(...)`
@@ -992,6 +993,23 @@ The current public wrappers for this are:
 
 This keeps the control plane in Perl while ensuring child modules do not call
 XS directly.
+
+For the public hot path, the intended rule is:
+
+- `compile_runtime(...)` remains an uncached compiler entrypoint
+- `build_runtime(...)` and `build_native_runtime(...)` are boot-time cache APIs
+- no-opt public execution should prefer the cached runtime graph / native wrapper
+- `clear_runtime_cache()` must invalidate:
+  - schema metadata cache
+  - compiled runtime graph
+  - cached native runtime wrapper
+
+This keeps the web-application mainline coherent:
+
+- app boot: `build_runtime` / `build_native_runtime`
+- request: compile or reuse VM program
+- request: specialize if needed
+- top-level bridge: execute on native runtime
 ## Public API direction
 
 The runtime-facing public API should treat VM artifacts as the primary

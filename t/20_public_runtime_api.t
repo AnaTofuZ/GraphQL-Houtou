@@ -4,7 +4,7 @@ use Test::More;
 use File::Temp qw(tempfile);
 
 use lib 'lib';
-use GraphQL::Houtou qw(execute compile_runtime build_native_runtime);
+use GraphQL::Houtou qw(execute compile_runtime build_runtime build_native_runtime);
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);
@@ -64,6 +64,25 @@ subtest 'top-level compile_runtime returns schema runtime' => sub {
   }, 'compiled runtime can execute operation';
 };
 
+subtest 'top-level build_runtime returns cached schema runtime' => sub {
+  my $first = build_runtime($schema);
+  my $second = build_runtime($schema);
+
+  isa_ok $first, 'GraphQL::Houtou::Runtime::SchemaGraph';
+  is $second, $first, 'top-level build_runtime reuses cached runtime graph';
+};
+
+subtest 'schema build_runtime caches no-opt runtime graph' => sub {
+  my $first = $schema->build_runtime;
+  my $second = $schema->build_runtime;
+
+  is $second, $first, 'build_runtime reuses cached runtime graph';
+
+  $schema->clear_runtime_cache;
+  my $third = $schema->build_runtime;
+  isnt $third, $first, 'clear_runtime_cache drops cached runtime graph';
+};
+
 subtest 'top-level build_native_runtime returns cached native runtime wrapper' => sub {
   my $native = build_native_runtime($schema);
   isa_ok $native, 'GraphQL::Houtou::Runtime::NativeRuntime';
@@ -77,6 +96,17 @@ subtest 'top-level build_native_runtime returns cached native runtime wrapper' =
     data => { greet => 'hello cached' },
     errors => [],
   }, 'cached native runtime executes request-specialized program';
+};
+
+subtest 'schema build_native_runtime caches no-opt native wrapper' => sub {
+  my $first = $schema->build_native_runtime;
+  my $second = $schema->build_native_runtime;
+
+  is $second, $first, 'build_native_runtime reuses cached native wrapper';
+
+  $schema->clear_runtime_cache;
+  my $third = $schema->build_native_runtime;
+  isnt $third, $first, 'clear_runtime_cache drops cached native wrapper';
 };
 
 subtest 'native runtime can compile reusable bundle from cached program' => sub {

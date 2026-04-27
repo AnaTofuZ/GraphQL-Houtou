@@ -4614,3 +4614,13 @@ This fixes the first real bridge-design bug we hit in the reboot:
     を持つようにした。
   - これにより cached VM program から request-specialized native bundle descriptor を生成し、
     file boundary を跨いで load し直して execute できる。
+  - `Schema->build_runtime(...)` / `Schema->build_native_runtime(...)` は
+    no-opt の public path では compiled runtime graph / native runtime wrapper を
+    再利用するようにした。
+  - `Schema->execute_runtime(...)` と top-level `GraphQL::Houtou::execute(...)` は
+    no-opt 実行時にこの cached runtime graph を優先して使う。
+  - `clear_runtime_cache()` は schema metadata cache だけでなく
+    compiled runtime graph と native runtime wrapper も同時に落とす。
+  - `Native.pm` は compile-time に XS package を import せず、
+    top-level native boundary の各 entrypoint で lazy require する。
+    これで child module が XS bootstrap 順に依存しにくくなった。

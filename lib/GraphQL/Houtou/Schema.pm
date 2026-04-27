@@ -79,12 +79,17 @@ sub compile_runtime {
 
 sub build_native_runtime {
   my ($self, %opts) = @_;
-  return GraphQL::Houtou::Runtime::build_native_runtime($self, %opts);
+  return GraphQL::Houtou::Runtime::build_native_runtime($self, %opts)
+    if %opts;
+  return $self->{_compiled_native_runtime} if $self->{_compiled_native_runtime};
+  return $self->{_compiled_native_runtime} = GraphQL::Houtou::Runtime::build_native_runtime($self);
 }
 
 sub build_runtime {
   my ($self, %opts) = @_;
-  return $self->compile_runtime(%opts);
+  return $self->compile_runtime(%opts) if %opts;
+  return $self->{_compiled_runtime_graph} if $self->{_compiled_runtime_graph};
+  return $self->{_compiled_runtime_graph} = $self->compile_runtime;
 }
 
 sub compile_runtime_graph {
@@ -134,7 +139,8 @@ sub load_runtime_native_descriptor {
 
 sub compile_operation {
   my ($self, $document, %opts) = @_;
-  return $self->compile_runtime(%opts)->compile_operation($document, %opts);
+  my $runtime = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
+  return $runtime->compile_operation($document, %opts);
 }
 
 sub compile_program {
@@ -154,7 +160,8 @@ sub compile_program_descriptor {
 
 sub inflate_operation {
   my ($self, $descriptor, %opts) = @_;
-  return $self->compile_runtime(%opts)->inflate_operation($descriptor);
+  my $runtime = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
+  return $runtime->inflate_operation($descriptor);
 }
 
 sub inflate_program {
@@ -177,14 +184,14 @@ sub load_operation_descriptor {
 
 sub execute_runtime {
   my ($self, $document, %opts) = @_;
-  my $runtime = $self->compile_runtime(%opts);
+  my $runtime = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
   my $program = $runtime->compile_operation($document, %opts);
   return $runtime->execute_operation($program, %opts);
 }
 
 sub execute_runtime_perl {
   my ($self, $document, %opts) = @_;
-  my $runtime = $self->compile_runtime(%opts);
+  my $runtime = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
   my $program = $runtime->compile_operation($document, %opts);
   return $runtime->execute_program_perl($program, %opts);
 }
@@ -206,7 +213,7 @@ sub lower_program_to_vm {
 
 sub execute_vm_runtime {
   my ($self, $document, %opts) = @_;
-  my $runtime = $self->compile_runtime(%opts);
+  my $runtime = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
   my $program = $self->compile_vm_operation($document, runtime_schema => $runtime, %opts);
   return $runtime->execute_vm_program($program, %opts);
 }
@@ -245,7 +252,8 @@ sub compile_native_program_descriptor {
 
 sub compile_lowered_operation {
   my ($self, $document, %opts) = @_;
-  return $self->compile_runtime(%opts)->compile_lowered_operation($document, %opts);
+  my $runtime = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
+  return $runtime->compile_lowered_operation($document, %opts);
 }
 
 sub compile_lowered_program {
@@ -255,7 +263,8 @@ sub compile_lowered_program {
 
 sub inflate_lowered_operation {
   my ($self, $descriptor, %opts) = @_;
-  return $self->compile_runtime(%opts)->inflate_lowered_operation($descriptor);
+  my $runtime = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
+  return $runtime->inflate_lowered_operation($descriptor);
 }
 
 sub inflate_lowered_program {
@@ -265,7 +274,7 @@ sub inflate_lowered_program {
 
 sub compile_vm_native_bundle_descriptor {
   my ($self, $document, %opts) = @_;
-  my $runtime = $self->compile_runtime(%opts);
+  my $runtime = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
   my $vm = $runtime->compile_operation($document, %opts);
   return {
     runtime => $runtime->to_native_struct,
@@ -307,7 +316,8 @@ sub dump_native_bundle_descriptor {
 
 sub inflate_vm_operation {
   my ($self, $descriptor, %opts) = @_;
-  return $self->compile_runtime(%opts)->inflate_vm_program($descriptor);
+  my $runtime = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
+  return $runtime->inflate_vm_program($descriptor);
 }
 
 sub inflate_vm_program {
@@ -317,7 +327,8 @@ sub inflate_vm_program {
 
 sub inflate_vm_native_bundle_descriptor {
   my ($self, $descriptor, %opts) = @_;
-  return $self->compile_runtime(%opts)->inflate_vm_native_bundle($descriptor);
+  my $runtime = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
+  return $runtime->inflate_vm_native_bundle($descriptor);
 }
 
 sub inflate_vm_bundle_descriptor {
@@ -340,7 +351,8 @@ sub load_vm_operation_descriptor {
 
 sub execute_vm_native_bundle_descriptor {
   my ($self, $descriptor, %opts) = @_;
-  return $self->compile_runtime(%opts)->execute_vm_native_bundle($descriptor, %opts);
+  my $runtime = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
+  return $runtime->execute_vm_native_bundle($descriptor, %opts);
 }
 
 sub execute_vm_bundle_descriptor {
@@ -355,7 +367,7 @@ sub execute_native_bundle_descriptor {
 
 sub execute_vm_native_runtime {
   my ($self, $document, %opts) = @_;
-  my $runtime = $self->compile_runtime(%opts);
+  my $runtime = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
   my $program = $runtime->compile_operation($document, %opts);
   return $runtime->execute_program($program, engine => 'native', %opts);
 }
@@ -373,6 +385,8 @@ sub runtime_cache {
 sub clear_runtime_cache {
   my ($self) = @_;
   delete $self->{_runtime_cache};
+  delete $self->{_compiled_runtime_graph};
+  delete $self->{_compiled_native_runtime};
   return $self;
 }
 

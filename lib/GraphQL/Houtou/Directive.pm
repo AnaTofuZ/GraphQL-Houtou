@@ -4,15 +4,15 @@ use 5.014;
 use strict;
 use warnings;
 
-use Moo;
+use parent 'GraphQL::Houtou::Type';
+use Role::Tiny::With;
 use GraphQL::Houtou::Type::Library qw(FieldMapInput);
-use Types::Standard qw(ArrayRef Enum);
+use GraphQL::Houtou::Internal::TypeSupport qw(description_doc_lines make_fieldtuples named_from_ast);
 
 use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 
 with qw(
-  GraphQL::Houtou::Role::Named
-  GraphQL::Houtou::Role::FieldsEither
+  GraphQL::Houtou::Role::Input
 );
 
 use constant DEBUG => $ENV{GRAPHQL_DEBUG};
@@ -38,30 +38,42 @@ my @LOCATIONS = qw(
   INPUT_FIELD_DEFINITION
 );
 
-has locations => (is => 'ro', isa => ArrayRef[Enum[@LOCATIONS]], required => 1);
-has args => (is => 'ro', isa => FieldMapInput, default => sub { {} });
+sub new {
+  my ($class, %args) = @_;
+  my $self = $class->SUPER::new(%args);
+  $self->{name} = $args{name};
+  $self->{description} = $args{description};
+  $self->{locations} = $args{locations} || [];
+  $self->{args} = $args{args} || {};
+  return bless $self, $class;
+}
 
-has to_doc => (
-  is => 'lazy',
-  builder => sub {
-    my ($self) = @_;
+sub name { $_[0]->{name} }
+sub description { $_[0]->{description} }
+sub locations { $_[0]->{locations} }
+sub args { $_[0]->{args} }
+sub to_string { $_[0]->{to_string} ||= $_[0]->name }
+
+sub to_doc {
+  my ($self) = @_;
+  return $self->{to_doc} ||= do {
     my @start = (
-      $self->_description_doc_lines($self->description),
+      description_doc_lines($self->description),
       "directive \@@{[$self->name]}(",
     );
-    my @argtuples = $self->_make_fieldtuples($self->args);
+    my @argtuples = make_fieldtuples($self->args);
     my $end = ") on " . join(' | ', @{ $self->locations });
     return join("\n", @start) . join(', ', map $_->[0], @argtuples) . $end . "\n"
       if !grep $_->[1], @argtuples;
-    return join '', map "$_\n",
+    join '', map "$_\n",
       @start,
       (map {
         my ($main, @description) = @$_;
         (map length() ? "  $_" : "", @description, $main)
       } @argtuples),
       $end;
-  },
-);
+  };
+}
 
 sub _get_directive_values {
   my ($self) = @_;

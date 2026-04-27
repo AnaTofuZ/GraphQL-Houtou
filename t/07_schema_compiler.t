@@ -129,7 +129,8 @@ subtest 'Houtou types consume Houtou roles' => sub {
   ok $schema->name2type->{Filter}->DOES('GraphQL::Houtou::Role::Input'), 'input object uses Houtou input role';
   ok $schema->name2type->{Filter}->DOES('GraphQL::Houtou::Role::FieldsInput'), 'input object uses Houtou fields input role';
   ok $schema->name2type->{Status}->DOES('GraphQL::Houtou::Role::Leaf'), 'enum uses Houtou leaf role';
-  ok $schema->directives->[-1]->DOES('GraphQL::Houtou::Role::Named'), 'directive uses Houtou named role';
+  ok $schema->directives->[-1]->can('name'), 'directive keeps named accessor without helper role';
+  ok defined $schema->directives->[-1]->name, 'directive accessor returns a directive name';
   ok !$schema->query->DOES('GraphQL::Role::Output'), 'object no longer depends on upstream output role';
   ok !$schema->name2type->{Filter}->DOES('GraphQL::Role::Input'), 'input object no longer depends on upstream input role';
   isa_ok $compiled, 'GraphQL::Houtou::Runtime::SchemaGraph';

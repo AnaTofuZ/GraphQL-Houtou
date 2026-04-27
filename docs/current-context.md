@@ -4619,6 +4619,10 @@ This fixes the first real bridge-design bug we hit in the reboot:
     再利用するようにした。
   - `Schema->execute_runtime(...)` と top-level `GraphQL::Houtou::execute(...)` は
     no-opt 実行時にこの cached runtime graph を優先して使う。
+  - `Schema->execute_native_runtime(...)` と
+    `Schema->execute_native_bundle_descriptor(...)` は
+    cached native runtime wrapper を主経路にし、
+    request ごとに native runtime handle を作り直さないようにした。
   - `clear_runtime_cache()` は schema metadata cache だけでなく
     compiled runtime graph と native runtime wrapper も同時に落とす。
   - `Native.pm` は compile-time に XS package を import せず、

@@ -91,7 +91,7 @@ sub execute {
     $opts{variables} = $variables_or_opts;
   }
 
-  my $runtime = %opts ? compile_runtime($schema, %opts) : $schema->build_runtime;
+  my $runtime = $schema->build_runtime;
   my $program = $runtime->compile_operation($document, %opts);
   return $runtime->execute_operation($program, %opts);
 }

@@ -999,6 +999,9 @@ For the public hot path, the intended rule is:
 - `compile_runtime(...)` remains an uncached compiler entrypoint
 - `build_runtime(...)` and `build_native_runtime(...)` are boot-time cache APIs
 - no-opt public execution should prefer the cached runtime graph / native wrapper
+- native execution helpers such as `execute_native_runtime(...)` and
+  `execute_native_bundle_descriptor(...)` should also route through the cached
+  native runtime wrapper instead of rebuilding a runtime handle per request
 - `clear_runtime_cache()` must invalidate:
   - schema metadata cache
   - compiled runtime graph

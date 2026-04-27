@@ -3,7 +3,6 @@ package GraphQL::Houtou::XS::Parser;
 use 5.014;
 use strict;
 use warnings;
-use Exporter 'import';
 use GraphQL ();
 use GraphQL::Error;
 use GraphQL::Houtou ();
@@ -11,21 +10,6 @@ use GraphQL::Language::Receiver ();
 use JSON::PP ();
 
 our $VERSION = '0.01';
-our @EXPORT_OK = qw(
-  graphqljs_apply_executable_loc_xs
-  graphqljs_build_document_xs
-  graphqljs_build_executable_document_xs
-  graphqljs_build_directives_xs
-  graphqljs_parse_document_xs
-  graphqljs_parse_executable_document_xs
-  graphqlperl_build_document_xs
-  graphqlperl_find_legacy_empty_object_location_xs
-  graphqljs_preprocess_xs
-  graphqljs_patch_document_xs
-  parse_xs
-  parse_directives_xs
-  tokenize_xs
-);
 
 BEGIN {
   GraphQL::Houtou::_bootstrap_xs();

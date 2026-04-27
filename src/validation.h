@@ -18,7 +18,6 @@ gql_validation_parse_ast(pTHX_ SV *document, SV *options) {
   eval_pv("require GraphQL::Houtou; 1;", TRUE);
 
   opts_hv = newHV();
-  gql_store_sv(opts_hv, "backend", newSVpv("xs", 0));
   if (options && SvROK(options) && SvTYPE(SvRV(options)) == SVt_PVHV) {
     SV **no_location_svp = hv_fetch((HV *)SvRV(options), "no_location", 11, 0);
     if (!no_location_svp) {

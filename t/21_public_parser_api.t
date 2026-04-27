@@ -14,17 +14,16 @@ subtest 'top-level parse returns legacy AST shape' => sub {
   is $ast->[0]{selections}[0]{name}, 'viewer', 'legacy field name is preserved';
 };
 
-subtest 'parse_with_options keeps graphql-perl dialect only' => sub {
+subtest 'parse_with_options exposes only parser-local options' => sub {
   my $ast = parse_with_options('{ viewer { id } }', {
-    dialect => 'graphql-perl',
-    backend => 'xs',
+    no_location => 1,
   });
 
   is ref($ast), 'ARRAY', 'graphql-perl parse returns arrayref document';
   my $error;
   eval { parse_with_options('{ viewer { id } }', { dialect => 'graphql-js' }) };
   $error = $@;
-  like($error, qr/Unknown parser dialect/, 'graphql-js dialect is no longer exposed');
+  like($error, qr/Unknown parser option/, 'legacy dialect option is no longer exposed');
 };
 
 done_testing;

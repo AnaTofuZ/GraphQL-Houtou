@@ -59,9 +59,14 @@
    - `GraphQL::Houtou::Runtime::VMExecutor`
 4. XS Native Boundary
    - bundle owner: `GraphQL::Houtou::_bootstrap_xs`
-   - parser helper: `GraphQL::Houtou::XS::Parser`
+   - parser helper: `GraphQL::Houtou::XS::Parser` は公開 facade ではなく、top-level `GraphQL::Houtou::parse*` と XS callback 用の internal helper
    - compile / validation / native runtime は public facade から XSUB package を直接呼ぶ
    - `GraphQL::Houtou::Runtime::NativeBundle` は Perl wrapper ではなく XS が提供する opaque handle
+
+5. Parser Surface
+   - 公開 parser surface は `graphql-perl` 互換 AST の 1 dialect に固定
+   - `parse_with_options(...)` は `no_location` / `noLocation` のような parser-local option だけを受ける
+   - dialect/backend の選択 surface と benchmark/profile script 上の旧 option は削除済み
 
 ## 内部通貨
 

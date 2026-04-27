@@ -22,8 +22,7 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     my $legacy_ast = parse('{ user { id } }');
 
     my $legacy_xs_ast = parse_with_options('{ user { id } }', {
-      dialect => 'graphql-perl',
-      backend => 'xs',
+      no_location => 1,
     });
 
     my $schema = GraphQL::Houtou::Schema->new(
@@ -78,19 +77,16 @@ The default `parse()` entry point returns the traditional
 
     my $ast = parse($source);
 
-If you want to choose the dialect explicitly, use `parse_with_options()`.
+If you want to tune parser options explicitly, use `parse_with_options()`.
 
     my $legacy = parse_with_options($source, {
-      dialect => 'graphql-perl',
-      backend => 'xs',
+      no_location => 1,
     });
 
 For throughput-sensitive parsing where you do not need location data, passing
 `no_location => 1` is still recommended.
 
     my $doc = parse_with_options($source, {
-      dialect => 'graphql-perl',
-      backend => 'xs',
       no_location => 1,
     });
 
@@ -159,24 +155,11 @@ API keeps the hook contract generic so that adapters can be supplied by user
 code for `Promises`, `Future`, `Promise::XS`, `Promise::ES6`,
 `Mojo::Promise`, or any other library with a suitable wrapper.
 
-# DIALECTS
+# PARSER SURFACE
 
-## graphql-perl compatible layer
-
-The default `parse()` entry point returns the traditional `graphql-perl`
-compatible AST.
-
-    my $ast = parse($source);
-
-If you want to be explicit about the backend, use `parse_with_options()`.
-
-    my $ast = parse_with_options($source, {
-      dialect => 'graphql-perl',
-      backend => 'xs',
-    });
-
-The public parser surface now exposes only the `graphql-perl` dialect. The
-intended backend is `xs`.
+The public parser surface is fixed to the traditional `graphql-perl`
+compatible AST. `parse_with_options()` only accepts parser-local knobs such
+as `no_location`.
 
 # PERFORMANCE NOTES
 
@@ -187,8 +170,6 @@ recommended for throughput-sensitive workloads.
 Example:
 
     my $doc = parse_with_options($source, {
-      dialect => 'graphql-perl',
-      backend => 'xs',
       no_location => 1,
     });
 

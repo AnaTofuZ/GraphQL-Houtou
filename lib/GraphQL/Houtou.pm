@@ -43,12 +43,12 @@ sub parse {
 sub parse_with_options {
   my ($source, $options) = @_;
   $options ||= {};
-  die "Unknown parser dialect '$options->{dialect}'.\n"
-    if defined($options->{dialect}) && $options->{dialect} ne 'graphql-perl';
-  my $backend = $options->{backend} || 'xs';
+  for my $key (keys %{$options}) {
+    next if $key eq 'no_location' || $key eq 'noLocation';
+    die "Unknown parser option '$key'.\n";
+  }
   my $no_location = $options->{no_location};
   $no_location = $options->{noLocation} if !defined $no_location;
-  die "Unknown parser backend '$backend'.\n" if $backend ne 'xs';
   require GraphQL::Houtou::XS::Parser;
   return GraphQL::Houtou::XS::Parser::parse_xs($source, $no_location);
 }
@@ -147,8 +147,7 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     my $legacy_ast = parse('{ user { id } }');
 
     my $legacy_xs_ast = parse_with_options('{ user { id } }', {
-      dialect => 'graphql-perl',
-      backend => 'xs',
+      no_location => 1,
     });
 
     my $schema = GraphQL::Houtou::Schema->new(
@@ -218,19 +217,16 @@ C<graphql-perl>-compatible AST.
 
     my $ast = parse($source);
 
-If you want to choose the dialect explicitly, use C<parse_with_options()>.
+If you want to tune parser options explicitly, use C<parse_with_options()>.
 
     my $legacy = parse_with_options($source, {
-      dialect => 'graphql-perl',
-      backend => 'xs',
+      no_location => 1,
     });
 
 For throughput-sensitive parsing where you do not need location data, passing
 C<no_location =E<gt> 1> is still recommended.
 
     my $doc = parse_with_options($source, {
-      dialect => 'graphql-perl',
-      backend => 'xs',
       no_location => 1,
     });
 
@@ -326,24 +322,11 @@ API keeps the hook contract generic so that adapters can be supplied by user
 code for C<Promises>, C<Future>, C<Promise::XS>, C<Promise::ES6>,
 C<Mojo::Promise>, or any other library with a suitable wrapper.
 
-=head1 DIALECTS
+=head1 PARSER SURFACE
 
-=head2 graphql-perl compatible layer
-
-The default C<parse()> entry point returns the traditional C<graphql-perl>
-compatible AST.
-
-    my $ast = parse($source);
-
-If you want to be explicit about the backend, use C<parse_with_options()>.
-
-    my $ast = parse_with_options($source, {
-      dialect => 'graphql-perl',
-      backend => 'xs',
-    });
-
-The public parser surface now exposes only the C<graphql-perl> dialect. The
-intended backend is C<xs>.
+The public parser surface is fixed to the traditional C<graphql-perl>
+compatible AST. C<parse_with_options()> only accepts parser-local knobs such
+as C<no_location>.
 
 =head1 PERFORMANCE NOTES
 
@@ -354,8 +337,6 @@ recommended for throughput-sensitive workloads.
 Example:
 
     my $doc = parse_with_options($source, {
-      dialect => 'graphql-perl',
-      backend => 'xs',
       no_location => 1,
     });
 

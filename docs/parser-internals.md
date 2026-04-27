@@ -14,8 +14,8 @@
 - 今後、独自構造体化の効果が出やすい層はどこか
 
 活動記録と benchmark の最新値は `docs/current-context.md` を参照。
-全体方針と公開 API の責務分離は `docs/project-status.md` と
-`docs/parser-dialects.md` を参照。
+現行の公開 parser surface は `graphql-perl` 互換 AST に固定されており、
+この文書に残っている `graphqljs_*` の記述は parser 内部の歴史的実装メモとして読む。
 
 ## 全体像
 

@@ -42,9 +42,8 @@ sub has_pending {
 }
 
 sub consume_outcome {
-  my ($self, $writer, $result_name, $outcome) = @_;
-  return if !$outcome;
-  $writer->consume_outcome($self->values, $result_name, $outcome);
+  GraphQL::Houtou::_bootstrap_xs();
+  GraphQL::Houtou::XS::VM::block_frame_consume_outcome_xs($_[0], $_[1], $_[2], $_[3]);
   return;
 }
 

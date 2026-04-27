@@ -97,6 +97,16 @@ gql_runtime_vm_expect_exec_state_handle(pTHX_ SV *self)
 }
 
 static SV *
+gql_runtime_vm_wrap_outcome_sv(pTHX_ gql_runtime_vm_outcome_t *outcome)
+{
+  if (!outcome) {
+    return newSVsv(&PL_sv_undef);
+  }
+  gql_runtime_vm_outcome_incref(outcome);
+  return gql_runtime_vm_new_handle_sv(aTHX_ "GraphQL::Houtou::Runtime::Outcome", outcome);
+}
+
+static SV *
 gql_runtime_vm_wrap_path_frame_sv(pTHX_ gql_runtime_vm_path_frame_t *path_frame)
 {
   if (!path_frame) {
@@ -133,6 +143,19 @@ gql_runtime_vm_new_path_frame_handle(pTHX_ SV *parent, SV *key)
 }
 
 static SV *
+gql_runtime_vm_new_block_frame_handle(pTHX)
+{
+  gql_runtime_vm_block_frame_t *frame;
+  Newxz(frame, 1, gql_runtime_vm_block_frame_t);
+  frame->values_hv = newHV();
+  frame->pending_count = 0;
+  frame->pending_capacity = 0;
+  frame->pending_names = NULL;
+  frame->pending_outcomes = NULL;
+  return gql_runtime_vm_new_handle_sv(aTHX_ "GraphQL::Houtou::Runtime::BlockFrame", frame);
+}
+
+static SV *
 gql_runtime_vm_new_field_frame_handle(pTHX_ SV *source, SV *path_frame)
 {
   gql_runtime_vm_field_frame_t *frame;
@@ -143,17 +166,8 @@ gql_runtime_vm_new_field_frame_handle(pTHX_ SV *source, SV *path_frame)
     frame->path_frame->refcount++;
   }
   frame->resolved_value = newSVsv(&PL_sv_undef);
-  frame->outcome = newSVsv(&PL_sv_undef);
+  frame->outcome = NULL;
   return gql_runtime_vm_new_handle_sv(aTHX_ "GraphQL::Houtou::Runtime::FieldFrame", frame);
-}
-
-static SV *
-gql_runtime_vm_new_block_frame_handle(pTHX_)
-{
-  gql_runtime_vm_block_frame_t *frame;
-  Newxz(frame, 1, gql_runtime_vm_block_frame_t);
-  frame->values_hv = newHV();
-  return gql_runtime_vm_new_handle_sv(aTHX_ "GraphQL::Houtou::Runtime::BlockFrame", frame);
 }
 
 static void
@@ -189,29 +203,28 @@ gql_runtime_vm_leave_field_now(pTHX_ gql_runtime_vm_exec_state_handle_t *s)
 }
 
 static void
-gql_runtime_vm_consume_current_outcome_now(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *outcome_sv)
+gql_runtime_vm_consume_current_outcome_now(pTHX_ gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_outcome_t *outcome)
 {
   gql_runtime_vm_block_frame_t *frame;
   gql_runtime_vm_writer_t *writer;
-  gql_runtime_vm_outcome_t *outcome;
   SV *op_sv;
   SV *result_name_sv;
 
-  if (!s || !outcome_sv || !SvOK(outcome_sv) || !s->frame || !SvOK(s->frame) || !s->writer || !SvOK(s->writer)) {
+  if (!s || !outcome || !s->frame || !SvOK(s->frame) || !s->writer || !SvOK(s->writer)) {
     gql_runtime_vm_leave_field_now(aTHX_ s);
     return;
   }
 
   frame = gql_runtime_vm_expect_block_frame(aTHX_ s->frame);
   writer = gql_runtime_vm_expect_writer(aTHX_ s->writer);
-  outcome = gql_runtime_vm_expect_outcome(aTHX_ outcome_sv);
   op_sv = s->cursor && SvOK(s->cursor) ? gql_runtime_vm_expect_cursor(aTHX_ s->cursor)->current_op : NULL;
   result_name_sv = gql_runtime_vm_op_result_name_sv(aTHX_ op_sv);
 
   if (s->field_frame && SvOK(s->field_frame)) {
     gql_runtime_vm_field_frame_t *field = gql_runtime_vm_expect_field_frame(aTHX_ s->field_frame);
-    SvREFCNT_dec(field->outcome);
-    field->outcome = newSVsv(outcome_sv);
+    gql_runtime_vm_outcome_decref(aTHX_ field->outcome);
+    gql_runtime_vm_outcome_incref(outcome);
+    field->outcome = outcome;
   }
 
   gql_runtime_vm_consume_outcome_struct(
@@ -693,7 +706,7 @@ gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_
 
     gql_runtime_vm_enter_field_now(aTHX_ s, source, owned_base_path);
     outcome_sv = gql_runtime_vm_exec_state_execute_current_op_sync_sv(aTHX_ state_sv, s);
-    gql_runtime_vm_consume_current_outcome_now(aTHX_ s, outcome_sv);
+    gql_runtime_vm_consume_current_outcome_now(aTHX_ s, gql_runtime_vm_expect_outcome(aTHX_ outcome_sv));
     SvREFCNT_dec(outcome_sv);
   }
 
@@ -2260,7 +2273,11 @@ field_frame_new_xs(class, source = &PL_sv_undef, path_frame = &PL_sv_undef, reso
         frame->path_frame->refcount++;
       }
       frame->resolved_value = newSVsv(resolved_value ? resolved_value : &PL_sv_undef);
-      frame->outcome = newSVsv(outcome ? outcome : &PL_sv_undef);
+      frame->outcome = NULL;
+      if (outcome && SvOK(outcome)) {
+        frame->outcome = gql_runtime_vm_expect_outcome(aTHX_ outcome);
+        gql_runtime_vm_outcome_incref(frame->outcome);
+      }
       RETVAL = gql_runtime_vm_new_handle_sv(aTHX_ pkg, frame);
     }
   OUTPUT:
@@ -2284,8 +2301,12 @@ field_frame_set_outcome_xs(frame, outcome)
   CODE:
     {
       gql_runtime_vm_field_frame_t *state = gql_runtime_vm_expect_field_frame(aTHX_ frame);
-      SvREFCNT_dec(state->outcome);
-      state->outcome = newSVsv(outcome ? outcome : &PL_sv_undef);
+      gql_runtime_vm_outcome_decref(aTHX_ state->outcome);
+      state->outcome = NULL;
+      if (outcome && SvOK(outcome)) {
+        state->outcome = gql_runtime_vm_expect_outcome(aTHX_ outcome);
+        gql_runtime_vm_outcome_incref(state->outcome);
+      }
     }
 
 SV *
@@ -2332,7 +2353,7 @@ field_frame_outcome_xs(frame)
   CODE:
     {
       gql_runtime_vm_field_frame_t *state = gql_runtime_vm_expect_field_frame(aTHX_ frame);
-      RETVAL = newSVsv(state->outcome ? state->outcome : &PL_sv_undef);
+      RETVAL = gql_runtime_vm_wrap_outcome_sv(aTHX_ state->outcome);
     }
   OUTPUT:
     RETVAL
@@ -2432,6 +2453,29 @@ block_frame_add_pending_xs(frame, result_name, outcome)
     {
       gql_runtime_vm_block_frame_t *state = gql_runtime_vm_expect_block_frame(aTHX_ frame);
       gql_runtime_vm_block_frame_push_pending(aTHX_ state, result_name, outcome);
+    }
+
+void
+block_frame_consume_outcome_xs(frame, writer, result_name, outcome)
+    SV *frame
+    SV *writer
+    SV *result_name
+    SV *outcome
+  CODE:
+    {
+      gql_runtime_vm_block_frame_t *state = gql_runtime_vm_expect_block_frame(aTHX_ frame);
+      gql_runtime_vm_writer_t *writer_state;
+      if (!outcome || !SvOK(outcome)) {
+        XSRETURN_EMPTY;
+      }
+      writer_state = gql_runtime_vm_expect_writer(aTHX_ writer);
+      gql_runtime_vm_consume_outcome_struct(
+        aTHX_
+        state->values_hv,
+        result_name,
+        gql_runtime_vm_expect_outcome(aTHX_ outcome),
+        writer_state
+      );
     }
 
 SV *
@@ -2818,7 +2862,7 @@ exec_state_enter_field_xs(state, source, path_frame)
         frame->path_frame->refcount++;
       }
       frame->resolved_value = newSVsv(&PL_sv_undef);
-      frame->outcome = newSVsv(&PL_sv_undef);
+      frame->outcome = NULL;
       field = gql_runtime_vm_new_handle_sv(aTHX_ "GraphQL::Houtou::Runtime::FieldFrame", frame);
       SvREFCNT_dec(s->field_frame);
       s->field_frame = newSVsv(field);
@@ -2861,11 +2905,11 @@ exec_state_consume_current_field_outcome_xs(state, outcome)
   CODE:
     {
       gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      gql_runtime_vm_consume_current_outcome_now(aTHX_ s, outcome);
+      gql_runtime_vm_consume_current_outcome_now(aTHX_ s, gql_runtime_vm_expect_outcome(aTHX_ outcome));
     }
 
 SV *
-exec_state_enter_block_xs(state, block, frame)
+exec_state_enter_block_xs(state, block, frame = &PL_sv_undef)
     SV *state
     SV *block
     SV *frame
@@ -2873,6 +2917,12 @@ exec_state_enter_block_xs(state, block, frame)
     {
       gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
       SV *snapshot = s->cursor ? gql_runtime_vm_cursor_snapshot_sv(aTHX_ s->cursor) : newSVsv(&PL_sv_undef);
+      SV *frame_sv = frame;
+      int owns_frame = 0;
+      if (!frame_sv || !SvOK(frame_sv)) {
+        frame_sv = gql_runtime_vm_new_block_frame_handle(aTHX);
+        owns_frame = 1;
+      }
       if (s->cursor) {
         gql_runtime_vm_cursor_t *dst = gql_runtime_vm_expect_cursor(aTHX_ s->cursor);
         SvREFCNT_dec(dst->block);
@@ -2884,10 +2934,13 @@ exec_state_enter_block_xs(state, block, frame)
         dst->current_slot = newSVsv(&PL_sv_undef);
         dst->current_op = newSVsv(&PL_sv_undef);
       }
-      av_push(s->frame_stack_av, newSVsv(frame ? frame : &PL_sv_undef));
+      av_push(s->frame_stack_av, newSVsv(frame_sv ? frame_sv : &PL_sv_undef));
       SvREFCNT_dec(s->frame);
-      s->frame = newSVsv(frame ? frame : &PL_sv_undef);
+      s->frame = newSVsv(frame_sv ? frame_sv : &PL_sv_undef);
       RETVAL = snapshot;
+      if (owns_frame && frame_sv) {
+        SvREFCNT_dec(frame_sv);
+      }
     }
   OUTPUT:
     RETVAL
@@ -2955,6 +3008,53 @@ exec_state_execute_current_op_xs(state)
     {
       gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
       RETVAL = gql_runtime_vm_exec_state_execute_current_op_sync_sv(aTHX_ state, s);
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+exec_state_run_program_xs(state, root_value = &PL_sv_undef)
+    SV *state
+    SV *root_value
+  CODE:
+    {
+      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
+      AV *program_av;
+      SV **root_block_svp;
+      SV *root_block_sv;
+      SV *effective_root = root_value;
+      SV *data_sv;
+      HV *response_hv;
+
+      if (!s->program || !SvOK(s->program) || !SvROK(s->program) || SvTYPE(SvRV(s->program)) != SVt_PVAV) {
+        croak("exec state program must be a VMProgram array handle");
+      }
+      program_av = (AV *)SvRV(s->program);
+      root_block_svp = av_fetch(program_av, 5, 0);
+      root_block_sv = (root_block_svp && *root_block_svp) ? *root_block_svp : &PL_sv_undef;
+      if (!effective_root || !SvOK(effective_root)) {
+        effective_root = s->root_value;
+      }
+
+      data_sv = gql_runtime_vm_exec_state_execute_block_sync_sv(
+        aTHX_
+        state,
+        s,
+        root_block_sv,
+        effective_root,
+        &PL_sv_undef
+      );
+
+      response_hv = newHV();
+      hv_store(response_hv, "data", 4, data_sv ? newSVsv(data_sv) : newSV(0), 0);
+      hv_store(
+        response_hv,
+        "errors",
+        6,
+        gql_runtime_vm_writer_materialize_errors_sv(aTHX_ gql_runtime_vm_expect_writer(aTHX_ s->writer)),
+        0
+      );
+      RETVAL = newRV_noinc((SV *)response_hv);
     }
   OUTPUT:
     RETVAL
@@ -3108,7 +3208,7 @@ DESTROY(self)
         SvREFCNT_dec(frame->source);
         gql_runtime_vm_path_frame_decref(frame->path_frame);
         SvREFCNT_dec(frame->resolved_value);
-        SvREFCNT_dec(frame->outcome);
+        gql_runtime_vm_outcome_decref(aTHX_ frame->outcome);
         Safefree(frame);
       }
     }

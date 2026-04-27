@@ -209,6 +209,10 @@ fresh `./Build build` 済み環境で、
   resolver/runtime error の message cleanup と path capture は `src/vm_runtime.h` 側で処理する
 - 現在の runtime hot path では、`Outcome` / `Writer` / `ErrorRecord` / `FieldFrame` などの
   Perl hash/array は内部通貨ではなく、境界用の facade に限定する方向で再実装している
+- `FieldFrame` の `outcome` は XS-owned `gql_runtime_vm_outcome_t *` を直接保持し、
+  `BlockFrame` の pending queue だけは promise cold path のため `SV*` queue として維持する。
+  これにより sync hot path は C struct owner、promise path は Perl promise object owner という
+  分離を明示した。
 - historical / internal parser 資料は docs にのみ残し、mainline の API からは `graphql-js` dialect を外した
 - parser compatibility 自体は要件から外し、parser 本体と旧互換層が共有していた helper は
   `src/parser_shared_ast.h` へ切り出したうえで parser-internal 層に閉じ込めた

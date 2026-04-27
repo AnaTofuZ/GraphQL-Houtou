@@ -153,12 +153,13 @@ typedef struct {
 } gql_runtime_vm_cursor_t;
 
 typedef struct gql_runtime_vm_path_frame gql_runtime_vm_path_frame_t;
+typedef struct gql_runtime_vm_outcome gql_runtime_vm_outcome_t;
 
 typedef struct {
   SV *source;
   gql_runtime_vm_path_frame_t *path_frame;
   SV *resolved_value;
-  SV *outcome;
+  gql_runtime_vm_outcome_t *outcome;
 } gql_runtime_vm_field_frame_t;
 
 struct gql_runtime_vm_path_frame {
@@ -183,13 +184,13 @@ typedef struct {
   SV **pending_outcomes;
 } gql_runtime_vm_block_frame_t;
 
-typedef struct gql_runtime_vm_outcome {
+struct gql_runtime_vm_outcome {
   UV refcount;
   U8 kind_code;
   SV *value_sv;
   IV error_record_count;
   gql_runtime_vm_error_record_t **error_records;
-} gql_runtime_vm_outcome_t;
+};
 
 typedef struct {
   IV error_record_count;
@@ -209,9 +210,7 @@ static void gql_runtime_vm_error_record_decref(pTHX_ gql_runtime_vm_error_record
 static void gql_runtime_vm_outcome_incref(gql_runtime_vm_outcome_t *outcome);
 static void gql_runtime_vm_outcome_decref(pTHX_ gql_runtime_vm_outcome_t *outcome);
 static void gql_runtime_vm_writer_push_error_record(gql_runtime_vm_writer_t *writer, gql_runtime_vm_error_record_t *record);
-static void gql_runtime_vm_maybe_incref_outcome_handle(pTHX_ SV *sv);
-static void gql_runtime_vm_maybe_decref_outcome_handle(pTHX_ SV *sv);
-static void gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, SV *result_name, SV *outcome_sv);
+static void gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, SV *result_name, SV *outcome);
 static void gql_runtime_vm_block_frame_clear_pending(pTHX_ gql_runtime_vm_block_frame_t *frame);
 static void gql_runtime_vm_path_frame_decref(gql_runtime_vm_path_frame_t *frame);
 
@@ -317,25 +316,9 @@ gql_runtime_vm_writer_push_error_record(gql_runtime_vm_writer_t *writer, gql_run
 }
 
 static void
-gql_runtime_vm_maybe_incref_outcome_handle(pTHX_ SV *sv)
+gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, SV *result_name, SV *outcome)
 {
-  if (sv && SvOK(sv) && SvROK(sv) && sv_derived_from(sv, "GraphQL::Houtou::Runtime::Outcome")) {
-    gql_runtime_vm_outcome_incref(gql_runtime_vm_expect_outcome(aTHX_ sv));
-  }
-}
-
-static void
-gql_runtime_vm_maybe_decref_outcome_handle(pTHX_ SV *sv)
-{
-  if (sv && SvOK(sv) && SvROK(sv) && sv_derived_from(sv, "GraphQL::Houtou::Runtime::Outcome")) {
-    gql_runtime_vm_outcome_decref(aTHX_ gql_runtime_vm_expect_outcome(aTHX_ sv));
-  }
-}
-
-static void
-gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, SV *result_name, SV *outcome_sv)
-{
-  if (!frame || !result_name || !outcome_sv) {
+  if (!frame || !result_name || !outcome) {
     return;
   }
   if (frame->pending_count == frame->pending_capacity) {
@@ -344,8 +327,7 @@ gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *fram
     Renew(frame->pending_outcomes, frame->pending_capacity, SV *);
   }
   frame->pending_names[frame->pending_count] = newSVsv(result_name);
-  gql_runtime_vm_maybe_incref_outcome_handle(aTHX_ outcome_sv);
-  frame->pending_outcomes[frame->pending_count] = newSVsv(outcome_sv);
+  frame->pending_outcomes[frame->pending_count] = newSVsv(outcome);
   frame->pending_count++;
 }
 
@@ -358,7 +340,6 @@ gql_runtime_vm_block_frame_clear_pending(pTHX_ gql_runtime_vm_block_frame_t *fra
   }
   for (i = 0; i < frame->pending_count; i++) {
     SvREFCNT_dec(frame->pending_names[i]);
-    gql_runtime_vm_maybe_decref_outcome_handle(aTHX_ frame->pending_outcomes[i]);
     SvREFCNT_dec(frame->pending_outcomes[i]);
   }
   Safefree(frame->pending_names);

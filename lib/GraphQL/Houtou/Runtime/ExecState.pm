@@ -55,6 +55,10 @@ sub build_for_program {
 sub run_program {
   my ($class, $runtime_schema, $program, %opts) = @_;
   my $state = $class->build_for_program($runtime_schema, $program, %opts);
+  if (!$state->promise_code) {
+    GraphQL::Houtou::_bootstrap_xs();
+    return GraphQL::Houtou::XS::VM::exec_state_run_program_xs($state, $opts{root_value});
+  }
   my $data = $state->execute_block($program->root_block, $opts{root_value});
   return $state->finalize_response($data);
 }
@@ -181,21 +185,20 @@ sub consume_current_field_outcome {
   my $op = $self->current_op or return;
   my $frame = $self->current_frame or return;
   my $field = $self->current_field_frame;
-  $field->set_outcome($outcome) if $field;
   if ($self->promise_code && is_promise_value($self->promise_code, $outcome)) {
     $frame->add_pending($op->result_name, $outcome);
     return $self->leave_field;
   }
+  $field->set_outcome($outcome) if $field;
   $frame->consume_outcome($self->writer, $op->result_name, $outcome);
   return $self->leave_field;
 }
 
 sub enter_block {
   my ($self, $block) = @_;
-  my $frame = GraphQL::Houtou::Runtime::BlockFrame->new;
   GraphQL::Houtou::_bootstrap_xs();
-  my $snapshot = GraphQL::Houtou::XS::VM::exec_state_enter_block_xs($self, $block, $frame);
-  return ($snapshot, $frame);
+  my $snapshot = GraphQL::Houtou::XS::VM::exec_state_enter_block_xs($self, $block);
+  return ($snapshot, $self->current_frame);
 }
 
 sub leave_block {
@@ -234,7 +237,7 @@ sub run_current_field_via {
       my ($complete_ok, $outcome) = $self->_capture_eval(sub {
         return $complete_cb->($self, $resolved_value, $path_frame);
       });
-      return $complete_ok ? $field->set_outcome($outcome) : $self->_error_outcome($outcome, $path_frame);
+      return $complete_ok ? $outcome : $self->_error_outcome($outcome, $path_frame);
     }, sub {
       return $self->_error_outcome($_[0], $path_frame);
     });
@@ -243,7 +246,7 @@ sub run_current_field_via {
   my ($complete_ok, $outcome) = $self->_capture_eval(sub {
     return $complete_cb->($self, $value, $path_frame);
   });
-  return $complete_ok ? $field->set_outcome($outcome) : $self->_error_outcome($outcome, $path_frame);
+  return $complete_ok ? $outcome : $self->_error_outcome($outcome, $path_frame);
 }
 
 sub execute_current_op {
@@ -529,6 +532,15 @@ sub _execute_block_perl {
 
 sub finalize_response {
   my ($self, $data) = @_;
+  if (!$self->promise_code) {
+    GraphQL::Houtou::_bootstrap_xs();
+    return GraphQL::Houtou::XS::VM::exec_state_run_program_xs($self, $self->root_value)
+      if !defined $data;
+    return {
+      data => $data,
+      errors => $self->writer->materialize_errors,
+    };
+  }
   if ($self->promise_code && is_promise_value($self->promise_code, $data)) {
     return then_promise($self->promise_code, $data, sub {
       return {

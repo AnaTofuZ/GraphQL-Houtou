@@ -82,6 +82,7 @@ sub to_native_compact_struct {
       $native_slot->{return_type_kind_code},
       $native_slot->{has_args},
       $native_slot->{has_directives},
+      $native_slot->{resolver_mode_code},
     ];
   }
   return [

@@ -96,35 +96,15 @@ sub specialize_program_for_native {
 
 sub preferred_engine_for_program {
   my ($class, $program, %opts) = @_;
-  return 'perl' if $opts{promise_code};
-  return 'perl' if !$program || !$program->can('blocks');
-  return 'perl' if keys %{ $program->variable_defs || {} };
-
-  for my $block (@{ $program->blocks || [] }) {
-    for my $op (@{ $block->ops || [] }) {
-      return 'perl' if $op->has_directives;
-      my $slot = $op->bound_slot or next;
-      my $shape = $slot->resolver_shape || q();
-      my $mode = $slot->resolver_mode || q();
-      if ($shape ne 'DEFAULT') {
-        return 'perl' if $shape ne 'EXPLICIT';
-        return 'perl' if $mode ne 'NATIVE';
-      }
-      if ($op->has_args) {
-        my $args_mode = $op->args_mode || q();
-        return 'perl' if $args_mode ne 'STATIC';
-      }
-      my $dispatch = $slot->dispatch_family || q();
-      return 'perl'
-        if $dispatch ne 'GENERIC'
-        && $dispatch ne 'TAG'
-        && $dispatch ne 'OBJECT'
-        && $dispatch ne 'LIST'
-        && $dispatch ne 'ABSTRACT';
-    }
-  }
-
-  return 'native';
+  return 'perl' if !$program;
+  my $struct = $program->can('to_native_compact_struct')
+    ? $program->to_native_compact_struct
+    : $program;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::program_native_eligible_xs(
+    $struct,
+    $opts{promise_code} ? 1 : 0,
+  ) ? 'native' : 'perl';
 }
 
 sub compile_bundle {

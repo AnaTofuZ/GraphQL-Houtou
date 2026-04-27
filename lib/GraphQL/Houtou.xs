@@ -992,6 +992,15 @@ evaluate_runtime_guards_xs(guards, variables)
   OUTPUT:
     RETVAL
 
+int
+program_native_eligible_xs(program, has_promise = 0)
+    SV *program
+    int has_promise
+  CODE:
+    RETVAL = gql_runtime_vm_program_is_native_eligible_sv(aTHX_ program, has_promise);
+  OUTPUT:
+    RETVAL
+
 void
 resolve_runtime_type_xs(dispatch, runtime_cache, value, context, info, abstract_type)
     SV *dispatch

@@ -61,6 +61,7 @@ typedef struct {
   char *return_type_name;
   IV schema_slot_index;
   IV resolver_shape_code;
+  IV resolver_mode_code;
   IV completion_family_code;
   IV dispatch_family_code;
   IV return_type_kind_code;
@@ -755,6 +756,8 @@ gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out
     out->has_args = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
     svp = av_fetch(av, 9, 0);
     out->has_directives = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
+    svp = av_fetch(av, 10, 0);
+    out->resolver_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
     return 1;
   }
   if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &hv)) {
@@ -774,6 +777,9 @@ gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out
   }
   if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "resolver_shape_code", 19, &out->resolver_shape_code)) {
     croak("native VM slot entry is missing resolver_shape_code");
+  }
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "resolver_mode_code", 18, &out->resolver_mode_code)) {
+    croak("native VM slot entry is missing resolver_mode_code");
   }
   if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "completion_family_code", 22, &out->completion_family_code)) {
     croak("native VM slot entry is missing completion_family_code");
@@ -1099,6 +1105,97 @@ gql_runtime_vm_native_bundle_from_sv(pTHX_ SV *sv)
   return gql_runtime_vm_native_bundle_from_runtime_and_program_sv(
     aTHX_ *runtime_svp, *program_svp
   );
+}
+
+static int
+gql_runtime_vm_program_is_native_eligible_sv(pTHX_ SV *program_sv, int has_promise)
+{
+  HV *program_hv;
+  AV *blocks_av;
+  IV i, j, k;
+  SV **svp;
+
+  if (has_promise) {
+    return 0;
+  }
+  if (!gql_runtime_vm_sv_to_hv(aTHX_ program_sv, &program_hv)) {
+    return 0;
+  }
+
+  svp = hv_fetch(program_hv, "variable_defs", 13, 0);
+  if (svp && SvOK(*svp) && SvROK(*svp) && SvTYPE(SvRV(*svp)) == SVt_PVHV) {
+    HV *defs_hv = (HV *)SvRV(*svp);
+    if (HvUSEDKEYS(defs_hv) > 0) {
+      return 0;
+    }
+  }
+
+  svp = hv_fetch(program_hv, "blocks_compact", 14, 0);
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &blocks_av)) {
+    svp = hv_fetch(program_hv, "blocks", 6, 0);
+  }
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &blocks_av)) {
+    return 0;
+  }
+
+  for (i = 0; i <= av_len(blocks_av); i++) {
+    SV **block_svp = av_fetch(blocks_av, i, 0);
+    AV *block_av;
+    AV *slots_av;
+    AV *ops_av;
+    if (!block_svp || !gql_runtime_vm_sv_to_av(aTHX_ *block_svp, &block_av)) {
+      return 0;
+    }
+
+    svp = av_fetch(block_av, 3, 0);
+    if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &slots_av)) {
+      return 0;
+    }
+    for (j = 0; j <= av_len(slots_av); j++) {
+      SV **slot_svp = av_fetch(slots_av, j, 0);
+      AV *slot_av;
+      IV resolver_shape_code;
+      IV resolver_mode_code;
+      if (!slot_svp || !gql_runtime_vm_sv_to_av(aTHX_ *slot_svp, &slot_av)) {
+        return 0;
+      }
+      svp = av_fetch(slot_av, 4, 0);
+      resolver_shape_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
+      svp = av_fetch(slot_av, 10, 0);
+      resolver_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
+      if (resolver_shape_code != GQL_VM_RESOLVE_DEFAULT) {
+        if (resolver_shape_code != GQL_VM_RESOLVE_EXPLICIT || resolver_mode_code != 2) {
+          return 0;
+        }
+      }
+    }
+
+    svp = av_fetch(block_av, 4, 0);
+    if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &ops_av)) {
+      return 0;
+    }
+    for (k = 0; k <= av_len(ops_av); k++) {
+      SV **op_svp = av_fetch(ops_av, k, 0);
+      AV *op_av;
+      IV args_mode_code;
+      int has_directives;
+      if (!op_svp || !gql_runtime_vm_sv_to_av(aTHX_ *op_svp, &op_av)) {
+        return 0;
+      }
+      svp = av_fetch(op_av, 7, 0);
+      args_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : GQL_VM_ARGS_NONE;
+      svp = av_fetch(op_av, 10, 0);
+      has_directives = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
+      if (args_mode_code != GQL_VM_ARGS_NONE && args_mode_code != GQL_VM_ARGS_STATIC) {
+        return 0;
+      }
+      if (has_directives) {
+        return 0;
+      }
+    }
+  }
+
+  return 1;
 }
 
 #endif

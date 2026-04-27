@@ -94,6 +94,7 @@ sub to_native_compact_struct {
     $native->{return_type_kind_code},
     $native->{has_args},
     $native->{has_directives},
+    $native->{resolver_mode_code},
   ];
 }
 

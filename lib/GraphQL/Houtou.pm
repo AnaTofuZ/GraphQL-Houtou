@@ -188,15 +188,33 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
 
 =head1 DESCRIPTION
 
-GraphQL::Houtou provides XS-backed GraphQL parsing and execution with
-compatibility layers for both the legacy C<graphql-perl> AST and a
-C<graphql-js>-style AST.
+GraphQL::Houtou provides an XS-first GraphQL parser and runtime for Perl.
+The parser still exposes both a legacy C<graphql-perl> AST and a
+C<graphql-js>-style AST, but the execution mainline is the compiled
+runtime / VM pipeline.
 
-This distribution was split out from local parser work that originally lived
-in a fork of L<graphql-perl|https://github.com/graphql-perl/graphql-perl>.
-It still uses the upstream C<GraphQL> distribution as a dependency for some
-compatibility behavior, while making the XS path the normal fast path for both
-parser and execution work.
+The current direction is:
+
+=over 4
+
+=item *
+
+parser compatibility where the public API still needs it
+
+=item *
+
+XS-required public compiler / validation facades
+
+=item *
+
+runtime-first execution through compiled programs and native bundles
+
+=item *
+
+legacy implementation tests and snapshots preserved under C<legacy-tests/>
+instead of shaping the active mainline
+
+=back
 
 =head1 USAGE
 
@@ -269,9 +287,9 @@ features not yet lowered into the native engine automatically fall back to the
 Perl VM. The Perl VM remains available as an explicit cold path via
 C<engine =E<gt> 'perl'>.
 
-The runtime-backed API above is the intended mainline. Older execution
-compatibility tests live under C<legacy-tests/> and are no longer part of the
-active suite.
+The runtime-backed API above is the intended mainline. The public compiler and
+validation facades now require XS. Older implementation tests and snapshots
+live under C<legacy-tests/> and are no longer part of the active suite.
 
 =head2 Promise Hooks
 

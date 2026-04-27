@@ -913,9 +913,7 @@ Still legacy PP/internal compatibility:
 
 - validation still retains `GraphQL::Houtou::Validation::PP` as an internal
   compatibility layer behind the XS facade
-- schema compilation still retains `GraphQL::Houtou::Schema::Compiler::PP` as
-  an internal compatibility module for old paths and tests
-- these are no longer treated as active public fallback surfaces
+- this is no longer treated as an active public fallback surface
 
 ### IR direct execution
 

@@ -39,7 +39,6 @@
 
 現在、一時的に残している内部互換モジュール:
 
-- `GraphQL::Houtou::Schema::Compiler::PP`
 - `GraphQL::Houtou::Validation::PP`
 
 これらは public fallback surface ではなく、旧 path の内部互換用です。
@@ -80,7 +79,7 @@ active suite は `legacy-tests/` を基準にはしていません。
 
 今後の主方向は次です。
 
-1. greenfield runtime / VM を mainline として育てる
+1. runtime / VM を mainline として育てる
 2. hot path の内部通貨から Perl envelope を追い出す
 3. family-owned completion と VM block/state ownership を強める
 4. native execution surface を mainline に寄せる

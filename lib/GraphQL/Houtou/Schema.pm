@@ -178,11 +178,6 @@ sub execute {
   return $runtime->execute_program($program, %opts);
 }
 
-sub execute_program {
-  my ($self, $document, %opts) = @_;
-  return $self->execute($document, %opts);
-}
-
 sub compile_native_program_descriptor {
   my ($self, $document, %opts) = @_;
   my $runtime = delete $opts{runtime_schema};

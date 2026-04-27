@@ -140,14 +140,6 @@ sub execute_program {
   return $native_runtime->execute_compact_program($candidate_program, %opts);
 }
 
-sub build_native_runtime {
-  my ($self) = @_;
-  require GraphQL::Houtou::Runtime::NativeRuntime;
-  return GraphQL::Houtou::Runtime::NativeRuntime->new(
-    runtime_schema => $self,
-  );
-}
-
 sub to_struct {
   my ($self) = @_;
   return {

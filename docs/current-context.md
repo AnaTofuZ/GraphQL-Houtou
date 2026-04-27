@@ -4522,3 +4522,8 @@ This fixes the first real bridge-design bug we hit in the reboot:
   runtime / VM / public runtime API を中心に維持する。
 - `Runtime.pm` は `GraphQL::Houtou::XS::VM` を直接 import せず、
   `GraphQL::Houtou::Native` を native boundary として使うようにした。
+- `Directive`, `Type::Object`, `Type::List`, `Role::Abstract` に残っていた
+  旧 execution completion entrypoint は mainline から外した。active runtime
+  では使わず、呼ばれた場合は runtime API へ移行するよう即座に失敗させる。
+- promise helper / hash merge の XS 呼び出しも `Promise::Adapter` から
+  `Native` 境界へ寄せた。mainline runtime は `XS::Execution` を直接参照しない。

@@ -6,31 +6,11 @@ use warnings;
 
 use Moo::Role;
 
-use GraphQL::Error ();
-
 # Runtime completion helpers for interfaces and unions.
 
 sub _complete_value {
-  my ($self, $context, $nodes, $info, $path, $result) = @_;
-  my $resolve_type = $self->resolve_type || \&_default_resolve_type;
-  my $runtime_type = $resolve_type->(
-    $result, $context->{context_value}, $info, $self
-  );
-  $runtime_type = $self->_ensure_valid_runtime_type(
-    $runtime_type,
-    $context,
-    $nodes,
-    $info,
-    $result,
-  );
-
-  return $runtime_type->_complete_value(
-    $context,
-    $nodes,
-    $info,
-    $path,
-    $result,
-  );
+  my ($self) = @_;
+  die "Abstract::_complete_value is part of the removed legacy execution path; use GraphQL::Houtou::Runtime instead for abstract completion on '@{[$self->name]}'.\n";
 }
 
 sub _ensure_valid_runtime_type {

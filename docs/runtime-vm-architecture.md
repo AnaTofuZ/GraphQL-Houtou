@@ -29,6 +29,8 @@ Public execution policy for this design:
 - the Perl VM should remain available as an explicit validation / bring-up path
 - child runtime modules should not `use` XS directly; the XS boundary should
   live at the top-level runtime/native API
+- core schema/type objects should not own legacy execution behavior for the
+  mainline runtime; execution belongs in the runtime/compiler/VM layers
 
 ## Design Principles
 

@@ -6,6 +6,7 @@ use warnings;
 
 use Exporter 'import';
 use GraphQL::Houtou::XS::Parser ();
+use GraphQL::Houtou::XS::VM ();
 
 our @EXPORT_OK = qw(
   native_codes

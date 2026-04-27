@@ -4416,6 +4416,34 @@ Checkpoint benchmark after removing those two export/repack boundaries
   - `houtou_compiled_ir` median `40714/s`
   - `houtou_xs_ast` median `41647/s`
 
+## 2026-04-27 benchmark axis reset
+
+The active execution benchmark is no longer the legacy
+`GraphQL::Houtou::Execution` / `compiled_ir` / `houtou_xs_ast` comparison.
+
+The mainline runtime now evaluates:
+
+- `upstream_string`
+- `upstream_ast`
+- `houtou_runtime_cached_perl`
+- `houtou_runtime_native_bundle`
+
+The point of the benchmark is to measure execution-plan reuse and the split
+between:
+
+- control plane
+  - schema compile
+  - operation lowering
+  - request-time specialization
+- data plane
+  - cached Perl VM runtime
+  - cached native bundle execution
+
+`util/execution-benchmark.pl`,
+`util/execution-benchmark-checkpoint.pl`,
+and `util/profile-execution-target.pl`
+have been moved to this new axis.
+
 Interpretation:
 
 - this is a real internal-currency checkpoint, not a helper-layout tweak

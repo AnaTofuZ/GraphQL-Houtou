@@ -9,7 +9,7 @@ use Getopt::Long qw(GetOptions);
 my $count = -3;
 my $repeat = 5;
 my @cases;
-my @modes = qw(houtou_compiled_ir houtou_xs_ast);
+my @modes = qw(houtou_runtime_cached_perl houtou_runtime_native_bundle);
 
 GetOptions(
   'count=s' => \$count,

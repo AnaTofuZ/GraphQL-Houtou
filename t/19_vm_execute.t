@@ -68,7 +68,7 @@ my $schema = GraphQL::Houtou::Schema->new(
 );
 
 subtest 'schema can execute VM-lowered program' => sub {
-  my $program = $schema->compile_operation('{ viewer { __typename id name } users { __typename id } node { __typename id } }');
+  my $program = $schema->compile_program('{ viewer { __typename id name } users { __typename id } node { __typename id } }');
   my $result = $schema->build_runtime->execute_program($program);
   is_deeply $result, {
     data => {
@@ -84,7 +84,7 @@ subtest 'schema can execute VM-lowered program' => sub {
 };
 
 subtest 'schema helper can compile and execute VM in one call' => sub {
-  my $result = $schema->execute_runtime('{ viewer { id } }');
+  my $result = $schema->execute('{ viewer { id } }');
   is_deeply $result, {
     data => { viewer => { id => 'u1' } },
     errors => [],
@@ -92,7 +92,7 @@ subtest 'schema helper can compile and execute VM in one call' => sub {
 };
 
 subtest 'VM descriptor can round-trip and still execute' => sub {
-  my $descriptor = $schema->compile_operation_descriptor('{ node { id } }');
+  my $descriptor = $schema->compile_program_descriptor('{ node { id } }');
   my $program = $schema->inflate_operation($descriptor);
   my $result = $schema->build_runtime->execute_program($program);
   is_deeply $result, {
@@ -111,7 +111,7 @@ subtest 'native VM bundle descriptor can execute through schema helper' => sub {
 };
 
 subtest 'schema helper can compile and execute native VM bundle in one call' => sub {
-  my $result = $schema->execute_native_runtime('{ viewer { id } }');
+  my $result = $schema->execute_native('{ viewer { id } }');
   is_deeply $result, {
     data => { viewer => { id => 'u1' } },
     errors => [],
@@ -119,7 +119,7 @@ subtest 'schema helper can compile and execute native VM bundle in one call' => 
 };
 
 subtest 'schema helper can execute native VM runtime with specialized variables' => sub {
-  my $result = $schema->execute_native_runtime(
+  my $result = $schema->execute_native(
     'query Q($name: String = "dora") { greet(name: $name) }',
   );
   is_deeply $result, {
@@ -129,7 +129,7 @@ subtest 'schema helper can execute native VM runtime with specialized variables'
 };
 
 subtest 'schema helper can execute native VM runtime with specialized directives' => sub {
-  my $result = $schema->execute_native_runtime(
+  my $result = $schema->execute_native(
     'query Q($show: Boolean = true) { greet(name: "eve") @include(if: $show) }',
   );
   is_deeply $result, {
@@ -139,7 +139,7 @@ subtest 'schema helper can execute native VM runtime with specialized directives
 };
 
 subtest 'schema helper can execute native VM runtime through abstract tag dispatch' => sub {
-  my $result = $schema->execute_native_runtime('{ node { __typename id } }');
+  my $result = $schema->execute_native('{ node { __typename id } }');
   is_deeply $result, {
     data => { node => { __typename => 'VmExecUser', id => 'u3' } },
     errors => [],

@@ -5,7 +5,6 @@ use JSON::PP ();
 use Test::More 0.98;
 
 use GraphQL::Houtou::Schema;
-use GraphQL::Houtou::Runtime qw(execute_operation);
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::InputObject;
@@ -150,7 +149,7 @@ subtest 'native resolver mode lets explicit resolver use native runtime' => sub 
       $called = 1;
       goto &$orig;
     };
-    my $result = $native_schema->execute_runtime('{ nativeHello }');
+    my $result = $native_schema->execute('{ nativeHello }');
     is_deeply $result, {
       data => {
         nativeHello => 'native-hi',
@@ -159,7 +158,7 @@ subtest 'native resolver mode lets explicit resolver use native runtime' => sub 
     }, 'native-safe explicit resolver still executes correctly';
   }
 
-  ok $called, 'execute_runtime selected native engine for native-safe explicit resolver';
+  ok $called, 'execute selected native engine for native-safe explicit resolver';
 };
 
 subtest 'native resolver mode supports static literal args on native runtime' => sub {
@@ -190,7 +189,7 @@ subtest 'native resolver mode supports static literal args on native runtime' =>
       $called = 1;
       goto &$orig;
     };
-    my $result = $native_schema->execute_runtime('{ nativeGreet(name: "vm") }');
+    my $result = $native_schema->execute('{ nativeGreet(name: "vm") }');
     is_deeply $result, {
       data => {
         nativeGreet => 'hi vm',
@@ -199,7 +198,7 @@ subtest 'native resolver mode supports static literal args on native runtime' =>
     }, 'native runtime passes static args to explicit resolver';
   }
 
-  ok $called, 'execute_runtime selected native engine for native-safe explicit resolver with static args';
+  ok $called, 'execute selected native engine for native-safe explicit resolver with static args';
 };
 
 subtest 'native runtime specializes variable args before bundle execution' => sub {
@@ -212,7 +211,7 @@ subtest 'native runtime specializes variable args before bundle execution' => su
       $called = 1;
       goto &$orig;
     };
-    my $result = $schema->execute_runtime(
+    my $result = $schema->execute(
       'query Q($name: String = "Bob") { greet(name: $name) }',
     );
     is_deeply $result, {
@@ -236,7 +235,7 @@ subtest 'native runtime specializes directive guards before bundle execution' =>
       $called = 1;
       goto &$orig;
     };
-    my $result = $schema->execute_runtime(
+    my $result = $schema->execute(
       'query Q($show: Boolean = true) { greet(name: "Ana") @include(if: $show) }',
     );
     is_deeply $result, {
@@ -251,7 +250,7 @@ subtest 'native runtime specializes directive guards before bundle execution' =>
 };
 
 subtest 'runtime keeps __typename on abstract/object corridors' => sub {
-  my $result = $schema->execute_runtime('{ search { __typename ... on User { id name } } }');
+  my $result = $schema->execute('{ search { __typename ... on User { id name } } }');
   is_deeply $result, {
     data => {
       search => {
@@ -274,7 +273,7 @@ subtest 'native runtime preserves static arg coercion and defaults' => sub {
       $called = 1;
       goto &$orig;
     };
-    my $result = $schema->execute_runtime(
+    my $result = $schema->execute(
       '{ describeProfile(profile: { name: "Ana" }) }',
     );
     is_deeply $result, {
@@ -290,7 +289,7 @@ subtest 'native runtime preserves static arg coercion and defaults' => sub {
 
 subtest 'cached runtime program can execute on native runtime with request variables' => sub {
   my $runtime = $schema->build_runtime;
-  my $program = $runtime->compile_operation(
+  my $program = $runtime->compile_program(
     'query Q($name: String = "Bob") { greet(name: $name) }',
   );
 
@@ -322,7 +321,7 @@ subtest 'cached runtime program can execute on native runtime with request varia
 subtest 'inflated runtime descriptor can still drive native specialization' => sub {
   my $runtime = $schema->build_runtime;
   my $inflated = GraphQL::Houtou::Runtime::inflate_schema($schema, $runtime->to_struct);
-  my $program = $inflated->compile_operation(
+  my $program = $inflated->compile_program(
     'query Q($show: Boolean = true) { greet(name: "Ana") @include(if: $show) }',
   );
 
@@ -348,7 +347,7 @@ subtest 'inflated runtime descriptor can still drive native specialization' => s
 };
 
 subtest 'schema helper can compile and execute in one call' => sub {
-  my $result = $schema->execute_runtime('{ viewer { id } }');
+  my $result = $schema->execute('{ viewer { id } }');
   is_deeply $result, {
     data => {
       viewer => { id => 'u1' },
@@ -358,7 +357,7 @@ subtest 'schema helper can compile and execute in one call' => sub {
 };
 
 subtest 'schema helper can still force the Perl executor' => sub {
-  my $result = $schema->execute_runtime('{ viewer { id } }', engine => 'perl');
+  my $result = $schema->execute('{ viewer { id } }', engine => 'perl');
   is_deeply $result, {
     data => {
       viewer => { id => 'u1' },
@@ -368,7 +367,7 @@ subtest 'schema helper can still force the Perl executor' => sub {
 };
 
 subtest 'default resolver path reads root hash values' => sub {
-  my $result = $schema->execute_runtime('{ hello }', root_value => { hello => 'world' });
+  my $result = $schema->execute('{ hello }', root_value => { hello => 'world' });
   is_deeply $result, {
     data => {
       hello => 'world',
@@ -378,7 +377,7 @@ subtest 'default resolver path reads root hash values' => sub {
 };
 
 subtest 'abstract fields dispatch through lowered child blocks' => sub {
-  my $result = $schema->execute_runtime('{ search { ... on User { id name } } }');
+  my $result = $schema->execute('{ search { ... on User { id name } } }');
   is_deeply $result, {
     data => {
       search => {
@@ -391,7 +390,7 @@ subtest 'abstract fields dispatch through lowered child blocks' => sub {
 };
 
 subtest 'static literal args are executed through lowered payloads' => sub {
-  my $result = $schema->execute_runtime('{ greet(name: "Ana") }');
+  my $result = $schema->execute('{ greet(name: "Ana") }');
   is_deeply $result, {
     data => {
       greet => 'hello Ana',
@@ -401,7 +400,7 @@ subtest 'static literal args are executed through lowered payloads' => sub {
 };
 
 subtest 'variable args are materialized at execution time' => sub {
-  my $result = $schema->execute_runtime(
+  my $result = $schema->execute(
     'query Q($name: String) { greet(name: $name) }',
     variables => { name => 'Bob' },
   );
@@ -414,7 +413,7 @@ subtest 'variable args are materialized at execution time' => sub {
 };
 
 subtest 'variable defaults are materialized from lowered program metadata' => sub {
-  my $result = $schema->execute_runtime(
+  my $result = $schema->execute(
     'query Q($name: String = "Ana") { greet(name: $name) }',
   );
   is_deeply $result, {
@@ -426,7 +425,7 @@ subtest 'variable defaults are materialized from lowered program metadata' => su
 };
 
 subtest 'variable values are coerced through lowered variable defs' => sub {
-  my $result = $schema->execute_runtime(
+  my $result = $schema->execute(
     'query Q($value: Int!) { addOne(value: $value) }',
     variables => { value => '41' },
   );
@@ -439,7 +438,7 @@ subtest 'variable values are coerced through lowered variable defs' => sub {
 };
 
 subtest 'argument values are coerced through lowered arg defs' => sub {
-  my $result = $schema->execute_runtime(
+  my $result = $schema->execute(
     '{ describeProfile(profile: { name: "Ana" }) }',
   );
   is_deeply $result, {
@@ -451,7 +450,7 @@ subtest 'argument values are coerced through lowered arg defs' => sub {
 };
 
 subtest 'dynamic argument values are coerced through lowered arg defs' => sub {
-  my $result = $schema->execute_runtime(
+  my $result = $schema->execute(
     'query Q($profile: ProfileInput!) { describeProfile(profile: $profile) }',
     variables => { profile => { name => 'Bob' } },
   );
@@ -485,7 +484,7 @@ subtest 'resolver receives lazy info hash' => sub {
     ),
   );
 
-  my $result = $info_schema->execute_runtime('{ hello }', context => { trace_id => 1 });
+  my $result = $info_schema->execute('{ hello }', context => { trace_id => 1 });
   is_deeply $result, { data => { hello => 'String' }, errors => [] }, 'resolver still executes';
   is_deeply $saw, {
     field_name => 'hello',
@@ -534,7 +533,7 @@ subtest 'abstract callbacks receive lazy info hash' => sub {
     types => [ $Tagged, $Abstract ],
   );
 
-  my $result = $tag_schema->execute_runtime('{ node { ... on TaggedUser { id } } }');
+  my $result = $tag_schema->execute('{ node { ... on TaggedUser { id } } }');
   is_deeply $result, { data => { node => { id => 'u1' } }, errors => [] }, 'abstract dispatch still executes';
   is_deeply $seen, {
     field_name => 'node',
@@ -546,7 +545,7 @@ subtest 'abstract callbacks receive lazy info hash' => sub {
 };
 
 subtest 'fragment spreads execute through lowered child blocks' => sub {
-  my $result = $schema->execute_runtime(<<'GRAPHQL');
+  my $result = $schema->execute(<<'GRAPHQL');
 query Q {
   viewer { ...UserBits }
 }
@@ -569,7 +568,7 @@ GRAPHQL
 };
 
 subtest 'dynamic include directives execute through lowered runtime guards' => sub {
-  my $result = $schema->execute_runtime(
+  my $result = $schema->execute(
     'query Q($show: Boolean) { viewer { id name @include(if: $show) } }',
     variables => { show => JSON::PP::true },
   );
@@ -586,7 +585,7 @@ subtest 'dynamic include directives execute through lowered runtime guards' => s
 };
 
 subtest 'static skip directives prune fields during lowering' => sub {
-  my $result = $schema->execute_runtime(
+  my $result = $schema->execute(
     '{ viewer { id name @skip(if: true) } }',
   );
 

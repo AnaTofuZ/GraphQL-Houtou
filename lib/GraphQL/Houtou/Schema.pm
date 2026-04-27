@@ -139,23 +139,23 @@ sub load_runtime_native_descriptor {
 
 sub compile_operation {
   my ($self, $document, %opts) = @_;
-  my $runtime = $self->build_runtime;
-  return $runtime->compile_operation($document, %opts);
+  return $self->compile_program($document, %opts);
 }
 
 sub compile_program {
   my ($self, $document, %opts) = @_;
-  return $self->compile_operation($document, %opts);
+  my $runtime = $self->build_runtime;
+  return $runtime->compile_program($document, %opts);
 }
 
 sub compile_operation_descriptor {
   my ($self, $document, %opts) = @_;
-  return $self->compile_operation($document, %opts)->to_struct;
+  return $self->compile_program_descriptor($document, %opts);
 }
 
 sub compile_program_descriptor {
   my ($self, $document, %opts) = @_;
-  return $self->compile_operation_descriptor($document, %opts);
+  return $self->compile_program($document, %opts)->to_struct;
 }
 
 sub inflate_operation {
@@ -184,20 +184,25 @@ sub load_operation_descriptor {
 
 sub execute_runtime {
   my ($self, $document, %opts) = @_;
+  return $self->execute($document, %opts);
+}
+
+sub execute {
+  my ($self, $document, %opts) = @_;
   my $runtime = $self->build_runtime;
-  my $program = $runtime->compile_operation($document, %opts);
+  my $program = $runtime->compile_program($document, %opts);
   return $runtime->execute_operation($program, %opts);
 }
 
 sub execute_program {
   my ($self, $document, %opts) = @_;
-  return $self->execute_runtime($document, %opts);
+  return $self->execute($document, %opts);
 }
 
 sub compile_native_operation_descriptor {
   my ($self, $document, %opts) = @_;
   my $runtime = delete $opts{runtime_schema};
-  return $self->compile_operation($document, ($runtime ? (runtime_schema => $runtime) : ()), %opts)->to_native_compact_struct;
+  return $self->compile_program($document, ($runtime ? (runtime_schema => $runtime) : ()), %opts)->to_native_compact_struct;
 }
 
 sub compile_native_program_descriptor {
@@ -208,7 +213,7 @@ sub compile_native_program_descriptor {
 sub compile_native_bundle_descriptor {
   my ($self, $document, %opts) = @_;
   my $runtime = $self->build_runtime;
-  my $vm = $runtime->compile_operation($document, %opts);
+  my $vm = $runtime->compile_program($document, %opts);
   return {
     runtime => $runtime->to_native_compact_struct,
     program => $vm->to_native_compact_struct,
@@ -284,8 +289,13 @@ sub execute_native_bundle_descriptor {
 
 sub execute_native_runtime {
   my ($self, $document, %opts) = @_;
+  return $self->execute_native($document, %opts);
+}
+
+sub execute_native {
+  my ($self, $document, %opts) = @_;
   my $runtime = $self->build_native_runtime;
-  my $program = $runtime->compile_operation($document, %opts);
+  my $program = $runtime->compile_program($document, %opts);
   return $runtime->execute_program($program, %opts);
 }
 

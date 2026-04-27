@@ -18,12 +18,13 @@ our @EXPORT_OK = qw(
   parse
   parse_with_options
   execute
+  execute_native
+  execute_native_runtime
   compile_runtime
   build_runtime
   build_native_runtime
   compile_native_bundle
   compile_native_bundle_descriptor
-  execute_native_runtime
   set_default_promise_code
   get_default_promise_code
   clear_default_promise_code
@@ -75,7 +76,12 @@ sub compile_native_bundle_descriptor {
 
 sub execute_native_runtime {
   my ($schema, $document, %opts) = @_;
-  return $schema->execute_native_runtime($document, %opts);
+  return $schema->execute_native($document, %opts);
+}
+
+sub execute_native {
+  my ($schema, $document, %opts) = @_;
+  return $schema->execute_native($document, %opts);
 }
 
 sub execute {
@@ -110,8 +116,8 @@ sub execute {
   }
 
   my $runtime = $schema->build_runtime;
-  my $program = $runtime->compile_operation($document, %opts);
-  return $runtime->execute_operation($program, %opts);
+  my $program = $runtime->compile_program($document, %opts);
+  return $runtime->execute_program($program, %opts);
 }
 
 1;
@@ -131,7 +137,7 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
       execute
       compile_runtime
       compile_native_bundle
-      execute_native_runtime
+      execute_native
       set_default_promise_code
     );
     use GraphQL::Houtou::Schema;
@@ -176,7 +182,7 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     my $result = execute($schema, '{ hello }');
     my $runtime = compile_runtime($schema);
     my $bundle = compile_native_bundle($schema, '{ hello }');
-    my $native = execute_native_runtime($schema, '{ hello }');
+    my $native = execute_native($schema, '{ hello }');
 
     set_default_promise_code({
       resolve => sub { ... },
@@ -251,8 +257,8 @@ a pre-parsed C<graphql-perl>-compatible AST
 If you need a reusable compiled runtime, use:
 
     my $runtime = GraphQL::Houtou::compile_runtime($schema);
-    my $program = $runtime->compile_operation($document);
-    my $result  = $runtime->execute_operation($program, variables => \%vars);
+    my $program = $runtime->compile_program($document);
+    my $result  = $runtime->execute_program($program, variables => \%vars);
 
 If you want a boot-time native artifact, use:
 
@@ -261,7 +267,7 @@ If you want a boot-time native artifact, use:
 
 Or execute directly through the cached native runtime:
 
-    my $result = GraphQL::Houtou::execute_native_runtime($schema, $document);
+    my $result = GraphQL::Houtou::execute_native($schema, $document);
 
 This runtime-backed API prefers the native XS engine when the lowered program
 stays within the current native-safe subset. Programs that still require

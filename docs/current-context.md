@@ -73,35 +73,35 @@ Runtime scaffold checkpoint:
 
 New runtime entrypoints now include:
 
-- `GraphQL::Houtou::Runtime::compile_operation($runtime_schema, $document)`
+- `GraphQL::Houtou::Runtime::compile_program($runtime_schema, $document)`
 - `GraphQL::Houtou::Runtime::inflate_operation($runtime_schema, $descriptor)`
-- `GraphQL::Houtou::Runtime::execute_operation($runtime_schema, $program, %opts)`
-- `$schema->compile_operation($document)`
-- `$schema->compile_operation_descriptor($document)`
+- `GraphQL::Houtou::Runtime::execute_program($runtime_schema, $program, %opts)`
+- `$schema->compile_program($document)`
+- `$schema->compile_program_descriptor($document)`
 - `$schema->inflate_operation($descriptor)`
-- `$runtime_schema->compile_operation($document)`
+- `$runtime_schema->compile_program($document)`
 - `$runtime_schema->inflate_operation($descriptor)`
-- `$runtime_schema->execute_operation($program, %opts)`
+- `$runtime_schema->execute_program($program, %opts)`
 - `$runtime_schema->inflate_program($descriptor)`
 - `$runtime_schema->inflate_native_bundle($descriptor)`
 - `$runtime_schema->execute_program($program, %opts)`
 - `$runtime_schema->execute_native_bundle($descriptor, %opts)`
 - `$runtime_schema->lower_vm_program($program)`
-- `$schema->execute_runtime($document, %opts)`
-- `$schema->compile_operation($document)`
+- `$schema->execute($document, %opts)`
+- `$schema->compile_program($document)`
 - `$schema->compile_native_bundle($document, %opts)`
 - `$schema->compile_native_bundle_descriptor($document, %opts)`
-- `$schema->execute_native_runtime($document, %opts)`
+- `$schema->execute_native($document, %opts)`
 - `GraphQL::Houtou::execute($schema, $document, \%variables?)`
 - `GraphQL::Houtou::compile_runtime($schema, %opts)`
 - `GraphQL::Houtou::compile_native_bundle($schema, $document, %opts)`
-- `GraphQL::Houtou::execute_native_runtime($schema, $document, %opts)`
+- `GraphQL::Houtou::execute_native($schema, $document, %opts)`
 
 Mainline execution policy:
 
 - `GraphQL::Houtou::execute(...)`
-- `$schema->execute_runtime(...)`
-- `$runtime->execute_operation(...)`
+- `$schema->execute(...)`
+- `$runtime->execute_program(...)`
 
 now prefer the native XS engine when the lowered program stays within the
 current native-safe subset.
@@ -262,7 +262,7 @@ Current runtime coverage:
     - `load_native_bundle_descriptor(...)`
     - `dump_native_bundle_descriptor(...)`
     - `execute_native_bundle_descriptor(...)`
-    - `execute_native_runtime(...)`
+    - `execute_native(...)`
   - legacy `compile_vm_*` / `execute_vm_*` names remain only as compatibility
     aliases while the runtime surface migrates to `native_*`
 - block execution is now also moving behind `ExecState`:
@@ -4526,7 +4526,7 @@ This fixes the first real bridge-design bug we hit in the reboot:
 - child runtime modules should not re-enter XS directly
 - 2026-04-26
   - mainline runtime path now executes through the Perl VM by default:
-    - `Schema->execute_runtime(...)`
+    - `Schema->execute(...)`
     - `Runtime->execute_program(...)`
   - public operation APIs are now VM-first:
     - `compile_operation`
@@ -4570,7 +4570,7 @@ This fixes the first real bridge-design bug we hit in the reboot:
       または `EXPLICIT + resolver_mode=NATIVE`
     - args がある場合は `args_mode=STATIC`
     の program を native 候補として扱う。
-  - `t/15_runtime_execute.t` では `execute_runtime(...)` が
+  - `t/15_runtime_execute.t` では `execute(...)` が
     native-safe explicit resolver を実際に native 境界へ流すことを固定した。
   - native VM bundle は static args payload を owned で保持し、
     実行時に deep clone した args hash/array を resolver ABI
@@ -4588,8 +4588,8 @@ This fixes the first real bridge-design bug we hit in the reboot:
     を行い、native 実行可能な VM program へ特化する。
   - この specialization は child module から XS を呼ばず、
     `Runtime->execute_program(engine => 'native')` および
-    `Schema->execute_native_runtime(...)` の top-level native boundary だけが使う。
-  - `execute_native_runtime(...)` は静的 bundle descriptor 直行ではなく、
+    `Schema->execute_native(...)` の top-level native boundary だけが使う。
+  - `execute_native(...)` は静的 bundle descriptor 直行ではなく、
     request-time specialization 後の VM program を native 実行へ渡す。
   - これにより native-safe な explicit resolver について、
     - variable args
@@ -4621,9 +4621,9 @@ This fixes the first real bridge-design bug we hit in the reboot:
   - `Schema->build_runtime(...)` / `Schema->build_native_runtime(...)` は
     no-opt の public path では compiled runtime graph / native runtime wrapper を
     再利用するようにした。
-  - `Schema->execute_runtime(...)` と top-level `GraphQL::Houtou::execute(...)` は
+  - `Schema->execute(...)` と top-level `GraphQL::Houtou::execute(...)` は
     no-opt 実行時にこの cached runtime graph を優先して使う。
-  - `Schema->execute_native_runtime(...)` と
+  - `Schema->execute_native(...)` と
     `Schema->execute_native_bundle_descriptor(...)` は
     cached native runtime wrapper を主経路にし、
     request ごとに native runtime handle を作り直さないようにした。

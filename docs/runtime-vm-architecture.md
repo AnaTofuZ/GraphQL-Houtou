@@ -383,7 +383,7 @@ The important distinction is:
 The same applies to operations. The control-plane API should expose:
 
 ```perl
-my $program = $runtime->compile_operation($document);
+my $program = $runtime->compile_program($document);
 my $descriptor = $program->to_struct;
 my $inflated = $runtime->inflate_operation($descriptor);
 ```
@@ -558,7 +558,7 @@ The next required scaffold is operation lowering:
 
 ```perl
 my $runtime = $schema->compile_runtime;
-my $exec = $runtime->compile_operation('{ viewer { id name } }');
+my $exec = $runtime->compile_program('{ viewer { id name } }');
 my $root_block = $exec->root_block;
 ```
 
@@ -570,8 +570,8 @@ sync runtime:
 
 ```perl
 my $runtime = $schema->compile_runtime;
-my $program = $runtime->compile_operation('{ viewer { id } }');
-my $result = $runtime->execute_operation($program);
+my $program = $runtime->compile_program('{ viewer { id } }');
+my $result = $runtime->execute_program($program);
 ```
 
 Even this first executor should already use native internal currency
@@ -998,7 +998,7 @@ teach every child module to call XS:
 - request-local mutation happens on a cloned VM program
 - the top-level runtime bridge remains the only native execution boundary
 
-In practice this means `Schema->execute_native_runtime(...)` should behave like
+In practice this means `Schema->execute_native(...)` should behave like
 `Runtime->execute_program(engine => 'native')`, not like a raw static bundle
 loader. Dynamic variables and directives are resolved before native execution,
 but execution itself still happens on the native VM.
@@ -1031,7 +1031,7 @@ For the public hot path, the intended rule is:
 - `compile_runtime(...)` remains an uncached compiler entrypoint
 - `build_runtime(...)` and `build_native_runtime(...)` are boot-time cache APIs
 - no-opt public execution should prefer the cached runtime graph / native wrapper
-- native execution helpers such as `execute_native_runtime(...)` and
+- native execution helpers such as `execute_native(...)` and
   `execute_native_bundle_descriptor(...)` should also route through the cached
   native runtime wrapper instead of rebuilding a runtime handle per request
 - `clear_runtime_cache()` must invalidate:
@@ -1052,7 +1052,7 @@ execution unit.
 
 - `compile_operation` / `compile_program`
 - `inflate_operation` / `inflate_program`
-- `execute_operation` / `execute_program`
+- `execute_program`
 
 These APIs should all return or consume VM programs by default.
 

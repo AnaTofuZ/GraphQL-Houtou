@@ -53,7 +53,7 @@ my $schema = GraphQL::Houtou::Schema->new(
 );
 
 subtest 'schema can lower operation into VM program' => sub {
-  my $vm = $schema->compile_operation('{ viewer { id } node { id } }');
+  my $vm = $schema->compile_program('{ viewer { id } node { id } }');
   isa_ok $vm, 'GraphQL::Houtou::Runtime::VMProgram';
   isa_ok $vm->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
   is $vm->operation_type, 'query', 'vm program keeps operation type';

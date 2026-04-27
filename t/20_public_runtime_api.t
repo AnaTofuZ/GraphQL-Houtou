@@ -6,12 +6,12 @@ use File::Temp qw(tempfile);
 use lib 'lib';
 use GraphQL::Houtou qw(
   execute
+  execute_native
   compile_runtime
   build_runtime
   build_native_runtime
   compile_native_bundle
   compile_native_bundle_descriptor
-  execute_native_runtime
 );
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
@@ -64,8 +64,8 @@ subtest 'top-level execute accepts variable hashref as third arg' => sub {
 subtest 'top-level compile_runtime returns schema runtime' => sub {
   my $runtime = compile_runtime($schema);
   isa_ok $runtime, 'GraphQL::Houtou::Runtime::SchemaGraph';
-  my $program = $runtime->compile_operation('{ hello }');
-  my $result = $runtime->execute_operation($program);
+  my $program = $runtime->compile_program('{ hello }');
+  my $result = $runtime->execute_program($program);
   is_deeply $result, {
     data => { hello => 'world' },
     errors => [],
@@ -170,7 +170,7 @@ subtest 'top-level compile_native_bundle_descriptor returns compact descriptor' 
   ok $descriptor->{program}, 'descriptor keeps program payload';
 };
 
-subtest 'schema execute_native_runtime reuses cached native runtime handle' => sub {
+subtest 'schema execute_native reuses cached native runtime handle' => sub {
   $schema->clear_runtime_cache;
   my $load_count = 0;
   my $orig = \&GraphQL::Houtou::Native::load_native_runtime;
@@ -182,8 +182,8 @@ subtest 'schema execute_native_runtime reuses cached native runtime handle' => s
       goto &$orig;
     };
 
-    my $first = $schema->execute_native_runtime('{ hello }');
-    my $second = $schema->execute_native_runtime('{ hello }');
+    my $first = $schema->execute_native('{ hello }');
+    my $second = $schema->execute_native('{ hello }');
 
     is_deeply $first, {
       data => { hello => 'world' },
@@ -195,15 +195,15 @@ subtest 'schema execute_native_runtime reuses cached native runtime handle' => s
     }, 'second native runtime execution succeeds';
   }
 
-  is $load_count, 1, 'execute_native_runtime reuses cached native runtime handle';
+  is $load_count, 1, 'execute_native reuses cached native runtime handle';
 };
 
-subtest 'top-level execute_native_runtime uses cached native path' => sub {
-  my $result = execute_native_runtime($schema, '{ hello }');
+subtest 'top-level execute_native uses cached native path' => sub {
+  my $result = execute_native($schema, '{ hello }');
   is_deeply $result, {
     data => { hello => 'world' },
     errors => [],
-  }, 'top-level execute_native_runtime delegates to schema native runtime';
+  }, 'top-level execute_native delegates to schema native runtime';
 };
 
 done_testing;

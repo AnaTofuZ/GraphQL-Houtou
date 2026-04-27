@@ -45,7 +45,7 @@ my $schema = GraphQL::Houtou::Schema->new(
 );
 
 subtest 'resolver errors are materialized lazily with path' => sub {
-  my $result = $schema->execute_runtime('{ viewer { id brokenName } }');
+  my $result = $schema->execute('{ viewer { id brokenName } }');
 
   is_deeply $result, {
     data => {
@@ -64,7 +64,7 @@ subtest 'resolver errors are materialized lazily with path' => sub {
 };
 
 subtest 'abstract resolution errors are materialized lazily with path' => sub {
-  my $result = $schema->execute_runtime('{ node { ... on User { id } } }');
+  my $result = $schema->execute('{ node { ... on User { id } } }');
 
   is_deeply $result, {
     data => {

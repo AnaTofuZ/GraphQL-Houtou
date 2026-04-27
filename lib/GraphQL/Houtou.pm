@@ -44,11 +44,10 @@ sub parse_with_options {
   my ($source, $options) = @_;
   $options ||= {};
   for my $key (keys %{$options}) {
-    next if $key eq 'no_location' || $key eq 'noLocation';
+    next if $key eq 'no_location';
     die "Unknown parser option '$key'.\n";
   }
   my $no_location = $options->{no_location};
-  $no_location = $options->{noLocation} if !defined $no_location;
   require GraphQL::Houtou::XS::Parser;
   return GraphQL::Houtou::XS::Parser::parse_xs($source, $no_location);
 }
@@ -144,9 +143,9 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     use GraphQL::Houtou::Type::Object;
     use GraphQL::Houtou::Type::Scalar;
 
-    my $legacy_ast = parse('{ user { id } }');
+    my $ast = parse('{ user { id } }');
 
-    my $legacy_xs_ast = parse_with_options('{ user { id } }', {
+    my $fast_ast = parse_with_options('{ user { id } }', {
       no_location => 1,
     });
 
@@ -215,7 +214,7 @@ this library.
 
 If you want to tune parser options explicitly, use C<parse_with_options()>.
 
-    my $legacy = parse_with_options($source, {
+    my $ast = parse_with_options($source, {
       no_location => 1,
     });
 

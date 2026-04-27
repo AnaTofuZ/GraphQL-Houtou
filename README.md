@@ -19,9 +19,9 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     use GraphQL::Houtou::Type::Object;
     use GraphQL::Houtou::Type::Scalar;
 
-    my $legacy_ast = parse('{ user { id } }');
+    my $ast = parse('{ user { id } }');
 
-    my $legacy_xs_ast = parse_with_options('{ user { id } }', {
+    my $fast_ast = parse_with_options('{ user { id } }', {
       no_location => 1,
     });
 
@@ -78,7 +78,7 @@ this library.
 
 If you want to tune parser options explicitly, use `parse_with_options()`.
 
-    my $legacy = parse_with_options($source, {
+    my $ast = parse_with_options($source, {
       no_location => 1,
     });
 

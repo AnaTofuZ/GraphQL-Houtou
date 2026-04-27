@@ -20,6 +20,11 @@ subtest 'parse_with_options exposes only parser-local options' => sub {
   });
 
   is ref($ast), 'ARRAY', 'graphql-perl parse returns arrayref document';
+  my $compat_error;
+  eval { parse_with_options('{ viewer { id } }', { noLocation => 1 }) };
+  $compat_error = $@;
+  like($compat_error, qr/Unknown parser option 'noLocation'/, 'camelCase parser option is retired');
+
   my $error;
   eval { parse_with_options('{ viewer { id } }', { dialect => 'graphql-js' }) };
   $error = $@;

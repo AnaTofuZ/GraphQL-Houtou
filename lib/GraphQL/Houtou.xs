@@ -1,6 +1,6 @@
 #include "bootstrap.h"
 #include "parser_core.h"
-#include "parser_compat.h"
+#include "parser_graphqlperl_runtime.h"
 #include "parser_shared_ast.h"
 #include "graphqljs_runtime.h"
 #include "graphqljs_ir_runtime.h"

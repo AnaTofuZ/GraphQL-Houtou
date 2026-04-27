@@ -8,6 +8,17 @@
  * mainline and should be reduced as parser compatibility surface shrinks.
  */
 static SV *
+gqljs_new_description_node_sv(pTHX_ SV *value_sv) {
+  HV *hv = gqljs_new_node_hv_sized("StringValue", 3);
+  STRLEN len;
+  const char *value;
+  value = SvPV(value_sv, len);
+  gql_store_sv(hv, "value", SvREFCNT_inc_simple_NN(value_sv));
+  gql_store_sv(hv, "block", newSViv(memchr(value, '\n', len) ? 1 : 0));
+  return newRV_noinc((SV *)hv);
+}
+
+static SV *
 gqljs_convert_legacy_type_sv(pTHX_ SV *type_sv) {
   if (!type_sv) {
     return &PL_sv_undef;

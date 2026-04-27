@@ -1,43 +1,7 @@
 /*
- * Responsibility: graphql-perl legacy AST builders, location conversion,
- * and the legacy recursive-descent parser entrypoints.
+ * Responsibility: graphql-perl mainline recursive-descent parser entrypoints
+ * and legacy AST builders used by the active parser surface.
  */
-static SV *
-gql_graphqlperl_build_document(pTHX_ SV *doc_sv) {
-  HV *doc_hv;
-  AV *definitions_av;
-  AV *out_av;
-  I32 i;
-
-  if (!doc_sv || !SvROK(doc_sv) || SvTYPE(SvRV(doc_sv)) != SVt_PVHV) {
-    croak("graphqlperl_build_document_xs expects a document hash reference");
-  }
-  doc_hv = (HV *)SvRV(doc_sv);
-  if (!strEQ(gqljs_fetch_kind(doc_hv), "Document")) {
-    croak("graphqlperl_build_document_xs expects a graphql-js Document node");
-  }
-  definitions_av = gqljs_fetch_array(doc_hv, "definitions");
-  if (!definitions_av) {
-    croak("graphqlperl_build_document_xs expected document definitions");
-  }
-
-  out_av = newAV();
-  for (i = 0; i <= av_len(definitions_av); i++) {
-    SV **svp = av_fetch(definitions_av, i, 0);
-    SV *converted_sv;
-    if (!svp) {
-      continue;
-    }
-    converted_sv = gqlperl_convert_definition_from_gqljs(aTHX_ *svp);
-    if (!converted_sv || converted_sv == &PL_sv_undef) {
-      SvREFCNT_dec((SV *)out_av);
-      return &PL_sv_undef;
-    }
-    av_push(out_av, converted_sv);
-  }
-
-  return newRV_noinc((SV *)out_av);
-}
 
 static void
 gql_skip_ignored(gql_parser_t *p) {
@@ -1429,4 +1393,3 @@ gql_parse_document(pTHX_ SV *source_sv, SV *no_location_sv) {
   LEAVE;
   return ret;
 }
-

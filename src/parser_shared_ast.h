@@ -48,17 +48,6 @@ gqljs_new_variable_node_sv(pTHX_ SV *value_sv) {
   return newRV_noinc((SV *)hv);
 }
 
-static SV *
-gqljs_new_description_node_sv(pTHX_ SV *value_sv) {
-  HV *hv = gqljs_new_node_hv_sized("StringValue", 3);
-  STRLEN len;
-  const char *value;
-  value = SvPV(value_sv, len);
-  gql_store_sv(hv, "value", SvREFCNT_inc_simple_NN(value_sv));
-  gql_store_sv(hv, "block", newSViv(memchr(value, '\n', len) ? 1 : 0));
-  return newRV_noinc((SV *)hv);
-}
-
 static int
 gqljs_cmp_sv_ptrs(const void *a, const void *b) {
   SV *const *left = (SV *const *)a;

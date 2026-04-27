@@ -180,8 +180,40 @@ typedef struct {
   AV *error_records_av;
 } gql_runtime_vm_writer_t;
 
+static AV *gql_runtime_vm_expect_op_array(pTHX_ SV *op_sv);
+static SV *gql_runtime_vm_op_slot_sv(pTHX_ SV *op_sv, IV index);
+static SV *gql_runtime_vm_op_result_name_sv(pTHX_ SV *op_sv);
 static SV *gql_runtime_vm_new_handle_sv(pTHX_ const char *pkg, void *ptr);
 static gql_runtime_vm_cursor_t *gql_runtime_vm_expect_cursor(pTHX_ SV *self);
+
+static AV *
+gql_runtime_vm_expect_op_array(pTHX_ SV *op_sv)
+{
+  if (!op_sv || !SvOK(op_sv) || !SvROK(op_sv) || SvTYPE(SvRV(op_sv)) != SVt_PVAV) {
+    return NULL;
+  }
+  return (AV *)SvRV(op_sv);
+}
+
+static SV *
+gql_runtime_vm_op_slot_sv(pTHX_ SV *op_sv, IV index)
+{
+  AV *op_av = gql_runtime_vm_expect_op_array(aTHX_ op_sv);
+  SV **svp;
+
+  if (!op_av) {
+    return NULL;
+  }
+
+  svp = av_fetch(op_av, index, 0);
+  return (svp && SvOK(*svp)) ? *svp : NULL;
+}
+
+static SV *
+gql_runtime_vm_op_result_name_sv(pTHX_ SV *op_sv)
+{
+  return gql_runtime_vm_op_slot_sv(aTHX_ op_sv, 7);
+}
 
 static SV *
 gql_runtime_vm_new_cursor_handle(pTHX_ const char *pkg, gql_runtime_vm_cursor_t *cursor)

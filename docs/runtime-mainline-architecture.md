@@ -103,12 +103,12 @@
 
 責務:
 
-- `ExecState` が block / field lifecycle を所有
-- `Cursor` が current block / op / slot を指す
-- `BlockFrame` が block-local values と pending state を保持
-- `FieldFrame` が field-local temporary を保持
-- `Outcome` が kind-first な結果通貨
-- `Writer` が response materialization を担当
+- `ExecState` が block / field lifecycle を所有し、Perl 側は state machine facade に縮退していく
+- `Cursor` が current block / op / slot を指す XS opaque handle
+- `BlockFrame` が block-local values と pending state を保持する XS opaque handle
+- `FieldFrame` が field-local temporary を保持する XS opaque handle
+- `Outcome` が kind-first な結果通貨を表す XS opaque handle
+- `Writer` が response materialization を担当する XS opaque handle
 
 ### 6. Native Boundary
 

@@ -481,6 +481,20 @@ sub resolve_runtime_type_for_current_field {
 
 sub execute_block {
   my ($self, $block, $source, $base_path) = @_;
+  if (!$self->promise_code) {
+    GraphQL::Houtou::_bootstrap_xs();
+    return GraphQL::Houtou::XS::VM::exec_state_execute_block_xs(
+      $self,
+      $block,
+      $source,
+      $base_path,
+    );
+  }
+  return $self->_execute_block_perl($block, $source, $base_path);
+}
+
+sub _execute_block_perl {
+  my ($self, $block, $source, $base_path) = @_;
   my ($snapshot) = $self->enter_block($block);
   while (my $op = $self->advance_current_op) {
     next if !$self->should_execute_current_op($op);

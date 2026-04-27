@@ -23,22 +23,22 @@ sub new {
 
 sub runtime_schema { return $_[0]{runtime_schema} }
 
-sub native_runtime_struct {
+sub _native_runtime_struct {
   my ($self) = @_;
   $self->{native_runtime_struct} ||= $self->runtime_schema->to_native_exec_struct;
   return $self->{native_runtime_struct};
 }
 
-sub native_runtime_compact_struct {
+sub _native_runtime_compact_struct {
   my ($self) = @_;
   $self->{native_runtime_compact_struct} ||= $self->runtime_schema->to_native_compact_struct;
   return $self->{native_runtime_compact_struct};
 }
 
-sub native_runtime_handle {
+sub _native_runtime_handle {
   my ($self) = @_;
   $self->{native_runtime_handle} ||= GraphQL::Houtou::Native::load_native_runtime(
-    $self->native_runtime_struct,
+    $self->_native_runtime_struct,
   );
   return $self->{native_runtime_handle};
 }
@@ -130,14 +130,14 @@ sub preferred_engine_for_program {
 sub compile_bundle {
   my ($self, $program, %opts) = @_;
   my $candidate = $self->specialize_program($program, %opts);
-  return $self->load_bundle_parts($candidate);
+  return $self->_load_bundle_parts($candidate);
 }
 
 sub compile_bundle_descriptor {
   my ($self, $program, %opts) = @_;
   my $candidate = $self->specialize_program($program, %opts);
   return {
-    runtime => $self->native_runtime_compact_struct,
+    runtime => $self->_native_runtime_compact_struct,
     program => $candidate->to_native_compact_struct,
   };
 }
@@ -145,22 +145,22 @@ sub compile_bundle_descriptor {
 sub compile_bundle_descriptor_for_document {
   my ($self, $document, %opts) = @_;
   my $program = $self->compile_program($document, %opts);
-  return $self->compact_bundle_descriptor($program);
+  return $self->_compact_bundle_descriptor($program);
 }
 
-sub compact_bundle_descriptor {
+sub _compact_bundle_descriptor {
   my ($self, $program) = @_;
   return {
-    runtime => $self->native_runtime_compact_struct,
+    runtime => $self->_native_runtime_compact_struct,
     program => $program->to_native_compact_struct,
   };
 }
 
-sub load_bundle_parts {
+sub _load_bundle_parts {
   my ($self, $program) = @_;
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::load_native_bundle_parts_xs(
-    $self->native_runtime_compact_struct,
+    $self->_native_runtime_compact_struct,
     $program->to_native_compact_struct,
   );
 }
@@ -215,8 +215,8 @@ sub execute_program {
 sub execute_compact_program {
   my ($self, $program, %opts) = @_;
   return GraphQL::Houtou::Native::execute_native_program(
-    $self->native_runtime_handle,
-    $self->native_runtime_compact_struct,
+    $self->_native_runtime_handle,
+    $self->_native_runtime_compact_struct,
     $program->to_native_compact_struct,
     $opts{root_value},
     $opts{context},
@@ -238,7 +238,7 @@ sub execute_document {
 sub execute_bundle {
   my ($self, $bundle, %opts) = @_;
   return GraphQL::Houtou::Native::execute_native_bundle(
-    $self->native_runtime_handle,
+    $self->_native_runtime_handle,
     $bundle,
     $opts{root_value},
     $opts{context},

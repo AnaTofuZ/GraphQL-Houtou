@@ -59,7 +59,7 @@
 4. XS Native Boundary
    - bundle owner: `GraphQL::Houtou::_bootstrap_xs`
    - parser helper: `GraphQL::Houtou::XS::Parser` は公開 facade ではなく、top-level `GraphQL::Houtou::parse*` と XS callback 用の internal helper
-   - `XS::Parser` の lazy materialize helper は旧 `graphqljs_*` 命名を外し、1 dialect 前提の parser-internal helper として整理を進める
+   - `XS::Parser` の lazy materialize helper は 1 dialect 前提の parser-internal helper として整理済み
    - `src/parser_ast_runtime.h` / `src/parser_ir_runtime.h` は parser-internal 層であり、runtime / VM mainline の一部ではない
    - compile / validation / native runtime は public facade から XSUB package を直接呼ぶ
    - `GraphQL::Houtou::Runtime::NativeBundle` は Perl wrapper ではなく XS が提供する opaque handle
@@ -172,7 +172,6 @@ fresh `./Build build` 済み環境で、
 - historical / internal parser 資料は docs にのみ残し、mainline の API からは `graphql-js` dialect を外した
 - parser compatibility 自体は要件から外したが、parser 本体と旧 compatibility 層が一部 helper を共有していたため、
   まず `src/parser_shared_ast.h` を新設して mainline 共有 helper を切り出した
-  - `parser_compat_convert.h` は compatibility-only へ縮退させる対象
   - graphql-perl parser 本体は `src/parser_graphqlperl_runtime.h` に移し、
     `parser_compat.h` は source tree から削除した
 - 今後の高速化は旧 corridor widening の延長ではなく、runtime/VM 本体で進める

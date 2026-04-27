@@ -14,10 +14,10 @@
 - 今後、独自構造体化の効果が出やすい層はどこか
 
 活動記録と benchmark の最新値は `docs/current-context.md` を参照。
-現行の公開 parser surface は `graphql-perl` 互換 AST に固定されており、
-この文書に残っている旧 graphql-js 由来の記述は parser compatibility 層の内部実装メモとして読む。
+現行の公開 parser surface は `graphql-perl` 互換 AST に固定されている。
+この文書に残っている旧 graphql-js 由来の記述は、parser-internal な履歴的背景として読む。
 runtime / VM mainline とは別物であり、現在の本命経路ではない。
-また、mainline と旧 compatibility 層の shared helper は
+また、mainline と旧 parser 実装の shared helper は
 `src/parser_shared_ast.h` に切り出した。ここには node 生成や sorted hash key
 抽出のような、parser 本体と schema/compiler の両方がまだ使う小さな共通部品だけを置く。
 executable-document 向けの IR 解析と lazy materialize は `src/parser_ir_runtime.h`
@@ -38,7 +38,7 @@ executable-document 向けの IR 解析と lazy materialize は `src/parser_ir_r
 - lazy `loc` / lazy array の補助は parser-internal helper が受け持つ
 - 公開 API の返り値は Perl のネイティブデータ構造である
 
-ここでいう旧 graphql-js 由来 helper は public dialect ではなく、parser compatibility を支える
+ここでいう旧 graphql-js 由来 helper は public dialect ではなく、parser 本体を支える
 内部 helper 群である。
 
 つまり、「全部 `SV` ベース」ではないが、「全部が独自構造体化済み」でもない。

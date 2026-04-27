@@ -1125,6 +1125,64 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
   OUTPUT:
     RETVAL
 
+SV *
+execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor, root_value = &PL_sv_undef, context_value = &PL_sv_undef)
+    SV *runtime_schema
+    SV *runtime_descriptor
+    SV *program_descriptor
+    SV *root_value
+    SV *context_value
+  CODE:
+    {
+      gql_runtime_vm_native_bundle_t *bundle;
+      gql_runtime_vm_native_runtime_t *runtime = NULL;
+      gql_runtime_vm_exec_state_t state;
+      int owns_runtime = 0;
+      HV *hv;
+      AV *errors;
+      SV *data_sv;
+
+      bundle = gql_runtime_vm_native_bundle_from_runtime_and_program_sv(
+        aTHX_ runtime_descriptor, program_descriptor
+      );
+
+      if (runtime_schema && SvROK(runtime_schema) && sv_derived_from(runtime_schema, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+        runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_schema)));
+        if (!runtime) {
+          gql_runtime_vm_native_bundle_destroy(bundle);
+          croak("native VM runtime handle is no longer valid");
+        }
+      } else {
+        runtime = gql_runtime_vm_native_runtime_from_runtime_schema_sv(aTHX_ runtime_schema);
+        owns_runtime = 1;
+      }
+
+      Zero(&state, 1, gql_runtime_vm_exec_state_t);
+      state.runtime = runtime;
+      state.bundle = bundle;
+      state.context = context_value;
+
+      data_sv = gql_runtime_vm_execute_block_sv(
+        aTHX_
+        &state,
+        bundle->root_block_index,
+        root_value
+      );
+
+      hv = newHV();
+      hv_store(hv, "data", 4, data_sv, 0);
+      errors = newAV();
+      hv_store(hv, "errors", 6, newRV_noinc((SV *)errors), 0);
+      RETVAL = newRV_noinc((SV *)hv);
+
+      gql_runtime_vm_native_bundle_destroy(bundle);
+      if (owns_runtime) {
+        gql_runtime_vm_native_runtime_destroy(runtime);
+      }
+    }
+  OUTPUT:
+    RETVAL
+
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::Runtime::NativeBundle
 
 void

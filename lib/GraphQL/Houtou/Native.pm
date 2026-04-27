@@ -15,6 +15,7 @@ our @EXPORT_OK = qw(
   native_bundle_summary
   native_runtime_summary
   execute_native_bundle
+  execute_native_program
 );
 
 sub _ensure_vm_xs_loaded {
@@ -55,6 +56,11 @@ sub native_runtime_summary {
 sub execute_native_bundle {
   _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::execute_native_bundle_xs(@_);
+}
+
+sub execute_native_program {
+  _ensure_vm_xs_loaded();
+  return GraphQL::Houtou::XS::VM::execute_native_program_xs(@_);
 }
 
 1;

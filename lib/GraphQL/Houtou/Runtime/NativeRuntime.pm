@@ -173,8 +173,13 @@ sub execute_program {
 
 sub execute_compact_program {
   my ($self, $program, %opts) = @_;
-  my $bundle = $self->load_bundle_parts($program);
-  return $self->execute_bundle($bundle, %opts);
+  return GraphQL::Houtou::Native::execute_native_program(
+    $self->native_runtime_handle,
+    $self->native_runtime_compact_struct,
+    $program->to_native_compact_struct,
+    $opts{root_value},
+    $opts{context},
+  );
 }
 
 sub execute_bundle_descriptor {

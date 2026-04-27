@@ -41,6 +41,8 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 - `Runtime::execute_vm(...)` からの compact program 実行も `NativeRuntime` が所有する
 - hot path では `runtime + program` の Perl descriptor hash を組み立てず、
   compact runtime struct と compact program struct を別引数のまま XS に渡して bundle を inflate する
+- compact program の実行時は、一時的な native bundle handle を Perl 側で組み立てず、
+  `execute_native_program_xs(...)` へ直接流す
 
 ### 3. Schema Graph
 

@@ -130,6 +130,8 @@
 - `Runtime::execute_vm(...)` も compact descriptor を直組みせず `NativeRuntime` に委譲する
 - native 実行の hot path では `runtime + program` を 1 つの Perl hash にまとめず、
   compact runtime struct と compact program struct を part-based API で XS に渡す
+- compact program 実行では Perl 側で一時 native bundle handle を作らず、
+  `execute_native_program_xs(...)` に直接渡す
 
 ## 内部通貨
 

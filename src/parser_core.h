@@ -627,7 +627,7 @@ gqljs_scan_variable_definition_directives(pTHX_ const char *src, STRLEN len, STR
 }
 
 static SV *
-gql_graphqljs_preprocess(pTHX_ SV *source_sv) {
+gql_parser_preprocess_document(pTHX_ SV *source_sv) {
   STRLEN len;
   const char *src = SvPV(source_sv, len);
   int is_utf8 = SvUTF8(source_sv) ? 1 : 0;
@@ -967,7 +967,7 @@ gqljs_extension_kind_name(const char *source_kind) {
 }
 
 static SV *
-gql_graphqljs_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
+gql_parser_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
   HV *doc_hv;
   HV *meta_hv;
   AV *definitions;
@@ -980,7 +980,7 @@ gql_graphqljs_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
 
   if (!SvROK(doc_sv) || SvTYPE(SvRV(doc_sv)) != SVt_PVHV ||
       !SvROK(meta_sv) || SvTYPE(SvRV(meta_sv)) != SVt_PVHV) {
-    croak("graphqljs_patch_document_xs expects hash references");
+    croak("parser document patcher expects hash references");
   }
 
   doc_hv = (HV *)SvRV(doc_sv);
@@ -989,7 +989,7 @@ gql_graphqljs_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
   {
     SV **svp = hv_fetch(doc_hv, "definitions", 11, 0);
     if (!svp || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVAV) {
-      croak("graphqljs_patch_document_xs expected document definitions");
+      croak("parser document patcher expected document definitions");
     }
     definitions = (AV *)SvRV(*svp);
   }

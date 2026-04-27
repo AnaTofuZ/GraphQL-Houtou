@@ -1368,7 +1368,7 @@ gqljs_locate_definition(pTHX_ gql_parser_t *p, SV *node_sv) {
 }
 
 static SV *
-gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
+gql_parser_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
   HV *doc_hv;
   AV *definitions;
   gql_parser_t p;
@@ -1376,12 +1376,12 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
   HV *loc_hv;
 
   if (!SvROK(doc_sv) || SvTYPE(SvRV(doc_sv)) != SVt_PVHV) {
-    croak("graphqljs_apply_executable_loc_xs expects a document hash reference");
+    croak("parser executable loc applicator expects a document hash reference");
   }
   doc_hv = (HV *)SvRV(doc_sv);
   definitions = gqljs_fetch_array(doc_hv, "definitions");
   if (!definitions) {
-    croak("graphqljs_apply_executable_loc_xs expected document definitions");
+    croak("parser executable loc applicator expected document definitions");
   }
 
   ENTER;

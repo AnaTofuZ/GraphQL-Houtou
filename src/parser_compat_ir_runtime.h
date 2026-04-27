@@ -8,7 +8,7 @@
  * execution mainline.
  */
 static SV *
-gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_location_sv, SV *compact_location_sv) {
+gql_parser_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_location_sv, SV *compact_location_sv) {
   gql_ir_document_t *ir_document;
   SV *doc_sv;
   SV *state_sv;

@@ -766,14 +766,14 @@ gqljs_convert_legacy_executable_definition_sv(pTHX_ SV *definition_sv) {
 }
 
 static SV *
-gql_graphqljs_build_document(pTHX_ SV *legacy_sv) {
+gql_parser_build_document_from_legacy(pTHX_ SV *legacy_sv) {
   AV *legacy_av;
   AV *definitions;
   HV *doc_hv;
   I32 i;
 
   if (!legacy_sv || !SvROK(legacy_sv) || SvTYPE(SvRV(legacy_sv)) != SVt_PVAV) {
-    croak("graphqljs_build_document_xs expects an array reference");
+    croak("parser compatibility document builder expects an array reference");
   }
 
   legacy_av = (AV *)SvRV(legacy_sv);
@@ -798,14 +798,14 @@ gql_graphqljs_build_document(pTHX_ SV *legacy_sv) {
 }
 
 static SV *
-gql_graphqljs_build_executable_document(pTHX_ SV *legacy_sv) {
+gql_parser_build_executable_document_from_legacy(pTHX_ SV *legacy_sv) {
   AV *legacy_av;
   AV *definitions;
   HV *doc_hv;
   I32 i;
 
   if (!legacy_sv || !SvROK(legacy_sv) || SvTYPE(SvRV(legacy_sv)) != SVt_PVAV) {
-    croak("graphqljs_build_executable_document_xs expects an array reference");
+    croak("parser compatibility executable document builder expects an array reference");
   }
   legacy_av = (AV *)SvRV(legacy_sv);
   definitions = newAV();
@@ -829,7 +829,7 @@ gql_graphqljs_build_executable_document(pTHX_ SV *legacy_sv) {
 }
 
 static SV *
-gql_graphqljs_build_directives_from_source(pTHX_ SV *source_sv) {
+gql_parser_build_directives_from_source(pTHX_ SV *source_sv) {
   SV *legacy_sv = gql_parse_directives_only(aTHX_ source_sv);
   AV *legacy_av;
   AV *directives_av;
@@ -930,7 +930,7 @@ gqljs_materialize_operation_variable_directives(pTHX_ HV *meta_hv) {
       }
 
       hv_store(operation_hv, key, (I32)key_len,
-        gql_graphqljs_build_directives_from_source(aTHX_ joined), 0);
+        gql_parser_build_directives_from_source(aTHX_ joined), 0);
       SvREFCNT_dec(joined);
     }
     gqljs_free_sorted_hash_keys(keys, key_count);
@@ -938,7 +938,7 @@ gqljs_materialize_operation_variable_directives(pTHX_ HV *meta_hv) {
 }
 
 static int
-gql_graphqljs_looks_like_executable_source(pTHX_ SV *source_sv) {
+gql_parser_looks_like_executable_source(pTHX_ SV *source_sv) {
   STRLEN len;
   const char *src = SvPV(source_sv, len);
   STRLEN pos = 0;
@@ -963,18 +963,18 @@ gql_graphqljs_looks_like_executable_source(pTHX_ SV *source_sv) {
 }
 
 static SV *
-gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_location_sv, SV *compact_location_sv) {
+gql_parser_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_location_sv, SV *compact_location_sv) {
   SV *meta_sv;
   HV *meta_hv;
   SV **rewritten_svp;
   SV *legacy_sv;
   SV *doc_sv;
 
-  if (gql_graphqljs_looks_like_executable_source(aTHX_ source_sv)) {
-    return gql_graphqljs_parse_executable_document(aTHX_ source_sv, no_location_sv, lazy_location_sv, compact_location_sv);
+  if (gql_parser_looks_like_executable_source(aTHX_ source_sv)) {
+    return gql_parser_parse_executable_document(aTHX_ source_sv, no_location_sv, lazy_location_sv, compact_location_sv);
   }
 
-  meta_sv = gql_graphqljs_preprocess(aTHX_ source_sv);
+  meta_sv = gql_parser_preprocess_document(aTHX_ source_sv);
   if (!meta_sv || !SvROK(meta_sv) || SvTYPE(SvRV(meta_sv)) != SVt_PVHV) {
     return &PL_sv_undef;
   }
@@ -992,9 +992,9 @@ gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_l
   }
 
   if (gqljs_legacy_document_is_executable(legacy_sv)) {
-    doc_sv = gql_graphqljs_build_executable_document(aTHX_ legacy_sv);
+    doc_sv = gql_parser_build_executable_document_from_legacy(aTHX_ legacy_sv);
   } else {
-    doc_sv = gql_graphqljs_build_document(aTHX_ legacy_sv);
+    doc_sv = gql_parser_build_document_from_legacy(aTHX_ legacy_sv);
   }
   if (!doc_sv || !SvOK(doc_sv) || doc_sv == &PL_sv_undef) {
     SvREFCNT_dec(meta_sv);
@@ -1002,7 +1002,7 @@ gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_l
   }
 
   gqljs_materialize_operation_variable_directives(aTHX_ meta_hv);
-  doc_sv = gql_graphqljs_patch_document(aTHX_ doc_sv, meta_sv);
+  doc_sv = gql_parser_patch_document(aTHX_ doc_sv, meta_sv);
   SvREFCNT_dec(meta_sv);
   if (SvTRUE(no_location_sv)) {
     return doc_sv;
@@ -1011,5 +1011,5 @@ gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_l
     return &PL_sv_undef;
   }
 
-  return gql_graphqljs_apply_executable_loc(aTHX_ doc_sv, source_sv);
+  return gql_parser_apply_executable_loc(aTHX_ doc_sv, source_sv);
 }

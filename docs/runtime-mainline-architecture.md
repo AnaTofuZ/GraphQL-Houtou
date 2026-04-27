@@ -10,9 +10,10 @@
 - 公開 API は Perl のまま保つ
 - hot path の内部通貨は Perl の `{ data => ..., errors => ... }` ではなく専用 runtime object にする
 - schema / operation / VM program を段階的に lower する
-- native 実行は `NativeRuntime` と `GraphQL::Houtou::Native` の境界に集約する
-- public な low-level native API は `GraphQL::Houtou::Native` に残し、
-  `NativeRuntime` の内部 hot path も `GraphQL::Houtou::Native` を通して native VM を呼ぶ
+- native 実行は `NativeRuntime` と XS VM の境界に集約する
+- public な low-level native API は `GraphQL::Houtou::Native` に残す
+- `NativeRuntime` の internal 専用 stitching は必要に応じて XS を直接呼び、
+  `GraphQL::Houtou::Native` は public low-level facade に限定する
 - `GraphQL::Houtou::Runtime` façade 層は削除し、`Schema` / `SchemaGraph` /
   `Compiler` / `NativeRuntime` が直接 mainline を構成する
 - Pure Perl VM は bring-up / fallback / 低速 path として残し、本命は native bundle 実行とする

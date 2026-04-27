@@ -120,7 +120,8 @@ sub compact_bundle_descriptor {
 
 sub load_bundle_parts {
   my ($self, $program) = @_;
-  return GraphQL::Houtou::Native::load_native_bundle_parts(
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::load_native_bundle_parts_xs(
     $self->native_runtime_compact_struct,
     $program->to_native_compact_struct,
   );

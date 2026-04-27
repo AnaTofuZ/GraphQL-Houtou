@@ -10,7 +10,6 @@ use GraphQL::Houtou ();
 our @EXPORT_OK = qw(
   native_codes
   load_native_bundle
-  load_native_bundle_parts
   load_native_runtime
   native_bundle_summary
   native_runtime_summary
@@ -31,11 +30,6 @@ sub native_codes {
 sub load_native_bundle {
   _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::load_native_bundle_xs(@_);
-}
-
-sub load_native_bundle_parts {
-  _ensure_vm_xs_loaded();
-  return GraphQL::Houtou::XS::VM::load_native_bundle_parts_xs(@_);
 }
 
 sub load_native_runtime {

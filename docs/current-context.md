@@ -31,10 +31,9 @@
 - PP fallback は設計上の主要求ではない
 - 子モジュールが XS を直接 `use` して hot path を組み立てる形は避ける
 - XS bundle のロード責務は `GraphQL::Houtou` だけが持つ
-- low-level native handle API は `GraphQL::Houtou::Native` が owner
-- native mainline の内部 hot path でも `Runtime::NativeRuntime` は
-  `GraphQL::Houtou::Native` を通して native VM を呼ぶ
-- `GraphQL::Houtou::Native` が public low-level facade と XS 境界の owner を兼ねる
+- low-level native handle API は `GraphQL::Houtou::Native` が public owner
+- native mainline の internal 専用 stitching は `Runtime::NativeRuntime` から XS を直接呼ぶ
+- `GraphQL::Houtou::Native` は public low-level facade に限定し、internal 専用 API の受け皿にはしない
 - 旧実装は git history で追えればよく、source tree には残さない
 
 ## 現在のアーキテクチャ

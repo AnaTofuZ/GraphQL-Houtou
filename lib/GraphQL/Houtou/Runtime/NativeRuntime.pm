@@ -4,7 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 
-use GraphQL::Houtou ();
+use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Schema ();
 use JSON::PP ();
@@ -36,7 +36,7 @@ sub native_runtime_compact_struct {
 
 sub native_runtime_handle {
   my ($self) = @_;
-  $self->{native_runtime_handle} ||= $self->_xs_load_native_runtime(
+  $self->{native_runtime_handle} ||= GraphQL::Houtou::Native::load_native_runtime(
     $self->native_runtime_struct,
   );
   return $self->{native_runtime_handle};
@@ -120,7 +120,7 @@ sub compact_bundle_descriptor {
 
 sub load_bundle_parts {
   my ($self, $program) = @_;
-  return $self->_xs_load_native_bundle_parts(
+  return GraphQL::Houtou::Native::load_native_bundle_parts(
     $self->native_runtime_compact_struct,
     $program->to_native_compact_struct,
   );
@@ -128,7 +128,7 @@ sub load_bundle_parts {
 
 sub load_bundle_descriptor {
   my ($self, $descriptor) = @_;
-  return $self->_xs_load_native_bundle($descriptor);
+  return GraphQL::Houtou::Native::load_native_bundle($descriptor);
 }
 
 sub inflate_bundle_descriptor {
@@ -175,7 +175,7 @@ sub execute_program {
 
 sub execute_compact_program {
   my ($self, $program, %opts) = @_;
-  return $self->_xs_execute_native_program(
+  return GraphQL::Houtou::Native::execute_native_program(
     $self->native_runtime_handle,
     $self->native_runtime_compact_struct,
     $program->to_native_compact_struct,
@@ -198,47 +198,12 @@ sub execute_document {
 
 sub execute_bundle {
   my ($self, $bundle, %opts) = @_;
-  return $self->_xs_execute_native_bundle(
+  return GraphQL::Houtou::Native::execute_native_bundle(
     $self->native_runtime_handle,
     $bundle,
     $opts{root_value},
     $opts{context},
   );
-}
-
-sub _bootstrap_vm_xs {
-  GraphQL::Houtou::_bootstrap_xs();
-  return 1;
-}
-
-sub _xs_load_native_runtime {
-  my ($self, @args) = @_;
-  $self->_bootstrap_vm_xs;
-  return GraphQL::Houtou::XS::VM::load_native_runtime_xs(@args);
-}
-
-sub _xs_load_native_bundle_parts {
-  my ($self, @args) = @_;
-  $self->_bootstrap_vm_xs;
-  return GraphQL::Houtou::XS::VM::load_native_bundle_parts_xs(@args);
-}
-
-sub _xs_load_native_bundle {
-  my ($self, @args) = @_;
-  $self->_bootstrap_vm_xs;
-  return GraphQL::Houtou::XS::VM::load_native_bundle_xs(@args);
-}
-
-sub _xs_execute_native_program {
-  my ($self, @args) = @_;
-  $self->_bootstrap_vm_xs;
-  return GraphQL::Houtou::XS::VM::execute_native_program_xs(@args);
-}
-
-sub _xs_execute_native_bundle {
-  my ($self, @args) = @_;
-  $self->_bootstrap_vm_xs;
-  return GraphQL::Houtou::XS::VM::execute_native_bundle_xs(@args);
 }
 
 sub _specialize_directives {

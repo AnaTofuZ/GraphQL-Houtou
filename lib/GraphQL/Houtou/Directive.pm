@@ -65,7 +65,7 @@ has to_doc => (
 
 sub _get_directive_values {
   my ($self) = @_;
-  die "Directive->_get_directive_values is part of the removed legacy execution path; use the runtime lowering APIs instead for directive evaluation on '$self->{name}'.\n";
+  die "Directive->_get_directive_values is part of the removed legacy execution path; use GraphQL::Houtou::Schema->compile_program / ->compile_native_bundle for directive evaluation on '$self->{name}'.\n";
 }
 
 our $DEPRECATED = __PACKAGE__->new(

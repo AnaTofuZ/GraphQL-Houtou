@@ -27,8 +27,9 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 - schema compile / operation compile / VM execute の公開 API を提供する
 - `GraphQL::Houtou::Runtime` façade は削除済み
 - low-level native handle 操作は `GraphQL::Houtou::Native` に集約する
-- ただし native mainline の内部 hot path は `Runtime::NativeRuntime` から
-  `GraphQL::Houtou::XS::VM::*` を直接呼び、`GraphQL::Houtou::Native` は public low-level facade として残す
+- native mainline の内部 hot path でも `Runtime::NativeRuntime` は
+  `GraphQL::Houtou::Native` を通して native VM を呼ぶ
+- `GraphQL::Houtou::Native` が public low-level facade と XS 境界を兼ねる
 
 ### 2. Schema Runtime
 

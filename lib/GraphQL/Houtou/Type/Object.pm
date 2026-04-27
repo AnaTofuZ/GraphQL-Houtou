@@ -128,7 +128,7 @@ sub _should_include_node {
 
 sub _complete_value {
   my ($self) = @_;
-  die "Type::Object->_complete_value is part of the removed legacy execution path; use GraphQL::Houtou::Runtime instead for object completion on '@{[$self->name]}'.\n";
+  die "Type::Object->_complete_value is part of the removed legacy execution path; use GraphQL::Houtou::Schema->build_runtime or ->build_native_runtime for object completion on '@{[$self->name]}'.\n";
 }
 
 has to_doc => (

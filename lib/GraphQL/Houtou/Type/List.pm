@@ -100,7 +100,7 @@ sub perl_to_graphql {
 
 sub _complete_value {
   my ($self) = @_;
-  die "Type::List->_complete_value is part of the removed legacy execution path; use GraphQL::Houtou::Runtime instead for list completion on '@{[$self->to_string]}'.\n";
+  die "Type::List->_complete_value is part of the removed legacy execution path; use GraphQL::Houtou::Schema->build_runtime or ->build_native_runtime for list completion on '@{[$self->to_string]}'.\n";
 }
 
 1;

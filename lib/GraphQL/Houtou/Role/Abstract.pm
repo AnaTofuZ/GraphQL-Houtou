@@ -10,7 +10,7 @@ use Moo::Role;
 
 sub _complete_value {
   my ($self) = @_;
-  die "Abstract::_complete_value is part of the removed legacy execution path; use GraphQL::Houtou::Runtime instead for abstract completion on '@{[$self->name]}'.\n";
+  die "Abstract::_complete_value is part of the removed legacy execution path; use GraphQL::Houtou::Schema->build_runtime or ->build_native_runtime for abstract completion on '@{[$self->name]}'.\n";
 }
 
 sub _ensure_valid_runtime_type {

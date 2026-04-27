@@ -256,7 +256,7 @@ sub _bind_vm_ops {
 
   for my $block (@{ $program->blocks || [] }, ($program->root_block || ())) {
     next if !$block;
-    my $schema_block = $runtime_schema->program->block_by_type_name($block->type_name);
+    my $schema_block = $runtime_schema->block_by_type_name($block->type_name);
     my %slots = $schema_block
       ? map { ($_->field_name => $_) } @{ $schema_block->slots || [] }
       : ();

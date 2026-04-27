@@ -14,7 +14,8 @@ sub new {
     dispatch_index => $args{dispatch_index} || {},
     root_types => $args{root_types} || {},
     slot_catalog => $args{slot_catalog} || [],
-    program => $args{program},
+    blocks => $args{blocks} || [],
+    root_blocks => $args{root_blocks} || {},
   }, $class;
 }
 
@@ -25,7 +26,8 @@ sub type_index { return $_[0]{type_index} }
 sub dispatch_index { return $_[0]{dispatch_index} }
 sub root_types { return $_[0]{root_types} }
 sub slot_catalog { return $_[0]{slot_catalog} }
-sub program { return $_[0]{program} }
+sub blocks { return $_[0]{blocks} }
+sub root_blocks { return $_[0]{root_blocks} }
 
 sub slot_by_index {
   my ($self, $index) = @_;
@@ -35,12 +37,17 @@ sub slot_by_index {
 
 sub root_block {
   my ($self, $name) = @_;
-  return $self->{program} ? $self->{program}->root_block($name) : undef;
+  return $self->{root_blocks}{$name};
 }
 
 sub block_by_type_name {
   my ($self, $type_name) = @_;
-  return $self->{program} ? $self->{program}->block_by_type_name($type_name) : undef;
+  return if !defined $type_name;
+  for my $block (@{ $self->{blocks} || [] }) {
+    next if !defined $block->root_type_name;
+    return $block if $block->root_type_name eq $type_name;
+  }
+  return;
 }
 
 sub compile_program {
@@ -114,7 +121,13 @@ sub to_struct {
     type_index => { %{ $self->{type_index} || {} } },
     dispatch_index => { %{ $self->{dispatch_index} || {} } },
     slot_catalog => [ map { $_->to_struct } @{ $self->{slot_catalog} || [] } ],
-    program => $self->{program} ? $self->{program}->to_struct : undef,
+    blocks => [ map { $_->to_struct } @{ $self->{blocks} || [] } ],
+    root_blocks => {
+      map {
+        my $block = $self->{root_blocks}{$_};
+        ($_ => ($block ? $block->name : undef));
+      } keys %{ $self->{root_blocks} || {} }
+    },
   };
 }
 

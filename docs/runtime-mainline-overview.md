@@ -37,11 +37,22 @@
 - field / abstract dispatch / slot metadata を固定する
 - native runtime / native bundle との境界を持つ
 
-### 3. Operation Lowering
+### 3. Schema Graph
+
+- `GraphQL::Houtou::Runtime::Compiler`
+- `GraphQL::Houtou::Runtime::SchemaGraph`
+- `GraphQL::Houtou::Runtime::Block`
+- `GraphQL::Houtou::Runtime::Slot`
+
+役割:
+
+- schema object から object-field 単位の immutable schema block を作る
+- root type / dispatch metadata / slot catalog を `SchemaGraph` が直接所有する
+- operation lowering から参照する schema-side block/index を提供する
+
+### 4. Operation Lowering
 
 - `GraphQL::Houtou::Runtime::OperationCompiler`
-- `GraphQL::Houtou::Runtime::Program`
-- `GraphQL::Houtou::Runtime::Block`
 - `GraphQL::Houtou::Runtime::Slot`
 - `GraphQL::Houtou::Runtime::ProgramSpecializer`
 
@@ -51,7 +62,7 @@
 - variables / args / directives / fragments を execution しやすい shape に下げる
 - さらに VM lowering に渡す前段の IR を持つ
 
-### 4. VM Lowering
+### 5. VM Lowering
 
 - `GraphQL::Houtou::Runtime::VMCompiler`
 - `GraphQL::Houtou::Runtime::VMProgram`
@@ -65,7 +76,7 @@
 - hot path で使う dispatch family を bind する
 - string opcode の再解釈や動的 helper lookup を避ける
 
-### 5. VM Execution
+### 6. VM Execution
 
 - `GraphQL::Houtou::Runtime::VMExecutor`
 - `GraphQL::Houtou::Runtime::ExecState`

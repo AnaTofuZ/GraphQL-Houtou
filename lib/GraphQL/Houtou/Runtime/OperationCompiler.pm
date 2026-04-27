@@ -44,7 +44,7 @@ sub compile_operation {
     grep { ($_->{kind} || '') eq 'fragment' } @{ $ast || [] };
 
   my $operation_type = $operation->{operation} || 'query';
-  my $schema_block = $runtime_schema->program->root_block($operation_type)
+  my $schema_block = $runtime_schema->root_block($operation_type)
     or die "No root block for operation type '$operation_type'.\n";
 
   my %state = (
@@ -123,7 +123,7 @@ sub _lower_selection_block {
           $base_name . q(.) . $field_name,
         );
       }
-      elsif (my $child_schema_block = $state->{runtime_schema}->program->block_by_type_name($child_type_name)) {
+      elsif (my $child_schema_block = $state->{runtime_schema}->block_by_type_name($child_type_name)) {
         $child_block = _lower_selection_block(
           $state,
           $child_type_name,
@@ -224,7 +224,7 @@ sub _bind_instructions_to_schema_slots {
   my ($runtime_schema, $blocks) = @_;
 
   for my $block (@{ $blocks || [] }) {
-    my $schema_block = $runtime_schema->program->block_by_type_name($block->type_name) or next;
+    my $schema_block = $runtime_schema->block_by_type_name($block->type_name) or next;
     my %slots = map { ($_->field_name => $_) } @{ $schema_block->slots || [] };
     for my $op (@{ $block->ops || [] }) {
       $op->set_bound_slot($slots{ $op->field_name });
@@ -295,7 +295,7 @@ sub _lower_abstract_child_blocks {
 
   for my $type (@$possible_types) {
     next if !$type || !$type->isa('GraphQL::Houtou::Type::Object');
-    my $schema_block = $state->{runtime_schema}->program->block_by_type_name($type->name) or next;
+    my $schema_block = $state->{runtime_schema}->block_by_type_name($type->name) or next;
     my $block = _lower_selection_block(
       $state,
       $type->name,
@@ -381,7 +381,7 @@ sub _build_typename_instruction {
 
 sub _lookup_typename_slot {
   my ($runtime_schema, $type_name, $result_name, $directives_mode) = @_;
-  my $schema_block = $runtime_schema->program->block_by_type_name($type_name);
+  my $schema_block = $runtime_schema->block_by_type_name($type_name);
   if ($schema_block) {
     for my $slot (@{ $schema_block->slots || [] }) {
       next if ($slot->field_name || q()) ne '__typename';

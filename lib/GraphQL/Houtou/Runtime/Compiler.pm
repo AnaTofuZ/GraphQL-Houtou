@@ -5,7 +5,6 @@ use strict;
 use warnings;
 
 use GraphQL::Houtou::Runtime::SchemaGraph ();
-use GraphQL::Houtou::Runtime::Program ();
 use GraphQL::Houtou::Runtime::Block ();
 use GraphQL::Houtou::Runtime::Slot ();
 use GraphQL::Houtou::Type::Scalar qw($String);
@@ -16,8 +15,8 @@ sub compile_schema {
 
   my $type_index = _build_type_index($runtime_cache->{name2type} || {});
   my $dispatch_index = _build_dispatch_index($runtime_cache);
-  my ($program, $root_types) = _build_program($schema, $runtime_cache);
-  my $slot_catalog = _build_slot_catalog($program);
+  my ($blocks, $root_blocks, $root_types) = _build_blocks($schema, $runtime_cache);
+  my $slot_catalog = _build_slot_catalog($blocks);
 
   return GraphQL::Houtou::Runtime::SchemaGraph->new(
     version => 1,
@@ -27,17 +26,18 @@ sub compile_schema {
     dispatch_index => $dispatch_index,
     root_types => $root_types,
     slot_catalog => $slot_catalog,
-    program => $program,
+    blocks => $blocks,
+    root_blocks => $root_blocks,
   );
 }
 
 sub inflate_schema {
   my ($class, $schema, $struct) = @_;
   my $runtime_cache = $schema->prepare_runtime;
-  my $program = _inflate_program($struct->{program} || {});
+  my ($blocks, $root_blocks) = _inflate_blocks($struct);
   my $slot_catalog = [ map { _inflate_slot($_) } @{ $struct->{slot_catalog} || [] } ];
-  _apply_slot_catalog_to_program($program, $slot_catalog) if @$slot_catalog;
-  _rebind_program_runtime_metadata($runtime_cache, $program);
+  _apply_slot_catalog_to_blocks($blocks, $slot_catalog) if @$slot_catalog;
+  _rebind_blocks_runtime_metadata($runtime_cache, $blocks);
 
   return GraphQL::Houtou::Runtime::SchemaGraph->new(
     version => $struct->{version} || 1,
@@ -47,7 +47,8 @@ sub inflate_schema {
     dispatch_index => $struct->{dispatch_index} || {},
     root_types => $struct->{root_types} || {},
     slot_catalog => $slot_catalog,
-    program => $program,
+    blocks => $blocks,
+    root_blocks => $root_blocks,
   );
 }
 
@@ -84,7 +85,7 @@ sub _build_dispatch_index {
   return \%dispatch;
 }
 
-sub _build_program {
+sub _build_blocks {
   my ($schema, $runtime_cache) = @_;
   my @blocks;
   my %root_blocks;
@@ -111,28 +112,21 @@ sub _build_program {
     $root_types{$root_name} = $root_type->name;
   }
 
-  my $program = GraphQL::Houtou::Runtime::Program->new(
-    variable_defs => {},
-    blocks => \@blocks,
-    root_blocks => \%root_blocks,
-  );
-
-  return ($program, \%root_types);
+  return (\@blocks, \%root_blocks, \%root_types);
 }
 
-sub _inflate_program {
+sub _inflate_blocks {
   my ($struct) = @_;
-  my @blocks = map { _inflate_block($_) } @{ $struct->{blocks} || [] };
+  my $legacy_program = $struct->{program} || {};
+  my $blocks_struct = $struct->{blocks} || $legacy_program->{blocks} || [];
+  my $root_blocks_struct = $struct->{root_blocks} || $legacy_program->{root_blocks} || {};
+  my @blocks = map { _inflate_block($_) } @{ $blocks_struct };
   my %by_name = map { ($_->name => $_) } @blocks;
   my %root_blocks = map {
-    ($_ => ($struct->{root_blocks}{$_} ? $by_name{ $struct->{root_blocks}{$_} } : undef));
-  } keys %{ $struct->{root_blocks} || {} };
+    ($_ => ($root_blocks_struct->{$_} ? $by_name{ $root_blocks_struct->{$_} } : undef));
+  } keys %{ $root_blocks_struct };
 
-  return GraphQL::Houtou::Runtime::Program->new(
-    variable_defs => $struct->{variable_defs} || {},
-    blocks => \@blocks,
-    root_blocks => \%root_blocks,
-  );
+  return (\@blocks, \%root_blocks);
 }
 
 sub _inflate_block {
@@ -207,11 +201,11 @@ sub _build_slots_for_object {
 }
 
 sub _build_slot_catalog {
-  my ($program) = @_;
+  my ($blocks) = @_;
   my @catalog;
   my %seen;
 
-  for my $block (@{ $program->blocks || [] }) {
+  for my $block (@{ $blocks || [] }) {
     for my $slot (@{ $block->slots || [] }) {
       my $key = $slot->schema_slot_key // join(q(.), ($block->root_type_name || q()), $slot->field_name);
       next if exists $seen{$key};
@@ -225,15 +219,15 @@ sub _build_slot_catalog {
   return \@catalog;
 }
 
-sub _apply_slot_catalog_to_program {
-  my ($program, $slot_catalog) = @_;
+sub _apply_slot_catalog_to_blocks {
+  my ($blocks, $slot_catalog) = @_;
   my %catalog_by_key = map {
     my $slot = $slot_catalog->[$_];
     $slot->{schema_slot_index} = $_ if !defined $slot->{schema_slot_index};
     (($slot->schema_slot_key || q()) => $slot);
   } 0 .. $#$slot_catalog;
 
-  for my $block (@{ $program->blocks || [] }) {
+  for my $block (@{ $blocks || [] }) {
     my @slots;
     for my $slot (@{ $block->slots || [] }) {
       my $key = $slot->schema_slot_key // join(q(.), ($block->root_type_name || q()), $slot->field_name);
@@ -243,13 +237,13 @@ sub _apply_slot_catalog_to_program {
     $block->{slots} = \@slots;
   }
 
-  return $program;
+  return $blocks;
 }
 
-sub _rebind_program_runtime_metadata {
-  my ($runtime_cache, $program) = @_;
+sub _rebind_blocks_runtime_metadata {
+  my ($runtime_cache, $blocks) = @_;
 
-  for my $block (@{ $program->blocks || [] }) {
+  for my $block (@{ $blocks || [] }) {
     my $type_name = $block->root_type_name;
     next if !defined $type_name;
     my $type = ($runtime_cache->{name2type} || {})->{$type_name} or next;
@@ -263,7 +257,7 @@ sub _rebind_program_runtime_metadata {
     }
   }
 
-  return $program;
+  return $blocks;
 }
 
 sub _type_name {

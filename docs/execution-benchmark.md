@@ -13,7 +13,7 @@ execution benchmark の評価軸もそれに合わせる。
   - 起動時に native runtime / native bundle まで compile した後、native VM を実行する
 
 重要なのは、resolver の戻り値そのものではなく **実行計画の再利用** を測ることです。
-そのため旧 `GraphQL::Houtou::Execution` や `compiled_ir/xs_ast` の比較は主系から外しました。
+そのため旧 execution mainline の比較は主系から外しました。
 
 ## Drivers
 

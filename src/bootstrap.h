@@ -147,7 +147,7 @@ typedef struct gql_ir_prepared_exec gql_ir_prepared_exec_t;
 typedef struct gql_ir_compiled_exec gql_ir_compiled_exec_t;
 typedef struct gql_ir_compiled_root_field_plan_entry gql_ir_compiled_root_field_plan_entry_t;
 typedef struct gql_ir_compiled_root_field_plan gql_ir_compiled_root_field_plan_t;
-typedef struct gql_ir_execution_lowered_plan gql_ir_execution_lowered_plan_t;
+typedef struct gql_runtime_vm_lowered_plan gql_runtime_vm_lowered_plan_t;
 typedef struct gql_ir_vm_block gql_ir_vm_block_t;
 typedef struct gql_ir_vm_exec_state gql_ir_vm_exec_state_t;
 typedef struct gql_ir_vm_field_meta gql_ir_vm_field_meta_t;
@@ -430,7 +430,7 @@ struct gql_ir_vm_program {
   gql_ir_vm_block_t *root_block;
 };
 
-struct gql_ir_execution_lowered_plan {
+struct gql_runtime_vm_lowered_plan {
   gql_ir_vm_program_t *program;
 };
 
@@ -483,7 +483,7 @@ struct gql_ir_compiled_exec {
   SV *operation_name_sv;
   gql_ir_operation_definition_t *selected_operation;
   SV *root_selection_plan_sv;
-  gql_ir_execution_lowered_plan_t *lowered_plan;
+  gql_runtime_vm_lowered_plan_t *lowered_plan;
   SV *root_field_plan_sv;
   SV *root_type_sv;
 };

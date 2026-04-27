@@ -393,7 +393,7 @@ Example:
 
 =head1 BENCHMARK SNAPSHOT
 
-現在の比較対象は旧 `compiled_ir` 系ではなく、runtime/VM mainline です。
+現在の比較対象は旧 executor ではなく、runtime/VM mainline です。
 
 主な評価軸は次の 2 系統です。
 

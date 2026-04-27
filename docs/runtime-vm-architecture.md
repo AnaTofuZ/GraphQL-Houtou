@@ -4,7 +4,7 @@ This document describes the architecture that would be preferable if we were
 designing a new high-performance Perl GraphQL library from scratch today,
 using the lessons learned from:
 
-- the current `compiled_ir` / VM-runtime work
+- the current runtime / VM work
 - repeated benchmark checkpoints on real execution paths
 - experiments that failed because they only widened helper corridors without
   reducing the hot-path payload cost

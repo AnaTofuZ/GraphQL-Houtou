@@ -1,6 +1,7 @@
 # Runtime/VM Mainline Overview
 
 この文書は、現在の `GraphQL::Houtou` の実行系を短く把握するための概要です。
+まず全体像を読み物として把握したい場合は `docs/architecture.md` を読むこと。
 ownership と層構成をまとめて読むには `docs/runtime-mainline-architecture.md` を参照してください。
 詳細設計は `docs/runtime-vm-architecture.md` を参照してください。
 

@@ -231,6 +231,10 @@ sub run_current_field_via {
 
 sub execute_current_op {
   my ($self) = @_;
+  if (!$self->promise_code) {
+    GraphQL::Houtou::_bootstrap_xs();
+    return GraphQL::Houtou::XS::VM::exec_state_execute_current_op_xs($self);
+  }
   return $self->run_current_field_via(
     sub {
       my ($state, $source, $path_frame) = @_;

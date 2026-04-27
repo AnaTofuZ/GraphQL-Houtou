@@ -11,6 +11,8 @@
 - hot path の内部通貨は Perl の `{ data => ..., errors => ... }` ではなく専用 runtime object にする
 - schema / operation / VM program を段階的に lower する
 - native 実行は `NativeRuntime` と XS VM boundary に集約する
+- public な low-level native API は `GraphQL::Houtou::Native` に残すが、
+  `NativeRuntime` の内部 hot path は `GraphQL::Houtou::XS::VM::*` を直接呼ぶ
 - Pure Perl VM は bring-up / fallback / 低速 path として残し、本命は native bundle 実行とする
 
 ## レイヤー構成

@@ -198,11 +198,11 @@ subtest 'top-level compile_native_bundle_descriptor returns compact descriptor' 
 subtest 'schema execute_native reuses cached native runtime handle' => sub {
   $schema->clear_runtime_cache;
   my $load_count = 0;
-  my $orig = \&GraphQL::Houtou::Native::load_native_runtime;
+  my $orig = \&GraphQL::Houtou::Runtime::NativeRuntime::_xs_load_native_runtime;
 
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::load_native_runtime = sub {
+    local *GraphQL::Houtou::Runtime::NativeRuntime::_xs_load_native_runtime = sub {
       $load_count++;
       goto &$orig;
     };

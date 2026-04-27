@@ -32,6 +32,8 @@
 - 子モジュールが XS を直接 `use` して hot path を組み立てる形は避ける
 - XS bundle のロード責務は `GraphQL::Houtou` だけが持つ
 - low-level native handle API は `GraphQL::Houtou::Native` が owner
+- ただし native mainline の内部 hot path では `Runtime::NativeRuntime` が
+  `GraphQL::Houtou::XS::VM::*` を直接呼び、`Native.pm` は public low-level facade に留める
 - 旧実装は git history で追えればよく、source tree には残さない
 
 ## 現在のアーキテクチャ

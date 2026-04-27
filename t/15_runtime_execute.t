@@ -129,7 +129,7 @@ subtest 'runtime execute_program uses native engine by default' => sub {
 
 subtest 'native resolver mode lets explicit resolver use native runtime' => sub {
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program;
   my $native_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
       name => 'NativeResolverQuery',
@@ -145,7 +145,7 @@ subtest 'native resolver mode lets explicit resolver use native runtime' => sub 
 
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program = sub {
       $called = 1;
       goto &$orig;
     };
@@ -163,7 +163,7 @@ subtest 'native resolver mode lets explicit resolver use native runtime' => sub 
 
 subtest 'native resolver mode supports static literal args on native runtime' => sub {
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program;
   my $native_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
       name => 'NativeArgsQuery',
@@ -185,7 +185,7 @@ subtest 'native resolver mode supports static literal args on native runtime' =>
 
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program = sub {
       $called = 1;
       goto &$orig;
     };
@@ -203,11 +203,11 @@ subtest 'native resolver mode supports static literal args on native runtime' =>
 
 subtest 'native runtime specializes variable args before bundle execution' => sub {
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program;
 
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program = sub {
       $called = 1;
       goto &$orig;
     };
@@ -227,11 +227,11 @@ subtest 'native runtime specializes variable args before bundle execution' => su
 
 subtest 'native runtime specializes directive guards before bundle execution' => sub {
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program;
 
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program = sub {
       $called = 1;
       goto &$orig;
     };
@@ -265,11 +265,11 @@ subtest 'runtime keeps __typename on abstract/object corridors' => sub {
 
 subtest 'native runtime preserves static arg coercion and defaults' => sub {
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program;
 
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program = sub {
       $called = 1;
       goto &$orig;
     };
@@ -294,11 +294,11 @@ subtest 'cached runtime program can execute on native runtime with request varia
   );
 
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program;
   my $result;
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program = sub {
       $called = 1;
       goto &$orig;
     };
@@ -326,11 +326,11 @@ subtest 'inflated runtime descriptor can still drive native specialization' => s
   );
 
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program;
   my $result;
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Runtime::NativeRuntime::_xs_execute_native_program = sub {
       $called = 1;
       goto &$orig;
     };

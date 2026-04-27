@@ -40,6 +40,12 @@ sub compile_program {
   return $self->runtime_schema->compile_program($document, %opts);
 }
 
+sub compile_bundle_for_document {
+  my ($self, $document, %opts) = @_;
+  my $program = $self->compile_program($document, %opts);
+  return $self->compile_bundle($program, %opts);
+}
+
 sub specialize_program {
   my ($self, $program, %opts) = @_;
   my $candidate = __PACKAGE__->specialize_program_for_native(
@@ -92,14 +98,42 @@ sub compile_bundle_descriptor {
   };
 }
 
+sub compile_bundle_descriptor_for_document {
+  my ($self, $document, %opts) = @_;
+  my $program = $self->compile_program($document, %opts);
+  return $self->compact_bundle_descriptor($program);
+}
+
+sub compact_bundle_descriptor {
+  my ($self, $program) = @_;
+  return {
+    runtime => $self->runtime_schema->to_native_compact_struct,
+    program => $program->to_native_compact_struct,
+  };
+}
+
 sub load_bundle_descriptor {
   my ($self, $descriptor) = @_;
   return GraphQL::Houtou::Native::load_native_bundle($descriptor);
 }
 
+sub inflate_bundle_descriptor {
+  my ($self, $descriptor) = @_;
+  return $self->runtime_schema->inflate_vm_native_bundle($descriptor);
+}
+
 sub dump_bundle_descriptor {
   my ($self, $program, $path, %opts) = @_;
   my $descriptor = $self->compile_bundle_descriptor($program, %opts);
+  open my $fh, '>', $path or die "Cannot open $path for write: $!";
+  print {$fh} JSON::PP::encode_json($descriptor);
+  close $fh;
+  return $descriptor;
+}
+
+sub dump_bundle_descriptor_for_document {
+  my ($self, $document, $path, %opts) = @_;
+  my $descriptor = $self->compile_bundle_descriptor_for_document($document, %opts);
   open my $fh, '>', $path or die "Cannot open $path for write: $!";
   print {$fh} JSON::PP::encode_json($descriptor);
   close $fh;
@@ -120,6 +154,18 @@ sub execute_program {
   my ($self, $program, %opts) = @_;
   my $bundle = $self->compile_bundle($program, %opts);
   return $self->execute_bundle($bundle, %opts);
+}
+
+sub execute_bundle_descriptor {
+  my ($self, $descriptor, %opts) = @_;
+  my $bundle = $self->load_bundle_descriptor($descriptor);
+  return $self->execute_bundle($bundle, %opts);
+}
+
+sub execute_document {
+  my ($self, $document, %opts) = @_;
+  my $program = $self->compile_program($document, %opts);
+  return $self->execute_program($program, %opts);
 }
 
 sub execute_bundle {

@@ -187,26 +187,20 @@ sub compile_native_program_descriptor {
 
 sub compile_native_bundle_descriptor {
   my ($self, $document, %opts) = @_;
-  my $runtime = $self->build_runtime;
-  my $vm = $runtime->compile_program($document, %opts);
-  return {
-    runtime => $runtime->to_native_compact_struct,
-    program => $vm->to_native_compact_struct,
-  };
+  my $runtime = $self->build_native_runtime;
+  return $runtime->compile_bundle_descriptor_for_document($document, %opts);
 }
 
 sub compile_native_bundle {
   my ($self, $document, %opts) = @_;
   my $runtime = $self->build_native_runtime;
-  my $program = $runtime->compile_program($document, %opts);
-  return $runtime->compile_bundle($program, %opts);
+  return $runtime->compile_bundle_for_document($document, %opts);
 }
 
 sub dump_native_bundle_descriptor {
   my ($self, $document, $path, %opts) = @_;
-  my $descriptor = $self->compile_native_bundle_descriptor($document, %opts);
-  _write_json_descriptor($path, $descriptor);
-  return $descriptor;
+  my $runtime = $self->build_native_runtime;
+  return $runtime->dump_bundle_descriptor_for_document($document, $path, %opts);
 }
 
 sub load_native_bundle_descriptor {
@@ -233,8 +227,8 @@ sub inflate_vm_program {
 
 sub inflate_native_bundle_descriptor {
   my ($self, $descriptor, %opts) = @_;
-  my $runtime = $self->build_runtime;
-  return $runtime->inflate_vm_native_bundle($descriptor);
+  my $runtime = $self->build_native_runtime;
+  return $runtime->inflate_bundle_descriptor($descriptor);
 }
 
 sub dump_vm_program_descriptor {
@@ -253,15 +247,13 @@ sub load_vm_program_descriptor {
 sub execute_native_bundle_descriptor {
   my ($self, $descriptor, %opts) = @_;
   my $runtime = $self->build_native_runtime;
-  my $bundle = $runtime->load_bundle_descriptor($descriptor);
-  return $runtime->execute_bundle($bundle, %opts);
+  return $runtime->execute_bundle_descriptor($descriptor, %opts);
 }
 
 sub execute_native {
   my ($self, $document, %opts) = @_;
   my $runtime = $self->build_native_runtime;
-  my $program = $runtime->compile_program($document, %opts);
-  return $runtime->execute_program($program, %opts);
+  return $runtime->execute_document($document, %opts);
 }
 
 sub runtime_cache {

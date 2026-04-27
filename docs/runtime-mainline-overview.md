@@ -36,6 +36,7 @@
 - schema を boot-time compile 可能な immutable graph に lower する
 - field / abstract dispatch / slot metadata を固定する
 - native runtime / native bundle との境界を持つ
+- request-time specialization と native bundle descriptor 組み立てを `NativeRuntime` が所有する
 
 ### 3. Schema Graph
 

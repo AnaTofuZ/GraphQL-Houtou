@@ -24,12 +24,14 @@
 - `GraphQL::Houtou::Runtime::SchemaGraph`
   - boot-time compiled schema graph
   - root block / slot catalog / dispatch index の owner
+  - program compile と public `execute_program` entrypoint の owner
 - `GraphQL::Houtou::Runtime::OperationCompiler`
   - document から `VMProgram` を lower する
 - `GraphQL::Houtou::Runtime::VMCompiler`
   - descriptor / native bundle 用の lower / inflate
 - `GraphQL::Houtou::Runtime::NativeRuntime`
   - native specialization と native execute の owner
+  - engine selection と native fast path 実行の owner
 - `GraphQL::Houtou::Runtime::ExecState`
   - perl VM path の state machine
 

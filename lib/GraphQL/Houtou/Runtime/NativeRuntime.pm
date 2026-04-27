@@ -208,7 +208,33 @@ sub load_bundle_descriptor_file {
 
 sub execute_program {
   my ($self, $program, %opts) = @_;
-  my $candidate = $self->specialize_program($program, %opts);
+  require GraphQL::Houtou::Runtime::VMCompiler;
+  require GraphQL::Houtou::Runtime::ExecState;
+
+  my $vm_program = $program->isa('GraphQL::Houtou::Runtime::VMProgram')
+    ? $program
+    : GraphQL::Houtou::Runtime::VMCompiler->lower_program($self->runtime_schema, $program);
+
+  my $candidate = $vm_program;
+  $opts{engine} = delete $opts{vm_engine}
+    if !defined $opts{engine} && exists $opts{vm_engine};
+  if (!defined $opts{engine} || $opts{engine} eq 'native') {
+    $candidate = __PACKAGE__->specialize_program_for_native(
+      $self->runtime_schema,
+      $vm_program,
+      %opts,
+    );
+  }
+
+  my $engine = __PACKAGE__->preferred_engine_for_program($candidate, %opts);
+  $engine = $opts{engine} if defined $opts{engine};
+  die "Requested native engine for a program that cannot be specialized into the native VM path.\n"
+    if $engine eq 'native'
+    && __PACKAGE__->preferred_engine_for_program($candidate, %opts) ne 'native';
+
+  return GraphQL::Houtou::Runtime::ExecState->run_program($self->runtime_schema, $vm_program, %opts)
+    if $engine eq 'perl';
+
   return $self->execute_compact_program($candidate, %opts);
 }
 

@@ -713,36 +713,6 @@ parse_xs(source, no_location = &PL_sv_undef)
     RETVAL
 
 SV *
-graphqljs_preprocess_xs(source)
-    SV *source
-  CODE:
-    RETVAL = gql_graphqljs_preprocess(aTHX_ source);
-  OUTPUT:
-    RETVAL
-
-SV *
-graphqljs_parse_document_xs(source, no_location = &PL_sv_undef, lazy_location = &PL_sv_undef, compact_location = &PL_sv_undef)
-    SV *source
-    SV *no_location
-    SV *lazy_location
-    SV *compact_location
-  CODE:
-    RETVAL = gql_graphqljs_parse_document(aTHX_ source, no_location, lazy_location, compact_location);
-  OUTPUT:
-    RETVAL
-
-SV *
-graphqljs_parse_executable_document_xs(source, no_location = &PL_sv_undef, lazy_location = &PL_sv_undef, compact_location = &PL_sv_undef)
-    SV *source
-    SV *no_location
-    SV *lazy_location
-    SV *compact_location
-  CODE:
-    RETVAL = gql_graphqljs_parse_executable_document(aTHX_ source, no_location, lazy_location, compact_location);
-  OUTPUT:
-    RETVAL
-
-SV *
 _graphqljs_materialize_arguments_xs(state, ptr)
     SV *state
     UV ptr
@@ -802,38 +772,6 @@ _graphqljs_materialize_object_fields_xs(state, ptr)
   OUTPUT:
     RETVAL
 
-SV *
-parse_directives_xs(source)
-    SV *source
-  CODE:
-    RETVAL = gql_parse_directives_only(aTHX_ source);
-  OUTPUT:
-    RETVAL
-
-SV *
-graphqljs_build_directives_xs(source)
-    SV *source
-  CODE:
-    RETVAL = gql_graphqljs_build_directives_from_source(aTHX_ source);
-  OUTPUT:
-    RETVAL
-
-SV *
-tokenize_xs(source)
-    SV *source
-  CODE:
-    RETVAL = gql_tokenize_source(aTHX_ source);
-  OUTPUT:
-    RETVAL
-
-SV *
-graphqlperl_find_legacy_empty_object_location_xs(source)
-    SV *source
-  CODE:
-    RETVAL = gql_graphqlperl_find_legacy_empty_object_location(aTHX_ source);
-  OUTPUT:
-    RETVAL
-
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::LazyState
 
 void
@@ -850,48 +788,6 @@ DESTROY(self)
     }
 
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Parser
-
-SV *
-graphqljs_patch_document_xs(doc, meta)
-    SV *doc
-    SV *meta
-  CODE:
-    RETVAL = gql_graphqljs_patch_document(aTHX_ doc, meta);
-  OUTPUT:
-    RETVAL
-
-SV *
-graphqljs_build_executable_document_xs(legacy)
-    SV *legacy
-  CODE:
-    RETVAL = gql_graphqljs_build_executable_document(aTHX_ legacy);
-  OUTPUT:
-    RETVAL
-
-SV *
-graphqljs_build_document_xs(legacy)
-    SV *legacy
-  CODE:
-    RETVAL = gql_graphqljs_build_document(aTHX_ legacy);
-  OUTPUT:
-    RETVAL
-
-SV *
-graphqlperl_build_document_xs(doc)
-    SV *doc
-  CODE:
-    RETVAL = gql_graphqlperl_build_document(aTHX_ doc);
-  OUTPUT:
-    RETVAL
-
-SV *
-graphqljs_apply_executable_loc_xs(doc, source)
-    SV *doc
-    SV *source
-  CODE:
-    RETVAL = gql_graphqljs_apply_executable_loc(aTHX_ doc, source);
-  OUTPUT:
-    RETVAL
 
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::SchemaCompiler
 

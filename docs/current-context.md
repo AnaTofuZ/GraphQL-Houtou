@@ -1,5 +1,10 @@
 # Current Context
 
+## Read First
+
+現状の構成を短く把握するには、まず `docs/runtime-mainline-overview.md` を読むこと。
+詳細設計や試行錯誤の履歴はこの文書と `docs/runtime-vm-architecture.md` に残してある。
+
 このリポジトリの主系は `Runtime` / `VM` ベースの新実装です。
 
 ## 現在の前提

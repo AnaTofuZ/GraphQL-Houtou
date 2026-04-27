@@ -163,6 +163,16 @@ fresh `./Build build` 済み環境で、
   - `abstract_with_fragment`: 約 `14.2x`
 - current cached-perl runtime は旧 `compiled_ir` より遅い
 - したがって mainline の本命は Perl VM ではなく native bundle / XS VM 側
+- 最近の XS 化 checkpoint 後の中央値:
+  - `nested_variable_object`
+    - `houtou_runtime_cached_perl` median `18095/s`
+    - `houtou_runtime_native_bundle` median `585426/s`
+  - `list_of_objects`
+    - `houtou_runtime_cached_perl` median `13527/s`
+    - `houtou_runtime_native_bundle` median `497824/s`
+  - `abstract_with_fragment`
+    - `houtou_runtime_cached_perl` median `15887/s`
+    - `houtou_runtime_native_bundle` median `549703/s`
 
 ## 直近の方針
 
@@ -178,6 +188,12 @@ fresh `./Build build` 済み環境で、
 - `ExecState` と `NativeRuntime` が別々に持っていた variable / arg coercion は `InputCoercion` に集約した
 - `InputCoercion` の dynamic arg materialization と runtime guard evaluation は `GraphQL::Houtou::XS::VM` helper に移し、Perl 側での再帰 walk を hot path から外した
 - `Runtime::Outcome` の constructor と `Runtime::Writer` の `consume_outcome(...)` は `GraphQL::Houtou::XS::VM` helper に移し、kind-first outcome の生成と consume を XS 側へ寄せた
+- `ExecState` の abstract runtime type resolution は `GraphQL::Houtou::XS::VM::resolve_runtime_type_xs(...)` に移し、
+  - `tag_resolver`
+  - `tag_map`
+  - `resolve_type`
+  - `possible_types + is_type_of`
+  の orchestration を Perl hot path から外した
 - historical / internal parser 資料は docs にのみ残し、mainline の API からは `graphql-js` dialect を外した
 - parser compatibility 自体は要件から外し、parser 本体と旧互換層が共有していた helper は
   `src/parser_shared_ast.h` へ切り出したうえで parser-internal 層に閉じ込めた

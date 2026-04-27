@@ -992,6 +992,25 @@ evaluate_runtime_guards_xs(guards, variables)
   OUTPUT:
     RETVAL
 
+void
+resolve_runtime_type_xs(dispatch, runtime_cache, value, context, info, abstract_type)
+    SV *dispatch
+    SV *runtime_cache
+    SV *value
+    SV *context
+    SV *info
+    SV *abstract_type
+  PPCODE:
+    {
+      SV *error = NULL;
+      SV *runtime_type = gql_runtime_vm_resolve_runtime_type_sv(
+        aTHX_ dispatch, runtime_cache, value, context, info, abstract_type, &error
+      );
+      EXTEND(SP, 2);
+      PUSHs(sv_2mortal(runtime_type ? runtime_type : newSV(0)));
+      PUSHs(sv_2mortal(error ? error : newSV(0)));
+    }
+
 SV *
 outcome_scalar_xs(value, error_records = &PL_sv_undef)
     SV *value

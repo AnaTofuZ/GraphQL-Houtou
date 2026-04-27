@@ -413,53 +413,35 @@ sub resolve_runtime_type_for_current_field {
   my $abstract_type = $dispatch ? $dispatch->{abstract_type} : ($slot ? $slot->return_type : undef);
   return if !$abstract_type;
   my $abstract_name = $dispatch ? $dispatch->{abstract_name} : $abstract_type->name;
-  my $info;
-  my $build_info = sub {
-    my $built_info = $args{info};
-    if (!$built_info && $args{info_builder}) {
-      $built_info = $args{info_builder}->();
+  my $has_callbacks =
+       ($dispatch ? $dispatch->{tag_resolver} : $cache->{tag_resolver_map}{$abstract_name})
+    || ($dispatch ? $dispatch->{resolve_type} : $cache->{resolve_type_map}{$abstract_name})
+    || @{ ($dispatch ? $dispatch->{possible_types} : $cache->{possible_types}{$abstract_name}) || [] };
+  my $info = $args{info};
+  if (!$info && $has_callbacks) {
+    if ($args{info_builder}) {
+      $info = $args{info_builder}->();
     }
-    $info ||= $built_info || GraphQL::Houtou::Runtime::LazyInfo->new(
-        state => $self,
-        runtime_schema => $self->runtime_schema,
-        block => $self->current_block,
-        instruction => $op,
-        path_frame => $path_frame,
-      );
-    return $info;
-  };
-
-  if (my $tag_resolver = $dispatch ? $dispatch->{tag_resolver} : $cache->{tag_resolver_map}{$abstract_name}) {
-    my ($ok, $tag) = $self->_capture_eval(sub {
-      return $tag_resolver->($value, $self->context, $build_info->(), $abstract_type);
-    });
-    return (undef, $self->_error_record($tag, $path_frame)) if !$ok;
-    if (defined $tag) {
-      my $type = (($dispatch ? $dispatch->{tag_map} : $cache->{runtime_tag_map}{$abstract_name}) || {})->{$tag};
-      return ($type, undef) if $type;
-    }
+    $info ||= GraphQL::Houtou::Runtime::LazyInfo->new(
+      state => $self,
+      runtime_schema => $self->runtime_schema,
+      block => $self->current_block,
+      instruction => $op,
+      path_frame => $path_frame,
+    );
   }
 
-  if (my $resolve_type = $dispatch ? $dispatch->{resolve_type} : $cache->{resolve_type_map}{$abstract_name}) {
-    my ($ok, $resolved) = $self->_capture_eval(sub {
-      return $resolve_type->($value, $self->context, $build_info->(), $abstract_type);
-    });
-    return (undef, $self->_error_record($resolved, $path_frame)) if !$ok;
-    return if !defined $resolved;
-    return (ref($resolved) ? $resolved : (($dispatch ? $dispatch->{name2type} : $cache->{name2type})->{$resolved}), undef);
-  }
-
-  for my $type (@{ ($dispatch ? $dispatch->{possible_types} : $cache->{possible_types}{$abstract_name}) || [] }) {
-    next if !$type;
-    my $cb = ($dispatch ? $dispatch->{is_type_of_map} : $cache->{is_type_of_map})->{ $type->name } or next;
-    my ($ok, $matched) = $self->_capture_eval(sub {
-      return $cb->($value, $self->context, $build_info->(), $type);
-    });
-    return (undef, $self->_error_record($matched, $path_frame)) if !$ok;
-    return ($type, undef) if $matched;
-  }
-
-  return (undef, undef);
+  my ($runtime_type, $error) = GraphQL::Houtou::XS::VM::resolve_runtime_type_xs(
+    $dispatch,
+    $cache,
+    $value,
+    $self->context,
+    $info,
+    $abstract_type,
+  );
+  return (undef, $self->_error_record($error, $path_frame)) if defined $error;
+  return (undef, undef) if !defined $runtime_type;
+  return ($runtime_type, undef);
 }
 
 sub execute_block {

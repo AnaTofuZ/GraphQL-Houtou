@@ -222,6 +222,208 @@ gql_runtime_vm_consume_outcome_sv(pTHX_ HV *data_hv, SV *result_name_sv, SV *out
 }
 
 static SV *
+gql_runtime_vm_dispatch_hash_fetch(pTHX_ SV *dispatch_sv, const char *key, STRLEN key_len)
+{
+  HV *hv;
+  SV **svp;
+  if (!dispatch_sv || !SvOK(dispatch_sv) || !SvROK(dispatch_sv) || SvTYPE(SvRV(dispatch_sv)) != SVt_PVHV) {
+    return NULL;
+  }
+  hv = (HV *)SvRV(dispatch_sv);
+  svp = hv_fetch(hv, key, (I32)key_len, 0);
+  return svp ? *svp : NULL;
+}
+
+static SV *
+gql_runtime_vm_hash_lookup_ent_sv(pTHX_ SV *hv_sv, SV *key_sv)
+{
+  HE *he;
+  HV *hv;
+  if (!hv_sv || !SvOK(hv_sv) || !SvROK(hv_sv) || SvTYPE(SvRV(hv_sv)) != SVt_PVHV || !key_sv) {
+    return NULL;
+  }
+  hv = (HV *)SvRV(hv_sv);
+  he = hv_fetch_ent(hv, key_sv, 0, 0);
+  return he ? HeVAL(he) : NULL;
+}
+
+static SV *
+gql_runtime_vm_call_cb_scalar(pTHX_ SV *cb, SV *value, SV *context, SV *info, SV *type_like, SV **error_out)
+{
+  dSP;
+  SV *result = NULL;
+  if (error_out) {
+    *error_out = NULL;
+  }
+  if (!cb || !SvOK(cb)) {
+    return NULL;
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(newSVsv(value ? value : &PL_sv_undef)));
+  XPUSHs(sv_2mortal(newSVsv(context ? context : &PL_sv_undef)));
+  XPUSHs(sv_2mortal(newSVsv(info ? info : &PL_sv_undef)));
+  XPUSHs(sv_2mortal(newSVsv(type_like ? type_like : &PL_sv_undef)));
+  PUTBACK;
+
+  if (call_sv(cb, G_SCALAR | G_EVAL) > 0) {
+    SPAGAIN;
+    result = POPs;
+    result = result ? newSVsv(result) : NULL;
+    PUTBACK;
+  }
+
+  if (SvTRUE(ERRSV)) {
+    if (error_out) {
+      *error_out = newSVsv(ERRSV);
+    }
+    sv_setsv(ERRSV, &PL_sv_undef);
+    result = NULL;
+  }
+
+  FREETMPS;
+  LEAVE;
+  return result;
+}
+
+static SV *
+gql_runtime_vm_resolve_runtime_type_sv(
+  pTHX_
+  SV *dispatch_sv,
+  SV *cache_sv,
+  SV *value,
+  SV *context,
+  SV *info,
+  SV *abstract_type,
+  SV **error_out
+)
+{
+  SV *tag_resolver;
+  SV *tag_map_sv;
+  SV *resolve_type;
+  SV *name2type_sv;
+  SV *possible_types_sv;
+  SV *is_type_of_map_sv;
+  SV *tmp_error = NULL;
+  SV *resolved = NULL;
+
+  if (error_out) {
+    *error_out = NULL;
+  }
+
+  tag_resolver = gql_runtime_vm_dispatch_hash_fetch(aTHX_ dispatch_sv, "tag_resolver", 12);
+  tag_map_sv = gql_runtime_vm_dispatch_hash_fetch(aTHX_ dispatch_sv, "tag_map", 7);
+  resolve_type = gql_runtime_vm_dispatch_hash_fetch(aTHX_ dispatch_sv, "resolve_type", 12);
+  name2type_sv = gql_runtime_vm_dispatch_hash_fetch(aTHX_ dispatch_sv, "name2type", 9);
+  possible_types_sv = gql_runtime_vm_dispatch_hash_fetch(aTHX_ dispatch_sv, "possible_types", 14);
+  is_type_of_map_sv = gql_runtime_vm_dispatch_hash_fetch(aTHX_ dispatch_sv, "is_type_of_map", 14);
+
+  if (!name2type_sv) {
+    name2type_sv = gql_runtime_vm_dispatch_hash_fetch(aTHX_ cache_sv, "name2type", 9);
+  }
+  if (!possible_types_sv) {
+    SV *possible_types_map = gql_runtime_vm_dispatch_hash_fetch(aTHX_ cache_sv, "possible_types", 14);
+    SV *abstract_name = gql_runtime_vm_dispatch_hash_fetch(aTHX_ dispatch_sv, "abstract_name", 13);
+    possible_types_sv = gql_runtime_vm_hash_lookup_ent_sv(aTHX_ possible_types_map, abstract_name);
+  }
+  if (!is_type_of_map_sv) {
+    is_type_of_map_sv = gql_runtime_vm_dispatch_hash_fetch(aTHX_ cache_sv, "is_type_of_map", 14);
+  }
+
+  if (tag_resolver) {
+    SV *tag = gql_runtime_vm_call_cb_scalar(aTHX_ tag_resolver, value, context, info, abstract_type, &tmp_error);
+    if (tmp_error) {
+      if (error_out) *error_out = tmp_error;
+      return NULL;
+    }
+    if (tag && SvOK(tag)) {
+      SV *mapped = gql_runtime_vm_hash_lookup_ent_sv(aTHX_ tag_map_sv, tag);
+      SvREFCNT_dec(tag);
+      if (mapped && SvOK(mapped)) {
+        return newSVsv(mapped);
+      }
+    } else if (tag) {
+      SvREFCNT_dec(tag);
+    }
+  }
+
+  if (resolve_type) {
+    resolved = gql_runtime_vm_call_cb_scalar(aTHX_ resolve_type, value, context, info, abstract_type, &tmp_error);
+    if (tmp_error) {
+      if (error_out) *error_out = tmp_error;
+      return NULL;
+    }
+    if (resolved && SvOK(resolved)) {
+      if (SvROK(resolved)) {
+        return resolved;
+      }
+      else {
+        SV *mapped = gql_runtime_vm_hash_lookup_ent_sv(aTHX_ name2type_sv, resolved);
+        SvREFCNT_dec(resolved);
+        return mapped && SvOK(mapped) ? newSVsv(mapped) : NULL;
+      }
+    } else if (resolved) {
+      SvREFCNT_dec(resolved);
+    }
+  }
+
+  if (possible_types_sv && SvOK(possible_types_sv) && SvROK(possible_types_sv) && SvTYPE(SvRV(possible_types_sv)) == SVt_PVAV) {
+    AV *possible_types_av = (AV *)SvRV(possible_types_sv);
+    SSize_t i;
+    for (i = 0; i <= av_len(possible_types_av); i++) {
+      SV **type_svp = av_fetch(possible_types_av, i, 0);
+      SV *type_sv;
+      SV *type_name_sv;
+      SV *cb;
+      SV *matched;
+      if (!type_svp || !(type_sv = *type_svp) || !SvOK(type_sv)) {
+        continue;
+      }
+      type_name_sv = gql_runtime_vm_dispatch_hash_fetch(aTHX_ type_sv, "name", 4);
+      if (!type_name_sv) {
+        dSP;
+        ENTER;
+        SAVETMPS;
+        PUSHMARK(SP);
+        XPUSHs(sv_2mortal(newSVsv(type_sv)));
+        PUTBACK;
+        if (call_method("name", G_SCALAR) > 0) {
+          SPAGAIN;
+          type_name_sv = POPs;
+          type_name_sv = type_name_sv ? newSVsv(type_name_sv) : NULL;
+          PUTBACK;
+        }
+        FREETMPS;
+        LEAVE;
+      } else {
+        type_name_sv = newSVsv(type_name_sv);
+      }
+      cb = gql_runtime_vm_hash_lookup_ent_sv(aTHX_ is_type_of_map_sv, type_name_sv);
+      SvREFCNT_dec(type_name_sv);
+      if (!cb || !SvOK(cb)) {
+        continue;
+      }
+      matched = gql_runtime_vm_call_cb_scalar(aTHX_ cb, value, context, info, type_sv, &tmp_error);
+      if (tmp_error) {
+        if (error_out) *error_out = tmp_error;
+        return NULL;
+      }
+      if (matched && SvTRUE(matched)) {
+        SvREFCNT_dec(matched);
+        return newSVsv(type_sv);
+      }
+      if (matched) {
+        SvREFCNT_dec(matched);
+      }
+    }
+  }
+
+  return NULL;
+}
+
+static SV *
 gql_runtime_vm_materialize_dynamic_value_sv(pTHX_ SV *value, HV *variables)
 {
   SV *inner;

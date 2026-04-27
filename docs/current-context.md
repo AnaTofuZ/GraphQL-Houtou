@@ -37,6 +37,7 @@
 - `SchemaGraph->execute_program(...)` は public entrypoint として残すが、engine 選択と native specialization の ownership は `NativeRuntime` に寄せた
 - `VMCompiler` は VM lower / inflate の owner に限定し、native compact struct の ownership は `SchemaGraph` / `VMProgram` / `NativeRuntime` に寄せている
 - `GraphQL::Houtou::Native` は public low-level facade に限定し、internal 専用 API の受け皿にはしない
+- `GraphQL::Houtou::Validation` は `validate` のみの最小 public facade として固定した
 - 旧実装は git history で追えればよく、source tree には残さない
 
 ## 現在のアーキテクチャ

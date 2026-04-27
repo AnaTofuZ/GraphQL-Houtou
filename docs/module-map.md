@@ -19,6 +19,12 @@
 - `GraphQL::Houtou::Native`
   - native bundle / native runtime の低レベル facade
 
+判断:
+
+- `Validation` は public に残す
+- `Native` も public に残す
+- ただし両方とも facade の面積はこれ以上広げない
+
 ## Runtime Mainline
 
 - `GraphQL::Houtou::Runtime::SchemaGraph`
@@ -108,6 +114,12 @@ parser compatibility は mainline 要件ではありませんが、最小 parser
   - graphql-perl dialect parser runtime
 - `src/parser_shared_ast.h`
   - shared AST helper
+
+判断:
+
+- parser compatibility は mainline 要件ではない
+- ただし parser public surface 自体は残す
+- したがって parser internals は削除対象ではなく、runtime mainline から切り離して維持する
 
 ## Non-Mainline
 

@@ -12,6 +12,21 @@
 短い入口は `docs/runtime-mainline-overview.md`、最新の checkpoint と計測結果は
 `docs/current-context.md` を参照してください。
 
+## 読む順
+
+この文書群は次の順で読むと迷いません。
+
+1. `docs/runtime-mainline-overview.md`
+   - いまの mainline の要約
+2. `docs/architecture.md`
+   - 設計原則と大きな構成
+3. `docs/runtime-mainline-architecture.md`
+   - ownership と境界
+4. `docs/module-map.md`
+   - モジュールごとの責務
+5. `docs/current-context.md`
+   - 最新 checkpoint / ベンチマーク / 直近判断
+
 ## 目的
 
 このリポジトリの現在の mainline は、旧 `execution` / `compiled_ir` 実装を延命することではありません。
@@ -256,6 +271,19 @@ native mainline では 3 の後にさらに
 
 つまり、公開面は残すが、内部は mainline のために作り直す、という立場です。
 
+現在の public surface は次に絞っています。
+
+- `GraphQL::Houtou`
+  - `parse`
+  - `parse_with_options`
+  - `execute`
+  - `execute_native`
+- `GraphQL::Houtou::Schema`
+- `GraphQL::Houtou::Validation`
+  - `validate` のみ
+- `GraphQL::Houtou::Native`
+  - low-level native handle facade
+
 ## parser の位置づけ
 
 parser は runtime mainline ではありません。
@@ -275,6 +303,9 @@ parser は runtime mainline ではありません。
 のような parser-internal helper に閉じています。
 
 これは runtime/VM の本命とは切り離して扱う、という意味です。
+
+重要なのは、parser は **公開 surface と内部 helper を持つが、runtime/VM の主系ではない** という点です。
+性能最適化の主戦場は parser ではなく native bundle mainline にあります。
 
 ## いまの本命
 

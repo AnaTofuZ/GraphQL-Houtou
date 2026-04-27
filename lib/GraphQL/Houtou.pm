@@ -19,6 +19,7 @@ our @EXPORT_OK = qw(
   parse_with_options
   execute
   compile_runtime
+  build_native_runtime
   set_default_promise_code
   get_default_promise_code
   clear_default_promise_code
@@ -46,6 +47,11 @@ sub parse_with_options {
 sub compile_runtime {
   my ($schema, %opts) = @_;
   return GraphQL::Houtou::Runtime::compile_schema($schema, %opts);
+}
+
+sub build_native_runtime {
+  my ($schema, %opts) = @_;
+  return GraphQL::Houtou::Runtime::build_native_runtime($schema, %opts);
 }
 
 sub execute {

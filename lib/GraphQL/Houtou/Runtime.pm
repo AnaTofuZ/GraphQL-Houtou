@@ -8,6 +8,7 @@ use Exporter 'import';
 use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Runtime::Compiler ();
 use GraphQL::Houtou::Runtime::Executor ();
+use GraphQL::Houtou::Runtime::NativeRuntime ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::ProgramSpecializer ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
@@ -16,6 +17,7 @@ use GraphQL::Houtou::Runtime::VMExecutor ();
 our @EXPORT_OK = qw(
   compile_schema
   build_runtime
+  build_native_runtime
   inflate_schema
   compile_lowered_program
   compile_lowered_operation
@@ -53,6 +55,14 @@ sub compile_schema {
 
 sub build_runtime {
   return GraphQL::Houtou::Runtime::Compiler->compile_schema(@_);
+}
+
+sub build_native_runtime {
+  my ($schema, %opts) = @_;
+  my $runtime_schema = build_runtime($schema, %opts);
+  return GraphQL::Houtou::Runtime::NativeRuntime->new(
+    runtime_schema => $runtime_schema,
+  );
 }
 
 sub inflate_schema {

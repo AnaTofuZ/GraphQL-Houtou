@@ -3,7 +3,7 @@ use warnings;
 use Test::More;
 
 use lib 'lib';
-use GraphQL::Houtou qw(execute compile_runtime);
+use GraphQL::Houtou qw(execute compile_runtime build_native_runtime);
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);
@@ -13,10 +13,12 @@ my $Query = GraphQL::Houtou::Type::Object->new(
   fields => {
     hello => {
       type => $String,
+      resolver_mode => 'native',
       resolve => sub { return 'world' },
     },
     greet => {
       type => $String,
+      resolver_mode => 'native',
       args => {
         name => { type => $String },
       },
@@ -59,6 +61,35 @@ subtest 'top-level compile_runtime returns schema runtime' => sub {
     data => { hello => 'world' },
     errors => [],
   }, 'compiled runtime can execute operation';
+};
+
+subtest 'top-level build_native_runtime returns cached native runtime wrapper' => sub {
+  my $native = build_native_runtime($schema);
+  isa_ok $native, 'GraphQL::Houtou::Runtime::NativeRuntime';
+
+  my $program = $native->compile_program(
+    'query Q($name: String = "bob") { greet(name: $name) }',
+  );
+  my $result = $native->execute_program($program, variables => { name => 'cached' });
+
+  is_deeply $result, {
+    data => { greet => 'hello cached' },
+    errors => [],
+  }, 'cached native runtime executes request-specialized program';
+};
+
+subtest 'native runtime can compile reusable bundle from cached program' => sub {
+  my $native = $schema->build_native_runtime;
+  my $program = $native->compile_program('{ hello }');
+  my $bundle = $native->compile_bundle($program);
+
+  isa_ok $bundle, 'GraphQL::Houtou::Runtime::NativeBundle';
+  my $result = $bundle->execute;
+
+  is_deeply $result, {
+    data => { hello => 'world' },
+    errors => [],
+  }, 'compiled native bundle executes through wrapper';
 };
 
 done_testing;

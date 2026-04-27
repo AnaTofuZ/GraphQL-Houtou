@@ -77,6 +77,11 @@ sub compile_runtime {
   return GraphQL::Houtou::Runtime::compile_schema($self, %opts);
 }
 
+sub build_native_runtime {
+  my ($self, %opts) = @_;
+  return GraphQL::Houtou::Runtime::build_native_runtime($self, %opts);
+}
+
 sub build_runtime {
   my ($self, %opts) = @_;
   return $self->compile_runtime(%opts);

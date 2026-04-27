@@ -138,6 +138,14 @@ sub inflate_native_bundle {
   return $self->inflate_vm_native_bundle($descriptor);
 }
 
+sub build_native_runtime {
+  my ($self) = @_;
+  require GraphQL::Houtou::Runtime::NativeRuntime;
+  return GraphQL::Houtou::Runtime::NativeRuntime->new(
+    runtime_schema => $self,
+  );
+}
+
 sub inflate_vm_bundle {
   my ($self, $descriptor) = @_;
   return $self->inflate_vm_native_bundle($descriptor);
@@ -162,6 +170,11 @@ sub execute_vm_native_bundle {
 sub execute_native_bundle {
   my ($self, $descriptor, %opts) = @_;
   return $self->execute_vm_native_bundle($descriptor, %opts);
+}
+
+sub execute_program_native {
+  my ($self, $program, %opts) = @_;
+  return $self->build_native_runtime->execute_program($program, %opts);
 }
 
 sub to_struct {

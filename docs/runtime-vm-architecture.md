@@ -970,6 +970,26 @@ In practice this means `Schema->execute_native_runtime(...)` should behave like
 `Runtime->execute_program(engine => 'native')`, not like a raw static bundle
 loader. Dynamic variables and directives are resolved before native execution,
 but execution itself still happens on the native VM.
+
+To make this usable in web applications, there should be a first-class startup
+cache API:
+
+- build a compiled runtime once at process boot
+- optionally compile and cache VM programs once
+- hold a loaded native runtime handle separately from request-local state
+- specialize cached VM programs per request
+- execute the specialized program only at the top-level native boundary
+
+The current public wrappers for this are:
+
+- `build_native_runtime($schema)`
+- `Schema->build_native_runtime`
+- `Runtime::NativeRuntime->compile_program(...)`
+- `Runtime::NativeRuntime->execute_program(...)`
+- `Runtime::NativeRuntime->compile_bundle(...)`
+
+This keeps the control plane in Perl while ensuring child modules do not call
+XS directly.
 ## Public API direction
 
 The runtime-facing public API should treat VM artifacts as the primary

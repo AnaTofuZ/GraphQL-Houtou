@@ -4564,3 +4564,17 @@ This fixes the first real bridge-design bug we hit in the reboot:
     - dynamic include/skip
     - abstract tag dispatch
     を含む query も top-level native API で通るようになった。
+  - 起動時 cache を first-class にするため、
+    `build_native_runtime(...)` / `Schema->build_native_runtime(...)` を追加した。
+  - `Runtime::NativeRuntime` は
+    - compiled runtime schema
+    - loaded native runtime handle
+    を所有し、request ごとに cached VM program を specialization した上で
+    native 実行できる。
+  - `Runtime::NativeBundle` は request-specialized native bundle handle を持つ。
+  - これにより想定する web application の mainline は
+    - app boot で runtime compile
+    - app boot または lazy で operation compile
+    - request ごとに specialization
+    - top-level native boundary で execute
+    という 4 段に固定された。

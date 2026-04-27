@@ -15,7 +15,7 @@ gql_validation_parse_ast(pTHX_ SV *document, SV *options) {
     return newSVsv(document);
   }
 
-  eval_pv("require GraphQL::Houtou::GraphQLPerl::Parser; 1;", TRUE);
+  eval_pv("require GraphQL::Houtou; 1;", TRUE);
 
   opts_hv = newHV();
   gql_store_sv(opts_hv, "backend", newSVpv("xs", 0));
@@ -36,13 +36,13 @@ gql_validation_parse_ast(pTHX_ SV *document, SV *options) {
   XPUSHs(sv_2mortal(newRV_noinc((SV *)opts_hv)));
   PUTBACK;
 
-  count = call_pv("GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options", G_SCALAR);
+  count = call_pv("GraphQL::Houtou::parse_with_options", G_SCALAR);
   SPAGAIN;
   if (count != 1) {
     PUTBACK;
     FREETMPS;
     LEAVE;
-    croak("GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options did not return a scalar");
+    croak("GraphQL::Houtou::parse_with_options did not return a scalar");
   }
 
   ret = newSVsv(POPs);

@@ -35,8 +35,9 @@ sub _bootstrap_xs {
 }
 
 sub parse {
-  require GraphQL::Houtou::GraphQLPerl::Parser;
-  return GraphQL::Houtou::GraphQLPerl::Parser::parse(@_);
+  my ($source, $no_location) = @_;
+  require GraphQL::Houtou::XS::Parser;
+  return GraphQL::Houtou::XS::Parser::parse_xs($source, $no_location);
 }
 
 sub parse_with_options {
@@ -44,8 +45,12 @@ sub parse_with_options {
   $options ||= {};
   die "Unknown parser dialect '$options->{dialect}'.\n"
     if defined($options->{dialect}) && $options->{dialect} ne 'graphql-perl';
-  require GraphQL::Houtou::GraphQLPerl::Parser;
-  return GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, $options);
+  my $backend = $options->{backend} || 'xs';
+  my $no_location = $options->{no_location};
+  $no_location = $options->{noLocation} if !defined $no_location;
+  die "Unknown parser backend '$backend'.\n" if $backend ne 'xs';
+  require GraphQL::Houtou::XS::Parser;
+  return GraphQL::Houtou::XS::Parser::parse_xs($source, $no_location);
 }
 
 sub compile_runtime {

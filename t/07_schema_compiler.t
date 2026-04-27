@@ -11,7 +11,6 @@ use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($Boolean $Int $String);
 use GraphQL::Houtou::Type::Union;
-use GraphQL::Houtou::Schema::Compiler qw(compile_schema);
 
 my $Node;
 my $User;
@@ -96,35 +95,9 @@ my $schema = GraphQL::Houtou::Schema->new(
   directives => [ @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES, $auth ],
 );
 
-my $compiled = compile_schema($schema);
-my $compiled_xs = compile_schema($schema);
-
-sub _strip_runtime {
-  my ($value) = @_;
-
-  if (!ref $value) {
-    return $value;
-  }
-
-  if (ref $value eq 'ARRAY') {
-    return [ map _strip_runtime($_), @$value ];
-  }
-
-  if (ref $value eq 'HASH') {
-    my %copy;
-    for my $key (sort keys %$value) {
-      next if $key =~ /\A(?:source_|resolve|subscribe|serialize|parse_value|resolve_type|is_type_of)\z/;
-      $copy{$key} = _strip_runtime($value->{$key});
-    }
-    return \%copy;
-  }
-
-  return ref $value;
-}
-
-subtest 'facade and XS agree on normalized shape' => sub {
-  is_deeply _strip_runtime($compiled), _strip_runtime($compiled_xs), 'facade matches XS';
-};
+my $compiled = $schema->compile_runtime;
+my $descriptor = $schema->compile_runtime_descriptor;
+my $inflated = $schema->inflate_runtime($descriptor);
 
 subtest 'Houtou wrappers stay in the Houtou namespace' => sub {
   isa_ok $schema, 'GraphQL::Houtou::Schema';
@@ -159,18 +132,14 @@ subtest 'Houtou types consume Houtou roles' => sub {
   ok $schema->directives->[-1]->DOES('GraphQL::Houtou::Role::Named'), 'directive uses Houtou named role';
   ok !$schema->query->DOES('GraphQL::Role::Output'), 'object no longer depends on upstream output role';
   ok !$schema->name2type->{Filter}->DOES('GraphQL::Role::Input'), 'input object no longer depends on upstream input role';
-};
-
-subtest 'roots are normalized' => sub {
-  is_deeply $compiled->{roots}, {
-    query => 'Query',
-    mutation => undef,
-    subscription => undef,
-  };
+  isa_ok $compiled, 'GraphQL::Houtou::Runtime::SchemaGraph';
+  isa_ok $inflated, 'GraphQL::Houtou::Runtime::SchemaGraph';
 };
 
 subtest 'runtime schema cache can be warmed explicitly' => sub {
-  is $schema->runtime_cache, undef, 'runtime_cache is undef before explicit warmup';
+  ok $schema->runtime_cache, 'compile_runtime primes runtime_cache';
+  $schema->clear_runtime_cache;
+  is $schema->runtime_cache, undef, 'clear_runtime_cache clears getter-visible cache';
 
   my $cache = $schema->prepare_runtime;
 
@@ -195,47 +164,62 @@ subtest 'runtime schema cache can be warmed explicitly' => sub {
   isnt $schema->prepare_runtime, $cache, 'clear_runtime_cache forces rebuild';
 };
 
-subtest 'named types are compiled' => sub {
-  is $compiled->{types}{Query}{kind}, 'OBJECT', 'query root kind';
-  is $compiled->{types}{Node}{kind}, 'INTERFACE', 'interface kind';
-  is $compiled->{types}{SearchResult}{kind}, 'UNION', 'union kind';
-  is $compiled->{types}{Filter}{kind}, 'INPUT_OBJECT', 'input object kind';
-  is $compiled->{types}{Status}{kind}, 'ENUM', 'enum kind';
+subtest 'runtime graph is descriptor-roundtrip stable' => sub {
+  is_deeply $compiled->to_struct, $inflated->to_struct, 'inflate_runtime preserves runtime graph shape';
 };
 
-subtest 'field and argument type references are normalized' => sub {
-  is $compiled->{types}{Query}{fields}{viewer}{type}{kind}, 'NAMED', 'named field type stays named';
-  is $compiled->{types}{Query}{fields}{viewer}{type}{name}, 'User', 'field type name is preserved';
+subtest 'root blocks and slots are compiled' => sub {
+  is_deeply $compiled->root_types, {
+    query => 'Query',
+  }, 'root_types keep active root names';
 
-  is $compiled->{types}{Query}{fields}{search}{type}{kind}, 'NON_NULL', 'non-null wrapper is preserved';
-  is $compiled->{types}{Query}{fields}{search}{type}{of}{kind}, 'LIST', 'list wrapper is preserved';
-  is $compiled->{types}{Query}{fields}{search}{type}{of}{of}{name}, 'SearchResult', 'nested named type is preserved';
+  my $query_block = $compiled->root_block('query');
+  isa_ok $query_block, 'GraphQL::Houtou::Runtime::Block';
+  is $query_block->root_type_name, 'Query', 'query block points at Query';
 
-  is $compiled->{types}{Query}{fields}{search}{args}{ids}{type}{kind}, 'LIST', 'argument list wrapper is preserved';
-  is $compiled->{types}{Query}{fields}{search}{args}{ids}{type}{of}{kind}, 'NON_NULL', 'argument nested non-null wrapper is preserved';
-  is $compiled->{types}{Query}{fields}{search}{args}{ids}{type}{of}{of}{name}, 'String', 'argument leaf type name is preserved';
+  my ($viewer_slot) = grep { $_->field_name eq 'viewer' } @{ $query_block->slots || [] };
+  ok $viewer_slot, 'viewer slot is present';
+  is $viewer_slot->completion_family, 'OBJECT', 'viewer slot is object family';
+  is $viewer_slot->dispatch_family, 'OBJECT', 'viewer slot dispatch stays object';
+
+  my ($search_slot) = grep { $_->field_name eq 'search' } @{ $query_block->slots || [] };
+  ok $search_slot, 'search slot is present';
+  is $search_slot->completion_family, 'LIST', 'search slot is list family';
+  is $search_slot->dispatch_family, 'LIST', 'search slot dispatch stays list';
+  is_deeply $search_slot->arg_defs->{ids}{type}, {
+    type => ['list', { type => ['non_null', { type => 'String' }] }],
+  }, 'argument lowering preserves list/non-null shape';
 };
 
-subtest 'input fields and enum values carry metadata' => sub {
-  is $compiled->{types}{Filter}{fields}{limit}{has_default_value}, 1, 'default value flag is set';
-  is $compiled->{types}{Filter}{fields}{limit}{default_value}, 20, 'default value is preserved';
-  is $compiled->{types}{Status}{values}{DISABLED}{is_deprecated}, 1, 'enum deprecation is preserved';
-  is $compiled->{types}{Status}{values}{DISABLED}{deprecation_reason}, 'Use ACTIVE instead', 'enum deprecation reason is preserved';
+subtest 'type and dispatch indexes are compiled' => sub {
+  is $compiled->type_index->{Query}{kind}, 'OBJECT', 'query root kind';
+  is $compiled->type_index->{Node}{kind}, 'INTERFACE', 'interface kind';
+  is $compiled->type_index->{SearchResult}{kind}, 'UNION', 'union kind';
+  is $compiled->type_index->{Filter}{kind}, 'INPUT_OBJECT', 'input object kind';
+  is $compiled->type_index->{Status}{kind}, 'ENUM', 'enum kind';
+
+  is $compiled->type_index->{User}{runtime_tag}, 'user', 'runtime_tag is indexed';
+  is $compiled->dispatch_index->{Node}{dispatch_family}, 'TAG', 'interface dispatch prefers tag resolver';
+  is $compiled->dispatch_index->{SearchResult}{dispatch_family}, 'TAG', 'union dispatch prefers tag resolver';
 };
 
-subtest 'abstract type relationships are precomputed' => sub {
-  is_deeply $compiled->{types}{User}{interfaces}, ['Node'], 'object interface names are preserved';
-  is_deeply $compiled->{interface_implementations}{Node}, ['User'], 'interface implementation map is built';
-  is_deeply $compiled->{possible_types}{Node}, ['User'], 'interface possible types are built';
-  is_deeply $compiled->{possible_types}{SearchResult}, ['User'], 'union possible types are built';
+subtest 'slot catalog and block lookup are stable' => sub {
+  my $user_block = $compiled->block_by_type_name('User');
+  isa_ok $user_block, 'GraphQL::Houtou::Runtime::Block';
+  is $user_block->name, 'USER', 'user block can be looked up by type name';
+
+  my $slot = $compiled->slot_by_index(0);
+  isa_ok $slot, 'GraphQL::Houtou::Runtime::Slot';
+  like $slot->schema_slot_key, qr/\AQuery\./, 'slot catalog exposes schema slot keys';
 };
 
-subtest 'directives are normalized' => sub {
-  ok exists $compiled->{directives}{auth}, 'custom directive is present';
-  is_deeply $compiled->{directives}{auth}{locations}, [qw(FIELD OBJECT)], 'directive locations are preserved';
-  is $compiled->{directives}{auth}{args}{role}{type}{kind}, 'NON_NULL', 'directive arg type is normalized';
-  is $compiled->{types}{Query}{fields}{viewer}{directives}[0]{name}, 'auth', 'field directive instance is preserved';
-  is $compiled->{types}{Query}{fields}{viewer}{directives}[0]{arguments}{role}, 'reader', 'field directive args are preserved';
+subtest 'native descriptors are available from runtime graph' => sub {
+  my $native = $compiled->to_native_struct;
+  ok ref($native->{slot_catalog}) eq 'ARRAY', 'native struct exposes slot catalog';
+  ok ref($native->{dispatch_index}) eq 'HASH', 'native struct exposes dispatch index';
+
+  my $compact = $compiled->to_native_compact_struct;
+  ok ref($compact->{slot_catalog_compact}) eq 'ARRAY', 'compact native struct exposes compact slot catalog';
 };
 
 done_testing;

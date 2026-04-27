@@ -4,7 +4,6 @@ use Test::More 0.98;
 use_ok $_ for qw(
     GraphQL::Houtou
     GraphQL::Houtou::Native
-    GraphQL::Houtou::Schema::Compiler
     GraphQL::Houtou::Schema
     GraphQL::Houtou::Directive
     GraphQL::Houtou::Role::Input

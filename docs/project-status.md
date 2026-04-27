@@ -20,9 +20,8 @@
 - `GraphQL::Houtou::Schema->execute(...)`
 - `GraphQL::Houtou::Schema->execute_native(...)`
 
-公開 compiler / validation façade は XS 必須です。
+公開 validation façade は XS 必須です。
 
-- `GraphQL::Houtou::Schema::Compiler`
 - `GraphQL::Houtou::Validation`
 
 ## Compatibility Policy

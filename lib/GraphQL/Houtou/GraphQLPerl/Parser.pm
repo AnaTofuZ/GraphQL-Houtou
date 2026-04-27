@@ -24,11 +24,6 @@ sub _has_xs_backend {
   return $HAS_XS_BACKEND;
 }
 
-sub _parse_via_pegex {
-  require GraphQL::Houtou::Backend::Pegex;
-  return GraphQL::Houtou::Backend::Pegex::parse(@_);
-}
-
 sub _parse_via_xs {
   my ($source, $no_location, $options) = @_;
   my $document = parse_xs($source, $no_location);
@@ -49,25 +44,23 @@ sub _parse_via_canonical_xs {
 
 sub parse {
   my ($source, $no_location) = @_;
-  return _has_xs_backend()
-    ? _parse_via_xs($source, $no_location, {})
-    : _parse_via_pegex($source, $no_location);
+  die "XS parser backend is required for GraphQL::Houtou::parse().\n" if !_has_xs_backend();
+  return _parse_via_xs($source, $no_location, {});
 }
 
 sub parse_with_options {
   my ($source, $options) = @_;
   $options ||= {};
-  my $backend = $options->{backend} || (_has_xs_backend() ? 'xs' : 'pegex');
+  my $backend = $options->{backend} || 'xs';
   my $no_location = $options->{no_location};
   $no_location = $options->{noLocation} if !defined $no_location;
 
-  if ($backend eq 'pegex') {
-    return _parse_via_pegex($source, $no_location);
-  }
   if ($backend eq 'xs') {
+    die "XS parser backend is required for GraphQL::Houtou::parse_with_options().\n" if !_has_xs_backend();
     return _parse_via_xs($source, $no_location, $options);
   }
   if ($backend eq 'canonical-xs' || $backend eq 'graphqljs-xs') {
+    die "XS parser backend is required for GraphQL::Houtou::parse_with_options().\n" if !_has_xs_backend();
     return _parse_via_canonical_xs($source, $no_location, $options);
   }
 

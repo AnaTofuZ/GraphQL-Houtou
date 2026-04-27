@@ -189,7 +189,7 @@ executable 変換そのものよりも、legacy 互換チェックと SDL / 非 
 対象:
 
 - dialect: `graphql-perl`
-- backend: `pegex`, `xs`
+- backend: `xs`
 - file: `t/kitchen-sink.graphql`
 - iterations: `300`
 

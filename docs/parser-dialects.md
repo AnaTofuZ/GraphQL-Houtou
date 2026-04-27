@@ -11,7 +11,6 @@
   - `graphql-perl`
   - `graphql-js`
 - backend
-  - `pegex`
   - `xs`
 
 ## Design Rules
@@ -27,7 +26,7 @@
 - `location => { line, column }` 形式
 - 既存 grammar の制約
 
-ただし backend の既定は `xs` であり、必要なときだけ `pegex` を明示選択する。
+backend の既定は `xs` であり、現在の mainline では `pegex` fallback は持たない。
 また、core parser が spec 寄りに受理する差分のうち legacy 互換が必要なものは、
 この dialect 層で再制約する。現時点では empty object value (`{}`) がこれに当たる。
 
@@ -52,10 +51,8 @@ my $ast = GraphQL::Houtou::parse_with_options($source, {
 
 ### 4. Backend modules are split by implementation
 
-- `GraphQL::Houtou::Backend::Pegex`
 - `GraphQL::Houtou::XS::Parser`
 
-`GraphQL::Language::Parser` 依存は `Backend::Pegex` に閉じ込め、
 通常経路は `XS::Parser` の XSUB / Perl helper を直接使う。
 
 ## Current Stage
@@ -63,7 +60,6 @@ my $ast = GraphQL::Houtou::parse_with_options($source, {
 2026-04-03 時点の状態:
 
 - top-level `parse()` の既定 backend は `xs`
-- `backend => 'pegex'` は互換用の明示指定
 - `GraphQL::Houtou::GraphQLJS::Parser` は executable document と主要 SDL を graphql-js 風 AST に変換できる
 - `no_location` は graphql-js dialect では実際に `loc` を落とす
 - `interface ... implements ...` と `directive ... repeatable ...` は metadata patch で対応済み
@@ -91,11 +87,10 @@ my $ast = GraphQL::Houtou::parse_with_options($source, {
 1. graphql-js dialect の current-spec 差分をさらに詰める
 2. graphql-js `loc` 精度を complex SDL 全体でさらに固定する
 3. benchmark / profile を distribution 側で継続的に取れるようにする
-4. 必要なら `Backend::Pegex` の optional dependency 化を検討する
+4. parser mainline は XS 固定で保ち、dialect 差分の検証を継続する
 
 ## Compatibility Promise
 
 - `GraphQL::Houtou::parse()` は graphql-perl 互換 AST を返す
 - graphql-js dialect は別 API / 別 namespace で提供する
-- `GraphQL::Language::Parser` 依存は `Backend::Pegex` に閉じ込める
 - 通常利用は `xs` backend を前提に進める

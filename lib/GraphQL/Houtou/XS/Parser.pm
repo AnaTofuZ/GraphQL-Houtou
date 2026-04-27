@@ -147,7 +147,7 @@ sub TIEARRAY {
 sub _materialize {
   my ($self) = @_;
   return $self->{data} if $self->{data};
-  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_arguments_xs(
+  $self->{data} = GraphQL::Houtou::XS::Parser::_materialize_arguments_xs(
     $self->{state},
     $self->{ptr},
   );
@@ -236,7 +236,7 @@ sub TIEARRAY {
 sub _materialize {
   my ($self) = @_;
   return $self->{data} if $self->{data};
-  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_directives_xs(
+  $self->{data} = GraphQL::Houtou::XS::Parser::_materialize_directives_xs(
     $self->{state},
     $self->{ptr},
   );
@@ -325,7 +325,7 @@ sub TIEARRAY {
 sub _materialize {
   my ($self) = @_;
   return $self->{data} if $self->{data};
-  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_variable_definitions_xs(
+  $self->{data} = GraphQL::Houtou::XS::Parser::_materialize_variable_definitions_xs(
     $self->{state},
     $self->{ptr},
   );
@@ -414,7 +414,7 @@ sub TIEARRAY {
 sub _materialize {
   my ($self) = @_;
   return $self->{data} if $self->{data};
-  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_object_fields_xs(
+  $self->{data} = GraphQL::Houtou::XS::Parser::_materialize_object_fields_xs(
     $self->{state},
     $self->{ptr},
   );

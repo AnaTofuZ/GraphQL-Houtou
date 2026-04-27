@@ -713,7 +713,7 @@ parse_xs(source, no_location = &PL_sv_undef)
     RETVAL
 
 SV *
-_graphqljs_materialize_arguments_xs(state, ptr)
+_materialize_arguments_xs(state, ptr)
     SV *state
     UV ptr
   CODE:
@@ -728,7 +728,7 @@ _graphqljs_materialize_arguments_xs(state, ptr)
     RETVAL
 
 SV *
-_graphqljs_materialize_directives_xs(state, ptr)
+_materialize_directives_xs(state, ptr)
     SV *state
     UV ptr
   CODE:
@@ -743,7 +743,7 @@ _graphqljs_materialize_directives_xs(state, ptr)
     RETVAL
 
 SV *
-_graphqljs_materialize_variable_definitions_xs(state, ptr)
+_materialize_variable_definitions_xs(state, ptr)
     SV *state
     UV ptr
   CODE:
@@ -758,7 +758,7 @@ _graphqljs_materialize_variable_definitions_xs(state, ptr)
     RETVAL
 
 SV *
-_graphqljs_materialize_object_fields_xs(state, ptr)
+_materialize_object_fields_xs(state, ptr)
     SV *state
     UV ptr
   CODE:

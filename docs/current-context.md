@@ -60,6 +60,7 @@
 4. XS Native Boundary
    - bundle owner: `GraphQL::Houtou::_bootstrap_xs`
    - parser helper: `GraphQL::Houtou::XS::Parser` は公開 facade ではなく、top-level `GraphQL::Houtou::parse*` と XS callback 用の internal helper
+   - `XS::Parser` の lazy materialize helper は `graphqljs_*` 命名を外し、1 dialect 前提の parser-internal helper として整理を進める
    - compile / validation / native runtime は public facade から XSUB package を直接呼ぶ
    - `GraphQL::Houtou::Runtime::NativeBundle` は Perl wrapper ではなく XS が提供する opaque handle
 

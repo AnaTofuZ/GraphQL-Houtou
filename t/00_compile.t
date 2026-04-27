@@ -31,7 +31,7 @@ use_ok $_ for qw(
     GraphQL::Houtou::Validation
     GraphQL::Houtou::Runtime::OperationCompiler
     GraphQL::Houtou::Runtime::SchemaGraph
-    GraphQL::Houtou::Runtime::Block
+    GraphQL::Houtou::Runtime::SchemaBlock
     GraphQL::Houtou::Runtime::Slot
     GraphQL::Houtou::Runtime::Outcome
     GraphQL::Houtou::Runtime::Writer

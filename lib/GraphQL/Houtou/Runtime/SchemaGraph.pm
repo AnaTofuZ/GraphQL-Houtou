@@ -4,7 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 
-use GraphQL::Houtou::Runtime::Block ();
+use GraphQL::Houtou::Runtime::SchemaBlock ();
 use GraphQL::Houtou::Runtime::Slot ();
 use GraphQL::Houtou::Type::Scalar qw($String);
 
@@ -335,7 +335,7 @@ sub _build_blocks {
   for my $type_name (sort keys %{ $runtime_cache->{name2type} || {} }) {
     my $type = $runtime_cache->{name2type}{$type_name} or next;
     next if !$type->isa('GraphQL::Houtou::Type::Object');
-    my $block = GraphQL::Houtou::Runtime::Block->new(
+    my $block = GraphQL::Houtou::Runtime::SchemaBlock->new(
       name => uc($type_name),
       family => 'OBJECT',
       root_type_name => $type->name,
@@ -371,7 +371,7 @@ sub _inflate_blocks {
 
 sub _inflate_block {
   my ($struct) = @_;
-  return GraphQL::Houtou::Runtime::Block->new(
+  return GraphQL::Houtou::Runtime::SchemaBlock->new(
     name => $struct->{name},
     family => $struct->{family},
     root_type_name => $struct->{root_type_name},

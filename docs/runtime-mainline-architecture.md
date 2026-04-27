@@ -44,7 +44,7 @@
 
 - `GraphQL::Houtou::Runtime::SchemaGraph`
 - `GraphQL::Houtou::Runtime::SchemaGraph`
-- `GraphQL::Houtou::Runtime::Block`
+- `GraphQL::Houtou::Runtime::SchemaBlock`
 - `GraphQL::Houtou::Runtime::Slot`
 
 責務:

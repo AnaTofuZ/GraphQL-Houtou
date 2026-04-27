@@ -174,7 +174,7 @@ subtest 'root blocks and slots are compiled' => sub {
   }, 'root_types keep active root names';
 
   my $query_block = $compiled->root_block('query');
-  isa_ok $query_block, 'GraphQL::Houtou::Runtime::Block';
+  isa_ok $query_block, 'GraphQL::Houtou::Runtime::SchemaBlock';
   is $query_block->root_type_name, 'Query', 'query block points at Query';
 
   my ($viewer_slot) = grep { $_->field_name eq 'viewer' } @{ $query_block->slots || [] };
@@ -205,7 +205,7 @@ subtest 'type and dispatch indexes are compiled' => sub {
 
 subtest 'slot catalog and block lookup are stable' => sub {
   my $user_block = $compiled->block_by_type_name('User');
-  isa_ok $user_block, 'GraphQL::Houtou::Runtime::Block';
+  isa_ok $user_block, 'GraphQL::Houtou::Runtime::SchemaBlock';
   is $user_block->name, 'USER', 'user block can be looked up by type name';
 
   my $slot = $compiled->slot_by_index(0);

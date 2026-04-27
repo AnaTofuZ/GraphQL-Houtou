@@ -1,4 +1,4 @@
-package GraphQL::Houtou::Runtime::Block;
+package GraphQL::Houtou::Runtime::SchemaBlock;
 
 use 5.014;
 use strict;

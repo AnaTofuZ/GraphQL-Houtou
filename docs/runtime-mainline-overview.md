@@ -58,7 +58,7 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 
 - `GraphQL::Houtou::Runtime::SchemaGraph`
 - `GraphQL::Houtou::Runtime::SchemaGraph`
-- `GraphQL::Houtou::Runtime::Block`
+- `GraphQL::Houtou::Runtime::SchemaBlock`
 - `GraphQL::Houtou::Runtime::Slot`
 
 役割:

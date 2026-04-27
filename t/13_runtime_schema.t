@@ -59,7 +59,7 @@ subtest 'schema can compile runtime graph' => sub {
   my $compiled = $schema->build_runtime;
 
   isa_ok $compiled, 'GraphQL::Houtou::Runtime::SchemaGraph';
-  isa_ok $compiled->root_block('query'), 'GraphQL::Houtou::Runtime::Block';
+  isa_ok $compiled->root_block('query'), 'GraphQL::Houtou::Runtime::SchemaBlock';
   is $compiled->root_types->{query}, 'Query', 'query root type is compiled';
 };
 

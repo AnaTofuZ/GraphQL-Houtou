@@ -92,11 +92,6 @@ sub build_runtime {
   return $self->{_compiled_runtime_graph} = $self->compile_runtime;
 }
 
-sub compile_runtime_graph {
-  my ($self, %opts) = @_;
-  return $self->compile_runtime(%opts);
-}
-
 sub compile_runtime_descriptor {
   my ($self, %opts) = @_;
   return $self->compile_runtime(%opts)->to_struct;
@@ -220,28 +215,10 @@ sub load_native_bundle_file {
   return $runtime->load_bundle_descriptor_file($path);
 }
 
-sub inflate_vm_program {
-  my ($self, $descriptor, %opts) = @_;
-  return $self->inflate_program($descriptor, %opts);
-}
-
 sub inflate_native_bundle_descriptor {
   my ($self, $descriptor, %opts) = @_;
   my $runtime = $self->build_native_runtime;
   return $runtime->inflate_bundle_descriptor($descriptor);
-}
-
-sub dump_vm_program_descriptor {
-  my ($self, $document, $path, %opts) = @_;
-  my $descriptor = $self->compile_program_descriptor($document, %opts);
-  _write_json_descriptor($path, $descriptor);
-  return $descriptor;
-}
-
-sub load_vm_program_descriptor {
-  my ($self, $path, %opts) = @_;
-  my $descriptor = _read_json_descriptor($path);
-  return $self->inflate_vm_program($descriptor, %opts);
 }
 
 sub execute_native_bundle_descriptor {

@@ -431,7 +431,7 @@ gql_validation_push_fragment_cycle_errors(pTHX_ AV *errors_av, HV *fragments_hv)
   SV **keys;
   HV *state_hv = newHV();
 
-  keys = gqljs_sorted_hash_keys(aTHX_ fragments_hv, &fragment_count);
+  keys = gql_parser_sorted_hash_keys(aTHX_ fragments_hv, &fragment_count);
   if (!keys) {
     SvREFCNT_dec((SV *)state_hv);
     return;
@@ -441,7 +441,7 @@ gql_validation_push_fragment_cycle_errors(pTHX_ AV *errors_av, HV *fragments_hv)
     gql_validation_visit_fragment_cycles(aTHX_ errors_av, fragments_hv, state_hv, keys[i]);
   }
 
-  gqljs_free_sorted_hash_keys(keys, fragment_count);
+  gql_parser_free_sorted_hash_keys(keys, fragment_count);
   SvREFCNT_dec((SV *)state_hv);
 }
 
@@ -686,7 +686,7 @@ gql_validation_validate_arguments(
   SV **argument_keys;
   I32 i;
 
-  argument_keys = gqljs_sorted_hash_keys(aTHX_ arguments_hv, &argument_count);
+  argument_keys = gql_parser_sorted_hash_keys(aTHX_ arguments_hv, &argument_count);
   if (argument_keys) {
     for (i = 0; i < argument_count; i++) {
       HE *arg_he = hv_fetch_ent(arguments_hv, argument_keys[i], 0, 0);
@@ -710,10 +710,10 @@ gql_validation_validate_arguments(
         );
       }
     }
-    gqljs_free_sorted_hash_keys(argument_keys, argument_count);
+    gql_parser_free_sorted_hash_keys(argument_keys, argument_count);
   }
 
-  argument_keys = gqljs_sorted_hash_keys(aTHX_ argument_defs_hv, &argument_count);
+  argument_keys = gql_parser_sorted_hash_keys(aTHX_ argument_defs_hv, &argument_count);
   if (argument_keys) {
     for (i = 0; i < argument_count; i++) {
       HE *def_he = hv_fetch_ent(argument_defs_hv, argument_keys[i], 0, 0);
@@ -733,7 +733,7 @@ gql_validation_validate_arguments(
         SvREFCNT_dec(message);
       }
     }
-    gqljs_free_sorted_hash_keys(argument_keys, argument_count);
+    gql_parser_free_sorted_hash_keys(argument_keys, argument_count);
   }
 }
 
@@ -788,7 +788,7 @@ gql_validation_validate_value(
       SV **fields_svp = hv_fetch(named_type_hv, "fields", 6, 0);
       HV *fields_hv = (fields_svp && SvROK(*fields_svp) && SvTYPE(SvRV(*fields_svp)) == SVt_PVHV) ? (HV *)SvRV(*fields_svp) : NULL;
       I32 count = 0;
-      SV **keys = gqljs_sorted_hash_keys(aTHX_ value_hv, &count);
+      SV **keys = gql_parser_sorted_hash_keys(aTHX_ value_hv, &count);
       I32 i;
       if (keys) {
         for (i = 0; i < count; i++) {
@@ -809,10 +809,10 @@ gql_validation_validate_value(
             gql_validation_validate_value(aTHX_ errors_av, schema, compiled_sv, HeVAL(value_he), field_type_svp ? *field_type_svp : NULL, variables_hv, location_sv);
           }
         }
-        gqljs_free_sorted_hash_keys(keys, count);
+        gql_parser_free_sorted_hash_keys(keys, count);
       }
       if (fields_hv) {
-        keys = gqljs_sorted_hash_keys(aTHX_ fields_hv, &count);
+        keys = gql_parser_sorted_hash_keys(aTHX_ fields_hv, &count);
         if (keys) {
           for (i = 0; i < count; i++) {
             HE *field_he = hv_fetch_ent(fields_hv, keys[i], 0, 0);
@@ -836,7 +836,7 @@ gql_validation_validate_value(
               SvREFCNT_dec(message);
             }
           }
-          gqljs_free_sorted_hash_keys(keys, count);
+          gql_parser_free_sorted_hash_keys(keys, count);
         }
       }
     }
@@ -1037,7 +1037,7 @@ gql_validation_validate_variable_definitions(
   SV *location_sv
 ) {
   I32 count = 0;
-  SV **keys = gqljs_sorted_hash_keys(aTHX_ variables_hv, &count);
+  SV **keys = gql_parser_sorted_hash_keys(aTHX_ variables_hv, &count);
   I32 i;
 
   if (!keys) {
@@ -1097,13 +1097,13 @@ gql_validation_validate_variable_definitions(
     SvREFCNT_dec(type_sv);
   }
 
-  gqljs_free_sorted_hash_keys(keys, count);
+  gql_parser_free_sorted_hash_keys(keys, count);
 }
 
 static void
 gql_validation_validate_fragments(pTHX_ AV *errors_av, SV *compiled_sv, HV *fragments_hv) {
   I32 count = 0;
-  SV **keys = gqljs_sorted_hash_keys(aTHX_ fragments_hv, &count);
+  SV **keys = gql_parser_sorted_hash_keys(aTHX_ fragments_hv, &count);
   I32 i;
   if (!keys) {
     return;
@@ -1153,7 +1153,7 @@ gql_validation_validate_fragments(pTHX_ AV *errors_av, SV *compiled_sv, HV *frag
       }
     }
   }
-  gqljs_free_sorted_hash_keys(keys, count);
+  gql_parser_free_sorted_hash_keys(keys, count);
 }
 
 static void

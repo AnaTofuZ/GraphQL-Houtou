@@ -279,20 +279,20 @@ gql_throw_unexpected_character(pTHX_ gql_parser_t *p, STRLEN pos, unsigned char 
 }
 
 static int
-gqljs_is_name_start(char c) {
+gql_parser_is_name_start(char c) {
   return (c == '_')
     || (c >= 'A' && c <= 'Z')
     || (c >= 'a' && c <= 'z');
 }
 
 static int
-gqljs_is_name_continue(char c) {
-  return gqljs_is_name_start(c)
+gql_parser_is_name_continue(char c) {
+  return gql_parser_is_name_start(c)
     || (c >= '0' && c <= '9');
 }
 
 static void
-gqljs_skip_ignored_raw(const char *src, STRLEN len, STRLEN *pos) {
+gql_parser_skip_ignored_raw(const char *src, STRLEN len, STRLEN *pos) {
   while (*pos < len) {
     unsigned char c = (unsigned char)src[*pos];
     if (c == 0xEF && *pos + 2 < len &&
@@ -316,7 +316,7 @@ gqljs_skip_ignored_raw(const char *src, STRLEN len, STRLEN *pos) {
 }
 
 static void
-gqljs_skip_quoted_string_raw(const char *src, STRLEN len, STRLEN *pos) {
+gql_parser_skip_quoted_string_raw(const char *src, STRLEN len, STRLEN *pos) {
   if (*pos + 2 < len &&
       src[*pos] == '"' &&
       src[*pos + 1] == '"' &&
@@ -348,7 +348,7 @@ gqljs_skip_quoted_string_raw(const char *src, STRLEN len, STRLEN *pos) {
 }
 
 static void
-gqljs_skip_delimited_raw(const char *src, STRLEN len, STRLEN *pos, char open, char close) {
+gql_parser_skip_delimited_raw(const char *src, STRLEN len, STRLEN *pos, char open, char close) {
   if (*pos >= len || src[*pos] != open) {
     return;
   }
@@ -363,23 +363,23 @@ gqljs_skip_delimited_raw(const char *src, STRLEN len, STRLEN *pos, char open, ch
       continue;
     }
     if (c == '"') {
-      gqljs_skip_quoted_string_raw(src, len, pos);
+      gql_parser_skip_quoted_string_raw(src, len, pos);
       continue;
     }
     if (c == open) {
-      gqljs_skip_delimited_raw(src, len, pos, open, close);
+      gql_parser_skip_delimited_raw(src, len, pos, open, close);
       continue;
     }
     if (c == '(' && open != '(') {
-      gqljs_skip_delimited_raw(src, len, pos, '(', ')');
+      gql_parser_skip_delimited_raw(src, len, pos, '(', ')');
       continue;
     }
     if (c == '[' && open != '[') {
-      gqljs_skip_delimited_raw(src, len, pos, '[', ']');
+      gql_parser_skip_delimited_raw(src, len, pos, '[', ']');
       continue;
     }
     if (c == '{' && open != '{') {
-      gqljs_skip_delimited_raw(src, len, pos, '{', '}');
+      gql_parser_skip_delimited_raw(src, len, pos, '{', '}');
       continue;
     }
     (*pos)++;
@@ -390,14 +390,14 @@ gqljs_skip_delimited_raw(const char *src, STRLEN len, STRLEN *pos, char open, ch
 }
 
 static int
-gqljs_read_name_bounds(const char *src, STRLEN len, STRLEN *pos, STRLEN *start, STRLEN *end) {
-  if (*pos >= len || !gqljs_is_name_start(src[*pos])) {
+gql_parser_read_name_bounds(const char *src, STRLEN len, STRLEN *pos, STRLEN *start, STRLEN *end) {
+  if (*pos >= len || !gql_parser_is_name_start(src[*pos])) {
     return 0;
   }
 
   *start = *pos;
   (*pos)++;
-  while (*pos < len && gqljs_is_name_continue(src[*pos])) {
+  while (*pos < len && gql_parser_is_name_continue(src[*pos])) {
     (*pos)++;
   }
   *end = *pos;
@@ -405,7 +405,7 @@ gqljs_read_name_bounds(const char *src, STRLEN len, STRLEN *pos, STRLEN *start, 
 }
 
 static SV *
-gqljs_make_string_sv(pTHX_ const char *src, STRLEN start, STRLEN end, int is_utf8) {
+gql_parser_make_string_sv(pTHX_ const char *src, STRLEN start, STRLEN end, int is_utf8) {
   SV *sv = newSVpvn(src + start, end - start);
   if (is_utf8) {
     SvUTF8_on(sv);
@@ -414,13 +414,13 @@ gqljs_make_string_sv(pTHX_ const char *src, STRLEN start, STRLEN end, int is_utf
 }
 
 static int
-gqljs_match_word(const char *src, STRLEN start, STRLEN end, const char *word) {
+gql_parser_match_word(const char *src, STRLEN start, STRLEN end, const char *word) {
   STRLEN want = (STRLEN)strlen(word);
   return (end - start) == want && memcmp(src + start, word, want) == 0;
 }
 
 static void
-gqljs_push_rewrite(pTHX_ AV *rewrites, UV start, UV end, const char *replacement) {
+gql_parser_push_rewrite(pTHX_ AV *rewrites, UV start, UV end, const char *replacement) {
   HV *hv = newHV();
   gql_store_sv(hv, "start", newSVuv(start));
   gql_store_sv(hv, "end", newSVuv(end));
@@ -429,7 +429,7 @@ gqljs_push_rewrite(pTHX_ AV *rewrites, UV start, UV end, const char *replacement
 }
 
 static void
-gqljs_push_extension(pTHX_ AV *extensions, const char *kind, SV *name_sv, UV occurrence) {
+gql_parser_push_extension(pTHX_ AV *extensions, const char *kind, SV *name_sv, UV occurrence) {
   HV *hv = newHV();
   gql_store_sv(hv, "kind", newSVpv(kind, 0));
   if (name_sv) {
@@ -440,7 +440,7 @@ gqljs_push_extension(pTHX_ AV *extensions, const char *kind, SV *name_sv, UV occ
 }
 
 static UV
-gqljs_bump_occurrence(pTHX_ HV *counts, const char *kind, SV *name_sv) {
+gql_parser_bump_occurrence(pTHX_ HV *counts, const char *kind, SV *name_sv) {
   SV *key_sv = newSVpv(kind, 0);
   SV **current_svp;
   UV next = 1;
@@ -464,14 +464,14 @@ gqljs_bump_occurrence(pTHX_ HV *counts, const char *kind, SV *name_sv) {
 }
 
 static void
-gqljs_store_hash_key_sv(HV *hv, SV *key_sv, SV *value) {
+gql_parser_store_hash_key_sv(HV *hv, SV *key_sv, SV *value) {
   STRLEN key_len;
   const char *key = SvPV(key_sv, key_len);
   hv_store(hv, key, (I32)key_len, value, 0);
 }
 
 static SV *
-gqljs_apply_rewrites_sv(pTHX_ SV *source_sv, AV *rewrites) {
+gql_parser_apply_rewrites_sv(pTHX_ SV *source_sv, AV *rewrites) {
   STRLEN src_len;
   const char *src = SvPV(source_sv, src_len);
   STRLEN cursor = 0;
@@ -526,7 +526,7 @@ gqljs_apply_rewrites_sv(pTHX_ SV *source_sv, AV *rewrites) {
 }
 
 static SV *
-gqljs_skip_directive_raw(pTHX_ const char *src, STRLEN len, STRLEN *pos, int is_utf8) {
+gql_parser_skip_directive_raw(pTHX_ const char *src, STRLEN len, STRLEN *pos, int is_utf8) {
   STRLEN start = *pos;
   STRLEN name_start;
   STRLEN name_end;
@@ -536,17 +536,17 @@ gqljs_skip_directive_raw(pTHX_ const char *src, STRLEN len, STRLEN *pos, int is_
   }
 
   (*pos)++;
-  (void)gqljs_read_name_bounds(src, len, pos, &name_start, &name_end);
-  gqljs_skip_ignored_raw(src, len, pos);
+  (void)gql_parser_read_name_bounds(src, len, pos, &name_start, &name_end);
+  gql_parser_skip_ignored_raw(src, len, pos);
   if (*pos < len && src[*pos] == '(') {
-    gqljs_skip_delimited_raw(src, len, pos, '(', ')');
+    gql_parser_skip_delimited_raw(src, len, pos, '(', ')');
   }
 
-  return gqljs_make_string_sv(aTHX_ src, start, *pos, is_utf8);
+  return gql_parser_make_string_sv(aTHX_ src, start, *pos, is_utf8);
 }
 
 static void
-gqljs_scan_variable_definition_directives(pTHX_ const char *src, STRLEN len, STRLEN *pos, int is_utf8, HV *operation_meta, AV *rewrites) {
+gql_parser_scan_variable_definition_directives(pTHX_ const char *src, STRLEN len, STRLEN *pos, int is_utf8, HV *operation_meta, AV *rewrites) {
   if (*pos >= len || src[*pos] != '(') {
     return;
   }
@@ -558,7 +558,7 @@ gqljs_scan_variable_definition_directives(pTHX_ const char *src, STRLEN len, STR
     STRLEN name_end;
     SV *name_sv;
 
-    gqljs_skip_ignored_raw(src, len, pos);
+    gql_parser_skip_ignored_raw(src, len, pos);
     if (*pos >= len) {
       return;
     }
@@ -572,10 +572,10 @@ gqljs_scan_variable_definition_directives(pTHX_ const char *src, STRLEN len, STR
     }
 
     (*pos)++;
-    if (!gqljs_read_name_bounds(src, len, pos, &name_start, &name_end)) {
+    if (!gql_parser_read_name_bounds(src, len, pos, &name_start, &name_end)) {
       continue;
     }
-    name_sv = gqljs_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
+    name_sv = gql_parser_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
 
     while (*pos < len) {
       char c = src[*pos];
@@ -586,28 +586,28 @@ gqljs_scan_variable_definition_directives(pTHX_ const char *src, STRLEN len, STR
         continue;
       }
       if (c == '"') {
-        gqljs_skip_quoted_string_raw(src, len, pos);
+        gql_parser_skip_quoted_string_raw(src, len, pos);
         continue;
       }
       if (c == '(') {
-        gqljs_skip_delimited_raw(src, len, pos, '(', ')');
+        gql_parser_skip_delimited_raw(src, len, pos, '(', ')');
         continue;
       }
       if (c == '[') {
-        gqljs_skip_delimited_raw(src, len, pos, '[', ']');
+        gql_parser_skip_delimited_raw(src, len, pos, '[', ']');
         continue;
       }
       if (c == '{') {
-        gqljs_skip_delimited_raw(src, len, pos, '{', '}');
+        gql_parser_skip_delimited_raw(src, len, pos, '{', '}');
         continue;
       }
       if (c == '@') {
         STRLEN directive_start = *pos;
-        SV *directive_text = gqljs_skip_directive_raw(aTHX_ src, len, pos, is_utf8);
+        SV *directive_text = gql_parser_skip_directive_raw(aTHX_ src, len, pos, is_utf8);
         if (!directive_texts) {
           directive_texts = newAV();
         }
-        gqljs_push_rewrite(aTHX_ rewrites, directive_start, *pos, "");
+        gql_parser_push_rewrite(aTHX_ rewrites, directive_start, *pos, "");
         av_push(directive_texts, directive_text);
         continue;
       }
@@ -618,7 +618,7 @@ gqljs_scan_variable_definition_directives(pTHX_ const char *src, STRLEN len, STR
     }
 
     if (directive_texts && av_count(directive_texts) > 0) {
-      gqljs_store_hash_key_sv(operation_meta, name_sv, newRV_noinc((SV *)directive_texts));
+      gql_parser_store_hash_key_sv(operation_meta, name_sv, newRV_noinc((SV *)directive_texts));
     } else if (directive_texts) {
       SvREFCNT_dec((SV *)directive_texts);
     }
@@ -650,7 +650,7 @@ gql_parser_preprocess_document(pTHX_ SV *source_sv) {
       continue;
     }
     if (c == '"') {
-      gqljs_skip_quoted_string_raw(src, len, &pos);
+      gql_parser_skip_quoted_string_raw(src, len, &pos);
       continue;
     }
     if (c == '{') {
@@ -665,74 +665,74 @@ gql_parser_preprocess_document(pTHX_ SV *source_sv) {
       pos++;
       continue;
     }
-    if (brace_depth == 0 && gqljs_is_name_start(c)) {
+    if (brace_depth == 0 && gql_parser_is_name_start(c)) {
       STRLEN word_start;
       STRLEN word_end;
       STRLEN temp_pos;
-      if (!gqljs_read_name_bounds(src, len, &pos, &word_start, &word_end)) {
+      if (!gql_parser_read_name_bounds(src, len, &pos, &word_start, &word_end)) {
         continue;
       }
 
-      if (gqljs_match_word(src, word_start, word_end, "extend")) {
+      if (gql_parser_match_word(src, word_start, word_end, "extend")) {
         STRLEN kind_start;
         STRLEN kind_end;
-        gqljs_skip_ignored_raw(src, len, &pos);
-        if (!gqljs_read_name_bounds(src, len, &pos, &kind_start, &kind_end)) {
+        gql_parser_skip_ignored_raw(src, len, &pos);
+        if (!gql_parser_read_name_bounds(src, len, &pos, &kind_start, &kind_end)) {
           continue;
         }
-        if (gqljs_match_word(src, kind_start, kind_end, "schema") ||
-            gqljs_match_word(src, kind_start, kind_end, "scalar") ||
-            gqljs_match_word(src, kind_start, kind_end, "type") ||
-            gqljs_match_word(src, kind_start, kind_end, "interface") ||
-            gqljs_match_word(src, kind_start, kind_end, "union") ||
-            gqljs_match_word(src, kind_start, kind_end, "enum") ||
-            gqljs_match_word(src, kind_start, kind_end, "input") ||
-            gqljs_match_word(src, kind_start, kind_end, "directive")) {
+        if (gql_parser_match_word(src, kind_start, kind_end, "schema") ||
+            gql_parser_match_word(src, kind_start, kind_end, "scalar") ||
+            gql_parser_match_word(src, kind_start, kind_end, "type") ||
+            gql_parser_match_word(src, kind_start, kind_end, "interface") ||
+            gql_parser_match_word(src, kind_start, kind_end, "union") ||
+            gql_parser_match_word(src, kind_start, kind_end, "enum") ||
+            gql_parser_match_word(src, kind_start, kind_end, "input") ||
+            gql_parser_match_word(src, kind_start, kind_end, "directive")) {
           SV *name_sv = NULL;
           const char *extension_kind;
           UV occurrence;
-          if (!gqljs_match_word(src, kind_start, kind_end, "schema")) {
+          if (!gql_parser_match_word(src, kind_start, kind_end, "schema")) {
             STRLEN name_start;
             STRLEN name_end;
-            gqljs_skip_ignored_raw(src, len, &pos);
-            if (gqljs_match_word(src, kind_start, kind_end, "directive")) {
+            gql_parser_skip_ignored_raw(src, len, &pos);
+            if (gql_parser_match_word(src, kind_start, kind_end, "directive")) {
               if (pos < len && src[pos] == '@') {
                 pos++;
               }
             }
-            if (gqljs_read_name_bounds(src, len, &pos, &name_start, &name_end)) {
-              name_sv = gqljs_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
+            if (gql_parser_read_name_bounds(src, len, &pos, &name_start, &name_end)) {
+              name_sv = gql_parser_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
             }
           }
           extension_kind =
-            gqljs_match_word(src, kind_start, kind_end, "schema") ? "schema" :
-            gqljs_match_word(src, kind_start, kind_end, "scalar") ? "scalar" :
-            gqljs_match_word(src, kind_start, kind_end, "type") ? "type" :
-            gqljs_match_word(src, kind_start, kind_end, "interface") ? "interface" :
-            gqljs_match_word(src, kind_start, kind_end, "union") ? "union" :
-            gqljs_match_word(src, kind_start, kind_end, "enum") ? "enum" :
-            gqljs_match_word(src, kind_start, kind_end, "input") ? "input" :
+            gql_parser_match_word(src, kind_start, kind_end, "schema") ? "schema" :
+            gql_parser_match_word(src, kind_start, kind_end, "scalar") ? "scalar" :
+            gql_parser_match_word(src, kind_start, kind_end, "type") ? "type" :
+            gql_parser_match_word(src, kind_start, kind_end, "interface") ? "interface" :
+            gql_parser_match_word(src, kind_start, kind_end, "union") ? "union" :
+            gql_parser_match_word(src, kind_start, kind_end, "enum") ? "enum" :
+            gql_parser_match_word(src, kind_start, kind_end, "input") ? "input" :
             "directive";
-          occurrence = gqljs_bump_occurrence(aTHX_ definition_counts, extension_kind, name_sv);
-          gqljs_push_extension(
+          occurrence = gql_parser_bump_occurrence(aTHX_ definition_counts, extension_kind, name_sv);
+          gql_parser_push_extension(
             aTHX_ extensions,
             extension_kind,
             name_sv,
             occurrence
           );
-          if (gqljs_match_word(src, kind_start, kind_end, "directive")) {
-            gqljs_push_rewrite(aTHX_ rewrites, word_start, kind_start, "");
+          if (gql_parser_match_word(src, kind_start, kind_end, "directive")) {
+            gql_parser_push_rewrite(aTHX_ rewrites, word_start, kind_start, "");
           }
-          if (gqljs_match_word(src, kind_start, kind_end, "interface") && name_sv) {
+          if (gql_parser_match_word(src, kind_start, kind_end, "interface") && name_sv) {
             temp_pos = pos;
-            gqljs_skip_ignored_raw(src, len, &temp_pos);
-            if (temp_pos < len && gqljs_is_name_start(src[temp_pos])) {
+            gql_parser_skip_ignored_raw(src, len, &temp_pos);
+            if (temp_pos < len && gql_parser_is_name_start(src[temp_pos])) {
               STRLEN kw_start;
               STRLEN kw_end;
-              if (gqljs_read_name_bounds(src, len, &temp_pos, &kw_start, &kw_end)
-                  && gqljs_match_word(src, kw_start, kw_end, "implements")) {
-                gqljs_store_hash_key_sv(interface_implements, name_sv, newSViv(1));
-                gqljs_push_rewrite(aTHX_ rewrites, kind_start, kind_end, "type");
+              if (gql_parser_read_name_bounds(src, len, &temp_pos, &kw_start, &kw_end)
+                  && gql_parser_match_word(src, kw_start, kw_end, "implements")) {
+                gql_parser_store_hash_key_sv(interface_implements, name_sv, newSViv(1));
+                gql_parser_push_rewrite(aTHX_ rewrites, kind_start, kind_end, "type");
               }
             }
           }
@@ -743,22 +743,22 @@ gql_parser_preprocess_document(pTHX_ SV *source_sv) {
         continue;
       }
 
-      if (gqljs_match_word(src, word_start, word_end, "interface")) {
+      if (gql_parser_match_word(src, word_start, word_end, "interface")) {
         STRLEN name_start;
         STRLEN name_end;
         temp_pos = pos;
-        gqljs_skip_ignored_raw(src, len, &temp_pos);
-        if (gqljs_read_name_bounds(src, len, &temp_pos, &name_start, &name_end)) {
-          SV *name_sv = gqljs_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
-          (void)gqljs_bump_occurrence(aTHX_ definition_counts, "interface", name_sv);
-          gqljs_skip_ignored_raw(src, len, &temp_pos);
-          if (temp_pos < len && gqljs_is_name_start(src[temp_pos])) {
+        gql_parser_skip_ignored_raw(src, len, &temp_pos);
+        if (gql_parser_read_name_bounds(src, len, &temp_pos, &name_start, &name_end)) {
+          SV *name_sv = gql_parser_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
+          (void)gql_parser_bump_occurrence(aTHX_ definition_counts, "interface", name_sv);
+          gql_parser_skip_ignored_raw(src, len, &temp_pos);
+          if (temp_pos < len && gql_parser_is_name_start(src[temp_pos])) {
             STRLEN kw_start;
             STRLEN kw_end;
-            if (gqljs_read_name_bounds(src, len, &temp_pos, &kw_start, &kw_end)
-                && gqljs_match_word(src, kw_start, kw_end, "implements")) {
-              gqljs_store_hash_key_sv(interface_implements, name_sv, newSViv(1));
-              gqljs_push_rewrite(aTHX_ rewrites, word_start, word_end, "type");
+            if (gql_parser_read_name_bounds(src, len, &temp_pos, &kw_start, &kw_end)
+                && gql_parser_match_word(src, kw_start, kw_end, "implements")) {
+              gql_parser_store_hash_key_sv(interface_implements, name_sv, newSViv(1));
+              gql_parser_push_rewrite(aTHX_ rewrites, word_start, word_end, "type");
             }
           }
           SvREFCNT_dec(name_sv);
@@ -766,31 +766,31 @@ gql_parser_preprocess_document(pTHX_ SV *source_sv) {
         continue;
       }
 
-      if (gqljs_match_word(src, word_start, word_end, "directive")) {
+      if (gql_parser_match_word(src, word_start, word_end, "directive")) {
         STRLEN name_start;
         STRLEN name_end;
         temp_pos = pos;
-        gqljs_skip_ignored_raw(src, len, &temp_pos);
+        gql_parser_skip_ignored_raw(src, len, &temp_pos);
         if (temp_pos < len && src[temp_pos] == '@') {
           SV *name_sv;
           temp_pos++;
-          if (!gqljs_read_name_bounds(src, len, &temp_pos, &name_start, &name_end)) {
+          if (!gql_parser_read_name_bounds(src, len, &temp_pos, &name_start, &name_end)) {
             continue;
           }
-          name_sv = gqljs_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
-          (void)gqljs_bump_occurrence(aTHX_ definition_counts, "directive", name_sv);
-          gqljs_skip_ignored_raw(src, len, &temp_pos);
+          name_sv = gql_parser_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
+          (void)gql_parser_bump_occurrence(aTHX_ definition_counts, "directive", name_sv);
+          gql_parser_skip_ignored_raw(src, len, &temp_pos);
           if (temp_pos < len && src[temp_pos] == '(') {
-            gqljs_skip_delimited_raw(src, len, &temp_pos, '(', ')');
-            gqljs_skip_ignored_raw(src, len, &temp_pos);
+            gql_parser_skip_delimited_raw(src, len, &temp_pos, '(', ')');
+            gql_parser_skip_ignored_raw(src, len, &temp_pos);
           }
-          if (temp_pos < len && gqljs_is_name_start(src[temp_pos])) {
+          if (temp_pos < len && gql_parser_is_name_start(src[temp_pos])) {
             STRLEN repeat_start;
             STRLEN repeat_end;
-            if (gqljs_read_name_bounds(src, len, &temp_pos, &repeat_start, &repeat_end)
-                && gqljs_match_word(src, repeat_start, repeat_end, "repeatable")) {
-              gqljs_store_hash_key_sv(repeatable_directives, name_sv, newSViv(1));
-              gqljs_push_rewrite(aTHX_ rewrites, repeat_start, repeat_end, "");
+            if (gql_parser_read_name_bounds(src, len, &temp_pos, &repeat_start, &repeat_end)
+                && gql_parser_match_word(src, repeat_start, repeat_end, "repeatable")) {
+              gql_parser_store_hash_key_sv(repeatable_directives, name_sv, newSViv(1));
+              gql_parser_push_rewrite(aTHX_ rewrites, repeat_start, repeat_end, "");
             }
           }
           SvREFCNT_dec(name_sv);
@@ -798,50 +798,50 @@ gql_parser_preprocess_document(pTHX_ SV *source_sv) {
         continue;
       }
 
-      if (gqljs_match_word(src, word_start, word_end, "schema") ||
-          gqljs_match_word(src, word_start, word_end, "scalar") ||
-          gqljs_match_word(src, word_start, word_end, "type") ||
-          gqljs_match_word(src, word_start, word_end, "union") ||
-          gqljs_match_word(src, word_start, word_end, "enum") ||
-          gqljs_match_word(src, word_start, word_end, "input")) {
+      if (gql_parser_match_word(src, word_start, word_end, "schema") ||
+          gql_parser_match_word(src, word_start, word_end, "scalar") ||
+          gql_parser_match_word(src, word_start, word_end, "type") ||
+          gql_parser_match_word(src, word_start, word_end, "union") ||
+          gql_parser_match_word(src, word_start, word_end, "enum") ||
+          gql_parser_match_word(src, word_start, word_end, "input")) {
         const char *definition_kind =
-          gqljs_match_word(src, word_start, word_end, "schema") ? "schema" :
-          gqljs_match_word(src, word_start, word_end, "scalar") ? "scalar" :
-          gqljs_match_word(src, word_start, word_end, "type") ? "type" :
-          gqljs_match_word(src, word_start, word_end, "union") ? "union" :
-          gqljs_match_word(src, word_start, word_end, "enum") ? "enum" :
+          gql_parser_match_word(src, word_start, word_end, "schema") ? "schema" :
+          gql_parser_match_word(src, word_start, word_end, "scalar") ? "scalar" :
+          gql_parser_match_word(src, word_start, word_end, "type") ? "type" :
+          gql_parser_match_word(src, word_start, word_end, "union") ? "union" :
+          gql_parser_match_word(src, word_start, word_end, "enum") ? "enum" :
           "input";
-        if (gqljs_match_word(src, word_start, word_end, "schema")) {
-          (void)gqljs_bump_occurrence(aTHX_ definition_counts, definition_kind, NULL);
+        if (gql_parser_match_word(src, word_start, word_end, "schema")) {
+          (void)gql_parser_bump_occurrence(aTHX_ definition_counts, definition_kind, NULL);
         } else {
           STRLEN name_start;
           STRLEN name_end;
           SV *name_sv = NULL;
           temp_pos = pos;
-          gqljs_skip_ignored_raw(src, len, &temp_pos);
-          if (gqljs_read_name_bounds(src, len, &temp_pos, &name_start, &name_end)) {
-            name_sv = gqljs_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
-            (void)gqljs_bump_occurrence(aTHX_ definition_counts, definition_kind, name_sv);
+          gql_parser_skip_ignored_raw(src, len, &temp_pos);
+          if (gql_parser_read_name_bounds(src, len, &temp_pos, &name_start, &name_end)) {
+            name_sv = gql_parser_make_string_sv(aTHX_ src, name_start, name_end, is_utf8);
+            (void)gql_parser_bump_occurrence(aTHX_ definition_counts, definition_kind, name_sv);
             SvREFCNT_dec(name_sv);
           }
         }
         continue;
       }
 
-      if (gqljs_match_word(src, word_start, word_end, "query") ||
-          gqljs_match_word(src, word_start, word_end, "mutation") ||
-          gqljs_match_word(src, word_start, word_end, "subscription")) {
+      if (gql_parser_match_word(src, word_start, word_end, "query") ||
+          gql_parser_match_word(src, word_start, word_end, "mutation") ||
+          gql_parser_match_word(src, word_start, word_end, "subscription")) {
         HV *operation_meta = newHV();
         temp_pos = pos;
-        gqljs_skip_ignored_raw(src, len, &temp_pos);
-        if (temp_pos < len && gqljs_is_name_start(src[temp_pos])) {
+        gql_parser_skip_ignored_raw(src, len, &temp_pos);
+        if (temp_pos < len && gql_parser_is_name_start(src[temp_pos])) {
           STRLEN maybe_name_start;
           STRLEN maybe_name_end;
-          (void)gqljs_read_name_bounds(src, len, &temp_pos, &maybe_name_start, &maybe_name_end);
-          gqljs_skip_ignored_raw(src, len, &temp_pos);
+          (void)gql_parser_read_name_bounds(src, len, &temp_pos, &maybe_name_start, &maybe_name_end);
+          gql_parser_skip_ignored_raw(src, len, &temp_pos);
         }
         if (temp_pos < len && src[temp_pos] == '(') {
-          gqljs_scan_variable_definition_directives(aTHX_ src, len, &temp_pos, is_utf8, operation_meta, rewrites);
+          gql_parser_scan_variable_definition_directives(aTHX_ src, len, &temp_pos, is_utf8, operation_meta, rewrites);
         }
         if (HvUSEDKEYS(operation_meta) > 0) {
           av_push(operation_variable_directives, newRV_noinc((SV *)operation_meta));
@@ -857,7 +857,7 @@ gql_parser_preprocess_document(pTHX_ SV *source_sv) {
   }
 
   gql_store_sv(meta, "rewrites", newRV_noinc((SV *)rewrites));
-  gql_store_sv(meta, "rewritten_source", gqljs_apply_rewrites_sv(aTHX_ source_sv, rewrites));
+  gql_store_sv(meta, "rewritten_source", gql_parser_apply_rewrites_sv(aTHX_ source_sv, rewrites));
   gql_store_sv(meta, "extensions", newRV_noinc((SV *)extensions));
   gql_store_sv(meta, "interface_implements", newRV_noinc((SV *)interface_implements));
   gql_store_sv(meta, "repeatable_directives", newRV_noinc((SV *)repeatable_directives));
@@ -886,7 +886,7 @@ gql_parse_directives_only(pTHX_ SV *source_sv) {
 }
 
 static SV *
-gqljs_clone_with_loc(pTHX_ SV *value, SV *loc_sv) {
+gql_parser_clone_with_loc(pTHX_ SV *value, SV *loc_sv) {
   if (!SvROK(value)) {
     return newSVsv(value);
   }
@@ -903,7 +903,7 @@ gqljs_clone_with_loc(pTHX_ SV *value, SV *loc_sv) {
       if (key_len == 3 && memcmp(key, "loc", 3) == 0) {
         continue;
       }
-      gqljs_store_hash_key_sv(dst_hv, key_sv, gqljs_clone_with_loc(aTHX_ hv_iterval(src_hv, he), loc_sv));
+      gql_parser_store_hash_key_sv(dst_hv, key_sv, gql_parser_clone_with_loc(aTHX_ hv_iterval(src_hv, he), loc_sv));
     }
     if (loc_sv && SvOK(loc_sv)) {
       gql_store_sv(dst_hv, "loc", newSVsv(loc_sv));
@@ -920,7 +920,7 @@ gqljs_clone_with_loc(pTHX_ SV *value, SV *loc_sv) {
       if (!svp) {
         continue;
       }
-      av_push(dst_av, gqljs_clone_with_loc(aTHX_ *svp, loc_sv));
+      av_push(dst_av, gql_parser_clone_with_loc(aTHX_ *svp, loc_sv));
     }
     return newRV_noinc((SV *)dst_av);
   }
@@ -929,7 +929,7 @@ gqljs_clone_with_loc(pTHX_ SV *value, SV *loc_sv) {
 }
 
 static int
-gqljs_sv_eq_pv(SV *sv, const char *literal) {
+gql_parser_sv_eq_pv(SV *sv, const char *literal) {
   STRLEN len;
   const char *value = SvPV(sv, len);
   STRLEN literal_len = (STRLEN)strlen(literal);
@@ -937,7 +937,7 @@ gqljs_sv_eq_pv(SV *sv, const char *literal) {
 }
 
 static const char *
-gqljs_definition_source_kind(SV *kind_sv) {
+gql_parser_definition_source_kind(SV *kind_sv) {
   STRLEN len;
   const char *kind = SvPV(kind_sv, len);
 
@@ -954,7 +954,7 @@ gqljs_definition_source_kind(SV *kind_sv) {
 }
 
 static const char *
-gqljs_extension_kind_name(const char *source_kind) {
+gql_parser_extension_kind_name(const char *source_kind) {
   if (strcmp(source_kind, "schema") == 0) return "SchemaExtension";
   if (strcmp(source_kind, "scalar") == 0) return "ScalarTypeExtension";
   if (strcmp(source_kind, "type") == 0) return "ObjectTypeExtension";
@@ -1033,7 +1033,7 @@ gql_parser_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
       continue;
     }
 
-    if (interface_implements && gqljs_sv_eq_pv(*kind_svp, "ObjectTypeDefinition")) {
+    if (interface_implements && gql_parser_sv_eq_pv(*kind_svp, "ObjectTypeDefinition")) {
       SV **name_svp = hv_fetch(def_hv, "name", 4, 0);
       if (name_svp && SvROK(*name_svp) && SvTYPE(SvRV(*name_svp)) == SVt_PVHV) {
         HV *name_hv = (HV *)SvRV(*name_svp);
@@ -1050,33 +1050,33 @@ gql_parser_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
     }
 
     if (extensions && av_len(extensions) >= 0 && kind_svp) {
-      const char *source_kind = gqljs_definition_source_kind(*kind_svp);
+      const char *source_kind = gql_parser_definition_source_kind(*kind_svp);
       if (source_kind) {
         SV **name_svp = hv_fetch(def_hv, "name", 4, 0);
         SV *name_value = NULL;
         UV occurrence;
         if (strcmp(source_kind, "schema") == 0) {
-          occurrence = gqljs_bump_occurrence(aTHX_ seen_occurrences, source_kind, NULL);
+          occurrence = gql_parser_bump_occurrence(aTHX_ seen_occurrences, source_kind, NULL);
         } else if (name_svp && SvROK(*name_svp) && SvTYPE(SvRV(*name_svp)) == SVt_PVHV) {
           HV *name_hv = (HV *)SvRV(*name_svp);
           SV **value_svp = hv_fetch(name_hv, "value", 5, 0);
           if (value_svp) {
             name_value = *value_svp;
           }
-          occurrence = gqljs_bump_occurrence(aTHX_ seen_occurrences, source_kind, name_value);
+          occurrence = gql_parser_bump_occurrence(aTHX_ seen_occurrences, source_kind, name_value);
         } else {
-          occurrence = gqljs_bump_occurrence(aTHX_ seen_occurrences, source_kind, NULL);
+          occurrence = gql_parser_bump_occurrence(aTHX_ seen_occurrences, source_kind, NULL);
         }
         SV **ext_svp = av_fetch(extensions, 0, 0);
         if (ext_svp && SvROK(*ext_svp) && SvTYPE(SvRV(*ext_svp)) == SVt_PVHV) {
           HV *ext_hv = (HV *)SvRV(*ext_svp);
           SV **ext_kind_svp = hv_fetch(ext_hv, "kind", 4, 0);
           SV **ext_occurrence_svp = hv_fetch(ext_hv, "occurrence", 10, 0);
-          const char *expected_kind = gqljs_extension_kind_name(source_kind);
+          const char *expected_kind = gql_parser_extension_kind_name(source_kind);
           int matches = 0;
 
           if (ext_kind_svp && ext_occurrence_svp &&
-              gqljs_sv_eq_pv(*ext_kind_svp, source_kind) &&
+              gql_parser_sv_eq_pv(*ext_kind_svp, source_kind) &&
               SvUV(*ext_occurrence_svp) == occurrence) {
             if (strcmp(source_kind, "schema") == 0) {
               matches = 1;
@@ -1100,7 +1100,7 @@ gql_parser_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
       }
     }
 
-    if (repeatable_directives && kind_svp && gqljs_sv_eq_pv(*kind_svp, "DirectiveDefinition")) {
+    if (repeatable_directives && kind_svp && gql_parser_sv_eq_pv(*kind_svp, "DirectiveDefinition")) {
       SV **name_svp = hv_fetch(def_hv, "name", 4, 0);
       if (name_svp && SvROK(*name_svp) && SvTYPE(SvRV(*name_svp)) == SVt_PVHV) {
         HV *name_hv = (HV *)SvRV(*name_svp);
@@ -1115,7 +1115,7 @@ gql_parser_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
       }
     }
 
-    if (operation_variable_directives && kind_svp && gqljs_sv_eq_pv(*kind_svp, "OperationDefinition")) {
+    if (operation_variable_directives && kind_svp && gql_parser_sv_eq_pv(*kind_svp, "OperationDefinition")) {
       if (av_len(operation_variable_directives) >= 0) {
         SV *shifted = av_shift(operation_variable_directives);
         if (shifted && SvROK(shifted) && SvTYPE(SvRV(shifted)) == SVt_PVHV) {
@@ -1146,7 +1146,7 @@ gql_parser_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
                     if (directives_svp) {
                       SV **loc_svp = hv_fetch(var_hv, "loc", 3, 0);
                       SV *loc_sv = (loc_svp && SvROK(*loc_svp)) ? *loc_svp : &PL_sv_undef;
-                      hv_store(var_hv, "directives", 10, gqljs_clone_with_loc(aTHX_ *directives_svp, loc_sv), 0);
+                      hv_store(var_hv, "directives", 10, gql_parser_clone_with_loc(aTHX_ *directives_svp, loc_sv), 0);
                     }
                   }
                 }
@@ -1166,7 +1166,7 @@ gql_parser_patch_document(pTHX_ SV *doc_sv, SV *meta_sv) {
 }
 
 static void
-gqljs_set_loc_node(pTHX_ SV *node_sv, SV *loc_sv) {
+gql_parser_set_loc_node(pTHX_ SV *node_sv, SV *loc_sv) {
   if (!node_sv || !loc_sv || !SvROK(node_sv) || SvTYPE(SvRV(node_sv)) != SVt_PVHV) {
     return;
   }
@@ -1174,26 +1174,26 @@ gqljs_set_loc_node(pTHX_ SV *node_sv, SV *loc_sv) {
 }
 
 static void
-gqljs_set_rewritten_loc_node(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, UV rewritten_pos) {
+gql_parser_set_rewritten_loc_node(pTHX_ gql_parser_loc_context_t *ctx, SV *node_sv, UV rewritten_pos) {
   SV *loc_sv;
 
   if (!ctx || !node_sv) {
     return;
   }
-  loc_sv = gqljs_loc_from_rewritten_pos(aTHX_ ctx, rewritten_pos);
-  gqljs_set_loc_node(aTHX_ node_sv, loc_sv);
+  loc_sv = gql_parser_loc_from_rewritten_pos(aTHX_ ctx, rewritten_pos);
+  gql_parser_set_loc_node(aTHX_ node_sv, loc_sv);
   SvREFCNT_dec(loc_sv);
 }
 
 static void
-gqljs_set_shared_rewritten_loc_nodes(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos, SV *left_sv, SV *right_sv) {
+gql_parser_set_shared_rewritten_loc_nodes(pTHX_ gql_parser_loc_context_t *ctx, UV rewritten_pos, SV *left_sv, SV *right_sv) {
   SV *loc_sv;
 
   if (!ctx || !left_sv || !right_sv) {
     return;
   }
-  loc_sv = gqljs_loc_from_rewritten_pos(aTHX_ ctx, rewritten_pos);
-  gqljs_set_loc_node(aTHX_ left_sv, loc_sv);
-  gqljs_set_loc_node(aTHX_ right_sv, loc_sv);
+  loc_sv = gql_parser_loc_from_rewritten_pos(aTHX_ ctx, rewritten_pos);
+  gql_parser_set_loc_node(aTHX_ left_sv, loc_sv);
+  gql_parser_set_loc_node(aTHX_ right_sv, loc_sv);
   SvREFCNT_dec(loc_sv);
 }

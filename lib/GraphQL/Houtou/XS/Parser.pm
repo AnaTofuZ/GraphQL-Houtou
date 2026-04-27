@@ -87,7 +87,7 @@ sub _new_lazy_array_ref {
 
 sub _new_lazy_array_tie {
   my ($class, $state, $ptr, $kind) = @_;
-  # NOTE: these keys are part of the XS fast-path contract in gqljs_fetch_array().
+  # NOTE: these keys are part of the XS fast-path contract in gql_parser_fetch_array().
   # If you rename them, update the XS reader and the contract test together.
   return bless {
     state => $state,

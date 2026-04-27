@@ -8,7 +8,7 @@
  */
 
 static HV *
-gqljs_new_node_hv_sized(const char *kind, I32 keys) {
+gql_parser_new_node_hv_sized(const char *kind, I32 keys) {
   HV *hv = newHV();
   if (keys > 1) {
     hv_ksplit(hv, keys);
@@ -18,38 +18,38 @@ gqljs_new_node_hv_sized(const char *kind, I32 keys) {
 }
 
 static HV *
-gqljs_new_node_hv(const char *kind) {
-  return gqljs_new_node_hv_sized(kind, 1);
+gql_parser_new_node_hv(const char *kind) {
+  return gql_parser_new_node_hv_sized(kind, 1);
 }
 
 static SV *
-gqljs_new_node_ref(const char *kind) {
-  return newRV_noinc((SV *)gqljs_new_node_hv(kind));
+gql_parser_new_node_ref(const char *kind) {
+  return newRV_noinc((SV *)gql_parser_new_node_hv(kind));
 }
 
 static SV *
-gqljs_new_name_node_sv(pTHX_ SV *value_sv) {
-  HV *hv = gqljs_new_node_hv_sized("Name", 2);
+gql_parser_new_name_node_sv(pTHX_ SV *value_sv) {
+  HV *hv = gql_parser_new_node_hv_sized("Name", 2);
   gql_store_sv(hv, "value", SvREFCNT_inc_simple_NN(value_sv));
   return newRV_noinc((SV *)hv);
 }
 
 static SV *
-gqljs_new_named_type_node_sv(pTHX_ SV *value_sv) {
-  HV *hv = gqljs_new_node_hv_sized("NamedType", 2);
-  hv_stores(hv, "name", gqljs_new_name_node_sv(aTHX_ value_sv));
+gql_parser_new_named_type_node_sv(pTHX_ SV *value_sv) {
+  HV *hv = gql_parser_new_node_hv_sized("NamedType", 2);
+  hv_stores(hv, "name", gql_parser_new_name_node_sv(aTHX_ value_sv));
   return newRV_noinc((SV *)hv);
 }
 
 static SV *
-gqljs_new_variable_node_sv(pTHX_ SV *value_sv) {
-  HV *hv = gqljs_new_node_hv_sized("Variable", 2);
-  hv_stores(hv, "name", gqljs_new_name_node_sv(aTHX_ value_sv));
+gql_parser_new_variable_node_sv(pTHX_ SV *value_sv) {
+  HV *hv = gql_parser_new_node_hv_sized("Variable", 2);
+  hv_stores(hv, "name", gql_parser_new_name_node_sv(aTHX_ value_sv));
   return newRV_noinc((SV *)hv);
 }
 
 static int
-gqljs_cmp_sv_ptrs(const void *a, const void *b) {
+gql_parser_cmp_sv_ptrs(const void *a, const void *b) {
   SV *const *left = (SV *const *)a;
   SV *const *right = (SV *const *)b;
   STRLEN left_len, right_len;
@@ -70,7 +70,7 @@ gqljs_cmp_sv_ptrs(const void *a, const void *b) {
 }
 
 static SV **
-gqljs_sorted_hash_keys(pTHX_ HV *hv, I32 *count_out) {
+gql_parser_sorted_hash_keys(pTHX_ HV *hv, I32 *count_out) {
   I32 count;
   I32 i = 0;
   HE *he;
@@ -91,13 +91,13 @@ gqljs_sorted_hash_keys(pTHX_ HV *hv, I32 *count_out) {
   while ((he = hv_iternext(hv))) {
     keys[i++] = newSVsv(hv_iterkeysv(he));
   }
-  qsort(keys, count, sizeof(SV *), gqljs_cmp_sv_ptrs);
+  qsort(keys, count, sizeof(SV *), gql_parser_cmp_sv_ptrs);
   *count_out = count;
   return keys;
 }
 
 static void
-gqljs_free_sorted_hash_keys(SV **keys, I32 count) {
+gql_parser_free_sorted_hash_keys(SV **keys, I32 count) {
   I32 i;
   if (!keys) {
     return;

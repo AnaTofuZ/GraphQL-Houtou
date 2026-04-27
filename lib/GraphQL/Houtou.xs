@@ -718,7 +718,7 @@ _materialize_arguments_xs(state, ptr)
     UV ptr
   CODE:
     {
-      RETVAL = newRV_noinc((SV *)gqljs_materialize_lazy_array(
+      RETVAL = newRV_noinc((SV *)gql_parser_materialize_lazy_array(
         aTHX_ state,
         ptr,
         GQLJS_LAZY_ARRAY_ARGUMENTS
@@ -733,7 +733,7 @@ _materialize_directives_xs(state, ptr)
     UV ptr
   CODE:
     {
-      RETVAL = newRV_noinc((SV *)gqljs_materialize_lazy_array(
+      RETVAL = newRV_noinc((SV *)gql_parser_materialize_lazy_array(
         aTHX_ state,
         ptr,
         GQLJS_LAZY_ARRAY_DIRECTIVES
@@ -748,7 +748,7 @@ _materialize_variable_definitions_xs(state, ptr)
     UV ptr
   CODE:
     {
-      RETVAL = newRV_noinc((SV *)gqljs_materialize_lazy_array(
+      RETVAL = newRV_noinc((SV *)gql_parser_materialize_lazy_array(
         aTHX_ state,
         ptr,
         GQLJS_LAZY_ARRAY_VARIABLE_DEFINITIONS
@@ -763,7 +763,7 @@ _materialize_object_fields_xs(state, ptr)
     UV ptr
   CODE:
     {
-      RETVAL = newRV_noinc((SV *)gqljs_materialize_lazy_array(
+      RETVAL = newRV_noinc((SV *)gql_parser_materialize_lazy_array(
         aTHX_ state,
         ptr,
         GQLJS_LAZY_ARRAY_OBJECT_FIELDS
@@ -781,9 +781,9 @@ DESTROY(self)
     if (self && SvROK(self)) {
       SV *inner_sv = SvRV(self);
       if (SvIOK(inner_sv) && SvUV(inner_sv) != 0) {
-        gqljs_lazy_state_t *state = INT2PTR(gqljs_lazy_state_t *, SvUV(inner_sv));
+        gql_parser_lazy_state_t *state = INT2PTR(gql_parser_lazy_state_t *, SvUV(inner_sv));
         sv_setuv(inner_sv, 0);
-        gqljs_lazy_state_destroy(state);
+        gql_parser_lazy_state_destroy(state);
       }
     }
 

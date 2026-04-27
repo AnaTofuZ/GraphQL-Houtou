@@ -1,6 +1,12 @@
 /*
- * Responsibility: graphql-js runtime helpers for lazy arrays, location
- * context management, and token-driven AST node location assignment.
+ * Parser compatibility layer only.
+ *
+ * Responsibility: graphql-js-shaped parser AST helpers for lazy arrays,
+ * location context management, and token-driven AST node location assignment.
+ *
+ * This header is not part of the runtime/VM mainline. It exists only because
+ * the public parser surface still returns graphql-perl-compatible AST while
+ * some parser internals continue to use graphql-js-shaped node helpers.
  */
 static HV *
 gqljs_node_hv(SV *node_sv) {
@@ -1410,4 +1416,3 @@ gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv) {
   LEAVE;
   return newSVsv(doc_sv);
 }
-

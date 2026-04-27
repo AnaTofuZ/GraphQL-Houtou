@@ -15,7 +15,8 @@
 
 活動記録と benchmark の最新値は `docs/current-context.md` を参照。
 現行の公開 parser surface は `graphql-perl` 互換 AST に固定されており、
-この文書に残っている `graphqljs_*` の記述は parser 内部の歴史的実装メモとして読む。
+この文書に残っている `graphqljs_*` の記述は parser compatibility 層の内部実装メモとして読む。
+runtime / VM mainline とは別物であり、現在の本命経路ではない。
 
 ## 全体像
 
@@ -29,9 +30,12 @@
 
 重要なのは、内部実装がすでに一枚岩ではないことである。
 
-- executable な `graphql-js` 経路は、過渡データを独自 IR へ寄せている
-- それ以外の経路は、今も `SV` / `HV` / `AV` を直接組み立てる比率が高い
+- executable な `graphql-js` 互換経路は、過渡データを独自 IR へ寄せている
+- それ以外の compatibility 経路は、今も `SV` / `HV` / `AV` を直接組み立てる比率が高い
 - 公開 API の返り値は、現状どの経路でも Perl のネイティブデータ構造である
+
+ここでいう `graphqljs_*` は public dialect ではなく、parser compatibility を支える
+内部ヘッダ名である。
 
 つまり、「全部 `SV` ベース」ではないが、「全部が独自構造体化済み」でもない。
 

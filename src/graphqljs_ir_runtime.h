@@ -1,6 +1,11 @@
 /*
- * Responsibility: executable-document IR allocation, parsing, cleanup,
- * and graphql-js AST building from the compact IR.
+ * Parser compatibility layer only.
+ *
+ * Responsibility: executable-document IR allocation, parsing, cleanup, and
+ * graphql-js-shaped AST building from the compact parser IR.
+ *
+ * This header is parser-side IR/AST glue. It is not part of the runtime/VM
+ * execution mainline.
  */
 static SV *
 gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_location_sv, SV *compact_location_sv) {
@@ -1994,4 +1999,3 @@ gqlperl_convert_definition_from_gqljs(pTHX_ SV *node_sv) {
   SvREFCNT_dec((SV *)dst_hv);
   return &PL_sv_undef;
 }
-

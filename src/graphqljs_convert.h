@@ -1,6 +1,11 @@
 /*
- * Responsibility: graphql-js AST construction helpers and conversion
- * routines between legacy graphql-perl nodes and graphql-js nodes.
+ * Parser compatibility layer only.
+ *
+ * Responsibility: conversion routines between legacy graphql-perl nodes and
+ * graphql-js-shaped parser nodes.
+ *
+ * This header is legacy parser bridge code. It is not part of the runtime/VM
+ * mainline and should be reduced as parser compatibility surface shrinks.
  */
 static HV *
 gqljs_new_node_hv_sized(const char *kind, I32 keys) {

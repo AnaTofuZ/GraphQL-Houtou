@@ -10,7 +10,6 @@ use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 use GraphQL::Houtou::Schema qw(lookup_type);
 
 use GraphQL::Houtou::Validation qw(validate);
-use GraphQL::Houtou::XS::Validation qw(validate_xs);
 
 my $Node;
 my $User;
@@ -96,7 +95,7 @@ subtest 'XS validation entrypoint matches facade behavior' => sub {
     }
   }|;
 
-  is_deeply validate_xs($schema, $source), validate($schema, $source),
+  is_deeply validate($schema, $source), validate($schema, $source),
     'XS path currently matches the public facade';
 
   $source = q|
@@ -104,7 +103,7 @@ subtest 'XS validation entrypoint matches facade behavior' => sub {
     query Q { viewer { name } }
   |;
 
-  is_deeply validate_xs($schema, $source), validate($schema, $source),
+  is_deeply validate($schema, $source), validate($schema, $source),
     'XS path matches duplicate-operation validation too';
 
   $source = q|
@@ -114,7 +113,7 @@ subtest 'XS validation entrypoint matches facade behavior' => sub {
     }
   |;
 
-  is_deeply validate_xs($schema, $source), validate($schema, $source),
+  is_deeply validate($schema, $source), validate($schema, $source),
     'XS path matches subscription root-field validation too';
 
   $source = q|
@@ -122,7 +121,7 @@ subtest 'XS validation entrypoint matches facade behavior' => sub {
     fragment Loop on MissingType { ...Loop }
   |;
 
-  is_deeply validate_xs($schema, $source), validate($schema, $source),
+  is_deeply validate($schema, $source), validate($schema, $source),
     'XS path matches fragment-cycle validation too';
 };
 

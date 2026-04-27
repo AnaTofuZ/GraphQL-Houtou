@@ -6,7 +6,7 @@ use warnings;
 
 use Moo;
 use GraphQL::Error;
-use Types::Standard qw(CodeRef);
+use Types::Standard qw(CodeRef HashRef);
 
 extends 'GraphQL::Houtou::Type';
 with qw(
@@ -31,6 +31,8 @@ sub non_null {
 use constant DEBUG => $ENV{GRAPHQL_DEBUG};
 
 has resolve_type => (is => 'ro', isa => CodeRef);
+has tag_resolver => (is => 'ro', isa => CodeRef);
+has tag_map => (is => 'ro', isa => HashRef);
 
 has to_doc => (
   is => 'lazy',

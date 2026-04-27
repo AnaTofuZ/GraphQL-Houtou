@@ -3,20 +3,9 @@ use Test::More 0.98;
 
 use_ok $_ for qw(
     GraphQL::Houtou
-    GraphQL::Houtou::Backend::GraphQLJS::XS
-    GraphQL::Houtou::Backend::Pegex
-    GraphQL::Houtou::Backend::XS
-    GraphQL::Houtou::Adapter::GraphQLJSToGraphQLPerl
-    GraphQL::Houtou::GraphQLPerl::FromGraphQLJS
-    GraphQL::Houtou::GraphQLJS::Canonical
-    GraphQL::Houtou::GraphQLJS::Locator
-    GraphQL::Houtou::GraphQLPerl::Parser
-    GraphQL::Houtou::GraphQLJS::Parser
-    GraphQL::Houtou::Schema::Compiler
-    GraphQL::Houtou::Schema::Compiler::PP
+    GraphQL::Houtou::Native
     GraphQL::Houtou::Schema
     GraphQL::Houtou::Directive
-    GraphQL::Houtou::Introspection
     GraphQL::Houtou::Role::Input
     GraphQL::Houtou::Role::Output
     GraphQL::Houtou::Role::Composite
@@ -40,11 +29,25 @@ use_ok $_ for qw(
     GraphQL::Houtou::Type::Scalar
     GraphQL::Houtou::Promise::Adapter
     GraphQL::Houtou::Validation
-    GraphQL::Houtou::Validation::PP
-    GraphQL::Houtou::XS::Validation
-    GraphQL::Houtou::GraphQLJS::Util
-    GraphQL::Houtou::XS::Parser
-    GraphQL::Houtou::XS::SchemaCompiler
+    GraphQL::Houtou::Runtime::OperationCompiler
+    GraphQL::Houtou::Runtime::SchemaGraph
+    GraphQL::Houtou::Runtime::SchemaBlock
+    GraphQL::Houtou::Runtime::Slot
+    GraphQL::Houtou::Runtime::Outcome
+    GraphQL::Houtou::Runtime::Writer
+    GraphQL::Houtou::Runtime::LazyInfo
+    GraphQL::Houtou::Runtime::PathFrame
+    GraphQL::Houtou::Runtime::ErrorRecord
+    GraphQL::Houtou::Runtime::FieldFrame
+    GraphQL::Houtou::Runtime::BlockFrame
+    GraphQL::Houtou::Runtime::Cursor
+    GraphQL::Houtou::Runtime::ExecState
+    GraphQL::Houtou::Runtime::VMCompiler
+    GraphQL::Houtou::Runtime::VMDispatch
+    GraphQL::Houtou::Runtime::VMProgram
+    GraphQL::Houtou::Runtime::VMBlock
+    GraphQL::Houtou::Runtime::VMOp
+    GraphQL::Houtou::Runtime::NativeRuntime
 );
 
 done_testing;

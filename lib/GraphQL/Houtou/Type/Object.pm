@@ -6,7 +6,7 @@ use warnings;
 
 use Moo;
 use GraphQL::Houtou::Directive ();
-use Types::Standard qw(ArrayRef Object CodeRef);
+use Types::Standard qw(ArrayRef Object CodeRef Str);
 use GraphQL::Error;
 
 extends 'GraphQL::Houtou::Type';
@@ -32,6 +32,7 @@ use constant DEBUG => $ENV{GRAPHQL_DEBUG};
 
 has interfaces => (is => 'ro', isa => ArrayRef[Object], default => sub { [] });
 has is_type_of => (is => 'ro', isa => CodeRef);
+has runtime_tag => (is => 'ro', isa => Str);
 
 sub graphql_to_perl {
   my ($self, $item) = @_;
@@ -126,28 +127,8 @@ sub _should_include_node {
 }
 
 sub _complete_value {
-  my ($self, $context, $nodes, $info, $path, $result) = @_;
-  my $subfield_nodes = [ [], {} ];
-  my $visited_fragment_names = {};
-
-  if ($self->is_type_of) {
-    my $is_type_of = $self->is_type_of->($result, $context->{context_value}, $info);
-    die GraphQL::Error->new(
-      message => "Expected a value of type '@{[$self->to_string]}' but received: '@{[ref($result) || $result]}'."
-    ) if !$is_type_of;
-  }
-
-  for (grep { $_->{selections} } @$nodes) {
-    ($subfield_nodes, $visited_fragment_names) = $self->_collect_fields(
-      $context,
-      $_->{selections},
-      $subfield_nodes,
-      $visited_fragment_names,
-    );
-  }
-
-  require GraphQL::Houtou::Execution::PP;
-  return GraphQL::Houtou::Execution::PP::_execute_fields($context, $self, $result, $path, $subfield_nodes);
+  my ($self) = @_;
+  die "Type::Object->_complete_value is part of the removed legacy execution path; use GraphQL::Houtou::Schema->build_runtime or ->build_native_runtime for object completion on '@{[$self->name]}'.\n";
 }
 
 has to_doc => (

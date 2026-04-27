@@ -20,7 +20,6 @@ our @EXPORT_OK = qw(
 );
 
 my $DEFAULT_PROMISE_CODE;
-my $HAS_XS_PROMISE_HELPERS;
 
 sub set_default_promise_code {
   my ($promise_code) = @_;
@@ -69,39 +68,16 @@ sub _normalize_promise_code {
   return $adapter;
 }
 
-sub _load_xs_promise_helpers {
-  if (!defined $HAS_XS_PROMISE_HELPERS) {
-    $HAS_XS_PROMISE_HELPERS = eval {
-      require GraphQL::Houtou::XS::Execution;
-      GraphQL::Houtou::XS::Execution->can('_promise_is_promise_xs')
-        && GraphQL::Houtou::XS::Execution->can('_promise_all_xs')
-        && GraphQL::Houtou::XS::Execution->can('_promise_then_xs')
-        && GraphQL::Houtou::XS::Execution->can('_promise_resolve_xs')
-        && GraphQL::Houtou::XS::Execution->can('_promise_reject_xs');
-    } ? 1 : 0;
-  }
-
-  return $HAS_XS_PROMISE_HELPERS;
-}
-
 sub all_promise {
   my ($promise_code, @values) = @_;
   die "all_promise requires promise_code\n"
     if !$promise_code || ref($promise_code) ne 'HASH' || !$promise_code->{all};
-
-  if (_load_xs_promise_helpers()) {
-    return GraphQL::Houtou::XS::Execution::_promise_all_xs($promise_code, \@values);
-  }
 
   return $promise_code->{all}->(@values);
 }
 
 sub merge_hash_result {
   my ($keys, $values, $errors) = @_;
-
-  if (_load_xs_promise_helpers() && GraphQL::Houtou::XS::Execution->can('_merge_hash_xs')) {
-    return GraphQL::Houtou::XS::Execution::_merge_hash_xs($keys, $values, $errors);
-  }
 
   my @all_errors = (@$errors, map @{ $_->{errors} || [] }, @$values);
   my %name2data;
@@ -121,10 +97,6 @@ sub resolve_promise {
   die "resolve_promise requires promise_code\n"
     if !$promise_code || ref($promise_code) ne 'HASH' || !$promise_code->{resolve};
 
-  if (_load_xs_promise_helpers()) {
-    return GraphQL::Houtou::XS::Execution::_promise_resolve_xs($promise_code, $value);
-  }
-
   return $promise_code->{resolve}->($value);
 }
 
@@ -133,19 +105,12 @@ sub reject_promise {
   die "reject_promise requires promise_code\n"
     if !$promise_code || ref($promise_code) ne 'HASH' || !$promise_code->{reject};
 
-  if (_load_xs_promise_helpers()) {
-    return GraphQL::Houtou::XS::Execution::_promise_reject_xs($promise_code, $value);
-  }
-
   return $promise_code->{reject}->($value);
 }
 
 sub is_promise_value {
   my ($promise_code, $value) = @_;
   return 0 if !$value || !ref($value);
-  if ($promise_code && ref($promise_code) eq 'HASH' && _load_xs_promise_helpers()) {
-    return !!GraphQL::Houtou::XS::Execution::_promise_is_promise_xs($promise_code, $value);
-  }
   return !!$promise_code->{is_promise}->($value)
     if $promise_code && ref($promise_code) eq 'HASH' && $promise_code->{is_promise};
   return !!eval { $value->can('then') };
@@ -154,15 +119,6 @@ sub is_promise_value {
 sub then_promise {
   my ($promise_code, $promise, $on_fulfilled, $on_rejected) = @_;
   die "then_promise requires a promise value\n" if !$promise || !ref($promise);
-
-  if ($promise_code && ref($promise_code) eq 'HASH' && _load_xs_promise_helpers()) {
-    return GraphQL::Houtou::XS::Execution::_promise_then_xs(
-      $promise_code,
-      $promise,
-      $on_fulfilled,
-      $on_rejected,
-    );
-  }
 
   if ($promise_code && ref($promise_code) eq 'HASH' && $promise_code->{then}) {
     return $promise_code->{then}->($promise, $on_fulfilled, $on_rejected);

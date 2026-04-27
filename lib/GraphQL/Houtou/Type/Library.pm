@@ -79,6 +79,7 @@ declare "FieldMapOutput", as Map[
     type => $OutputTypeConsumer,
     args => Optional[FieldMapInput],
     resolve => Optional[CodeRef],
+    resolver_mode => Optional[Enum[qw(native)]],
     subscribe => Optional[CodeRef],
     directives => Optional[ArrayRef[HashRef]],
     deprecation_reason => Optional[Str],

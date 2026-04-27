@@ -8,29 +8,20 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     use GraphQL::Houtou qw(
       parse
       parse_with_options
+      execute
+      compile_runtime
+      compile_native_bundle
+      execute_native
       set_default_promise_code
     );
-    use GraphQL::Houtou::Execution qw(execute);
     use GraphQL::Houtou::Schema;
     use GraphQL::Houtou::Type;
     use GraphQL::Houtou::Type::Object;
     use GraphQL::Houtou::Type::Scalar;
 
-    my $legacy_ast = parse('{ user { id } }');
+    my $ast = parse('{ user { id } }');
 
-    my $js_ast = parse_with_options('{ user { id } }', {
-      dialect => 'graphql-js',
-      backend => 'xs',
-    });
-
-    my $legacy_xs_ast = parse_with_options('{ user { id } }', {
-      dialect => 'graphql-perl',
-      backend => 'xs',
-    });
-
-    my $fast_js_ast = parse_with_options('{ user { id } }', {
-      dialect => 'graphql-js',
-      backend => 'xs',
+    my $fast_ast = parse_with_options('{ user { id } }', {
       no_location => 1,
     });
 
@@ -51,6 +42,9 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     );
 
     my $result = execute($schema, '{ hello }');
+    my $runtime = compile_runtime($schema);
+    my $bundle = compile_native_bundle($schema, '{ hello }');
+    my $native = execute_native($schema, '{ hello }');
 
     set_default_promise_code({
       resolve => sub { ... },
@@ -62,60 +56,75 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
 
 # DESCRIPTION
 
-GraphQL::Houtou provides XS-backed GraphQL parsing and execution with
-compatibility layers for both the legacy `graphql-perl` AST and a
-`graphql-js`-style AST.
+GraphQL::Houtou provides an XS-first GraphQL parser and runtime for Perl.
+The parser surface returns the library's canonical Perl AST, while the
+execution mainline is the compiled runtime / VM pipeline.
 
-This distribution was split out from local parser work that originally lived
-in a fork of [graphql-perl](https://github.com/graphql-perl/graphql-perl).
-It still uses the upstream `GraphQL` distribution as a dependency for some
-compatibility behavior, while making the XS path the normal fast path for both
-parser and execution work.
+The current direction is:
+
+- XS-required public compiler / validation facades
+- runtime-first execution through compiled programs and native bundles
+- legacy implementation tests and snapshots preserved under `legacy-tests/`
+instead of shaping the active mainline
 
 # USAGE
 
 ## Parsing
 
-The default `parse()` entry point returns the traditional
-`graphql-perl`-compatible AST.
+The default `parse()` entry point returns the canonical parser AST used by
+this library.
 
     my $ast = parse($source);
 
-If you want to choose the dialect explicitly, use `parse_with_options()`.
+If you want to tune parser options explicitly, use `parse_with_options()`.
 
-    my $legacy = parse_with_options($source, {
-      dialect => 'graphql-perl',
-      backend => 'xs',
-    });
-
-    my $graphql_js = parse_with_options($source, {
-      dialect => 'graphql-js',
-      backend => 'xs',
+    my $ast = parse_with_options($source, {
+      no_location => 1,
     });
 
 For throughput-sensitive parsing where you do not need location data, passing
 `no_location => 1` is still recommended.
 
     my $doc = parse_with_options($source, {
-      dialect => 'graphql-js',
-      backend => 'xs',
       no_location => 1,
     });
 
 ## Executing Queries
 
-Execution lives under [GraphQL::Houtou::Execution](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3AExecution). The public entry point is:
+The top-level runtime API is:
 
-    my $result = GraphQL::Houtou::Execution::execute($schema, $document, \%vars);
+    my $result = GraphQL::Houtou::execute($schema, $document, \%vars);
 
 Where `$document` can be either:
 
 - a source string
-- a pre-parsed `graphql-perl`-compatible AST
+- a pre-parsed parser AST returned by `parse()` or `parse_with_options()`
 
-In current practical benchmark coverage, the XS-backed execution path is the
-normal fast path and outperforms upstream `GraphQL::Execution::execute` in
-the benchmarked string and AST cases.
+If you need a reusable compiled runtime, use:
+
+    my $runtime = GraphQL::Houtou::compile_runtime($schema);
+    my $program = $runtime->compile_program($document);
+    my $result  = $runtime->execute_program($program, variables => \%vars);
+
+If you want a boot-time native artifact, use:
+
+    my $bundle = GraphQL::Houtou::compile_native_bundle($schema, $document);
+    my $runtime = GraphQL::Houtou::build_native_runtime($schema);
+    my $result = $runtime->execute_bundle($bundle);
+
+Or execute directly through the cached native runtime:
+
+    my $result = GraphQL::Houtou::execute_native($schema, $document);
+
+This runtime-backed API prefers the native XS engine when the lowered program
+stays within the current native-safe subset. Programs that still require
+features not yet lowered into the native engine automatically fall back to the
+Perl VM. The Perl VM remains available as an explicit cold path via
+`engine => 'perl'`.
+
+The runtime-backed API above is the intended mainline. The public compiler and
+validation facades now require XS. Older implementation tests and snapshots
+live under `legacy-tests/` and are no longer part of the active suite.
 
 ## Promise Hooks
 
@@ -145,35 +154,11 @@ API keeps the hook contract generic so that adapters can be supplied by user
 code for `Promises`, `Future`, `Promise::XS`, `Promise::ES6`,
 `Mojo::Promise`, or any other library with a suitable wrapper.
 
-# DIALECTS
+# PARSER SURFACE
 
-## graphql-perl compatible layer
-
-The default `parse()` entry point returns the traditional `graphql-perl`
-compatible AST.
-
-    my $ast = parse($source);
-
-If you want to be explicit about the backend, use `parse_with_options()`.
-
-    my $ast = parse_with_options($source, {
-      dialect => 'graphql-perl',
-      backend => 'xs',
-    });
-
-The `pegex` backend is still available for compatibility, but the intended
-default path is `xs`.
-
-## graphql-js compatible layer
-
-If you want a `graphql-js`-style AST, select the `graphql-js` dialect.
-
-    my $doc = parse_with_options($source, {
-      dialect => 'graphql-js',
-      backend => 'xs',
-    });
-
-The `graphql-js` parser currently supports only the `xs` backend.
+The public parser surface is fixed to the library's canonical parser AST.
+`parse_with_options()` only accepts parser-local knobs such as
+`no_location`.
 
 # PERFORMANCE NOTES
 
@@ -184,49 +169,29 @@ recommended for throughput-sensitive workloads.
 Example:
 
     my $doc = parse_with_options($source, {
-      dialect => 'graphql-js',
-      backend => 'xs',
       no_location => 1,
     });
 
 # BENCHMARK SNAPSHOT
 
-As of 2026-04-06, practical execution benchmarks using
-`util/execution-benchmark.pl --count=-3` produced the following snapshot:
+現在の比較対象は旧 executor ではなく、runtime/VM mainline です。
 
-- `simple_scalar` AST execution:
-`houtou_xs_ast` about 139,565/s, `houtou_compiled_ir` about 139,515/s,
-`upstream_ast` about 41,261/s
-- `nested_variable_object` AST execution:
-`houtou_compiled_ir` about 79,130/s, `houtou_xs_ast` about 77,441/s,
-`upstream_ast` about 25,041/s
-- `list_of_objects` AST execution:
-`houtou_xs_ast` about 58,659/s, `houtou_compiled_ir` about 57,941/s,
-`upstream_ast` about 17,816/s
-- `abstract_with_fragment` AST execution:
-`houtou_xs_ast` about 41,687/s, `houtou_compiled_ir` about 41,647/s,
-`upstream_ast` about 23,641/s
-- `async_scalar` AST execution:
-`houtou_facade_ast` about 78,946/s, `houtou_compiled_ir` about 77,535/s,
-`upstream_ast` about 41,389/s
-- `async_list` AST execution:
-`houtou_compiled_ir` about 43,671/s, `houtou_facade_ast` about 43,260/s,
-`upstream_ast` about 26,131/s
+主な評価軸は次の 2 系統です。
 
-This confirms several practical points:
+- cached runtime (Perl VM)
+- cached native bundle (XS VM)
 
-- the XS path is now materially faster than upstream execution in the benchmarked
-AST and source-string cases
-- compiled IR plans are now a real execution path, not just parser metadata; they
-already improve over prepared IR and are competitive with, or better than, the
-best AST-based Houtou path in several practical cases
-- the execution XS work is paying off not only for nested/list/object workloads
-but also for promise-backed scalar and list cases
-- turning off parser location handling still materially improves parse-only
-throughput when you do not need `loc` or `location` data
+ベンチマークでは resolver の結果をキャッシュするのではなく、
+schema/runtime/program のコンパイル済み実行計画を再利用した時の
+スループットを見ます。
 
-The exact benchmark command and more detailed performance notes are kept in
-`docs/execution-benchmark.md` and `docs/current-context.md`.
+典型的なコマンドは次です。
+
+    perl util/execution-benchmark.pl --count=-3
+    perl util/execution-benchmark-checkpoint.pl --repeat=5 --count=-3
+
+詳細な評価軸は `docs/execution-benchmark.md`、現在の実装前提は
+`docs/current-context.md` と `docs/runtime-vm-architecture.md` にあります。
 
 # NAME ORIGIN
 

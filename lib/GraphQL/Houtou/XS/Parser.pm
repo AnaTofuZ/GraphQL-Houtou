@@ -3,31 +3,17 @@ package GraphQL::Houtou::XS::Parser;
 use 5.014;
 use strict;
 use warnings;
-use Exporter 'import';
 use GraphQL ();
 use GraphQL::Error;
+use GraphQL::Houtou ();
 use GraphQL::Language::Receiver ();
 use JSON::PP ();
-use XSLoader ();
 
 our $VERSION = '0.01';
-our @EXPORT_OK = qw(
-  graphqljs_apply_executable_loc_xs
-  graphqljs_build_document_xs
-  graphqljs_build_executable_document_xs
-  graphqljs_build_directives_xs
-  graphqljs_parse_document_xs
-  graphqljs_parse_executable_document_xs
-  graphqlperl_build_document_xs
-  graphqlperl_find_legacy_empty_object_location_xs
-  graphqljs_preprocess_xs
-  graphqljs_patch_document_xs
-  parse_xs
-  parse_directives_xs
-  tokenize_xs
-);
 
-XSLoader::load('GraphQL::Houtou', $VERSION);
+BEGIN {
+  GraphQL::Houtou::_bootstrap_xs();
+}
 
 sub _make_bool {
   return $_[0] ? JSON::PP::true : JSON::PP::false;
@@ -101,7 +87,7 @@ sub _new_lazy_array_ref {
 
 sub _new_lazy_array_tie {
   my ($class, $state, $ptr, $kind) = @_;
-  # NOTE: these keys are part of the XS fast-path contract in gqljs_fetch_array().
+  # NOTE: these keys are part of the XS fast-path contract in gql_parser_fetch_array().
   # If you rename them, update the XS reader and the contract test together.
   return bless {
     state => $state,
@@ -161,7 +147,7 @@ sub TIEARRAY {
 sub _materialize {
   my ($self) = @_;
   return $self->{data} if $self->{data};
-  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_arguments_xs(
+  $self->{data} = GraphQL::Houtou::XS::Parser::_materialize_arguments_xs(
     $self->{state},
     $self->{ptr},
   );
@@ -250,7 +236,7 @@ sub TIEARRAY {
 sub _materialize {
   my ($self) = @_;
   return $self->{data} if $self->{data};
-  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_directives_xs(
+  $self->{data} = GraphQL::Houtou::XS::Parser::_materialize_directives_xs(
     $self->{state},
     $self->{ptr},
   );
@@ -339,7 +325,7 @@ sub TIEARRAY {
 sub _materialize {
   my ($self) = @_;
   return $self->{data} if $self->{data};
-  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_variable_definitions_xs(
+  $self->{data} = GraphQL::Houtou::XS::Parser::_materialize_variable_definitions_xs(
     $self->{state},
     $self->{ptr},
   );
@@ -428,7 +414,7 @@ sub TIEARRAY {
 sub _materialize {
   my ($self) = @_;
   return $self->{data} if $self->{data};
-  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_object_fields_xs(
+  $self->{data} = GraphQL::Houtou::XS::Parser::_materialize_object_fields_xs(
     $self->{state},
     $self->{ptr},
   );

@@ -64,11 +64,8 @@ has to_doc => (
 );
 
 sub _get_directive_values {
-  my ($self, $node, $variables) = @_;
-  my ($d) = grep $_->{name} eq $self->name, @{ $node->{directives} || [] };
-  return if !$d;
-  require GraphQL::Houtou::Execution::PP;
-  return GraphQL::Houtou::Execution::PP::_get_argument_values($self, $d, $variables);
+  my ($self) = @_;
+  die "Directive->_get_directive_values is part of the removed legacy execution path; use GraphQL::Houtou::Schema->compile_program / ->compile_native_bundle for directive evaluation on '$self->{name}'.\n";
 }
 
 our $DEPRECATED = __PACKAGE__->new(

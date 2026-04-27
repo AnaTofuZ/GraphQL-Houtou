@@ -5,10 +5,14 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use JSON::PP ();
 use Moo;
 use Types::Standard qw(HashRef Object ArrayRef);
 
 use GraphQL::Houtou::Directive ();
+use GraphQL::Houtou::Runtime::OperationCompiler ();
+use GraphQL::Houtou::Runtime::SchemaGraph ();
+use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Type::Scalar qw($Int $Float $String $Boolean $ID);
 use GraphQL::Houtou::Introspection qw($SCHEMA_META_TYPE);
 
@@ -69,6 +73,170 @@ sub prepare_runtime {
   return $self->_runtime_cache;
 }
 
+sub compile_runtime {
+  my ($self, %opts) = @_;
+  return GraphQL::Houtou::Runtime::SchemaGraph->compile_schema($self, %opts);
+}
+
+sub build_native_runtime {
+  my ($self, %opts) = @_;
+  if (%opts) {
+    my $runtime_schema = $self->compile_runtime(%opts);
+    require GraphQL::Houtou::Runtime::NativeRuntime;
+    return GraphQL::Houtou::Runtime::NativeRuntime->new(
+      runtime_schema => $runtime_schema,
+    );
+  }
+  return $self->{_compiled_native_runtime} if $self->{_compiled_native_runtime};
+  require GraphQL::Houtou::Runtime::NativeRuntime;
+  return $self->{_compiled_native_runtime} = GraphQL::Houtou::Runtime::NativeRuntime->new(
+    runtime_schema => $self->build_runtime,
+  );
+}
+
+sub build_runtime {
+  my ($self, %opts) = @_;
+  return $self->compile_runtime(%opts) if %opts;
+  return $self->{_compiled_runtime_graph} if $self->{_compiled_runtime_graph};
+  return $self->{_compiled_runtime_graph} = $self->compile_runtime;
+}
+
+sub compile_runtime_descriptor {
+  my ($self, %opts) = @_;
+  return $self->compile_runtime(%opts)->to_struct;
+}
+
+sub compile_native_runtime_descriptor {
+  my ($self, %opts) = @_;
+  return $self->compile_runtime(%opts)->to_native_struct;
+}
+
+sub inflate_runtime {
+  my ($self, $descriptor) = @_;
+  return GraphQL::Houtou::Runtime::SchemaGraph->inflate_schema($self, $descriptor);
+}
+
+sub dump_runtime_descriptor {
+  my ($self, $path, %opts) = @_;
+  my $descriptor = $self->compile_runtime_descriptor(%opts);
+  _write_json_descriptor($path, $descriptor);
+  return $descriptor;
+}
+
+sub dump_native_runtime_descriptor {
+  my ($self, $path, %opts) = @_;
+  my $descriptor = $self->compile_native_runtime_descriptor(%opts);
+  _write_json_descriptor($path, $descriptor);
+  return $descriptor;
+}
+
+sub load_runtime_descriptor {
+  my ($self, $path) = @_;
+  my $descriptor = _read_json_descriptor($path);
+  return $self->inflate_runtime($descriptor);
+}
+
+sub load_native_runtime_descriptor {
+  my ($self, $path) = @_;
+  return _read_json_descriptor($path);
+}
+
+sub compile_program {
+  my ($self, $document, %opts) = @_;
+  my $runtime = $self->build_runtime;
+  return $runtime->compile_program($document, %opts);
+}
+
+sub compile_program_descriptor {
+  my ($self, $document, %opts) = @_;
+  return $self->compile_program($document, %opts)->to_struct;
+}
+
+sub dump_program_descriptor {
+  my ($self, $document, $path, %opts) = @_;
+  my $descriptor = $self->compile_program_descriptor($document, %opts);
+  _write_json_descriptor($path, $descriptor);
+  return $descriptor;
+}
+
+sub load_program_descriptor {
+  my ($self, $path, %opts) = @_;
+  my $descriptor = _read_json_descriptor($path);
+  return $self->inflate_program($descriptor, %opts);
+}
+
+sub inflate_program {
+  my ($self, $descriptor, %opts) = @_;
+  my $runtime = $self->build_runtime;
+  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program($runtime, $descriptor);
+}
+
+sub execute {
+  my ($self, $document, %opts) = @_;
+  my $runtime = $self->build_runtime;
+  my $program = $runtime->compile_program($document, %opts);
+  return $runtime->execute_program($program, %opts);
+}
+
+sub compile_native_program_descriptor {
+  my ($self, $document, %opts) = @_;
+  my $runtime = delete $opts{runtime_schema};
+  return $self->compile_program($document, ($runtime ? (runtime_schema => $runtime) : ()), %opts)->to_native_compact_struct;
+}
+
+sub compile_native_bundle_descriptor {
+  my ($self, $document, %opts) = @_;
+  my $runtime = $self->build_native_runtime;
+  return $runtime->compile_bundle_descriptor_for_document($document, %opts);
+}
+
+sub compile_native_bundle {
+  my ($self, $document, %opts) = @_;
+  my $runtime = $self->build_native_runtime;
+  return $runtime->compile_bundle_for_document($document, %opts);
+}
+
+sub dump_native_bundle_descriptor {
+  my ($self, $document, $path, %opts) = @_;
+  my $runtime = $self->build_native_runtime;
+  return $runtime->dump_bundle_descriptor_for_document($document, $path, %opts);
+}
+
+sub load_native_bundle_descriptor {
+  my ($self, $path) = @_;
+  return _read_json_descriptor($path);
+}
+
+sub load_native_bundle {
+  my ($self, $descriptor) = @_;
+  my $runtime = $self->build_native_runtime;
+  return $runtime->load_bundle_descriptor($descriptor);
+}
+
+sub load_native_bundle_file {
+  my ($self, $path) = @_;
+  my $runtime = $self->build_native_runtime;
+  return $runtime->load_bundle_descriptor_file($path);
+}
+
+sub inflate_native_bundle_descriptor {
+  my ($self, $descriptor, %opts) = @_;
+  my $runtime = $self->build_native_runtime;
+  return $runtime->inflate_bundle_descriptor($descriptor);
+}
+
+sub execute_native_bundle_descriptor {
+  my ($self, $descriptor, %opts) = @_;
+  my $runtime = $self->build_native_runtime;
+  return $runtime->execute_bundle_descriptor($descriptor, %opts);
+}
+
+sub execute_native {
+  my ($self, $document, %opts) = @_;
+  my $runtime = $self->build_native_runtime;
+  return $runtime->execute_document($document, %opts);
+}
+
 sub runtime_cache {
   my ($self) = @_;
   return $self->{_runtime_cache};
@@ -77,6 +245,8 @@ sub runtime_cache {
 sub clear_runtime_cache {
   my ($self) = @_;
   delete $self->{_runtime_cache};
+  delete $self->{_compiled_runtime_graph};
+  delete $self->{_compiled_native_runtime};
   return $self;
 }
 
@@ -91,6 +261,8 @@ sub _runtime_cache {
   my %field_maps;
   my %resolve_type_map;
   my %is_type_of_map;
+  my %tag_resolver_map;
+  my %runtime_tag_map;
 
   for my $type (values %$name2type) {
     next if !$type;
@@ -110,18 +282,28 @@ sub _runtime_cache {
     if ($type->isa('GraphQL::Type::Union') || $type->isa('GraphQL::Houtou::Type::Union')) {
       my $types = $type->{types} || $type->types || [];
       my $resolve_type = $type->resolve_type;
+      my $tag_resolver = $type->can('tag_resolver') ? $type->tag_resolver : undef;
       $resolve_type_map{ $type->name } = $resolve_type if $resolve_type;
+      $tag_resolver_map{ $type->name } = $tag_resolver if $tag_resolver;
       $possible_types{ $type->name } = [ @$types ];
       $possible_type_map->{ $type->name } ||= { map { ($_->name => 1) } @$types };
+      if (my $tag_map = _build_runtime_tag_map($type, $types, $name2type)) {
+        $runtime_tag_map{ $type->name } = $tag_map;
+      }
       next;
     }
 
     if ($type->isa('GraphQL::Type::Interface') || $type->isa('GraphQL::Houtou::Type::Interface')) {
       my $types = [ @{ $interface2types->{ $type->name } || [] } ];
       my $resolve_type = $type->resolve_type;
+      my $tag_resolver = $type->can('tag_resolver') ? $type->tag_resolver : undef;
       $resolve_type_map{ $type->name } = $resolve_type if $resolve_type;
+      $tag_resolver_map{ $type->name } = $tag_resolver if $tag_resolver;
       $possible_types{ $type->name } = $types;
       $possible_type_map->{ $type->name } ||= { map { ($_->name => 1) } @$types };
+      if (my $tag_map = _build_runtime_tag_map($type, $types, $name2type)) {
+        $runtime_tag_map{ $type->name } = $tag_map;
+      }
       next;
     }
   }
@@ -139,7 +321,34 @@ sub _runtime_cache {
     field_maps => \%field_maps,
     resolve_type_map => \%resolve_type_map,
     is_type_of_map => \%is_type_of_map,
+    tag_resolver_map => \%tag_resolver_map,
+    runtime_tag_map => \%runtime_tag_map,
   };
+}
+
+sub _build_runtime_tag_map {
+  my ($abstract_type, $possible_types, $name2type) = @_;
+  my %tag_map;
+  my $declared = $abstract_type->can('tag_map') ? $abstract_type->tag_map : undef;
+
+  if ($declared) {
+    for my $tag (keys %$declared) {
+      my $target = $declared->{$tag};
+      my $type = ref($target) ? $target : $name2type->{$target};
+      next if !$type;
+      next if !($type->isa('GraphQL::Type::Object') || $type->isa('GraphQL::Houtou::Type::Object'));
+      $tag_map{$tag} = $type;
+    }
+  }
+
+  for my $type (@{ $possible_types || [] }) {
+    next if !$type || !$type->can('runtime_tag');
+    my $tag = $type->runtime_tag;
+    next if !defined $tag || ref($tag);
+    $tag_map{$tag} ||= $type;
+  }
+
+  return keys(%tag_map) ? \%tag_map : undef;
 }
 
 sub _build_name2type {
@@ -150,6 +359,23 @@ sub _build_name2type {
   my %name2type;
   _expand_type_houtou(\%name2type, $_) for @types;
   return \%name2type;
+}
+
+sub _write_json_descriptor {
+  my ($path, $descriptor) = @_;
+  open my $fh, '>', $path or die "Cannot write descriptor '$path': $!";
+  print {$fh} JSON::PP->new->canonical->encode($descriptor);
+  close $fh or die "Cannot close descriptor '$path': $!";
+  return;
+}
+
+sub _read_json_descriptor {
+  my ($path) = @_;
+  open my $fh, '<', $path or die "Cannot read descriptor '$path': $!";
+  local $/;
+  my $json = <$fh>;
+  close $fh or die "Cannot close descriptor '$path': $!";
+  return JSON::PP->new->decode($json);
 }
 
 sub _does_any_role {

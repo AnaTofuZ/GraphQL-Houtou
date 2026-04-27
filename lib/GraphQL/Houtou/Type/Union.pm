@@ -6,7 +6,7 @@ use warnings;
 
 use Moo;
 use GraphQL::Houtou::Type::Library qw(UniqueByProperty ArrayRefNonEmpty);
-use Types::Standard qw(ArrayRef Object CodeRef Bool);
+use Types::Standard qw(ArrayRef Object CodeRef Bool HashRef);
 
 extends 'GraphQL::Houtou::Type';
 with qw(
@@ -35,6 +35,8 @@ has types => (
 );
 
 has resolve_type => (is => 'ro', isa => CodeRef);
+has tag_resolver => (is => 'ro', isa => CodeRef);
+has tag_map => (is => 'ro', isa => HashRef);
 has _types_validated => (is => 'rw', isa => Bool);
 
 sub get_types {
@@ -43,7 +45,7 @@ sub get_types {
   return \@types if $self->_types_validated;
 
   $self->_types_validated(1);
-  if (!$self->resolve_type) {
+  if (!$self->resolve_type && !$self->tag_resolver) {
     my @bad = map $_->name, grep !$_->is_type_of, @types;
     die $self->name . " no resolve_type and no is_type_of for @bad" if @bad;
   }

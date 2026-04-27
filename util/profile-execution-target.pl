@@ -11,16 +11,13 @@ BEGIN {
   my $upstream = File::Spec->catdir($root, '..', 'graphql-perl');
 
   unshift @INC,
+    File::Spec->catdir($root, 'lib'),
     File::Spec->catdir($root, 'blib', 'lib'),
     File::Spec->catdir($root, 'blib', 'arch'),
-    File::Spec->catdir($root, 'lib'),
     File::Spec->catdir($upstream, 'lib');
 }
 
 use GraphQL::Execution qw(execute);
-use GraphQL::Houtou::Execution ();
-use GraphQL::Houtou::GraphQLPerl::Parser qw(parse_with_options);
-use GraphQL::Houtou::XS::Execution ();
 use GraphQL::Language::Parser qw(parse);
 
 use GraphQL::Schema;
@@ -259,6 +256,7 @@ sub build_houtou_schema {
   my %fields = (
     hello => {
       type => $GraphQL::Houtou::Type::Scalar::String->non_null,
+      resolver_mode => 'native',
       resolve => sub { 'world' },
     },
     greet => {
@@ -266,6 +264,7 @@ sub build_houtou_schema {
       args => {
         name => { type => $GraphQL::Houtou::Type::Scalar::String->non_null },
       },
+      resolver_mode => 'native',
       resolve => sub {
         my ($root, $args) = @_;
         return "hello $args->{name}";
@@ -276,6 +275,7 @@ sub build_houtou_schema {
       args => {
         id => { type => $GraphQL::Houtou::Type::Scalar::ID->non_null },
       },
+      resolver_mode => 'native',
       resolve => sub {
         my ($root, $args) = @_;
         return {
@@ -286,6 +286,7 @@ sub build_houtou_schema {
     },
     users => {
       type => $User->list->non_null,
+      resolver_mode => 'native',
       resolve => sub {
         return [
           { id => '21', name => 'user:21' },
@@ -295,6 +296,7 @@ sub build_houtou_schema {
     },
     searchResult => {
       type => $SearchResult,
+      resolver_mode => 'native',
       resolve => sub {
         return {
           id => '13',
@@ -307,10 +309,12 @@ sub build_houtou_schema {
   if ($include_async_case) {
     $fields{asyncHello} = {
       type => $GraphQL::Houtou::Type::Scalar::String->non_null,
+      resolver_mode => 'native',
       resolve => sub { Local::ImmediatePromise->resolve('async-world') },
     };
     $fields{asyncList} = {
       type => $GraphQL::Houtou::Type::Scalar::String->non_null->list->non_null,
+      resolver_mode => 'native',
       resolve => sub {
         return [
           Local::ImmediatePromise->resolve('alpha'),
@@ -359,16 +363,12 @@ my $spec = $cases{$case_name};
 my %targets = map { $_ => 1 } qw(
   upstream_ast
   upstream_string
-  houtou_facade_ast
-  houtou_facade_string
-  houtou_prepared_ir
-  houtou_compiled_ir
-  houtou_xs_ast
-  houtou_xs_string
+  houtou_runtime_cached_perl
+  houtou_runtime_native_bundle
 );
 die "Unknown target: $target\n" unless $targets{$target};
 die "Target $target is not available for promise cases\n"
-  if $spec->{promise} && $target =~ /^houtou_xs_/;
+  if $spec->{promise} && $target eq 'houtou_runtime_native_bundle';
 
 DB::disable_profile() if DB->can('disable_profile');
 
@@ -379,13 +379,15 @@ my $vars = $spec->{vars};
 my $op = $spec->{op};
 my $promise = $spec->{promise} ? promise_code() : undef;
 my $up_ast = parse($query);
-my $houtou_ast = parse_with_options($query, { backend => 'xs' });
-my $prepared_ir = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs($query);
-my $compiled_ir = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
-  $houtou_schema,
-  $prepared_ir,
-  $op,
-);
+my $runtime = $houtou_schema->build_runtime;
+my $program = $runtime->compile_program($query);
+my $native_runtime = !$promise ? $houtou_schema->build_native_runtime : undef;
+my $native_bundle = $native_runtime
+  ? $native_runtime->compile_bundle(
+      $program,
+      (defined($vars) ? (variables => $vars) : ()),
+    )
+  : undef;
 
 my %dispatch = (
   upstream_ast => sub {
@@ -394,43 +396,18 @@ my %dispatch = (
   upstream_string => sub {
     return maybe_get(execute($up_schema, $query, undef, undef, $vars, $op, undef, $promise));
   },
-  houtou_facade_ast => sub {
-    return maybe_get(GraphQL::Houtou::Execution::execute($houtou_schema, $houtou_ast, undef, undef, $vars, $op, undef, $promise));
-  },
-  houtou_facade_string => sub {
-    return maybe_get(GraphQL::Houtou::Execution::execute($houtou_schema, $query, undef, undef, $vars, $op, undef, $promise));
-  },
-  houtou_prepared_ir => sub {
+  houtou_runtime_cached_perl => sub {
     return maybe_get(
-      GraphQL::Houtou::XS::Execution::execute_prepared_ir_xs(
-        $houtou_schema,
-        $prepared_ir,
-        undef,
-        undef,
-        $vars,
-        $op,
-        undef,
-        $promise,
+      $runtime->execute_program(
+        $program,
+        engine => 'perl',
+        (defined($vars) ? (variables => $vars) : ()),
+        ($promise ? (promise_code => $promise) : ()),
       )
     );
   },
-  houtou_compiled_ir => sub {
-    return maybe_get(
-      GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs(
-        $compiled_ir,
-        undef,
-        undef,
-        $vars,
-        undef,
-        $promise,
-      )
-    );
-  },
-  houtou_xs_ast => sub {
-    return GraphQL::Houtou::XS::Execution::execute_xs($houtou_schema, $houtou_ast, undef, undef, $vars, $op);
-  },
-  houtou_xs_string => sub {
-    return GraphQL::Houtou::XS::Execution::execute_xs($houtou_schema, $query, undef, undef, $vars, $op);
+  houtou_runtime_native_bundle => sub {
+    return maybe_get($native_bundle->execute);
   },
 );
 
@@ -438,7 +415,7 @@ my $runner = $dispatch{$target};
 my $expected = $dispatch{$target}->();
 die "Sanity check failed for $case_name/$target\n" if !defined $expected;
 
-DB::enable_profile();
+DB::enable_profile() if DB->can('enable_profile');
 for (1 .. $iterations) {
   my $got = $runner->();
   require Data::Dumper;
@@ -446,9 +423,13 @@ for (1 .. $iterations) {
   die "Result mismatch for $case_name/$target\n"
     if Data::Dumper::Dumper($got) ne Data::Dumper::Dumper($expected);
 }
-DB::disable_profile();
+DB::disable_profile() if DB->can('disable_profile');
 
-print "profiled case=$case_name target=$target iterations=$iterations\n";
+print(
+  DB->can('enable_profile')
+    ? "profiled case=$case_name target=$target iterations=$iterations\n"
+    : "executed case=$case_name target=$target iterations=$iterations (DB profile hooks unavailable)\n"
+);
 
 sub usage {
   return "Usage: $0 --case NAME --target NAME [--iterations N]\n";

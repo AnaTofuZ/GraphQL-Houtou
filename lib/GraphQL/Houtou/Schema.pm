@@ -6,8 +6,6 @@ use warnings;
 
 use Exporter 'import';
 use JSON::PP ();
-use Moo;
-use Types::Standard qw(HashRef Object ArrayRef);
 
 use GraphQL::Houtou::Directive ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
@@ -18,55 +16,45 @@ use GraphQL::Houtou::Introspection qw($SCHEMA_META_TYPE);
 
 our @EXPORT_OK = qw(lookup_type);
 
-has query => (
-  is => 'ro',
-  isa => Object,
-  required => 1,
-);
+sub new {
+  my ($class, %args) = @_;
+  die "GraphQL::Houtou::Schema requires query" if !defined $args{query};
+  my $self = bless {
+    query => $args{query},
+    mutation => $args{mutation},
+    subscription => $args{subscription},
+    types => $args{types} || [ $Int, $Float, $String, $Boolean, $ID ],
+    directives => $args{directives} || \@GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES,
+  }, $class;
+  return $self;
+}
 
-has mutation => (
-  is => 'ro',
-  isa => Object,
-);
+sub query { return $_[0]->{query} }
+sub mutation { return $_[0]->{mutation} }
+sub subscription { return $_[0]->{subscription} }
+sub types { return $_[0]->{types} }
+sub directives { return $_[0]->{directives} }
 
-has subscription => (
-  is => 'ro',
-  isa => Object,
-);
+sub name2type {
+  my ($self) = @_;
+  return $self->{name2type} ||= $self->_build_name2type;
+}
 
-has types => (
-  is => 'ro',
-  isa => ArrayRef,
-  default => sub { [ $Int, $Float, $String, $Boolean, $ID ] },
-);
+sub name2directive {
+  my ($self) = @_;
+  return $self->{name2directive} ||= $self->_build_name2directive;
+}
 
-has directives => (
-  is => 'ro',
-  isa => ArrayRef,
-  default => sub { \@GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES },
-);
+sub _interface2types {
+  my ($self) = @_;
+  return $self->{_interface2types} ||= $self->_build__interface2types;
+}
 
-has name2type => (
-  is => 'lazy',
-  isa => HashRef,
-);
-
-has name2directive => (
-  is => 'lazy',
-  isa => HashRef,
-  builder => '_build_name2directive',
-);
-
-has _interface2types => (
-  is => 'lazy',
-  isa => HashRef,
-  builder => '_build__interface2types',
-);
-
-has _possible_type_map => (
-  is => 'rw',
-  isa => HashRef,
-);
+sub _possible_type_map {
+  my ($self, @set) = @_;
+  $self->{_possible_type_map} = $set[0] if @set;
+  return $self->{_possible_type_map};
+}
 
 sub prepare_runtime {
   my ($self) = @_;

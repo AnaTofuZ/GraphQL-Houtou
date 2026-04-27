@@ -13,6 +13,7 @@ use constant {
   ROOT_BLOCK_SLOT     => 5,
   BLOCK_MAP_SLOT      => 6,
   DISPATCH_BOUND_SLOT => 7,
+  NATIVE_COMPACT_STRUCT_SLOT => 8,
 };
 
 sub new {
@@ -30,6 +31,7 @@ sub new {
     $root_block,
     \%block_map,
     0,
+    undef,
   ], $class;
 }
 
@@ -40,7 +42,11 @@ sub variable_defs { return $_[0][VARIABLE_DEFS_SLOT] }
 sub blocks { return $_[0][BLOCKS_SLOT] }
 sub root_block { return $_[0][ROOT_BLOCK_SLOT] }
 sub dispatch_bound { return $_[0][DISPATCH_BOUND_SLOT] }
-sub set_variable_defs { $_[0][VARIABLE_DEFS_SLOT] = $_[1] || {}; return $_[0][VARIABLE_DEFS_SLOT] }
+sub set_variable_defs {
+  $_[0][VARIABLE_DEFS_SLOT] = $_[1] || {};
+  $_[0][NATIVE_COMPACT_STRUCT_SLOT] = undef;
+  return $_[0][VARIABLE_DEFS_SLOT];
+}
 sub set_dispatch_bound { $_[0][DISPATCH_BOUND_SLOT] = $_[1] ? 1 : 0; return $_[0][DISPATCH_BOUND_SLOT] }
 
 sub block_by_name {
@@ -78,9 +84,10 @@ sub to_native_struct {
 
 sub to_native_compact_struct {
   my ($self) = @_;
+  return $self->[NATIVE_COMPACT_STRUCT_SLOT] if $self->[NATIVE_COMPACT_STRUCT_SLOT];
   my @blocks = @{ $self->blocks || [] };
   my %block_index = map { ($blocks[$_]->name => $_) } 0 .. $#blocks;
-  return {
+  return $self->[NATIVE_COMPACT_STRUCT_SLOT] = {
     version => $self->version,
     operation_type_code => _operation_type_code($self->operation_type),
     operation_name => $self->operation_name,

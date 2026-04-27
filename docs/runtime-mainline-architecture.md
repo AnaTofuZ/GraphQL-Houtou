@@ -132,6 +132,8 @@
   compact runtime struct と compact program struct を part-based API で XS に渡す
 - compact program 実行では Perl 側で一時 native bundle handle を作らず、
   `execute_native_program_xs(...)` に直接渡す
+- `VMProgram` は compact native struct を memoize し、
+  specialization 後の同一 program 再実行では descriptor 再構築を避ける
 
 ## 内部通貨
 

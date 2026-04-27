@@ -43,6 +43,8 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
   compact runtime struct と compact program struct を別引数のまま XS に渡して bundle を inflate する
 - compact program の実行時は、一時的な native bundle handle を Perl 側で組み立てず、
   `execute_native_program_xs(...)` へ直接流す
+- `VMProgram` は compact native struct を memoize し、同一 program の繰り返し実行で
+  block/op 配列の Perl 再構築を避ける
 
 ### 3. Schema Graph
 

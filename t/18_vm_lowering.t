@@ -101,14 +101,13 @@ subtest 'schema can emit XS-friendly native VM descriptor' => sub {
 subtest 'schema can emit bundled native runtime and VM descriptor' => sub {
   my $bundle = $schema->compile_native_bundle_descriptor('{ viewer { id } node { id } }');
   my $codes = native_codes();
-  my %runtime_slots = map { (($_->{schema_slot_key} || '') => $_) } @{ $bundle->{runtime}{slot_catalog} || [] };
-  ok ref($bundle->{runtime}{slot_catalog}) eq 'ARRAY' && @{$bundle->{runtime}{slot_catalog}} >= 2,
+  ok ref($bundle->{runtime}{slot_catalog_compact}) eq 'ARRAY' && @{$bundle->{runtime}{slot_catalog_compact}} >= 2,
     'native bundle keeps runtime slot catalog';
-  ok defined $bundle->{runtime}{slot_catalog}[0]{completion_family_code},
+  ok defined $bundle->{runtime}{slot_catalog_compact}[0][5],
     'native bundle keeps runtime numeric family code';
-  is $runtime_slots{'VmQuery.node'}{completion_family_code}, $codes->{family_abstract},
+  is $bundle->{runtime}{slot_catalog_compact}[1][5], $codes->{family_abstract},
     'native runtime family code matches XS header constant';
-  is $runtime_slots{'VmQuery.node'}{return_type_kind_code}, $codes->{kind_interface},
+  is $bundle->{runtime}{slot_catalog_compact}[1][7], $codes->{kind_interface},
     'native runtime slot keeps return type kind code';
   ok ref($bundle->{program}{blocks_compact}) eq 'ARRAY' && @{$bundle->{program}{blocks_compact}} >= 2,
     'native bundle keeps vm program blocks';
@@ -150,7 +149,7 @@ subtest 'XS can inflate native VM bundle descriptor into a native handle' => sub
   isa_ok $handle, 'GraphQL::Houtou::Runtime::NativeBundle';
 
   my $summary = native_bundle_summary($handle);
-  is $summary->{runtime_slot_count}, scalar(@{ $bundle->{runtime}{slot_catalog} || [] }),
+  is $summary->{runtime_slot_count}, scalar(@{ $bundle->{runtime}{slot_catalog_compact} || [] }),
     'XS native handle sees runtime slot count';
   is $summary->{block_count}, scalar(@{ $bundle->{program}{blocks_compact} || [] }),
     'XS native handle sees block count';

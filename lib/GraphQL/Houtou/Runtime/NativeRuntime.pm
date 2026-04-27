@@ -68,7 +68,7 @@ sub compile_bundle_descriptor {
   my ($self, $program, %opts) = @_;
   my $candidate = $self->specialize_program($program, %opts);
   return {
-    runtime => $self->runtime_schema->to_native_struct,
+    runtime => $self->runtime_schema->to_native_compact_struct,
     program => $candidate->to_native_compact_struct,
   };
 }

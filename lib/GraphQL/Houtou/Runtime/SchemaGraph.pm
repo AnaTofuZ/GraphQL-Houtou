@@ -217,10 +217,38 @@ sub to_native_struct {
   };
 }
 
+sub to_native_compact_struct {
+  my ($self) = @_;
+  return {
+    version => $self->{version},
+    root_types => { %{ $self->{root_types} || {} } },
+    type_index => {
+      map {
+        my $entry = $self->{type_index}{$_} || {};
+        ($_ => {
+          %$entry,
+          kind_code => _type_kind_code($entry->{kind}),
+          completion_family_code => _family_code($entry->{completion_family}),
+        });
+      } keys %{ $self->{type_index} || {} }
+    },
+    dispatch_index => {
+      map {
+        my $entry = $self->{dispatch_index}{$_} || {};
+        ($_ => {
+          %$entry,
+          dispatch_family_code => _dispatch_family_code($entry->{dispatch_family}),
+        });
+      } keys %{ $self->{dispatch_index} || {} }
+    },
+    slot_catalog_compact => [ map { $_->to_native_compact_struct } @{ $self->{slot_catalog} || [] } ],
+  };
+}
+
 sub to_native_exec_struct {
   my ($self) = @_;
-  my $struct = $self->to_native_struct;
-  $struct->{slot_catalog} = [ map { $_->to_native_exec_struct } @{ $self->{slot_catalog} || [] } ];
+  my $struct = $self->to_native_compact_struct;
+  $struct->{slot_catalog_exec} = [ map { $_->to_native_exec_struct } @{ $self->{slot_catalog} || [] } ];
   $struct->{runtime_cache} = $self->{runtime_cache};
   return $struct;
 }

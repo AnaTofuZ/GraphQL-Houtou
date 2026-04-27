@@ -80,6 +80,23 @@ sub to_native_struct {
   };
 }
 
+sub to_native_compact_struct {
+  my ($self) = @_;
+  my $native = $self->to_native_struct;
+  return [
+    $native->{field_name},
+    $native->{result_name},
+    $native->{return_type_name},
+    $native->{schema_slot_index},
+    $native->{resolver_shape_code},
+    $native->{completion_family_code},
+    $native->{dispatch_family_code},
+    $native->{return_type_kind_code},
+    $native->{has_args},
+    $native->{has_directives},
+  ];
+}
+
 sub to_native_exec_struct {
   my ($self) = @_;
   my $struct = $self->to_native_struct;

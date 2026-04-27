@@ -51,7 +51,10 @@ gql_runtime_vm_fetch_runtime_slot_sv(pTHX_ SV *runtime_schema, IV schema_slot_in
   SV **slot_svp;
 
   schema_hv = gql_runtime_vm_expect_hashref(aTHX_ runtime_schema, "runtime schema");
-  catalog_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ schema_hv, "slot_catalog", 12);
+  catalog_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ schema_hv, "slot_catalog_exec", 17);
+  if (!catalog_sv) {
+    catalog_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ schema_hv, "slot_catalog", 12);
+  }
   if (!catalog_sv) {
     croak("runtime schema is missing slot_catalog");
   }
@@ -90,7 +93,10 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
   IV i;
 
   schema_hv = gql_runtime_vm_expect_hashref(aTHX_ runtime_schema, "runtime schema");
-  catalog_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ schema_hv, "slot_catalog", 12);
+  catalog_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ schema_hv, "slot_catalog_exec", 17);
+  if (!catalog_sv) {
+    catalog_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ schema_hv, "slot_catalog", 12);
+  }
   if (!catalog_sv) {
     croak("runtime schema is missing slot_catalog");
   }

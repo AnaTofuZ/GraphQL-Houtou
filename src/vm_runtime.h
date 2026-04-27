@@ -608,7 +608,10 @@ gql_runtime_vm_native_bundle_from_sv(pTHX_ SV *sv)
     croak("native VM program descriptor is missing root_block_index");
   }
 
-  svp = hv_fetch(runtime_hv, "slot_catalog", 12, 0);
+  svp = hv_fetch(runtime_hv, "slot_catalog_compact", 20, 0);
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &runtime_slots_av)) {
+    svp = hv_fetch(runtime_hv, "slot_catalog", 12, 0);
+  }
   if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &runtime_slots_av)) {
     gql_runtime_vm_native_bundle_destroy(bundle);
     croak("native VM runtime descriptor is missing slot_catalog");

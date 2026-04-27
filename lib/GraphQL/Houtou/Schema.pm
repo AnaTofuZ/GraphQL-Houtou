@@ -277,7 +277,7 @@ sub compile_vm_native_bundle_descriptor {
   my $runtime = $self->build_runtime;
   my $vm = $runtime->compile_operation($document, %opts);
   return {
-    runtime => $runtime->to_native_struct,
+    runtime => $runtime->to_native_compact_struct,
     program => $vm->to_native_compact_struct,
   };
 }

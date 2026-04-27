@@ -156,6 +156,12 @@ sub execute_program {
   return $self->execute_bundle($bundle, %opts);
 }
 
+sub execute_compact_program {
+  my ($self, $program, %opts) = @_;
+  my $descriptor = $self->compact_bundle_descriptor($program);
+  return $self->execute_bundle_descriptor($descriptor, %opts);
+}
+
 sub execute_bundle_descriptor {
   my ($self, $descriptor, %opts) = @_;
   my $bundle = $self->load_bundle_descriptor($descriptor);

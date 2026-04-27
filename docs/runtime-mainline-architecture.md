@@ -127,6 +127,7 @@
 - `Runtime::NativeBundle` の Perl wrapper は削除済み
 - native bundle は XS が提供する opaque handle
 - `Schema` が native bundle descriptor を手組みする経路は削除済み
+- `Runtime::execute_vm(...)` も compact descriptor を直組みせず `NativeRuntime` に委譲する
 
 ## 内部通貨
 

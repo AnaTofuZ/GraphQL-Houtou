@@ -107,11 +107,10 @@ sub execute_vm {
   if ($engine eq 'perl') {
     return GraphQL::Houtou::Runtime::VMExecutor->execute_program($runtime_schema, $program, %opts);
   }
-  my $descriptor = {
-    runtime => $runtime_schema->to_native_exec_struct,
-    program => $program->to_native_compact_struct,
-  };
-  return execute_vm_native_bundle($runtime_schema, $descriptor, %opts);
+  my $native_runtime = GraphQL::Houtou::Runtime::NativeRuntime->new(
+    runtime_schema => $runtime_schema,
+  );
+  return $native_runtime->execute_compact_program($program, %opts);
 }
 
 sub execute_vm_native_bundle {

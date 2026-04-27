@@ -38,6 +38,7 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 - field / abstract dispatch / slot metadata を固定する
 - native runtime / native bundle との境界を持つ
 - request-time specialization と native bundle descriptor 組み立てを `NativeRuntime` が所有する
+- `Runtime::execute_vm(...)` からの compact program 実行も `NativeRuntime` が所有する
 
 ### 3. Schema Graph
 

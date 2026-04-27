@@ -28,7 +28,8 @@
 - `GraphQL::Houtou::Runtime::OperationCompiler`
   - document から `VMProgram` を lower する
 - `GraphQL::Houtou::Runtime::VMCompiler`
-  - descriptor / native bundle 用の lower / inflate
+  - lowered `VMProgram` の lower / inflate
+  - native compact struct 自体の owner ではない
 - `GraphQL::Houtou::Runtime::NativeRuntime`
   - native specialization と native execute の owner
   - engine selection と native fast path 実行の owner

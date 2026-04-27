@@ -7,6 +7,7 @@ use Exporter 'import';
 use GraphQL::Houtou::GraphQLJS::Parser ();
 use GraphQL::Houtou::GraphQLPerl::Parser ();
 use GraphQL::Houtou::Runtime ();
+use XSLoader ();
 use GraphQL::Houtou::Promise::Adapter qw(
   set_default_promise_code
   get_default_promise_code
@@ -14,6 +15,7 @@ use GraphQL::Houtou::Promise::Adapter qw(
 );
 
 our $VERSION = '0.01';
+our $XS_BUNDLE_LOADED = 0;
 our @EXPORT_OK = qw(
   parse
   parse_with_options
@@ -28,6 +30,12 @@ our @EXPORT_OK = qw(
   get_default_promise_code
   clear_default_promise_code
 );
+
+sub _bootstrap_xs {
+  return 1 if $XS_BUNDLE_LOADED++;
+  XSLoader::load('GraphQL::Houtou', $VERSION);
+  return 1;
+}
 
 sub parse {
   return GraphQL::Houtou::GraphQLPerl::Parser::parse(@_);
@@ -383,78 +391,33 @@ Example:
 
 =head1 BENCHMARK SNAPSHOT
 
-As of 2026-04-06, practical execution benchmarks using
-C<util/execution-benchmark.pl --count=-3> produced the following snapshot:
+現在の比較対象は旧 `compiled_ir` 系ではなく、runtime/VM mainline です。
+
+主な評価軸は次の 2 系統です。
 
 =over 4
 
 =item *
 
-C<simple_scalar> AST execution:
-C<houtou_xs_ast> about 139,565/s, C<houtou_compiled_ir> about 139,515/s,
-C<upstream_ast> about 41,261/s
+cached runtime (Perl VM)
 
 =item *
 
-C<nested_variable_object> AST execution:
-C<houtou_compiled_ir> about 79,130/s, C<houtou_xs_ast> about 77,441/s,
-C<upstream_ast> about 25,041/s
-
-=item *
-
-C<list_of_objects> AST execution:
-C<houtou_xs_ast> about 58,659/s, C<houtou_compiled_ir> about 57,941/s,
-C<upstream_ast> about 17,816/s
-
-=item *
-
-C<abstract_with_fragment> AST execution:
-C<houtou_xs_ast> about 41,687/s, C<houtou_compiled_ir> about 41,647/s,
-C<upstream_ast> about 23,641/s
-
-=item *
-
-C<async_scalar> AST execution:
-C<houtou_facade_ast> about 78,946/s, C<houtou_compiled_ir> about 77,535/s,
-C<upstream_ast> about 41,389/s
-
-=item *
-
-C<async_list> AST execution:
-C<houtou_compiled_ir> about 43,671/s, C<houtou_facade_ast> about 43,260/s,
-C<upstream_ast> about 26,131/s
+cached native bundle (XS VM)
 
 =back
 
-This confirms several practical points:
+ベンチマークでは resolver の結果をキャッシュするのではなく、
+schema/runtime/program のコンパイル済み実行計画を再利用した時の
+スループットを見ます。
 
-=over 4
+典型的なコマンドは次です。
 
-=item *
+    perl util/execution-benchmark.pl --count=-3
+    perl util/execution-benchmark-checkpoint.pl --repeat=5 --count=-3
 
-the XS path is now materially faster than upstream execution in the benchmarked
-AST and source-string cases
-
-=item *
-
-compiled IR plans are now a real execution path, not just parser metadata; they
-already improve over prepared IR and are competitive with, or better than, the
-best AST-based Houtou path in several practical cases
-
-=item *
-
-the execution XS work is paying off not only for nested/list/object workloads
-but also for promise-backed scalar and list cases
-
-=item *
-
-turning off parser location handling still materially improves parse-only
-throughput when you do not need C<loc> or C<location> data
-
-=back
-
-The exact benchmark command and more detailed performance notes are kept in
-C<docs/execution-benchmark.md> and C<docs/current-context.md>.
+詳細な評価軸は C<docs/execution-benchmark.md>、現在の実装前提は
+C<docs/current-context.md> と C<docs/runtime-vm-architecture.md> にあります。
 
 =head1 NAME ORIGIN
 

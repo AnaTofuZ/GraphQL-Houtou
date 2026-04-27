@@ -5,6 +5,7 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use GraphQL::Houtou ();
 
 our $VERSION = '0.01';
 our @EXPORT_OK = qw(
@@ -16,6 +17,8 @@ our @EXPORT_OK = qw(
   execute_native_bundle_xs
 );
 
-require GraphQL::Houtou::XS::Parser;
+BEGIN {
+  GraphQL::Houtou::_bootstrap_xs();
+}
 
 1;

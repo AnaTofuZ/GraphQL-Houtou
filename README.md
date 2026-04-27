@@ -221,42 +221,24 @@ Example:
 
 # BENCHMARK SNAPSHOT
 
-As of 2026-04-06, practical execution benchmarks using
-`util/execution-benchmark.pl --count=-3` produced the following snapshot:
+現在の比較対象は旧 \`compiled\_ir\` 系ではなく、runtime/VM mainline です。
 
-- `simple_scalar` AST execution:
-`houtou_xs_ast` about 139,565/s, `houtou_compiled_ir` about 139,515/s,
-`upstream_ast` about 41,261/s
-- `nested_variable_object` AST execution:
-`houtou_compiled_ir` about 79,130/s, `houtou_xs_ast` about 77,441/s,
-`upstream_ast` about 25,041/s
-- `list_of_objects` AST execution:
-`houtou_xs_ast` about 58,659/s, `houtou_compiled_ir` about 57,941/s,
-`upstream_ast` about 17,816/s
-- `abstract_with_fragment` AST execution:
-`houtou_xs_ast` about 41,687/s, `houtou_compiled_ir` about 41,647/s,
-`upstream_ast` about 23,641/s
-- `async_scalar` AST execution:
-`houtou_facade_ast` about 78,946/s, `houtou_compiled_ir` about 77,535/s,
-`upstream_ast` about 41,389/s
-- `async_list` AST execution:
-`houtou_compiled_ir` about 43,671/s, `houtou_facade_ast` about 43,260/s,
-`upstream_ast` about 26,131/s
+主な評価軸は次の 2 系統です。
 
-This confirms several practical points:
+- cached runtime (Perl VM)
+- cached native bundle (XS VM)
 
-- the XS path is now materially faster than upstream execution in the benchmarked
-AST and source-string cases
-- compiled IR plans are now a real execution path, not just parser metadata; they
-already improve over prepared IR and are competitive with, or better than, the
-best AST-based Houtou path in several practical cases
-- the execution XS work is paying off not only for nested/list/object workloads
-but also for promise-backed scalar and list cases
-- turning off parser location handling still materially improves parse-only
-throughput when you do not need `loc` or `location` data
+ベンチマークでは resolver の結果をキャッシュするのではなく、
+schema/runtime/program のコンパイル済み実行計画を再利用した時の
+スループットを見ます。
 
-The exact benchmark command and more detailed performance notes are kept in
-`docs/execution-benchmark.md` and `docs/current-context.md`.
+典型的なコマンドは次です。
+
+    perl util/execution-benchmark.pl --count=-3
+    perl util/execution-benchmark-checkpoint.pl --repeat=5 --count=-3
+
+詳細な評価軸は `docs/execution-benchmark.md`、現在の実装前提は
+`docs/current-context.md` と `docs/runtime-vm-architecture.md` にあります。
 
 # NAME ORIGIN
 

@@ -6,9 +6,9 @@ use warnings;
 use Exporter 'import';
 use GraphQL ();
 use GraphQL::Error;
+use GraphQL::Houtou ();
 use GraphQL::Language::Receiver ();
 use JSON::PP ();
-use XSLoader ();
 
 our $VERSION = '0.01';
 our @EXPORT_OK = qw(
@@ -27,7 +27,9 @@ our @EXPORT_OK = qw(
   tokenize_xs
 );
 
-XSLoader::load('GraphQL::Houtou', $VERSION);
+BEGIN {
+  GraphQL::Houtou::_bootstrap_xs();
+}
 
 sub _make_bool {
   return $_[0] ? JSON::PP::true : JSON::PP::false;

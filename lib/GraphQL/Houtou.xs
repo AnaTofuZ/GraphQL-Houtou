@@ -1,14 +1,12 @@
 #include "bootstrap.h"
 #include "parser_core.h"
+#include "parser_compat.h"
 #include "graphqljs_runtime.h"
+#include "graphqljs_ir_runtime.h"
 #include "graphqljs_convert.h"
 #include "schema_compiler.h"
 #include "validation.h"
-#include "execution.h"
-#include "ir_engine.h"
-#include "ir_execution.h"
 #include "vm_runtime.h"
-#include "legacy_compat.h"
 
 static HV *
 gql_runtime_vm_expect_hashref(pTHX_ SV *sv, const char *what)

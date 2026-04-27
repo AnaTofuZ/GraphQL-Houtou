@@ -159,6 +159,46 @@ subtest 'native resolver mode lets explicit resolver use native runtime' => sub 
   ok $called, 'execute_runtime selected native engine for native-safe explicit resolver';
 };
 
+subtest 'native resolver mode supports static literal args on native runtime' => sub {
+  my $called = 0;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_bundle;
+  my $native_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'NativeArgsQuery',
+      fields => {
+        nativeGreet => {
+          type => $String,
+          resolver_mode => 'native',
+          args => {
+            name => { type => $String },
+          },
+          resolve => sub {
+            my ($source, $args) = @_;
+            return "hi $args->{name}";
+          },
+        },
+      },
+    ),
+  );
+
+  {
+    no warnings 'redefine';
+    local *GraphQL::Houtou::Native::execute_native_bundle = sub {
+      $called = 1;
+      goto &$orig;
+    };
+    my $result = $native_schema->execute_runtime('{ nativeGreet(name: "vm") }');
+    is_deeply $result, {
+      data => {
+        nativeGreet => 'hi vm',
+      },
+      errors => [],
+    }, 'native runtime passes static args to explicit resolver';
+  }
+
+  ok $called, 'execute_runtime selected native engine for native-safe explicit resolver with static args';
+};
+
 subtest 'schema helper can compile and execute in one call' => sub {
   my $result = $schema->execute_runtime('{ viewer { id } }');
   is_deeply $result, {

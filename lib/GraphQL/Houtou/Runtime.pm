@@ -228,13 +228,17 @@ sub _preferred_engine_for_program {
 
   for my $block (@{ $program->blocks || [] }) {
     for my $op (@{ $block->ops || [] }) {
-      return 'perl' if $op->has_args || $op->has_directives;
+      return 'perl' if $op->has_directives;
       my $slot = $op->bound_slot or next;
       my $shape = $slot->resolver_shape || q();
       my $mode = $slot->resolver_mode || q();
       if ($shape ne 'DEFAULT') {
         return 'perl' if $shape ne 'EXPLICIT';
         return 'perl' if $mode ne 'NATIVE';
+      }
+      if ($op->has_args) {
+        my $args_mode = $op->args_mode || q();
+        return 'perl' if $args_mode ne 'STATIC';
       }
       my $dispatch = $slot->dispatch_family || q();
       return 'perl'

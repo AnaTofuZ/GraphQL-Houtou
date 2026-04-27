@@ -4533,9 +4533,17 @@ This fixes the first real bridge-design bug we hit in the reboot:
     lazy `info` 互換を要求しない resolver に限定して使う。
   - compiler / slot catalog / native descriptor まで `resolver_mode` を保持する。
   - `Runtime::_preferred_engine_for_program(...)` は
-    - args / directives / variables が無い
+    - directives / variables が無い
     - resolver shape が `DEFAULT`
       または `EXPLICIT + resolver_mode=NATIVE`
+    - args がある場合は `args_mode=STATIC`
     の program を native 候補として扱う。
   - `t/15_runtime_execute.t` では `execute_runtime(...)` が
     native-safe explicit resolver を実際に native 境界へ流すことを固定した。
+  - native VM bundle は static args payload を owned で保持し、
+    実行時に deep clone した args hash/array を resolver ABI
+    `($source, $args, $context, $return_type)` へ渡す。
+  - これにより native-safe explicit resolver は
+    - no-arg
+    - static literal args
+    の 2 パターンまで native hot path に乗る。

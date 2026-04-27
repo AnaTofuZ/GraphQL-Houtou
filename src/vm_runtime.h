@@ -30,6 +30,12 @@ enum {
 };
 
 enum {
+  GQL_VM_ARGS_NONE = 0,
+  GQL_VM_ARGS_STATIC = 1,
+  GQL_VM_ARGS_DYNAMIC = 2
+};
+
+enum {
   GQL_VM_KIND_UNKNOWN = 0,
   GQL_VM_KIND_SCALAR = 1,
   GQL_VM_KIND_OBJECT = 2,
@@ -72,6 +78,8 @@ typedef struct {
   IV slot_index;
   IV child_block_index;
   IV abstract_child_count;
+  IV args_mode_code;
+  SV *args_payload_sv;
   U8 has_args;
   U8 has_directives;
 } gql_runtime_vm_native_op_t;
@@ -148,6 +156,9 @@ gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
         for (j = 0; j < bundle->blocks[i].op_count; j++) {
           Safefree(bundle->blocks[i].ops[j].abstract_child_names);
           Safefree(bundle->blocks[i].ops[j].abstract_child_indexes);
+          if (bundle->blocks[i].ops[j].args_payload_sv) {
+            SvREFCNT_dec(bundle->blocks[i].ops[j].args_payload_sv);
+          }
         }
       }
       Safefree(bundle->blocks[i].slots);
@@ -368,6 +379,10 @@ gql_runtime_vm_parse_native_op(pTHX_ SV *sv, gql_runtime_vm_native_op_t *out)
     out->abstract_child_names = NULL;
     out->abstract_child_indexes = NULL;
   }
+  svp = hv_fetch(hv, "args_mode_code", 14, 0);
+  out->args_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : GQL_VM_ARGS_NONE;
+  svp = hv_fetch(hv, "args_payload", 12, 0);
+  out->args_payload_sv = (svp && SvOK(*svp)) ? newSVsv(*svp) : NULL;
   return 1;
 }
 

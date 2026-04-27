@@ -111,6 +111,8 @@ sub to_native_struct {
     slot_index => defined $slot_id && exists $slot_index->{$slot_id}
       ? $slot_index->{$slot_id}
       : undef,
+    args_mode_code => _args_mode_code($self->{args_mode}),
+    args_payload => _clone_value($self->{args_mode} && $self->{args_mode} eq 'STATIC' ? $self->{args_payload} : undef),
     args_mode => $self->{args_mode},
     has_args => $self->{has_args},
     directives_mode => $self->{directives_mode},
@@ -133,6 +135,13 @@ sub _dispatch_family_code {
   return 3 if ($family || q()) eq 'TAG';
   return 4 if ($family || q()) eq 'POSSIBLE_TYPES';
   return 1;
+}
+
+sub _args_mode_code {
+  my ($mode) = @_;
+  return 1 if ($mode || q()) eq 'STATIC';
+  return 2 if ($mode || q()) eq 'DYNAMIC';
+  return 0;
 }
 
 sub _clone_value {

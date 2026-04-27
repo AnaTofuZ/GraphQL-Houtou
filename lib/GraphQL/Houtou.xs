@@ -273,6 +273,58 @@ gql_runtime_vm_clone_value_sv(pTHX_ SV *value)
 }
 
 static SV *
+gql_runtime_vm_clone_args_payload_sv(pTHX_ SV *value)
+{
+  if (!value) {
+    return newSVsv(&PL_sv_undef);
+  }
+  if (!SvROK(value)) {
+    return newSVsv(value);
+  }
+
+  switch (SvTYPE(SvRV(value))) {
+    case SVt_PVHV: {
+      HV *src_hv = (HV *)SvRV(value);
+      HV *dst_hv = newHV();
+      HE *he;
+      hv_iterinit(src_hv);
+      while ((he = hv_iternext(src_hv))) {
+        SV *keysv = hv_iterkeysv(he);
+        SV *val = HeVAL(he);
+        hv_store_ent(dst_hv, keysv, gql_runtime_vm_clone_args_payload_sv(aTHX_ val), 0);
+      }
+      return newRV_noinc((SV *)dst_hv);
+    }
+    case SVt_PVAV: {
+      AV *src_av = (AV *)SvRV(value);
+      AV *dst_av = newAV();
+      IV i;
+      av_extend(dst_av, av_count(src_av) > 0 ? av_count(src_av) - 1 : 0);
+      for (i = 0; i < av_count(src_av); i++) {
+        SV **item_svp = av_fetch(src_av, i, 0);
+        av_store(dst_av, i, gql_runtime_vm_clone_args_payload_sv(aTHX_ (item_svp && SvOK(*item_svp)) ? *item_svp : &PL_sv_undef));
+      }
+      return newRV_noinc((SV *)dst_av);
+    }
+    default:
+      return newSVsv(value);
+  }
+}
+
+static SV *
+gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
+{
+  const gql_runtime_vm_native_op_t *op = state->op;
+  if (!op) {
+    return newRV_noinc((SV *)newHV());
+  }
+  if (op->args_mode_code == GQL_VM_ARGS_STATIC && op->args_payload_sv) {
+    return gql_runtime_vm_clone_args_payload_sv(aTHX_ op->args_payload_sv);
+  }
+  return newRV_noinc((SV *)newHV());
+}
+
+static SV *
 gql_runtime_vm_resolve_current_field_default(pTHX_ gql_runtime_vm_exec_state_t *state, SV *source)
 {
   SV *resolver_sv;
@@ -287,7 +339,7 @@ gql_runtime_vm_resolve_current_field_default(pTHX_ gql_runtime_vm_exec_state_t *
   return_type_sv = runtime->slot_return_types ? runtime->slot_return_types[slot->schema_slot_index] : NULL;
 
   if (resolver_sv && SvOK(resolver_sv)) {
-    SV *args = sv_2mortal(newRV_noinc((SV *)newHV()));
+    SV *args = sv_2mortal(gql_runtime_vm_build_current_args_sv(aTHX_ state));
     return gql_runtime_vm_call_cb4(aTHX_ resolver_sv, source, args, state->context, return_type_sv ? return_type_sv : &PL_sv_undef);
   }
 
@@ -465,7 +517,7 @@ gql_runtime_vm_resolve_current_field_explicit(pTHX_ gql_runtime_vm_exec_state_t 
   }
 
   {
-    SV *args = sv_2mortal(newRV_noinc((SV *)newHV()));
+    SV *args = sv_2mortal(gql_runtime_vm_build_current_args_sv(aTHX_ state));
     return gql_runtime_vm_call_cb4(
       aTHX_
       resolver_sv,

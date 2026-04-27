@@ -899,6 +899,7 @@ The currently supported native execution slice is intentionally narrow:
 
 - sync / no-promise execution
 - default and explicit resolver calls
+- static literal args for explicit resolvers marked `resolver_mode => 'native'`
 - object child blocks
 - list child blocks
 - abstract dispatch through:
@@ -931,6 +932,13 @@ In practice this means:
 - but they should delegate native execution through the runtime bridge
 - dump/load-friendly descriptor payloads must not be polluted with
   execution-only Perl objects or bindings
+
+For static literal args, this boundary is:
+
+- lowering stores a serializable static payload in the VM op descriptor
+- native bundle inflation owns that payload in C
+- each resolver call deep-clones the payload into a fresh Perl args value
+- child runtime modules still do not call XS directly
 
 This keeps the architecture coherent even after the pure-Perl VM is replaced
 by the native runtime.

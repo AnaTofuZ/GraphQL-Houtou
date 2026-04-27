@@ -15,7 +15,8 @@ our @EXPORT_OK = qw(
 );
 
 my $HAS_XS_BACKEND = eval {
-  require GraphQL::Houtou::Backend::XS;
+  require GraphQL::Houtou::XS::Parser;
+  GraphQL::Houtou::XS::Parser->import(qw(parse_xs graphqljs_parse_document_xs));
   1;
 };
 
@@ -30,18 +31,19 @@ sub _parse_via_pegex {
 
 sub _parse_via_xs {
   my ($source, $no_location, $options) = @_;
-  require GraphQL::Houtou::Backend::XS;
-  my $document = GraphQL::Houtou::Backend::XS::parse($source, $no_location);
+  my $document = parse_xs($source, $no_location);
   enforce_legacy_compat($source, $options);
   return $document;
 }
 
 sub _parse_via_canonical_xs {
   my ($source, $no_location, $options) = @_;
-  require GraphQL::Houtou::Backend::GraphQLJS::XS;
-  my $document = GraphQL::Houtou::Backend::GraphQLJS::XS::parse($source, {
-    no_location => $no_location,
-  });
+  my $document = graphqljs_parse_document_xs(
+    $source,
+    $no_location ? 1 : 0,
+    0,
+    0,
+  );
   return convert_canonical_document($document, $source, $options);
 }
 

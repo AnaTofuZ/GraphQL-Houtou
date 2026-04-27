@@ -40,8 +40,7 @@ sub _parse_legacy_document {
   die "graphql-js parser only supports backend 'xs'.\n"
     if ($backend || '') ne 'xs';
 
-  require GraphQL::Houtou::Backend::XS;
-  return GraphQL::Houtou::Backend::XS::parse($source, $no_location);
+  return parse_xs($source, $no_location);
 }
 
 sub _build_graphqljs_document_from_legacy {

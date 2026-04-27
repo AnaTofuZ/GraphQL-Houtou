@@ -53,10 +53,10 @@ my $ast = GraphQL::Houtou::parse_with_options($source, {
 ### 4. Backend modules are split by implementation
 
 - `GraphQL::Houtou::Backend::Pegex`
-- `GraphQL::Houtou::Backend::XS`
+- `GraphQL::Houtou::XS::Parser`
 
 `GraphQL::Language::Parser` 依存は `Backend::Pegex` に閉じ込め、
-通常経路は `Backend::XS` を使う。
+通常経路は `XS::Parser` の XSUB / Perl helper を直接使う。
 
 ## Current Stage
 

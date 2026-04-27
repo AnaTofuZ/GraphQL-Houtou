@@ -9,7 +9,6 @@ use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Runtime::Compiler ();
 use GraphQL::Houtou::Runtime::NativeRuntime ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
-use GraphQL::Houtou::Runtime::ProgramSpecializer ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Runtime::VMExecutor ();
 
@@ -72,7 +71,7 @@ sub execute_program {
   $opts{engine} = delete $opts{vm_engine}
     if !defined $opts{engine} && exists $opts{vm_engine};
   if (!defined $opts{engine} || $opts{engine} eq 'native') {
-    $candidate_program = GraphQL::Houtou::Runtime::ProgramSpecializer->specialize_for_native(
+    $candidate_program = GraphQL::Houtou::Runtime::NativeRuntime->specialize_program_for_native(
       $runtime_schema,
       $vm_program,
       %opts,

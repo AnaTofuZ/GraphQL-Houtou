@@ -396,7 +396,9 @@ sub benchmark_case {
 
   if ($native_bundle) {
     push @checks, [ 'houtou_runtime_native_bundle', sub {
-      return maybe_get($native_bundle->execute);
+      return maybe_get(
+        $native_runtime->execute_bundle($native_bundle)
+      );
     } ];
   }
 

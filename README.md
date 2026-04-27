@@ -10,6 +10,8 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
       parse_with_options
       execute
       compile_runtime
+      compile_native_bundle
+      execute_native_runtime
       set_default_promise_code
     );
     use GraphQL::Houtou::Schema;
@@ -53,6 +55,8 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
 
     my $result = execute($schema, '{ hello }');
     my $runtime = compile_runtime($schema);
+    my $bundle = compile_native_bundle($schema, '{ hello }');
+    my $native = execute_native_runtime($schema, '{ hello }');
 
     set_default_promise_code({
       resolve => sub { ... },
@@ -120,6 +124,15 @@ If you need a reusable compiled runtime, use:
     my $runtime = GraphQL::Houtou::compile_runtime($schema);
     my $program = $runtime->compile_operation($document);
     my $result  = $runtime->execute_operation($program, variables => \%vars);
+
+If you want a boot-time native artifact, use:
+
+    my $bundle = GraphQL::Houtou::compile_native_bundle($schema, $document);
+    my $result = $bundle->execute;
+
+Or execute directly through the cached native runtime:
+
+    my $result = GraphQL::Houtou::execute_native_runtime($schema, $document);
 
 This runtime-backed API prefers the native XS engine when the lowered program
 stays within the current native-safe subset. Programs that still require

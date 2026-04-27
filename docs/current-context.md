@@ -89,8 +89,13 @@ New runtime entrypoints now include:
 - `$runtime_schema->lower_vm_program($program)`
 - `$schema->execute_runtime($document, %opts)`
 - `$schema->compile_operation($document)`
+- `$schema->compile_native_bundle($document, %opts)`
+- `$schema->compile_native_bundle_descriptor($document, %opts)`
+- `$schema->execute_native_runtime($document, %opts)`
 - `GraphQL::Houtou::execute($schema, $document, \%variables?)`
 - `GraphQL::Houtou::compile_runtime($schema, %opts)`
+- `GraphQL::Houtou::compile_native_bundle($schema, $document, %opts)`
+- `GraphQL::Houtou::execute_native_runtime($schema, $document, %opts)`
 
 Mainline execution policy:
 

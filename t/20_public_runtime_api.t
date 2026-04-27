@@ -4,7 +4,15 @@ use Test::More;
 use File::Temp qw(tempfile);
 
 use lib 'lib';
-use GraphQL::Houtou qw(execute compile_runtime build_runtime build_native_runtime);
+use GraphQL::Houtou qw(
+  execute
+  compile_runtime
+  build_runtime
+  build_native_runtime
+  compile_native_bundle
+  compile_native_bundle_descriptor
+  execute_native_runtime
+);
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);
@@ -146,6 +154,22 @@ subtest 'native runtime can round-trip bundle descriptors' => sub {
   }, 'dumped and loaded native bundle descriptor still executes';
 };
 
+subtest 'top-level compile_native_bundle returns executable bundle' => sub {
+  my $bundle = compile_native_bundle($schema, '{ hello }');
+  isa_ok $bundle, 'GraphQL::Houtou::Runtime::NativeBundle';
+  my $result = $bundle->execute;
+  is_deeply $result, {
+    data => { hello => 'world' },
+    errors => [],
+  }, 'top-level bundle compile returns executable native bundle';
+};
+
+subtest 'top-level compile_native_bundle_descriptor returns compact descriptor' => sub {
+  my $descriptor = compile_native_bundle_descriptor($schema, '{ hello }');
+  ok $descriptor->{runtime}, 'descriptor keeps runtime payload';
+  ok $descriptor->{program}, 'descriptor keeps program payload';
+};
+
 subtest 'schema execute_native_runtime reuses cached native runtime handle' => sub {
   $schema->clear_runtime_cache;
   my $load_count = 0;
@@ -172,6 +196,14 @@ subtest 'schema execute_native_runtime reuses cached native runtime handle' => s
   }
 
   is $load_count, 1, 'execute_native_runtime reuses cached native runtime handle';
+};
+
+subtest 'top-level execute_native_runtime uses cached native path' => sub {
+  my $result = execute_native_runtime($schema, '{ hello }');
+  is_deeply $result, {
+    data => { hello => 'world' },
+    errors => [],
+  }, 'top-level execute_native_runtime delegates to schema native runtime';
 };
 
 done_testing;

@@ -215,6 +215,13 @@ sub compile_native_bundle_descriptor {
   };
 }
 
+sub compile_native_bundle {
+  my ($self, $document, %opts) = @_;
+  my $runtime = $self->build_native_runtime;
+  my $program = $runtime->compile_program($document, %opts);
+  return $runtime->compile_bundle($program, %opts);
+}
+
 sub dump_native_bundle_descriptor {
   my ($self, $document, $path, %opts) = @_;
   my $descriptor = $self->compile_native_bundle_descriptor($document, %opts);
@@ -225,6 +232,18 @@ sub dump_native_bundle_descriptor {
 sub load_native_bundle_descriptor {
   my ($self, $path) = @_;
   return _read_json_descriptor($path);
+}
+
+sub load_native_bundle {
+  my ($self, $descriptor) = @_;
+  my $runtime = $self->build_native_runtime;
+  return $runtime->load_bundle_descriptor($descriptor);
+}
+
+sub load_native_bundle_file {
+  my ($self, $path) = @_;
+  my $runtime = $self->build_native_runtime;
+  return $runtime->load_bundle_descriptor_file($path);
 }
 
 sub inflate_vm_operation {

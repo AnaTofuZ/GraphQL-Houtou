@@ -134,6 +134,8 @@
   `execute_native_program_xs(...)` に直接渡す
 - `VMProgram` は compact native struct を memoize し、
   specialization 後の同一 program 再実行では descriptor 再構築を避ける
+- `NativeRuntime->execute_program(...)` も `compile_bundle -> execute_bundle` を通らず、
+  `specialize -> execute_compact_program` の経路へ寄せてある
 
 ## 内部通貨
 

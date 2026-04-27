@@ -167,8 +167,8 @@ sub load_bundle_descriptor_file {
 
 sub execute_program {
   my ($self, $program, %opts) = @_;
-  my $bundle = $self->compile_bundle($program, %opts);
-  return $self->execute_bundle($bundle, %opts);
+  my $candidate = $self->specialize_program($program, %opts);
+  return $self->execute_compact_program($candidate, %opts);
 }
 
 sub execute_compact_program {

@@ -45,6 +45,8 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
   `execute_native_program_xs(...)` へ直接流す
 - `VMProgram` は compact native struct を memoize し、同一 program の繰り返し実行で
   block/op 配列の Perl 再構築を避ける
+- `NativeRuntime->execute_program(...)` も `compile_bundle -> execute_bundle` を通らず、
+  `specialize -> execute_compact_program` の mainline を使う
 
 ### 3. Schema Graph
 

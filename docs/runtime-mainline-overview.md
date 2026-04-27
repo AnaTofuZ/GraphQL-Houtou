@@ -25,8 +25,8 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 
 - XS bundle bootstrap の入口を 1 箇所にまとめる
 - schema compile / operation compile / VM execute の公開 API を提供する
-- `Runtime.pm` は最小の facade に留め、native bundle inflate/execute のような内部 alias は持たない
-- low-level native handle 操作は `Runtime.pm` ではなく `GraphQL::Houtou::Native` に集約する
+- `GraphQL::Houtou::Runtime` façade は削除済み
+- low-level native handle 操作は `GraphQL::Houtou::Native` に集約する
 - ただし native mainline の内部 hot path は `Runtime::NativeRuntime` から
   `GraphQL::Houtou::XS::VM::*` を直接呼び、`GraphQL::Houtou::Native` は public low-level facade として残す
 

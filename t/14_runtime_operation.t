@@ -4,10 +4,8 @@ use warnings;
 use Test::More 0.98;
 use File::Temp qw(tempfile);
 
-use GraphQL::Houtou::Runtime qw(
-  compile_program
-  inflate_program
-);
+use GraphQL::Houtou::Runtime::OperationCompiler ();
+use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
@@ -87,7 +85,7 @@ subtest 'schema runtime can lower source into execution program' => sub {
 
 subtest 'top-level helper can lower operation source' => sub {
   my $runtime = $schema->compile_runtime;
-  my $program = compile_program($runtime, '{ search }');
+  my $program = GraphQL::Houtou::Runtime::OperationCompiler->compile_operation($runtime, '{ search }');
 
   isa_ok $program, 'GraphQL::Houtou::Runtime::VMProgram';
   my ($search) = @{ $program->root_block->ops };
@@ -109,7 +107,7 @@ subtest 'execution program descriptor can round-trip back into executable progra
   my $runtime = $schema->compile_runtime;
   my $program = $runtime->compile_program('{ viewer { id name } }');
   my $descriptor = $program->to_struct;
-  my $inflated = inflate_program($runtime, $descriptor);
+  my $inflated = GraphQL::Houtou::Runtime::VMCompiler->inflate_program($runtime, $descriptor);
 
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::VMProgram';
   is $inflated->operation_type, 'query', 'inflated program keeps operation type';

@@ -13,6 +13,8 @@
 - native 実行は `NativeRuntime` と XS VM boundary に集約する
 - public な low-level native API は `GraphQL::Houtou::Native` に残すが、
   `NativeRuntime` の内部 hot path は `GraphQL::Houtou::XS::VM::*` を直接呼ぶ
+- `GraphQL::Houtou::Runtime` façade 層は削除し、`Schema` / `SchemaGraph` /
+  `Compiler` / `NativeRuntime` が直接 mainline を構成する
 - Pure Perl VM は bring-up / fallback / 低速 path として残し、本命は native bundle 実行とする
 
 ## レイヤー構成

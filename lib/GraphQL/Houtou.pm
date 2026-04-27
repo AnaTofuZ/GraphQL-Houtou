@@ -58,8 +58,7 @@ sub parse_with_options {
 
 sub compile_runtime {
   my ($schema, %opts) = @_;
-  require GraphQL::Houtou::Runtime;
-  return GraphQL::Houtou::Runtime::compile_schema($schema, %opts);
+  return $schema->compile_runtime(%opts);
 }
 
 sub build_runtime {
@@ -69,8 +68,7 @@ sub build_runtime {
 
 sub build_native_runtime {
   my ($schema, %opts) = @_;
-  require GraphQL::Houtou::Runtime;
-  return GraphQL::Houtou::Runtime::build_native_runtime($schema, %opts);
+  return $schema->build_native_runtime(%opts);
 }
 
 sub compile_native_bundle {

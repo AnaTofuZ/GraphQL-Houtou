@@ -5,7 +5,7 @@ use Test::More 0.98;
 use File::Temp qw(tempfile);
 
 use GraphQL::Houtou::Schema;
-use GraphQL::Houtou::Runtime qw(compile_schema inflate_schema);
+use GraphQL::Houtou::Runtime::Compiler ();
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);
@@ -64,7 +64,7 @@ subtest 'schema can compile runtime graph' => sub {
 };
 
 subtest 'top-level compile helper returns same graph kind' => sub {
-  my $compiled = compile_schema($schema);
+  my $compiled = GraphQL::Houtou::Runtime::Compiler->compile_schema($schema);
   isa_ok $compiled, 'GraphQL::Houtou::Runtime::SchemaGraph';
 };
 
@@ -83,7 +83,7 @@ subtest 'runtime graph records field families and dispatch shapes' => sub {
 
 subtest 'runtime graph can round-trip through descriptor form' => sub {
   my $descriptor = $schema->compile_runtime_descriptor;
-  my $inflated = inflate_schema($schema, $descriptor);
+  my $inflated = GraphQL::Houtou::Runtime::Compiler->inflate_schema($schema, $descriptor);
 
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::SchemaGraph';
   is $inflated->root_block('query')->name, 'QUERY', 'inflated graph restores root block';

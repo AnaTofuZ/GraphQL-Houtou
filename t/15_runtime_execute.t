@@ -4,6 +4,7 @@ use warnings;
 use JSON::PP ();
 use Test::More 0.98;
 
+use GraphQL::Houtou::Runtime::Compiler ();
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
@@ -320,7 +321,7 @@ subtest 'cached runtime program can execute on native runtime with request varia
 
 subtest 'inflated runtime descriptor can still drive native specialization' => sub {
   my $runtime = $schema->build_runtime;
-  my $inflated = GraphQL::Houtou::Runtime::inflate_schema($schema, $runtime->to_struct);
+  my $inflated = GraphQL::Houtou::Runtime::Compiler->inflate_schema($schema, $runtime->to_struct);
   my $program = $inflated->compile_program(
     'query Q($show: Boolean = true) { greet(name: "Ana") @include(if: $show) }',
   );

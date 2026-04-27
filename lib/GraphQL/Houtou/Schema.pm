@@ -10,8 +10,9 @@ use Moo;
 use Types::Standard qw(HashRef Object ArrayRef);
 
 use GraphQL::Houtou::Directive ();
-use GraphQL::Houtou::Runtime ();
+use GraphQL::Houtou::Runtime::Compiler ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
+use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Type::Scalar qw($Int $Float $String $Boolean $ID);
 use GraphQL::Houtou::Introspection qw($SCHEMA_META_TYPE);
 
@@ -74,15 +75,23 @@ sub prepare_runtime {
 
 sub compile_runtime {
   my ($self, %opts) = @_;
-  return GraphQL::Houtou::Runtime::compile_schema($self, %opts);
+  return GraphQL::Houtou::Runtime::Compiler->compile_schema($self, %opts);
 }
 
 sub build_native_runtime {
   my ($self, %opts) = @_;
-  return GraphQL::Houtou::Runtime::build_native_runtime($self, %opts)
-    if %opts;
+  if (%opts) {
+    my $runtime_schema = $self->compile_runtime(%opts);
+    require GraphQL::Houtou::Runtime::NativeRuntime;
+    return GraphQL::Houtou::Runtime::NativeRuntime->new(
+      runtime_schema => $runtime_schema,
+    );
+  }
   return $self->{_compiled_native_runtime} if $self->{_compiled_native_runtime};
-  return $self->{_compiled_native_runtime} = GraphQL::Houtou::Runtime::build_native_runtime($self);
+  require GraphQL::Houtou::Runtime::NativeRuntime;
+  return $self->{_compiled_native_runtime} = GraphQL::Houtou::Runtime::NativeRuntime->new(
+    runtime_schema => $self->build_runtime,
+  );
 }
 
 sub build_runtime {
@@ -104,7 +113,7 @@ sub compile_native_runtime_descriptor {
 
 sub inflate_runtime {
   my ($self, $descriptor) = @_;
-  return GraphQL::Houtou::Runtime::inflate_schema($self, $descriptor);
+  return GraphQL::Houtou::Runtime::Compiler->inflate_schema($self, $descriptor);
 }
 
 sub dump_runtime_descriptor {
@@ -159,7 +168,7 @@ sub load_program_descriptor {
 sub inflate_program {
   my ($self, $descriptor, %opts) = @_;
   my $runtime = $self->build_runtime;
-  return $runtime->inflate_program($descriptor);
+  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program($runtime, $descriptor);
 }
 
 sub execute {

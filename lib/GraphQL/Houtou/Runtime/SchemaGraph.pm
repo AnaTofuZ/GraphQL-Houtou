@@ -64,8 +64,33 @@ sub inflate_program {
 
 sub execute_program {
   my ($self, $program, %opts) = @_;
-  require GraphQL::Houtou::Runtime;
-  return GraphQL::Houtou::Runtime::execute_program($self, $program, %opts);
+  require GraphQL::Houtou::Runtime::NativeRuntime;
+  require GraphQL::Houtou::Runtime::VMCompiler;
+  require GraphQL::Houtou::Runtime::VMExecutor;
+  my $vm_program = $program->isa('GraphQL::Houtou::Runtime::VMProgram')
+    ? $program
+    : GraphQL::Houtou::Runtime::VMCompiler->lower_program($self, $program);
+  my $candidate_program = $vm_program;
+  $opts{engine} = delete $opts{vm_engine}
+    if !defined $opts{engine} && exists $opts{vm_engine};
+  if (!defined $opts{engine} || $opts{engine} eq 'native') {
+    $candidate_program = GraphQL::Houtou::Runtime::NativeRuntime->specialize_program_for_native(
+      $self,
+      $vm_program,
+      %opts,
+    );
+  }
+  my $engine = _preferred_engine_for_program($candidate_program, %opts);
+  $engine = $opts{engine} if defined $opts{engine};
+  die "Requested native engine for a program that cannot be specialized into the native VM path.\n"
+    if $engine eq 'native'
+    && _preferred_engine_for_program($candidate_program, %opts) ne 'native';
+  return GraphQL::Houtou::Runtime::VMExecutor->execute_program($self, $vm_program, %opts)
+    if $engine eq 'perl';
+  my $native_runtime = GraphQL::Houtou::Runtime::NativeRuntime->new(
+    runtime_schema => $self,
+  );
+  return $native_runtime->execute_compact_program($candidate_program, %opts);
 }
 
 sub build_native_runtime {
@@ -177,6 +202,39 @@ sub _family_code {
   return 3 if ($family || q()) eq 'LIST';
   return 4 if ($family || q()) eq 'ABSTRACT';
   return 1;
+}
+
+sub _preferred_engine_for_program {
+  my ($program, %opts) = @_;
+  return 'perl' if $opts{promise_code};
+  return 'perl' if !$program || !$program->can('blocks');
+  return 'perl' if keys %{ $program->variable_defs || {} };
+
+  for my $block (@{ $program->blocks || [] }) {
+    for my $op (@{ $block->ops || [] }) {
+      return 'perl' if $op->has_directives;
+      my $slot = $op->bound_slot or next;
+      my $shape = $slot->resolver_shape || q();
+      my $mode = $slot->resolver_mode || q();
+      if ($shape ne 'DEFAULT') {
+        return 'perl' if $shape ne 'EXPLICIT';
+        return 'perl' if $mode ne 'NATIVE';
+      }
+      if ($op->has_args) {
+        my $args_mode = $op->args_mode || q();
+        return 'perl' if $args_mode ne 'STATIC';
+      }
+      my $dispatch = $slot->dispatch_family || q();
+      return 'perl'
+        if $dispatch ne 'GENERIC'
+        && $dispatch ne 'TAG'
+        && $dispatch ne 'OBJECT'
+        && $dispatch ne 'LIST'
+        && $dispatch ne 'ABSTRACT';
+    }
+  }
+
+  return 'native';
 }
 
 sub _dispatch_family_code {

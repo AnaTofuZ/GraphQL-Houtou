@@ -1056,8 +1056,8 @@ execution unit.
 
 These APIs should all return or consume VM programs by default.
 
-Lowered pre-VM artifacts still exist, but only as explicit internal or
-diagnostic escape hatches:
+The old lowered pre-VM artifact layer is no longer a separate runtime shape.
+Compatibility names remain, but they now alias the same VM artifact path:
 
 - `compile_lowered_operation`
 - `compile_lowered_program`

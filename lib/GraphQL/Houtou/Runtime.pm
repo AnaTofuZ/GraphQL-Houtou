@@ -7,7 +7,6 @@ use warnings;
 use Exporter 'import';
 use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Runtime::Compiler ();
-use GraphQL::Houtou::Runtime::Executor ();
 use GraphQL::Houtou::Runtime::NativeRuntime ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::ProgramSpecializer ();
@@ -71,8 +70,7 @@ sub inflate_schema {
 
 sub compile_program {
   my ($runtime_schema, $document, %opts) = @_;
-  my $program = compile_lowered_program($runtime_schema, $document, %opts);
-  return lower_program_to_vm($runtime_schema, $program);
+  return compile_lowered_program($runtime_schema, $document, %opts);
 }
 
 sub compile_operation {
@@ -145,11 +143,14 @@ sub execute_operation_perl {
 }
 
 sub execute_lowered_program_perl {
-  return GraphQL::Houtou::Runtime::Executor->execute_operation(@_);
+  my ($runtime_schema, $program, %opts) = @_;
+  $opts{engine} = 'perl';
+  return execute_program($runtime_schema, $program, %opts);
 }
 
 sub execute_lowered_operation_perl {
-  return GraphQL::Houtou::Runtime::Executor->execute_operation(@_);
+  my ($runtime_schema, $program, %opts) = @_;
+  return execute_lowered_program_perl($runtime_schema, $program, %opts);
 }
 
 sub lower_program_to_vm {

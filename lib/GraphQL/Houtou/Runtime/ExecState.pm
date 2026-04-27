@@ -6,11 +6,13 @@ use warnings;
 
 use GraphQL::Houtou::Promise::Adapter qw(is_promise_value normalize_promise_code then_promise);
 use GraphQL::Houtou::Runtime::BlockFrame ();
+use GraphQL::Houtou::Runtime::Cursor ();
 use GraphQL::Houtou::Runtime::ErrorRecord ();
 use GraphQL::Houtou::Runtime::FieldFrame ();
 use GraphQL::Houtou::Runtime::LazyInfo ();
 use GraphQL::Houtou::Runtime::Outcome ();
 use GraphQL::Houtou::Runtime::PathFrame ();
+use GraphQL::Houtou::Runtime::Writer ();
 use GraphQL::Houtou::Schema ();
 
 sub new {

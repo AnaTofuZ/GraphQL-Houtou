@@ -5,10 +5,35 @@ use strict;
 use warnings;
 
 use GraphQL::Houtou::GraphQLPerl::Parser ();
-use GraphQL::Houtou::Runtime::ExecutionProgram ();
-use GraphQL::Houtou::Runtime::ExecutionBlock ();
-use GraphQL::Houtou::Runtime::Instruction ();
 use GraphQL::Houtou::Runtime::Slot ();
+use GraphQL::Houtou::Runtime::VMBlock ();
+use GraphQL::Houtou::Runtime::VMDispatch ();
+use GraphQL::Houtou::Runtime::VMOp ();
+use GraphQL::Houtou::Runtime::VMProgram ();
+
+my %RESOLVE_HANDLER = (
+  RESOLVE_DEFAULT  => 'resolve_default',
+  RESOLVE_EXPLICIT => 'resolve_explicit',
+);
+
+my %RESOLVE_CODE = (
+  RESOLVE_DEFAULT  => 1,
+  RESOLVE_EXPLICIT => 2,
+);
+
+my %COMPLETE_HANDLER = (
+  COMPLETE_GENERIC  => 'complete_generic',
+  COMPLETE_OBJECT   => 'complete_object',
+  COMPLETE_LIST     => 'complete_list',
+  COMPLETE_ABSTRACT => 'complete_abstract',
+);
+
+my %COMPLETE_CODE = (
+  COMPLETE_GENERIC  => 1,
+  COMPLETE_OBJECT   => 2,
+  COMPLETE_LIST     => 3,
+  COMPLETE_ABSTRACT => 4,
+);
 
 sub compile_operation {
   my ($class, $runtime_schema, $document, %opts) = @_;
@@ -37,7 +62,7 @@ sub compile_operation {
     uc($operation_type),
   );
 
-  my $program = GraphQL::Houtou::Runtime::ExecutionProgram->new(
+  my $program = GraphQL::Houtou::Runtime::VMProgram->new(
     operation_type => $operation_type,
     operation_name => $operation->{name},
     variable_defs => _lower_variable_defs($operation->{variables}),
@@ -46,6 +71,7 @@ sub compile_operation {
   );
 
   _bind_instruction_blocks($program);
+  GraphQL::Houtou::Runtime::VMDispatch->bind_program($program);
   return $program;
 }
 
@@ -55,7 +81,7 @@ sub inflate_operation {
   my %by_name = map { ($_->name => $_) } @blocks;
   my $root_block = defined $struct->{root_block} ? $by_name{ $struct->{root_block} } : undef;
   _bind_instructions_to_schema_slots($runtime_schema, \@blocks);
-  my $program = GraphQL::Houtou::Runtime::ExecutionProgram->new(
+  my $program = GraphQL::Houtou::Runtime::VMProgram->new(
     version => $struct->{version} || 1,
     operation_type => $struct->{operation_type} || 'query',
     operation_name => $struct->{operation_name},
@@ -64,20 +90,21 @@ sub inflate_operation {
     root_block => $root_block,
   );
   _bind_instruction_blocks($program);
+  GraphQL::Houtou::Runtime::VMDispatch->bind_program($program);
   return $program;
 }
 
 sub _lower_selection_block {
   my ($state, $type_name, $schema_block, $selections, $base_name) = @_;
   my %schema_slots = map { ($_->field_name => $_) } @{ $schema_block->slots || [] };
-  my @instructions;
+  my @ops;
   my $field_selections = _normalize_selections($state, $selections, $type_name);
 
   for my $selection (@{ $field_selections || [] }) {
     next if !$selection || ($selection->{kind} || '') ne 'field';
     my $field_name = $selection->{name};
     if (($field_name || q()) eq '__typename') {
-      push @instructions, _build_typename_instruction($state, $type_name, $selection);
+      push @ops, _build_typename_instruction($state, $type_name, $selection);
       next;
     }
     my $slot = $schema_slots{$field_name} or next;
@@ -107,12 +134,18 @@ sub _lower_selection_block {
       }
     }
 
-    push @instructions, GraphQL::Houtou::Runtime::Instruction->new(
+    my $resolve_family = _resolve_op_for_slot($slot);
+    my $complete_family = _complete_op_for_slot($slot);
+    push @ops, GraphQL::Houtou::Runtime::VMOp->new(
+      opcode => join(q(:), $resolve_family, $complete_family),
+      opcode_code => (($RESOLVE_CODE{$resolve_family} || 0) * 16) + ($COMPLETE_CODE{$complete_family} || 0),
       field_name => $field_name,
       result_name => ($selection->{alias} || $field_name),
       return_type_name => $slot->return_type_name,
-      resolve_op => _resolve_op_for_slot($slot),
-      complete_op => _complete_op_for_slot($slot),
+      resolve_family => $resolve_family,
+      resolve_code => $RESOLVE_CODE{$resolve_family} || 0,
+      complete_family => $complete_family,
+      complete_code => $COMPLETE_CODE{$complete_family} || 0,
       dispatch_family => $slot->dispatch_family,
       arg_defs => $slot->arg_defs,
       has_args => $slot->has_args,
@@ -127,14 +160,16 @@ sub _lower_selection_block {
       abstract_dispatch => (($slot->completion_family || '') eq 'ABSTRACT')
         ? _bind_abstract_dispatch($state->{runtime_schema}, $slot->return_type_name)
         : undef,
+      resolve_handler => $RESOLVE_HANDLER{$resolve_family},
+      complete_handler => $COMPLETE_HANDLER{$complete_family},
     );
   }
 
-  my $block = GraphQL::Houtou::Runtime::ExecutionBlock->new(
+  my $block = GraphQL::Houtou::Runtime::VMBlock->new(
     name => _next_block_name($state, $base_name),
     type_name => $type_name,
     family => 'OBJECT',
-    instructions => \@instructions,
+    ops => \@ops,
   );
   push @{ $state->{blocks} }, $block;
   return $block;
@@ -148,22 +183,28 @@ sub _next_block_name {
 
 sub _inflate_execution_block {
   my ($struct) = @_;
-  return GraphQL::Houtou::Runtime::ExecutionBlock->new(
+  return GraphQL::Houtou::Runtime::VMBlock->new(
     name => $struct->{name},
     type_name => $struct->{type_name},
     family => $struct->{family} || 'OBJECT',
-    instructions => [ map { _inflate_instruction($_) } @{ $struct->{instructions} || [] } ],
+    ops => [ map { _inflate_instruction($_) } @{ $struct->{ops} || $struct->{instructions} || [] } ],
   );
 }
 
 sub _inflate_instruction {
   my ($struct) = @_;
-  return GraphQL::Houtou::Runtime::Instruction->new(
+  my $resolve_family = $struct->{resolve_family} || $struct->{resolve_op} || 'RESOLVE_DEFAULT';
+  my $complete_family = $struct->{complete_family} || $struct->{complete_op} || 'COMPLETE_GENERIC';
+  return GraphQL::Houtou::Runtime::VMOp->new(
+    opcode => $struct->{opcode} || join(q(:), $resolve_family, $complete_family),
+    opcode_code => $struct->{opcode_code} || (($RESOLVE_CODE{$resolve_family} || 0) * 16) + ($COMPLETE_CODE{$complete_family} || 0),
     field_name => $struct->{field_name},
     result_name => $struct->{result_name},
     return_type_name => $struct->{return_type_name},
-    resolve_op => $struct->{resolve_op},
-    complete_op => $struct->{complete_op},
+    resolve_family => $resolve_family,
+    resolve_code => $struct->{resolve_code} || $RESOLVE_CODE{$resolve_family} || 0,
+    complete_family => $complete_family,
+    complete_code => $struct->{complete_code} || $COMPLETE_CODE{$complete_family} || 0,
     dispatch_family => $struct->{dispatch_family},
     arg_defs => _clone_argument_value($struct->{arg_defs} || {}),
     has_args => $struct->{has_args},
@@ -174,6 +215,8 @@ sub _inflate_instruction {
     directives_payload => _clone_argument_value($struct->{directives_payload}),
     child_block_name => $struct->{child_block_name},
     abstract_child_blocks => _clone_argument_value($struct->{abstract_child_blocks} || {}),
+    resolve_handler => $RESOLVE_HANDLER{$resolve_family},
+    complete_handler => $COMPLETE_HANDLER{$complete_family},
   );
 }
 
@@ -183,12 +226,12 @@ sub _bind_instructions_to_schema_slots {
   for my $block (@{ $blocks || [] }) {
     my $schema_block = $runtime_schema->program->block_by_type_name($block->type_name) or next;
     my %slots = map { ($_->field_name => $_) } @{ $schema_block->slots || [] };
-    for my $instruction (@{ $block->instructions || [] }) {
-      $instruction->{bound_slot} = $slots{ $instruction->field_name };
-      $instruction->{abstract_dispatch} = _bind_abstract_dispatch(
+    for my $op (@{ $block->ops || [] }) {
+      $op->set_bound_slot($slots{ $op->field_name });
+      $op->set_abstract_dispatch(_bind_abstract_dispatch(
         $runtime_schema,
-        $instruction->return_type_name,
-      ) if ($instruction->complete_op || '') eq 'COMPLETE_ABSTRACT';
+        $op->return_type_name,
+      )) if ($op->complete_family || '') eq 'COMPLETE_ABSTRACT';
     }
   }
 
@@ -204,16 +247,16 @@ sub _bind_instruction_blocks {
 
   for my $block (@{ $program->blocks || [] }, ($program->root_block || ())) {
     next if !$block;
-    for my $instruction (@{ $block->instructions || [] }) {
-      $instruction->{bound_child_block} = $instruction->child_block_name
-        ? $by_name{ $instruction->child_block_name }
-        : undef;
-      $instruction->{bound_abstract_child_blocks} = {
+    for my $op (@{ $block->ops || [] }) {
+      $op->set_bound_child_block($op->child_block_name
+        ? $by_name{ $op->child_block_name }
+        : undef);
+      $op->set_bound_abstract_child_blocks({
         map {
-          my $child_name = $instruction->abstract_child_blocks->{$_};
+          my $child_name = $op->abstract_child_blocks->{$_};
           ($_ => ($child_name ? $by_name{$child_name} : undef))
-        } keys %{ $instruction->abstract_child_blocks || {} }
-      };
+        } keys %{ $op->abstract_child_blocks || {} }
+      });
     }
   }
 
@@ -310,12 +353,18 @@ sub _build_typename_instruction {
   my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
   my $result_name = ($selection->{alias} || '__typename');
   my $slot = _lookup_typename_slot($state->{runtime_schema}, $type_name, $result_name, $directives_mode);
-  return GraphQL::Houtou::Runtime::Instruction->new(
+  my $resolve_family = 'RESOLVE_DEFAULT';
+  my $complete_family = 'COMPLETE_GENERIC';
+  return GraphQL::Houtou::Runtime::VMOp->new(
+    opcode => 'RESOLVE_DEFAULT:COMPLETE_GENERIC',
+    opcode_code => (($RESOLVE_CODE{$resolve_family} || 0) * 16) + ($COMPLETE_CODE{$complete_family} || 0),
     field_name => '__typename',
     result_name => $result_name,
     return_type_name => 'String',
-    resolve_op => 'RESOLVE_DEFAULT',
-    complete_op => 'COMPLETE_GENERIC',
+    resolve_family => $resolve_family,
+    resolve_code => $RESOLVE_CODE{$resolve_family} || 0,
+    complete_family => $complete_family,
+    complete_code => $COMPLETE_CODE{$complete_family} || 0,
     dispatch_family => 'DEFAULT',
     arg_defs => {},
     has_args => 0,
@@ -325,6 +374,8 @@ sub _build_typename_instruction {
     directives_mode => $directives_mode,
     directives_payload => $directives_payload,
     bound_slot => $slot,
+    resolve_handler => $RESOLVE_HANDLER{$resolve_family},
+    complete_handler => $COMPLETE_HANDLER{$complete_family},
   );
 }
 

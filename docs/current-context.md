@@ -53,10 +53,10 @@ Runtime scaffold checkpoint:
   - `GraphQL::Houtou::Runtime::Program`
   - `GraphQL::Houtou::Runtime::Block`
   - `GraphQL::Houtou::Runtime::Slot`
-  - `GraphQL::Houtou::Runtime::ExecutionProgram`
-  - `GraphQL::Houtou::Runtime::ExecutionBlock`
-  - `GraphQL::Houtou::Runtime::Instruction`
-  - `GraphQL::Houtou::Runtime::Executor`
+  - `GraphQL::Houtou::Runtime::VMProgram`
+  - `GraphQL::Houtou::Runtime::VMBlock`
+  - `GraphQL::Houtou::Runtime::VMOp`
+  - `GraphQL::Houtou::Runtime::VMExecutor`
   - `GraphQL::Houtou::Runtime::ExecState`
   - `GraphQL::Houtou::Runtime::Cursor`
   - `GraphQL::Houtou::Runtime::Outcome`
@@ -66,8 +66,8 @@ Runtime scaffold checkpoint:
   - compile root blocks and field slots
   - classify resolver/completion/dispatch families
   - export/import runtime descriptors
-  - lower source/AST into execution programs with root/child blocks and
-    `RESOLVE_*` / `COMPLETE_*` instruction families
+  - lower source/AST directly into VM programs with root/child blocks and
+    `RESOLVE_*` / `COMPLETE_*` op families
   - execute sync/no-promise object/list/default-resolver/abstract-tag programs through the
     new runtime
 
@@ -76,6 +76,8 @@ New runtime entrypoints now include:
 - `GraphQL::Houtou::Runtime::compile_operation($runtime_schema, $document)`
 - `GraphQL::Houtou::Runtime::inflate_operation($runtime_schema, $descriptor)`
 - `GraphQL::Houtou::Runtime::execute_operation($runtime_schema, $program, %opts)`
+- `compile_lowered_*` / `inflate_lowered_*` remain only as compatibility names and now
+  return the same VM artifacts
 - `$schema->compile_operation($document)`
 - `$schema->compile_operation_descriptor($document)`
 - `$schema->inflate_operation($descriptor)`

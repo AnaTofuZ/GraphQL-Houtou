@@ -45,8 +45,7 @@ sub block_by_type_name {
 
 sub compile_operation {
   my ($self, $document, %opts) = @_;
-  my $program = $self->compile_lowered_operation($document, %opts);
-  return $self->lower_vm_program($program);
+  return $self->compile_lowered_operation($document, %opts);
 }
 
 sub compile_program {
@@ -67,8 +66,7 @@ sub compile_lowered_program {
 
 sub inflate_operation {
   my ($self, $descriptor) = @_;
-  require GraphQL::Houtou::Runtime::VMCompiler;
-  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program($self, $descriptor);
+  return $self->inflate_lowered_operation($descriptor);
 }
 
 sub inflate_program {

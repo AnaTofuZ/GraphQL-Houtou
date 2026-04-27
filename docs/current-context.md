@@ -76,8 +76,6 @@ New runtime entrypoints now include:
 - `GraphQL::Houtou::Runtime::compile_operation($runtime_schema, $document)`
 - `GraphQL::Houtou::Runtime::inflate_operation($runtime_schema, $descriptor)`
 - `GraphQL::Houtou::Runtime::execute_operation($runtime_schema, $program, %opts)`
-- `compile_lowered_*` / `inflate_lowered_*` remain only as compatibility names and now
-  return the same VM artifacts
 - `$schema->compile_operation($document)`
 - `$schema->compile_operation_descriptor($document)`
 - `$schema->inflate_operation($descriptor)`
@@ -103,8 +101,7 @@ Mainline execution policy:
 now prefer the native XS engine when the lowered program stays within the
 current native-safe subset.
 Programs outside that subset automatically fall back to the Perl VM.
-`execute_runtime_perl(...)` / `execute_program_perl(...)` remain as explicit
-cold-path validation hooks.
+The Perl VM remains available only through `engine => 'perl'`.
 
 Current operation lowering shape:
 

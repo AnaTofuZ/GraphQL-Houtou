@@ -1057,12 +1057,12 @@ execution unit.
 These APIs should all return or consume VM programs by default.
 
 The old lowered pre-VM artifact layer is no longer a separate runtime shape.
-Compatibility names remain, but they now alias the same VM artifact path:
+Callers should use only the VM-facing names:
 
-- `compile_lowered_operation`
-- `compile_lowered_program`
-- `inflate_lowered_operation`
-- `inflate_lowered_program`
+- `compile_operation`
+- `compile_program`
+- `inflate_operation`
+- `inflate_program`
 
 This keeps callers off intermediate artifact shapes and makes the VM runtime
 the single mainline execution model.

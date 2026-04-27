@@ -45,7 +45,8 @@ sub block_by_type_name {
 
 sub compile_operation {
   my ($self, $document, %opts) = @_;
-  return $self->compile_lowered_operation($document, %opts);
+  require GraphQL::Houtou::Runtime::OperationCompiler;
+  return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation($self, $document, %opts);
 }
 
 sub compile_program {
@@ -53,36 +54,15 @@ sub compile_program {
   return $self->compile_operation($document, %opts);
 }
 
-sub compile_lowered_operation {
-  my ($self, $document, %opts) = @_;
-  require GraphQL::Houtou::Runtime::OperationCompiler;
-  return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation($self, $document, %opts);
-}
-
-sub compile_lowered_program {
-  my ($self, $document, %opts) = @_;
-  return $self->compile_lowered_operation($document, %opts);
-}
-
 sub inflate_operation {
   my ($self, $descriptor) = @_;
-  return $self->inflate_lowered_operation($descriptor);
+  require GraphQL::Houtou::Runtime::VMCompiler;
+  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program($self, $descriptor);
 }
 
 sub inflate_program {
   my ($self, $descriptor) = @_;
   return $self->inflate_operation($descriptor);
-}
-
-sub inflate_lowered_operation {
-  my ($self, $descriptor) = @_;
-  require GraphQL::Houtou::Runtime::OperationCompiler;
-  return GraphQL::Houtou::Runtime::OperationCompiler->inflate_operation($self, $descriptor);
-}
-
-sub inflate_lowered_program {
-  my ($self, $descriptor) = @_;
-  return $self->inflate_lowered_operation($descriptor);
 }
 
 sub execute_operation {
@@ -94,30 +74,6 @@ sub execute_operation {
 sub execute_program {
   my ($self, $program, %opts) = @_;
   return $self->execute_operation($program, %opts);
-}
-
-sub execute_program_perl {
-  my ($self, $program, %opts) = @_;
-  require GraphQL::Houtou::Runtime;
-  return GraphQL::Houtou::Runtime::execute_program_perl($self, $program, %opts);
-}
-
-sub execute_lowered_program_perl {
-  my ($self, $program, %opts) = @_;
-  require GraphQL::Houtou::Runtime;
-  return GraphQL::Houtou::Runtime::execute_lowered_program_perl($self, $program, %opts);
-}
-
-sub lower_vm_program {
-  my ($self, $program) = @_;
-  return $program if eval { $program->isa('GraphQL::Houtou::Runtime::VMProgram') };
-  require GraphQL::Houtou::Runtime::VMCompiler;
-  return GraphQL::Houtou::Runtime::VMCompiler->lower_program($self, $program);
-}
-
-sub lower_program_to_vm {
-  my ($self, $program) = @_;
-  return $self->lower_vm_program($program);
 }
 
 sub inflate_vm_program {
@@ -147,16 +103,6 @@ sub build_native_runtime {
 sub inflate_vm_bundle {
   my ($self, $descriptor) = @_;
   return $self->inflate_vm_native_bundle($descriptor);
-}
-
-sub execute_vm_program {
-  my ($self, $program, %opts) = @_;
-  return $self->execute_operation($program, %opts);
-}
-
-sub execute_vm {
-  my ($self, $program, %opts) = @_;
-  return $self->execute_vm_program($program, %opts);
 }
 
 sub execute_vm_native_bundle {

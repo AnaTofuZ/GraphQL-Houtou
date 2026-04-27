@@ -18,27 +18,16 @@ our @EXPORT_OK = qw(
   build_runtime
   build_native_runtime
   inflate_schema
-  compile_lowered_program
-  compile_lowered_operation
-  inflate_lowered_program
-  inflate_lowered_operation
-  execute_lowered_program_perl
-  execute_lowered_operation_perl
   compile_program
   compile_operation
   inflate_program
   inflate_operation
-  execute_program_perl
-  execute_operation_perl
   execute_program
   execute_operation
-  lower_program_to_vm
-  lower_vm_program
   inflate_vm_bundle
   inflate_vm_program
   inflate_vm_native_bundle
   execute_vm
-  execute_vm_program
   execute_vm_native_bundle
   native_codes
   load_native_bundle
@@ -70,20 +59,12 @@ sub inflate_schema {
 
 sub compile_program {
   my ($runtime_schema, $document, %opts) = @_;
-  return compile_lowered_program($runtime_schema, $document, %opts);
+  return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation($runtime_schema, $document, %opts);
 }
 
 sub compile_operation {
   my ($runtime_schema, $document, %opts) = @_;
   return compile_program($runtime_schema, $document, %opts);
-}
-
-sub compile_lowered_program {
-  return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation(@_);
-}
-
-sub compile_lowered_operation {
-  return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation(@_);
 }
 
 sub inflate_program {
@@ -94,19 +75,11 @@ sub inflate_operation {
   return GraphQL::Houtou::Runtime::VMCompiler->inflate_program(@_);
 }
 
-sub inflate_lowered_program {
-  return GraphQL::Houtou::Runtime::OperationCompiler->inflate_operation(@_);
-}
-
-sub inflate_lowered_operation {
-  return GraphQL::Houtou::Runtime::OperationCompiler->inflate_operation(@_);
-}
-
 sub execute_program {
   my ($runtime_schema, $program, %opts) = @_;
   my $vm_program = _is_vm_program($program)
     ? $program
-    : lower_program_to_vm($runtime_schema, $program);
+    : GraphQL::Houtou::Runtime::VMCompiler->lower_program($runtime_schema, $program);
   my $candidate_program = $vm_program;
   $opts{engine} = delete $opts{vm_engine}
     if !defined $opts{engine} && exists $opts{vm_engine};
@@ -129,38 +102,6 @@ sub execute_program {
 sub execute_operation {
   my ($runtime_schema, $program, %opts) = @_;
   return execute_program($runtime_schema, $program, %opts);
-}
-
-sub execute_program_perl {
-  my ($runtime_schema, $program, %opts) = @_;
-  $opts{engine} = 'perl';
-  return execute_program($runtime_schema, $program, %opts);
-}
-
-sub execute_operation_perl {
-  my ($runtime_schema, $program, %opts) = @_;
-  return execute_program_perl($runtime_schema, $program, %opts);
-}
-
-sub execute_lowered_program_perl {
-  my ($runtime_schema, $program, %opts) = @_;
-  $opts{engine} = 'perl';
-  return execute_program($runtime_schema, $program, %opts);
-}
-
-sub execute_lowered_operation_perl {
-  my ($runtime_schema, $program, %opts) = @_;
-  return execute_lowered_program_perl($runtime_schema, $program, %opts);
-}
-
-sub lower_program_to_vm {
-  my ($runtime_schema, $program) = @_;
-  return $program if _is_vm_program($program);
-  return GraphQL::Houtou::Runtime::VMCompiler->lower_program($runtime_schema, $program);
-}
-
-sub lower_vm_program {
-  return lower_program_to_vm(@_);
 }
 
 sub inflate_vm_bundle {
@@ -189,11 +130,6 @@ sub execute_vm {
     program => $program->to_native_compact_struct,
   };
   return execute_vm_native_bundle($runtime_schema, $descriptor, %opts);
-}
-
-sub execute_vm_program {
-  my ($runtime_schema, $program, %opts) = @_;
-  return execute_vm($runtime_schema, $program, %opts);
 }
 
 sub execute_vm_native_bundle {

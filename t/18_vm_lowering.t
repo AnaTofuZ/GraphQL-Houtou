@@ -135,7 +135,7 @@ subtest 'native VM bundle descriptor can round-trip through JSON helpers' => sub
 
 subtest 'native VM bundle can inflate back into a VM program' => sub {
   my $bundle = $schema->compile_native_bundle_descriptor('{ viewer { id } node { id } }');
-  my $vm = $schema->inflate_vm_native_bundle_descriptor($bundle);
+  my $vm = $schema->inflate_native_bundle_descriptor($bundle);
   isa_ok $vm, 'GraphQL::Houtou::Runtime::VMProgram';
   isa_ok $vm->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
   is $vm->root_block->ops->[0]->field_name, 'viewer', 'inflated native bundle restores field name';

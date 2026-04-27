@@ -2,7 +2,7 @@
 
 ## Purpose
 
-実行系の主系が greenfield runtime / VM / native bundle に移ったため、
+実行系の主系が runtime / VM / native bundle に移ったため、
 execution benchmark の評価軸もそれに合わせる。
 
 この benchmark が見るものは次の 2 系統です。
@@ -77,5 +77,5 @@ promise case では native bundle を使わず、Perl runtime を比較対象に
 3. nested / list / abstract の 3 系統で極端な regress がないか
 
 つまり、評価対象は
-**「旧 executor より何 % 速いか」ではなく、greenfield runtime の control plane と native data plane の分離が実利を生んでいるか**
+**「旧 executor より何 % 速いか」ではなく、runtime の control plane と native data plane の分離が実利を生んでいるか**
 です。

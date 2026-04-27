@@ -5,8 +5,8 @@ use Test::More 0.98;
 use File::Temp qw(tempfile);
 
 use GraphQL::Houtou::Runtime qw(
-  compile_lowered_program
-  inflate_lowered_program
+  compile_program
+  inflate_program
 );
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Interface;
@@ -66,7 +66,7 @@ my $schema = GraphQL::Houtou::Schema->new(
 
 subtest 'schema runtime can lower source into execution program' => sub {
   my $runtime = $schema->compile_runtime;
-  my $program = $runtime->compile_lowered_operation('{ viewer { id name } }');
+  my $program = $runtime->compile_operation('{ viewer { id name } }');
 
   isa_ok $program, 'GraphQL::Houtou::Runtime::VMProgram';
   isa_ok $program->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
@@ -87,7 +87,7 @@ subtest 'schema runtime can lower source into execution program' => sub {
 
 subtest 'top-level helper can lower operation source' => sub {
   my $runtime = $schema->compile_runtime;
-  my $program = compile_lowered_program($runtime, '{ search }');
+  my $program = compile_program($runtime, '{ search }');
 
   isa_ok $program, 'GraphQL::Houtou::Runtime::VMProgram';
   my ($search) = @{ $program->root_block->ops };
@@ -96,7 +96,7 @@ subtest 'top-level helper can lower operation source' => sub {
 };
 
 subtest 'execution program can round-trip through struct form' => sub {
-  my $program = $schema->compile_lowered_operation('{ viewer { id } }');
+  my $program = $schema->compile_operation('{ viewer { id } }');
   my $struct = $program->to_struct;
   my ($root_block) = grep { $_->{name} eq $struct->{root_block} } @{ $struct->{blocks} };
 
@@ -107,9 +107,9 @@ subtest 'execution program can round-trip through struct form' => sub {
 
 subtest 'execution program descriptor can round-trip back into executable program' => sub {
   my $runtime = $schema->compile_runtime;
-  my $program = $runtime->compile_lowered_operation('{ viewer { id name } }');
+  my $program = $runtime->compile_operation('{ viewer { id name } }');
   my $descriptor = $program->to_struct;
-  my $inflated = inflate_lowered_program($runtime, $descriptor);
+  my $inflated = inflate_program($runtime, $descriptor);
 
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::VMProgram';
   is $inflated->operation_type, 'query', 'inflated program keeps operation type';
@@ -122,8 +122,8 @@ subtest 'execution program descriptor can round-trip back into executable progra
 };
 
 subtest 'schema helper can compile and inflate operation descriptors' => sub {
-  my $descriptor = $schema->compile_lowered_operation('{ viewer { id } }')->to_struct;
-  my $inflated = $schema->inflate_lowered_operation($descriptor);
+  my $descriptor = $schema->compile_operation('{ viewer { id } }')->to_struct;
+  my $inflated = $schema->inflate_operation($descriptor);
 
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::VMProgram';
   is $inflated->root_block->type_name, 'Query', 'schema helper inflates operation root block';
@@ -133,7 +133,7 @@ subtest 'operation descriptor can round-trip through JSON file helpers' => sub {
   my ($fh, $path) = tempfile();
   close $fh;
 
-  my $descriptor = $schema->compile_lowered_operation('{ viewer { id } }')->to_struct;
+  my $descriptor = $schema->compile_operation('{ viewer { id } }')->to_struct;
   open my $out, '>', $path or die $!;
   print {$out} JSON::PP::encode_json($descriptor);
   close $out;
@@ -141,7 +141,7 @@ subtest 'operation descriptor can round-trip through JSON file helpers' => sub {
   local $/;
   my $loaded = JSON::PP::decode_json(<$in>);
   close $in;
-  my $inflated = $schema->inflate_lowered_operation($loaded);
+  my $inflated = $schema->inflate_operation($loaded);
 
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::VMProgram';
   is_deeply $inflated->to_struct, $descriptor, 'schema helper preserves operation descriptor through file boundary';
@@ -149,8 +149,8 @@ subtest 'operation descriptor can round-trip through JSON file helpers' => sub {
 
 subtest 'instruction lowering classifies static and dynamic args' => sub {
   my $runtime = $schema->compile_runtime;
-  my $static = $runtime->compile_lowered_operation('{ greet(name: "Ana") }');
-  my $dynamic = $runtime->compile_lowered_operation('query Q($name: String) { greet(name: $name) }');
+  my $static = $runtime->compile_operation('{ greet(name: "Ana") }');
+  my $dynamic = $runtime->compile_operation('query Q($name: String) { greet(name: $name) }');
 
   my ($static_greet) = grep { $_->field_name eq 'greet' } @{ $static->root_block->ops };
   my ($dynamic_greet) = grep { $_->field_name eq 'greet' } @{ $dynamic->root_block->ops };
@@ -164,7 +164,7 @@ subtest 'instruction lowering classifies static and dynamic args' => sub {
 
 subtest 'operation variable definitions are lowered into immutable program metadata' => sub {
   my $runtime = $schema->compile_runtime;
-  my $program = $runtime->compile_lowered_operation('query Q($name: String = "Ana") { greet(name: $name) }');
+  my $program = $runtime->compile_operation('query Q($name: String = "Ana") { greet(name: $name) }');
 
   is_deeply $program->variable_defs, {
     name => {
@@ -177,7 +177,7 @@ subtest 'operation variable definitions are lowered into immutable program metad
 
 subtest 'fragment spreads are normalized into lowered child blocks' => sub {
   my $runtime = $schema->compile_runtime;
-  my $program = $runtime->compile_lowered_operation(<<'GRAPHQL');
+  my $program = $runtime->compile_operation(<<'GRAPHQL');
 query Q {
   viewer { ...UserBits }
 }
@@ -195,7 +195,7 @@ GRAPHQL
 
 subtest 'include/skip directives are lowered onto instructions as runtime guards' => sub {
   my $runtime = $schema->compile_runtime;
-  my $program = $runtime->compile_lowered_operation('query Q($show: Boolean) { viewer { id name @include(if: $show) } }');
+  my $program = $runtime->compile_operation('query Q($show: Boolean) { viewer { id name @include(if: $show) } }');
   my ($viewer) = grep { $_->field_name eq 'viewer' } @{ $program->root_block->ops };
   my $child = $program->block_by_name($viewer->child_block_name);
   my ($name) = grep { $_->field_name eq 'name' } @{ $child->ops };

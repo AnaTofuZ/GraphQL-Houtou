@@ -358,7 +358,7 @@ subtest 'schema helper can compile and execute in one call' => sub {
 };
 
 subtest 'schema helper can still force the Perl executor' => sub {
-  my $result = $schema->execute_runtime_perl('{ viewer { id } }');
+  my $result = $schema->execute_runtime('{ viewer { id } }', engine => 'perl');
   is_deeply $result, {
     data => {
       viewer => { id => 'u1' },

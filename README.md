@@ -125,7 +125,7 @@ This runtime-backed API prefers the native XS engine when the lowered program
 stays within the current native-safe subset. Programs that still require
 features not yet lowered into the native engine automatically fall back to the
 Perl VM. The Perl VM remains available as an explicit cold path via
-`execute_runtime_perl(...)`/`execute_program_perl(...)`.
+`engine => 'perl'`.
 
 The runtime-backed API above is the intended mainline. Older execution
 compatibility tests live under `legacy-tests/` and are no longer part of the

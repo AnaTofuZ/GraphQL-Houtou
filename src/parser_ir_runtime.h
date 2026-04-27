@@ -1,8 +1,8 @@
 /*
- * Parser compatibility layer only.
+ * Parser-internal IR/AST bridge only.
  *
  * Responsibility: executable-document IR allocation, parsing, cleanup, and
- * graphql-js-shaped AST building from the compact parser IR.
+ * parser AST building from the compact parser IR.
  *
  * This header is parser-side IR/AST glue. It is not part of the runtime/VM
  * execution mainline.
@@ -1322,7 +1322,7 @@ gqlperl_convert_type_from_gqljs(pTHX_ SV *node_sv) {
     return newRV_noinc((SV *)av);
   }
 
-  croak("Unsupported graphql-js type node '%s'.", kind);
+  croak("Unsupported parser type node '%s'.", kind);
 }
 
 static SV *
@@ -1396,7 +1396,7 @@ gqlperl_convert_value_from_gqljs(pTHX_ SV *node_sv) {
     return newRV_noinc((SV *)dst_hv);
   }
 
-  croak("Unsupported graphql-js value node '%s'.", kind);
+  croak("Unsupported parser value node '%s'.", kind);
 }
 
 static SV *
@@ -1482,7 +1482,7 @@ gqlperl_convert_selection_from_gqljs(pTHX_ SV *node_sv) {
   AV *selection_av;
 
   if (!node_sv || !SvROK(node_sv) || SvTYPE(SvRV(node_sv)) != SVt_PVHV) {
-    croak("Unsupported graphql-js selection node");
+    croak("Unsupported parser selection node");
   }
   src_hv = (HV *)SvRV(node_sv);
   kind = gql_parser_fetch_kind(src_hv);
@@ -1551,7 +1551,7 @@ gqlperl_convert_selection_from_gqljs(pTHX_ SV *node_sv) {
   }
 
   SvREFCNT_dec((SV *)dst_hv);
-  croak("Unsupported graphql-js selection node '%s'.", kind);
+  croak("Unsupported parser selection node '%s'.", kind);
 }
 
 static SV *

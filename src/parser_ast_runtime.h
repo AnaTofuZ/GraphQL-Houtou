@@ -1,12 +1,12 @@
 /*
- * Parser compatibility layer only.
+ * Parser-internal AST runtime layer only.
  *
- * Responsibility: graphql-js-shaped parser AST helpers for lazy arrays,
+ * Responsibility: parser AST helpers for lazy arrays,
  * location context management, and token-driven AST node location assignment.
  *
  * This header is not part of the runtime/VM mainline. It exists only because
  * the public parser surface still returns graphql-perl-compatible AST while
- * some parser internals continue to use graphql-js-shaped node helpers.
+ * some parser internals continue to use parser-shaped node helpers.
  */
 static HV *
 gql_parser_node_hv(SV *node_sv) {
@@ -79,7 +79,7 @@ gql_parser_fetch_array(HV *hv, const char *key) {
 
       if (!materialized_sv || !SvROK(materialized_sv) || SvTYPE(SvRV(materialized_sv)) != SVt_PVAV) {
         SvREFCNT_dec(materialized_sv);
-        croak("graphql-js lazy array materialization returned a non-array reference");
+        croak("parser lazy array materialization returned a non-array reference");
       }
       av = (AV *)SvRV(materialized_sv);
       SvREFCNT_dec(materialized_sv);
@@ -252,7 +252,7 @@ gql_parser_attach_magic_state(pTHX_ SV *sv, SV *state_sv) {
   sv_magicext(sv, NULL, PERL_MAGIC_ext, &gql_parser_lazy_state_vtbl, NULL, 0);
   mg = mg_findext(sv, PERL_MAGIC_ext, &gql_parser_lazy_state_vtbl);
   if (!mg) {
-    croak("failed to attach graphql-js lazy state");
+    croak("failed to attach parser lazy state");
   }
   mg->mg_ptr = (char *)SvREFCNT_inc_simple_NN(state_sv);
 }
@@ -353,7 +353,7 @@ gql_parser_materialize_lazy_array(pTHX_ SV *state_sv, UV ptr, IV kind) {
       );
   }
 
-  croak("Unknown graphql-js lazy array kind %" IVdf, kind);
+  croak("Unknown parser lazy array kind %" IVdf, kind);
   return NULL;
 }
 
@@ -671,7 +671,7 @@ gql_parser_locate_type_node(pTHX_ gql_parser_t *p, SV *node_sv) {
   SV *loc;
 
   if (!kind) {
-    croak("graphqljs executable loc expected type node");
+    croak("parser executable loc expected type node");
   }
 
   if (strcmp(kind, "NamedType") == 0) {
@@ -694,7 +694,7 @@ gql_parser_locate_type_node(pTHX_ gql_parser_t *p, SV *node_sv) {
     return loc;
   }
 
-  croak("Unsupported graphqljs executable type node %s", kind);
+  croak("Unsupported parser executable type node %s", kind);
 }
 
 static SV *
@@ -706,7 +706,7 @@ gql_parser_locate_value_node(pTHX_ gql_parser_t *p, SV *node_sv) {
   I32 i;
 
   if (!kind) {
-    croak("graphqljs executable loc expected value node");
+    croak("parser executable loc expected value node");
   }
 
   if (strcmp(kind, "Variable") == 0) {
@@ -780,7 +780,7 @@ gql_parser_locate_value_node(pTHX_ gql_parser_t *p, SV *node_sv) {
     return loc;
   }
 
-  croak("Unsupported graphqljs executable value node %s", kind);
+  croak("Unsupported parser executable value node %s", kind);
 }
 
 static void
@@ -1158,7 +1158,7 @@ gql_parser_locate_selection_node(pTHX_ gql_parser_t *p, SV *node_sv) {
   SV *loc;
 
   if (!kind) {
-    croak("graphqljs executable loc expected selection node");
+    croak("parser executable loc expected selection node");
   }
 
   if (strcmp(kind, "Field") == 0) {
@@ -1199,7 +1199,7 @@ gql_parser_locate_selection_node(pTHX_ gql_parser_t *p, SV *node_sv) {
     return;
   }
 
-  croak("Unsupported graphqljs executable selection node %s", kind);
+  croak("Unsupported parser executable selection node %s", kind);
 }
 
 static int
@@ -1211,7 +1211,7 @@ gql_parser_locate_definition(pTHX_ gql_parser_t *p, SV *node_sv) {
   int is_extension = 0;
 
   if (!kind) {
-    croak("graphqljs loc expected definition node");
+    croak("parser loc expected definition node");
   }
 
   if (strcmp(kind, "OperationDefinition") == 0) {
@@ -1362,9 +1362,9 @@ gql_parser_locate_definition(pTHX_ gql_parser_t *p, SV *node_sv) {
   }
 
   if (is_extension) {
-    croak("Unsupported graphqljs extension loc node %s", kind);
+    croak("Unsupported parser extension loc node %s", kind);
   }
-  croak("Unsupported graphqljs loc definition node %s", kind);
+  croak("Unsupported parser loc definition node %s", kind);
 }
 
 static SV *

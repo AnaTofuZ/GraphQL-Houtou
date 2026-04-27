@@ -4628,3 +4628,26 @@ This fixes the first real bridge-design bug we hit in the reboot:
   - `Native.pm` は compile-time に XS package を import せず、
     top-level native boundary の各 entrypoint で lazy require する。
     これで child module が XS bootstrap 順に依存しにくくなった。
+  - runtime の内部通貨をさらに軽くした。
+    - `Runtime::Outcome` は hash-based object ではなく fixed-slot array object にした。
+    - `Runtime::BlockFrame` も fixed-slot array object にした。
+    - kind/shape と payload を先に分ける方針を、hot path の実装にも反映した。
+  - runtime schema 側で `__typename` を first-class slot として扱うようにした。
+    - object block は `__typename` slot を必ず先頭に持つ。
+    - operation lowering も pseudo field ではなく real runtime slot を優先して bind する。
+    - native VM block は `type_name` を owned で保持し、XS default resolver は
+      `__typename` を hash lookup ではなく block type から直接返す。
+  - これにより native bundle path の `__typename` 欠落は解消した。
+  - `util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3` の現 checkpoint は:
+    - `nested_variable_object`
+      - `houtou_runtime_cached_perl` median `16614/s`
+      - `houtou_runtime_native_bundle` median `509020/s`
+    - `list_of_objects`
+      - `houtou_runtime_cached_perl` median `12977/s`
+      - `houtou_runtime_native_bundle` median `448256/s`
+    - `abstract_with_fragment`
+      - `houtou_runtime_cached_perl` median `15428/s`
+      - `houtou_runtime_native_bundle` median `488490/s`
+  - ここで重要なのは、benchmark が workspace の `blib/arch` XS artifact を使うこと。
+    local の `.xs` 変更後に `./Build build` を忘れると、Perl 側と native 側の
+    shape がずれて誤った benchmark failure を起こす。

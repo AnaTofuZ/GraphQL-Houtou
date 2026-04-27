@@ -100,15 +100,15 @@ my $schema = GraphQL::Houtou::Schema->new(
 
 subtest 'schema can execute runtime program' => sub {
   my $runtime = $schema->build_runtime;
-  my $program = $runtime->compile_program('{ viewer { id name } users { id } }');
+  my $program = $runtime->compile_program('{ viewer { __typename id name } users { __typename id } }');
   my $result = $runtime->execute_program($program);
 
   is_deeply $result, {
     data => {
-      viewer => { id => 'u1', name => 'Ana' },
+      viewer => { __typename => 'User', id => 'u1', name => 'Ana' },
       users => [
-        { id => 'u1' },
-        { id => 'u2' },
+        { __typename => 'User', id => 'u1' },
+        { __typename => 'User', id => 'u2' },
       ],
     },
     errors => [],
@@ -248,6 +248,20 @@ subtest 'native runtime specializes directive guards before bundle execution' =>
   }
 
   ok $called, 'dynamic directives stayed on native runtime through specialization';
+};
+
+subtest 'runtime keeps __typename on abstract/object corridors' => sub {
+  my $result = $schema->execute_runtime('{ search { __typename ... on User { id name } } }');
+  is_deeply $result, {
+    data => {
+      search => {
+        __typename => 'User',
+        id => 'u3',
+        name => 'Cara',
+      },
+    },
+    errors => [],
+  }, '__typename survives runtime abstract/object execution';
 };
 
 subtest 'native runtime preserves static arg coercion and defaults' => sub {

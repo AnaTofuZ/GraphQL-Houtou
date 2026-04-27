@@ -68,16 +68,16 @@ my $schema = GraphQL::Houtou::Schema->new(
 );
 
 subtest 'schema can execute VM-lowered program' => sub {
-  my $program = $schema->compile_operation('{ viewer { id name } users { id } node { id } }');
+  my $program = $schema->compile_operation('{ viewer { __typename id name } users { __typename id } node { __typename id } }');
   my $result = $schema->build_runtime->execute_program($program);
   is_deeply $result, {
     data => {
-      viewer => { id => 'u1', name => 'Alice' },
+      viewer => { __typename => 'VmExecUser', id => 'u1', name => 'Alice' },
       users => [
-        { id => 'u1' },
-        { id => 'u2' },
+        { __typename => 'VmExecUser', id => 'u1' },
+        { __typename => 'VmExecUser', id => 'u2' },
       ],
-      node => { id => 'u3' },
+      node => { __typename => 'VmExecUser', id => 'u3' },
     },
     errors => [],
   }, 'VM executor runs object/list/abstract fields';
@@ -139,9 +139,9 @@ subtest 'schema helper can execute native VM runtime with specialized directives
 };
 
 subtest 'schema helper can execute native VM runtime through abstract tag dispatch' => sub {
-  my $result = $schema->execute_native_runtime('{ node { id } }');
+  my $result = $schema->execute_native_runtime('{ node { __typename id } }');
   is_deeply $result, {
-    data => { node => { id => 'u3' } },
+    data => { node => { __typename => 'VmExecUser', id => 'u3' } },
     errors => [],
   }, 'native runtime keeps abstract tag dispatch on native path';
 };

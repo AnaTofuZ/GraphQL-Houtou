@@ -4,30 +4,52 @@ use 5.014;
 use strict;
 use warnings;
 
+use constant {
+  KIND_SLOT          => 0,
+  SCALAR_VALUE_SLOT  => 1,
+  OBJECT_VALUE_SLOT  => 2,
+  LIST_VALUE_SLOT    => 3,
+  ERROR_RECORDS_SLOT => 4,
+};
+
 sub new {
   my ($class, %args) = @_;
   my $kind = $args{kind} || 'NONE';
-  my $self = {
-    kind => $kind,
-    error_records => $args{error_records} || [],
-  };
-  $self->{scalar_value} = $args{scalar_value} if exists $args{scalar_value};
-  $self->{object_value} = $args{object_value} if exists $args{object_value};
-  $self->{list_value} = $args{list_value} if exists $args{list_value};
-  return bless $self, $class;
+  return bless [
+    $kind,
+    (exists $args{scalar_value} ? $args{scalar_value} : undef),
+    (exists $args{object_value} ? $args{object_value} : undef),
+    (exists $args{list_value} ? $args{list_value} : undef),
+    ($args{error_records} || []),
+  ], $class;
 }
 
-sub kind { return $_[0]{kind} }
-sub scalar_value { return $_[0]{scalar_value} }
-sub object_value { return $_[0]{object_value} }
-sub list_value { return $_[0]{list_value} }
+sub scalar {
+  my ($class, $value, $error_records) = @_;
+  return bless [ 'SCALAR', $value, undef, undef, ($error_records || []) ], $class;
+}
+
+sub object {
+  my ($class, $value, $error_records) = @_;
+  return bless [ 'OBJECT', undef, $value, undef, ($error_records || []) ], $class;
+}
+
+sub list {
+  my ($class, $value, $error_records) = @_;
+  return bless [ 'LIST', undef, undef, $value, ($error_records || []) ], $class;
+}
+
+sub kind { return $_[0][KIND_SLOT] }
+sub scalar_value { return $_[0][SCALAR_VALUE_SLOT] }
+sub object_value { return $_[0][OBJECT_VALUE_SLOT] }
+sub list_value { return $_[0][LIST_VALUE_SLOT] }
 sub value {
   my ($self) = @_;
-  return $self->{scalar_value} if ($self->{kind} || '') eq 'SCALAR';
-  return $self->{object_value} if ($self->{kind} || '') eq 'OBJECT';
-  return $self->{list_value} if ($self->{kind} || '') eq 'LIST';
+  return $self->[SCALAR_VALUE_SLOT] if ($self->[KIND_SLOT] || '') eq 'SCALAR';
+  return $self->[OBJECT_VALUE_SLOT] if ($self->[KIND_SLOT] || '') eq 'OBJECT';
+  return $self->[LIST_VALUE_SLOT] if ($self->[KIND_SLOT] || '') eq 'LIST';
   return undef;
 }
-sub error_records { return $_[0]{error_records} }
+sub error_records { return $_[0][ERROR_RECORDS_SLOT] }
 
 1;

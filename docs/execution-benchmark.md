@@ -61,6 +61,8 @@ promise case では native bundle を使わず、Perl runtime を比較対象に
 
 - benchmark script は repo checkout の `lib/` を優先し、必要なら `blib/arch` の XS を併用します。
 - native benchmark を回す前には、repo root の `./Build build` で local XS artifact を更新してください。
+- これを忘れると、Perl 側 lowering は最新でも native bundle 実行だけ古い XS を読むため、
+  `__typename` や slot index の mismatch を benchmark failure として誤検出します。
 - `util/execution-benchmark-checkpoint.pl` の既定 mode も
   - `houtou_runtime_cached_perl`
   - `houtou_runtime_native_bundle`

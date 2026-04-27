@@ -343,6 +343,10 @@ gql_runtime_vm_resolve_current_field_default(pTHX_ gql_runtime_vm_exec_state_t *
     return gql_runtime_vm_call_cb4(aTHX_ resolver_sv, source, args, state->context, return_type_sv ? return_type_sv : &PL_sv_undef);
   }
 
+  if (slot->field_name && strEQ(slot->field_name, "__typename")) {
+    return newSVpv((state->block && state->block->type_name) ? state->block->type_name : "", 0);
+  }
+
   if (source && SvROK(source) && SvTYPE(SvRV(source)) == SVt_PVHV) {
     HV *source_hv = (HV *)SvRV(source);
     SV **value_svp = hv_fetch(source_hv, slot->field_name, (I32)strlen(slot->field_name), 0);

@@ -5,6 +5,7 @@ use strict;
 use warnings;
 
 use GraphQL::Houtou::Runtime::OperationCompiler ();
+use GraphQL::Houtou::Runtime::Slot ();
 use GraphQL::Houtou::Runtime::VMBlock ();
 use GraphQL::Houtou::Runtime::VMDispatch ();
 use GraphQL::Houtou::Runtime::VMOp ();
@@ -213,6 +214,7 @@ sub _bind_vm_ops {
 
     for my $op (@{ $block->ops || [] }) {
       $op->{bound_slot} ||= $slots{ $op->field_name };
+      $op->{bound_slot} ||= _bind_typename_slot($runtime_schema, $block, $op);
       if (!$op->{abstract_dispatch} && (($op->opcode || q()) =~ /:COMPLETE_ABSTRACT$/)) {
         my $slot = $op->{bound_slot};
         my $return_type = $slot ? $slot->return_type_name : undef;
@@ -260,6 +262,7 @@ sub _bind_native_vm_ops {
       $op->{bound_slot} = $runtime_slot if $runtime_slot;
       $op->{field_name} = $slot_struct->{field_name} if $slot_struct && defined $slot_struct->{field_name};
       $op->{result_name} = $slot_struct->{result_name} if $slot_struct && defined $slot_struct->{result_name};
+      $op->{bound_slot} ||= _bind_typename_slot($runtime_schema, $block, $op, $slot_struct);
 
       if (!$op->{abstract_dispatch} && (($op->complete_family || q()) eq 'COMPLETE_ABSTRACT')) {
         my $return_type = $runtime_slot ? $runtime_slot->return_type_name : ($slot_struct ? $slot_struct->{return_type_name} : undef);
@@ -284,6 +287,27 @@ sub _bind_native_vm_ops {
   }
 
   return $program;
+}
+
+sub _bind_typename_slot {
+  my ($runtime_schema, $block, $op, $slot_struct) = @_;
+  return undef if ($op->field_name || q()) ne '__typename';
+
+  my $string_type = $runtime_schema->runtime_cache->{name2type}{String};
+  return GraphQL::Houtou::Runtime::Slot->new(
+    schema_slot_key => join(q(.), ($block->type_name || q()), '__typename'),
+    field_name => '__typename',
+    result_name => ($op->result_name || '__typename'),
+    return_type_name => (($slot_struct && $slot_struct->{return_type_name}) || 'String'),
+    resolver_shape => 'DEFAULT',
+    resolver_mode => 'DEFAULT',
+    completion_family => 'GENERIC',
+    dispatch_family => 'GENERIC',
+    arg_defs => {},
+    has_args => 0,
+    has_directives => (($op->has_directives || 0) ? 1 : 0),
+    return_type => $string_type,
+  );
 }
 
 sub _resolve_family_from_code {

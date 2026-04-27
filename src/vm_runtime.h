@@ -86,6 +86,7 @@ typedef struct {
 
 typedef struct {
   IV family_code;
+  char *type_name;
   IV slot_count;
   IV op_count;
   gql_runtime_vm_native_slot_t *slots;
@@ -145,6 +146,7 @@ gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
   Safefree(bundle->runtime_slots);
   if (bundle->blocks) {
     for (i = 0; i < bundle->block_count; i++) {
+      Safefree(bundle->blocks[i].type_name);
       if (bundle->blocks[i].slots) {
         for (j = 0; j < bundle->blocks[i].slot_count; j++) {
           Safefree(bundle->blocks[i].slots[j].field_name);
@@ -399,6 +401,9 @@ gql_runtime_vm_parse_native_block(pTHX_ SV *sv, gql_runtime_vm_native_block_t *o
   }
   if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "family_code", 11, &out->family_code)) {
     return 0;
+  }
+  if (!gql_runtime_vm_fetch_hv_string(aTHX_ hv, "type_name", 9, &out->type_name)) {
+    croak("native VM block entry is missing type_name");
   }
   svp = hv_fetch(hv, "slots", 5, 0);
   if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &slots_av)) {

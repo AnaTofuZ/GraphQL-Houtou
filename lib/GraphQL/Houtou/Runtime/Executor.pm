@@ -118,7 +118,7 @@ sub _complete_resolved_value {
   my ($state, $block, $instruction, $value, $path_frame) = @_;
   my $op = $instruction->complete_op || 'COMPLETE_GENERIC';
 
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
+  return GraphQL::Houtou::Runtime::Outcome->scalar($value)
     if $op eq 'COMPLETE_GENERIC';
 
   return _complete_object($state, $block, $instruction, $value, $path_frame)
@@ -130,7 +130,7 @@ sub _complete_resolved_value {
   return _complete_abstract($state, $block, $instruction, $value, $path_frame)
     if $op eq 'COMPLETE_ABSTRACT';
 
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value);
+  return GraphQL::Houtou::Runtime::Outcome->scalar($value);
 }
 
 sub _resolve_field_value {
@@ -285,35 +285,29 @@ sub _coerce_input_value {
 
 sub _complete_object {
   my ($state, $block, $instruction, $value, $path_frame) = @_;
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
+  return GraphQL::Houtou::Runtime::Outcome->scalar(undef)
     if !defined $value;
 
   my $child = $instruction->bound_child_block;
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
+  return GraphQL::Houtou::Runtime::Outcome->scalar($value)
     if !$child;
 
   my $child_value = _execute_block($state, $child, $value, $path_frame);
   if (_is_promise($state, $child_value)) {
     return then_promise($state->promise_code, $child_value, sub {
-      return GraphQL::Houtou::Runtime::Outcome->new(
-        kind => 'OBJECT',
-        object_value => $_[0],
-      );
+      return GraphQL::Houtou::Runtime::Outcome->object($_[0]);
     });
   }
 
-  return GraphQL::Houtou::Runtime::Outcome->new(
-    kind => 'OBJECT',
-    object_value => $child_value,
-  );
+  return GraphQL::Houtou::Runtime::Outcome->object($child_value);
 }
 
 sub _complete_list {
   my ($state, $block, $instruction, $value, $path_frame) = @_;
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
+  return GraphQL::Houtou::Runtime::Outcome->scalar(undef)
     if !defined $value;
 
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
+  return GraphQL::Houtou::Runtime::Outcome->scalar($value)
     if ref($value) ne 'ARRAY';
 
   my $child = $instruction->bound_child_block;
@@ -330,45 +324,36 @@ sub _complete_list {
     my $aggregate = all_promise($state->promise_code, @items);
     return then_promise($state->promise_code, $aggregate, sub {
       my @resolved = _promise_all_values_to_array(@_);
-      return GraphQL::Houtou::Runtime::Outcome->new(kind => 'LIST', list_value => \@resolved);
+      return GraphQL::Houtou::Runtime::Outcome->list(\@resolved);
     });
   }
 
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'LIST', list_value => \@items);
+  return GraphQL::Houtou::Runtime::Outcome->list(\@items);
 }
 
 sub _complete_abstract {
   my ($state, $block, $instruction, $value, $path_frame) = @_;
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => undef)
+  return GraphQL::Houtou::Runtime::Outcome->scalar(undef)
     if !defined $value;
 
   my ($runtime_type, $error_record) = _resolve_runtime_type($state, $block, $instruction, $value, $path_frame);
-  return GraphQL::Houtou::Runtime::Outcome->new(
-    kind => 'SCALAR',
-    scalar_value => undef,
-    error_records => [ $error_record ],
-  ) if $error_record;
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
+  return GraphQL::Houtou::Runtime::Outcome->scalar(undef, [ $error_record ])
+    if $error_record;
+  return GraphQL::Houtou::Runtime::Outcome->scalar($value)
     if !$runtime_type;
 
   my $child = ($instruction->bound_abstract_child_blocks || {})->{ $runtime_type->name };
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'SCALAR', scalar_value => $value)
+  return GraphQL::Houtou::Runtime::Outcome->scalar($value)
     if !$child;
 
   my $child_value = _execute_block($state, $child, $value, $path_frame);
   if (_is_promise($state, $child_value)) {
     return then_promise($state->promise_code, $child_value, sub {
-      return GraphQL::Houtou::Runtime::Outcome->new(
-        kind => 'OBJECT',
-        object_value => $_[0],
-      );
+      return GraphQL::Houtou::Runtime::Outcome->object($_[0]);
     });
   }
 
-  return GraphQL::Houtou::Runtime::Outcome->new(
-    kind => 'OBJECT',
-    object_value => $child_value,
-  );
+  return GraphQL::Houtou::Runtime::Outcome->object($child_value);
 }
 
 sub _resolve_runtime_type {
@@ -460,10 +445,9 @@ sub _error_record {
 
 sub _error_outcome {
   my ($error, $path_frame) = @_;
-  return GraphQL::Houtou::Runtime::Outcome->new(
-    kind => 'SCALAR',
-    scalar_value => undef,
-    error_records => [ _error_record($error, $path_frame) ],
+  return GraphQL::Houtou::Runtime::Outcome->scalar(
+    undef,
+    [ _error_record($error, $path_frame) ],
   );
 }
 

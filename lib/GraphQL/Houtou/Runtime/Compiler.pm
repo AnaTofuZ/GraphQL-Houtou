@@ -8,6 +8,7 @@ use GraphQL::Houtou::Runtime::SchemaGraph ();
 use GraphQL::Houtou::Runtime::Program ();
 use GraphQL::Houtou::Runtime::Block ();
 use GraphQL::Houtou::Runtime::Slot ();
+use GraphQL::Houtou::Type::Scalar qw($String);
 
 sub compile_schema {
   my ($class, $schema, %opts) = @_;
@@ -165,7 +166,22 @@ sub _inflate_slot {
 sub _build_slots_for_object {
   my ($type) = @_;
   my $fields = $type->fields || {};
-  my @slots;
+  my @slots = (
+    GraphQL::Houtou::Runtime::Slot->new(
+      schema_slot_key => join(q(.), $type->name, '__typename'),
+      field_name => '__typename',
+      result_name => '__typename',
+      return_type_name => 'String',
+      resolver_shape => 'DEFAULT',
+      resolver_mode => 'DEFAULT',
+      completion_family => 'GENERIC',
+      dispatch_family => 'GENERIC',
+      arg_defs => {},
+      has_args => 0,
+      has_directives => 0,
+      return_type => $String,
+    ),
+  );
 
   for my $field_name (sort keys %$fields) {
     my $field = $fields->{$field_name} || {};

@@ -94,15 +94,18 @@ subtest 'runtime graph can round-trip through descriptor form' => sub {
 
 subtest 'runtime graph can emit native descriptor' => sub {
   my $descriptor = $schema->compile_runtime_native_descriptor;
+  my ($search_slot) = grep {
+    (($_->{schema_slot_key} || q()) eq 'Query.search')
+  } @{ $descriptor->{slot_catalog} || [] };
   ok ref($descriptor->{slot_catalog}) eq 'ARRAY' && @{$descriptor->{slot_catalog}} >= 2,
     'native runtime descriptor exports slot catalog';
-  ok defined $descriptor->{slot_catalog}[0]{schema_slot_index},
+  ok defined $search_slot->{schema_slot_index},
     'native runtime slot keeps schema slot index';
-  ok defined $descriptor->{slot_catalog}[0]{completion_family_code},
+  ok defined $search_slot->{completion_family_code},
     'native runtime slot keeps numeric family code';
-  ok defined $descriptor->{slot_catalog}[0]{resolver_mode_code},
+  ok defined $search_slot->{resolver_mode_code},
     'native runtime slot keeps numeric resolver mode code';
-  is $descriptor->{slot_catalog}[0]{schema_slot_key}, 'Query.search',
+  is $search_slot->{schema_slot_key}, 'Query.search',
     'native runtime slot keeps stable schema slot key';
 };
 

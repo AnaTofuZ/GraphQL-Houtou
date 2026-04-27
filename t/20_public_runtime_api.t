@@ -147,6 +147,7 @@ subtest 'native runtime can round-trip bundle descriptors' => sub {
 };
 
 subtest 'schema execute_native_runtime reuses cached native runtime handle' => sub {
+  $schema->clear_runtime_cache;
   my $load_count = 0;
   my $orig = \&GraphQL::Houtou::Native::load_native_runtime;
 

@@ -225,6 +225,8 @@ sub resolve_field_value {
 sub resolve_default {
   my ($self, $source, $path_frame) = @_;
   my $op = $self->current_op;
+  return $self->current_block->type_name
+    if ($op->field_name || q()) eq '__typename';
   my $slot = $self->current_slot || $op->bound_slot;
   my $resolver = $slot ? $slot->resolve : undef;
   my $return_type = $self->current_return_type;
@@ -337,18 +339,17 @@ sub object_outcome_from_child_block {
   my $child_value = $self->execute_child_block($block, $value, $path_frame);
   if ($self->promise_code && is_promise_value($self->promise_code, $child_value)) {
     return then_promise($self->promise_code, $child_value, sub {
-      return GraphQL::Houtou::Runtime::Outcome->new(kind => 'OBJECT', object_value => $_[0]);
+      return GraphQL::Houtou::Runtime::Outcome->object($_[0]);
     });
   }
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'OBJECT', object_value => $child_value);
+  return GraphQL::Houtou::Runtime::Outcome->object($child_value);
 }
 
 sub scalar_outcome {
   my ($self, $value, $error_record) = @_;
-  return GraphQL::Houtou::Runtime::Outcome->new(
-    kind => 'SCALAR',
-    scalar_value => $value,
-    error_records => $error_record ? [ $error_record ] : [],
+  return GraphQL::Houtou::Runtime::Outcome->scalar(
+    $value,
+    ($error_record ? [ $error_record ] : []),
   );
 }
 
@@ -376,11 +377,11 @@ sub complete_list_value {
     my $aggregate = GraphQL::Houtou::Promise::Adapter::all_promise($self->promise_code, @items);
     return then_promise($self->promise_code, $aggregate, sub {
       my @resolved = _promise_all_values_to_array(@_);
-      return GraphQL::Houtou::Runtime::Outcome->new(kind => 'LIST', list_value => \@resolved);
+      return GraphQL::Houtou::Runtime::Outcome->list(\@resolved);
     });
   }
 
-  return GraphQL::Houtou::Runtime::Outcome->new(kind => 'LIST', list_value => \@items);
+  return GraphQL::Houtou::Runtime::Outcome->list(\@items);
 }
 
 sub complete_abstract_value {
@@ -550,10 +551,9 @@ sub _error_record {
 
 sub _error_outcome {
   my ($self, $error, $path_frame) = @_;
-  return GraphQL::Houtou::Runtime::Outcome->new(
-    kind => 'SCALAR',
-    scalar_value => undef,
-    error_records => [ $self->_error_record($error, $path_frame) ],
+  return GraphQL::Houtou::Runtime::Outcome->scalar(
+    undef,
+    [ $self->_error_record($error, $path_frame) ],
   );
 }
 

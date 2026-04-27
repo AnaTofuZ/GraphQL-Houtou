@@ -8,6 +8,7 @@ use GraphQL::Houtou::GraphQLPerl::Parser ();
 use GraphQL::Houtou::Runtime::ExecutionProgram ();
 use GraphQL::Houtou::Runtime::ExecutionBlock ();
 use GraphQL::Houtou::Runtime::Instruction ();
+use GraphQL::Houtou::Runtime::Slot ();
 
 sub compile_operation {
   my ($class, $runtime_schema, $document, %opts) = @_;
@@ -75,6 +76,10 @@ sub _lower_selection_block {
   for my $selection (@{ $field_selections || [] }) {
     next if !$selection || ($selection->{kind} || '') ne 'field';
     my $field_name = $selection->{name};
+    if (($field_name || q()) eq '__typename') {
+      push @instructions, _build_typename_instruction($state, $type_name, $selection);
+      next;
+    }
     my $slot = $schema_slots{$field_name} or next;
     my $child_block;
     my $abstract_child_blocks;
@@ -298,6 +303,71 @@ sub _normalize_selections {
   }
 
   return \@normalized;
+}
+
+sub _build_typename_instruction {
+  my ($state, $type_name, $selection) = @_;
+  my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
+  my $result_name = ($selection->{alias} || '__typename');
+  my $slot = _lookup_typename_slot($state->{runtime_schema}, $type_name, $result_name, $directives_mode);
+  return GraphQL::Houtou::Runtime::Instruction->new(
+    field_name => '__typename',
+    result_name => $result_name,
+    return_type_name => 'String',
+    resolve_op => 'RESOLVE_DEFAULT',
+    complete_op => 'COMPLETE_GENERIC',
+    dispatch_family => 'DEFAULT',
+    arg_defs => {},
+    has_args => 0,
+    args_mode => 'NONE',
+    args_payload => undef,
+    has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
+    directives_mode => $directives_mode,
+    directives_payload => $directives_payload,
+    bound_slot => $slot,
+  );
+}
+
+sub _lookup_typename_slot {
+  my ($runtime_schema, $type_name, $result_name, $directives_mode) = @_;
+  my $schema_block = $runtime_schema->program->block_by_type_name($type_name);
+  if ($schema_block) {
+    for my $slot (@{ $schema_block->slots || [] }) {
+      next if ($slot->field_name || q()) ne '__typename';
+      return GraphQL::Houtou::Runtime::Slot->new(
+        schema_slot_key => $slot->schema_slot_key,
+        schema_slot_index => $slot->schema_slot_index,
+        field_name => '__typename',
+        result_name => $result_name,
+        return_type_name => $slot->return_type_name,
+        resolver_shape => $slot->resolver_shape,
+        resolver_mode => $slot->resolver_mode,
+        completion_family => $slot->completion_family,
+        dispatch_family => $slot->dispatch_family,
+        arg_defs => {},
+        has_args => 0,
+        has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
+        resolve => $slot->resolve,
+        return_type => $slot->return_type,
+      );
+    }
+  }
+
+  my $string_type = $runtime_schema->runtime_cache->{name2type}{String};
+  return GraphQL::Houtou::Runtime::Slot->new(
+    schema_slot_key => join(q(.), ($type_name || q()), '__typename'),
+    field_name => '__typename',
+    result_name => $result_name,
+    return_type_name => 'String',
+    resolver_shape => 'DEFAULT',
+    resolver_mode => 'DEFAULT',
+    completion_family => 'GENERIC',
+    dispatch_family => 'GENERIC',
+    arg_defs => {},
+    has_args => 0,
+    has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
+    return_type => $string_type,
+  );
 }
 
 sub _resolve_op_for_slot {

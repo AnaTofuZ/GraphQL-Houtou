@@ -26,6 +26,8 @@ Principles:
 - allow compiled-IR-native hot paths to diverge from AST/legacy code when that
   removes measurable bridge costs
 - introduce IR-oriented execution in small internal stages
+- use `docs/ecosystem-feature-gap.md` as a planning constraint so runtime
+  specialization does not block high-priority ecosystem work
 
 ## Compatibility Policy
 
@@ -676,3 +678,41 @@ That sequence fits the current architecture better than adding more one-off
 branches to `execution.h`, because it keeps specialization decisions inside the
 compiler pipeline and leaves runtime mostly responsible for executing already
 chosen native shapes.
+
+Current abstract-lowering note:
+
+- lowered native field-plan entries can now own a lowered abstract child plan
+  table for the single-node native-plan case
+- that lowered table keeps only `(possible_type, native_field_plan)` pairs and
+  clones the native child field plan into lowered-plan-owned storage
+- cloned lowered abstract child plans now recursively clone nested lowered
+  abstract-child tables too, so specialized ownership does not stop at the
+  first abstract child boundary
+- runtime abstract dispatch therefore no longer depends on borrowing the
+  node-attached concrete-plan table at lookup time
+- sync compiled-IR completion now has a narrow direct-data helper for trivial
+  `null` / leaf / simple `NonNull` outcomes, so generic completion can skip
+  materializing a completed `{ data => ... }` `HV` in those cases
+- that same direct-data helper is now reused by the generic XS field loops too,
+  so the allocation-reduction path is no longer isolated to compiled-IR-only
+  code and the shared execution semantics stay closer while runtime ownership
+  still differs
+- the next pass should specialize the owned lowered table further so abstract
+  dispatch can run entirely against lowered-plan-native operands and outcomes
+
+## April 2026 Direction Change
+
+The next phase should be treated as a new runtime project, not just another
+series of local fast paths on the current mixed executor.
+
+Key decision:
+
+- keep user-visible API compatibility
+- drop internal compatibility requirements for AST / legacy execution data
+  structures inside `compiled_ir`
+- introduce a dedicated execution-lowered IR and then a dedicated VM /
+  threaded-op runtime for that lowered form
+
+The detailed project sketch lives in:
+
+- `docs/compiled-ir-vm-runtime.md`

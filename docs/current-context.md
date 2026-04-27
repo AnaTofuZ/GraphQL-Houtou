@@ -4555,6 +4555,10 @@ This fixes the first real bridge-design bug we hit in the reboot:
   (`t/10_object_runtime.t`, `t/11_execution.t`, `t/12_promise.t`) は
   `legacy-tests/original-t/` に退避した。以後の active suite は
   runtime / VM / public runtime API を中心に維持する。
+- 同じ方針で、旧 parser/compat/introspection の heavy regression
+  (`t/01` 〜 `t/06`, `t/09`) も active suite から外した。
+  parser 公開面については軽い smoke を別 test で維持し、deep legacy
+  regression は `legacy-tests/original-t/` 参照に切り替えた。
 - `Runtime.pm` は `GraphQL::Houtou::XS::VM` を直接 import せず、
   `GraphQL::Houtou::Native` を native boundary として使うようにした。
 - `Directive`, `Type::Object`, `Type::List`, `Role::Abstract` に残っていた

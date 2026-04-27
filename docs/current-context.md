@@ -74,13 +74,13 @@ Runtime scaffold checkpoint:
 New runtime entrypoints now include:
 
 - `GraphQL::Houtou::Runtime::compile_program($runtime_schema, $document)`
-- `GraphQL::Houtou::Runtime::inflate_operation($runtime_schema, $descriptor)`
+- `GraphQL::Houtou::Runtime::inflate_program($runtime_schema, $descriptor)`
 - `GraphQL::Houtou::Runtime::execute_program($runtime_schema, $program, %opts)`
 - `$schema->compile_program($document)`
 - `$schema->compile_program_descriptor($document)`
-- `$schema->inflate_operation($descriptor)`
+- `$schema->inflate_program($descriptor)`
 - `$runtime_schema->compile_program($document)`
-- `$runtime_schema->inflate_operation($descriptor)`
+- `$runtime_schema->inflate_program($descriptor)`
 - `$runtime_schema->execute_program($program, %opts)`
 - `$runtime_schema->inflate_program($descriptor)`
 - `$runtime_schema->inflate_native_bundle($descriptor)`
@@ -256,7 +256,7 @@ Current runtime coverage:
     - `native_runtime_summary(...)`
     - `execute_native_bundle(...)`
   - schema now also exposes native-first aliases:
-    - `compile_native_operation_descriptor(...)`
+    - `compile_native_program_descriptor(...)`
     - `compile_native_program_descriptor(...)`
     - `compile_native_bundle_descriptor(...)`
     - `load_native_bundle_descriptor(...)`

@@ -19,7 +19,6 @@ our @EXPORT_OK = qw(
   parse_with_options
   execute
   execute_native
-  execute_native_runtime
   compile_runtime
   build_runtime
   build_native_runtime
@@ -72,11 +71,6 @@ sub compile_native_bundle {
 sub compile_native_bundle_descriptor {
   my ($schema, $document, %opts) = @_;
   return $schema->compile_native_bundle_descriptor($document, %opts);
-}
-
-sub execute_native_runtime {
-  my ($schema, $document, %opts) = @_;
-  return $schema->execute_native($document, %opts);
 }
 
 sub execute_native {

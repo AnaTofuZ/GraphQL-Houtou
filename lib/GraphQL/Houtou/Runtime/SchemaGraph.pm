@@ -43,42 +43,27 @@ sub block_by_type_name {
   return $self->{program} ? $self->{program}->block_by_type_name($type_name) : undef;
 }
 
-sub compile_operation {
+sub compile_program {
   my ($self, $document, %opts) = @_;
   require GraphQL::Houtou::Runtime::OperationCompiler;
   return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation($self, $document, %opts);
 }
 
-sub compile_program {
-  my ($self, $document, %opts) = @_;
-  return $self->compile_operation($document, %opts);
-}
-
-sub inflate_operation {
+sub inflate_program {
   my ($self, $descriptor) = @_;
   require GraphQL::Houtou::Runtime::VMCompiler;
   return GraphQL::Houtou::Runtime::VMCompiler->inflate_program($self, $descriptor);
 }
 
-sub inflate_program {
-  my ($self, $descriptor) = @_;
-  return $self->inflate_operation($descriptor);
-}
-
-sub execute_operation {
-  my ($self, $program, %opts) = @_;
-  require GraphQL::Houtou::Runtime;
-  return GraphQL::Houtou::Runtime::execute_operation($self, $program, %opts);
-}
-
 sub execute_program {
   my ($self, $program, %opts) = @_;
-  return $self->execute_operation($program, %opts);
+  require GraphQL::Houtou::Runtime;
+  return GraphQL::Houtou::Runtime::execute_program($self, $program, %opts);
 }
 
 sub inflate_vm_program {
   my ($self, $descriptor) = @_;
-  return $self->inflate_operation($descriptor);
+  return $self->inflate_program($descriptor);
 }
 
 sub inflate_vm_native_bundle {

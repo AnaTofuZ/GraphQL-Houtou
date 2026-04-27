@@ -93,7 +93,7 @@ subtest 'schema helper can compile and execute VM in one call' => sub {
 
 subtest 'VM descriptor can round-trip and still execute' => sub {
   my $descriptor = $schema->compile_program_descriptor('{ node { id } }');
-  my $program = $schema->inflate_operation($descriptor);
+  my $program = $schema->inflate_program($descriptor);
   my $result = $schema->build_runtime->execute_program($program);
   is_deeply $result, {
     data => { node => { id => 'u3' } },

@@ -123,7 +123,7 @@ subtest 'execution program descriptor can round-trip back into executable progra
 
 subtest 'schema helper can compile and inflate operation descriptors' => sub {
   my $descriptor = $schema->compile_program('{ viewer { id } }')->to_struct;
-  my $inflated = $schema->inflate_operation($descriptor);
+  my $inflated = $schema->inflate_program($descriptor);
 
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::VMProgram';
   is $inflated->root_block->type_name, 'Query', 'schema helper inflates operation root block';
@@ -141,7 +141,7 @@ subtest 'operation descriptor can round-trip through JSON file helpers' => sub {
   local $/;
   my $loaded = JSON::PP::decode_json(<$in>);
   close $in;
-  my $inflated = $schema->inflate_operation($loaded);
+  my $inflated = $schema->inflate_program($loaded);
 
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::VMProgram';
   is_deeply $inflated->to_struct, $descriptor, 'schema helper preserves operation descriptor through file boundary';

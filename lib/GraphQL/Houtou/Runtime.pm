@@ -19,11 +19,8 @@ our @EXPORT_OK = qw(
   build_native_runtime
   inflate_schema
   compile_program
-  compile_operation
   inflate_program
-  inflate_operation
   execute_program
-  execute_operation
   inflate_vm_bundle
   inflate_vm_program
   inflate_vm_native_bundle
@@ -62,16 +59,7 @@ sub compile_program {
   return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation($runtime_schema, $document, %opts);
 }
 
-sub compile_operation {
-  my ($runtime_schema, $document, %opts) = @_;
-  return compile_program($runtime_schema, $document, %opts);
-}
-
 sub inflate_program {
-  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program(@_);
-}
-
-sub inflate_operation {
   return GraphQL::Houtou::Runtime::VMCompiler->inflate_program(@_);
 }
 
@@ -97,11 +85,6 @@ sub execute_program {
   }
   my $program_for_exec = $opts{engine} eq 'native' ? $candidate_program : $vm_program;
   return execute_vm($runtime_schema, $program_for_exec, %opts);
-}
-
-sub execute_operation {
-  my ($runtime_schema, $program, %opts) = @_;
-  return execute_program($runtime_schema, $program, %opts);
 }
 
 sub inflate_vm_bundle {

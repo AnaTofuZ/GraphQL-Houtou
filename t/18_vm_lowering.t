@@ -74,8 +74,8 @@ subtest 'schema can lower operation into VM program' => sub {
 };
 
 subtest 'VM program descriptor can round-trip through schema helpers' => sub {
-  my $descriptor = $schema->compile_operation_descriptor('{ viewer { id } }');
-  my $vm = $schema->inflate_operation($descriptor);
+  my $descriptor = $schema->compile_program_descriptor('{ viewer { id } }');
+  my $vm = $schema->inflate_program($descriptor);
   isa_ok $vm, 'GraphQL::Houtou::Runtime::VMProgram';
   isa_ok $vm->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
   is $vm->root_block->ops->[0]->field_name, 'viewer', 'inflated VM program keeps field op';
@@ -83,7 +83,7 @@ subtest 'VM program descriptor can round-trip through schema helpers' => sub {
 };
 
 subtest 'schema can emit XS-friendly native VM descriptor' => sub {
-  my $descriptor = $schema->compile_native_operation_descriptor('{ viewer { id } node { id } }');
+  my $descriptor = $schema->compile_native_program_descriptor('{ viewer { id } node { id } }');
   ok defined $descriptor->{root_block_index}, 'native descriptor keeps root block index';
   ok ref($descriptor->{blocks_compact}) eq 'ARRAY' && @{$descriptor->{blocks_compact}} >= 2,
     'native descriptor keeps indexed blocks';

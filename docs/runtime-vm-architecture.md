@@ -385,7 +385,7 @@ The same applies to operations. The control-plane API should expose:
 ```perl
 my $program = $runtime->compile_program($document);
 my $descriptor = $program->to_struct;
-my $inflated = $runtime->inflate_operation($descriptor);
+my $inflated = $runtime->inflate_program($descriptor);
 ```
 
 And the next lowering stage should also be explicit:

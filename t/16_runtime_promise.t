@@ -135,7 +135,7 @@ my $schema = GraphQL::Houtou::Schema->new(
 );
 
 subtest 'runtime program returns promise when promise_code is supplied' => sub {
-  my $result = $schema->execute_runtime(
+  my $result = $schema->execute(
     '{ later later_user { id name } later_list later_search { ... on RuntimePromiseUser { id name } } }',
     promise_code => $promise_code,
   );

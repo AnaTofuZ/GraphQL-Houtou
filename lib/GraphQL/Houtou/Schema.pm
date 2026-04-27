@@ -137,20 +137,10 @@ sub load_runtime_native_descriptor {
   return _read_json_descriptor($path);
 }
 
-sub compile_operation {
-  my ($self, $document, %opts) = @_;
-  return $self->compile_program($document, %opts);
-}
-
 sub compile_program {
   my ($self, $document, %opts) = @_;
   my $runtime = $self->build_runtime;
   return $runtime->compile_program($document, %opts);
-}
-
-sub compile_operation_descriptor {
-  my ($self, $document, %opts) = @_;
-  return $self->compile_program_descriptor($document, %opts);
 }
 
 sub compile_program_descriptor {
@@ -158,40 +148,30 @@ sub compile_program_descriptor {
   return $self->compile_program($document, %opts)->to_struct;
 }
 
-sub inflate_operation {
-  my ($self, $descriptor, %opts) = @_;
-  my $runtime = $self->build_runtime;
-  return $runtime->inflate_operation($descriptor);
-}
-
-sub inflate_program {
-  my ($self, $descriptor, %opts) = @_;
-  return $self->inflate_operation($descriptor, %opts);
-}
-
-sub dump_operation_descriptor {
+sub dump_program_descriptor {
   my ($self, $document, $path, %opts) = @_;
-  my $descriptor = $self->compile_operation_descriptor($document, %opts);
+  my $descriptor = $self->compile_program_descriptor($document, %opts);
   _write_json_descriptor($path, $descriptor);
   return $descriptor;
 }
 
-sub load_operation_descriptor {
+sub load_program_descriptor {
   my ($self, $path, %opts) = @_;
   my $descriptor = _read_json_descriptor($path);
-  return $self->inflate_operation($descriptor, %opts);
+  return $self->inflate_program($descriptor, %opts);
 }
 
-sub execute_runtime {
-  my ($self, $document, %opts) = @_;
-  return $self->execute($document, %opts);
+sub inflate_program {
+  my ($self, $descriptor, %opts) = @_;
+  my $runtime = $self->build_runtime;
+  return $runtime->inflate_program($descriptor);
 }
 
 sub execute {
   my ($self, $document, %opts) = @_;
   my $runtime = $self->build_runtime;
   my $program = $runtime->compile_program($document, %opts);
-  return $runtime->execute_operation($program, %opts);
+  return $runtime->execute_program($program, %opts);
 }
 
 sub execute_program {
@@ -199,15 +179,10 @@ sub execute_program {
   return $self->execute($document, %opts);
 }
 
-sub compile_native_operation_descriptor {
+sub compile_native_program_descriptor {
   my ($self, $document, %opts) = @_;
   my $runtime = delete $opts{runtime_schema};
   return $self->compile_program($document, ($runtime ? (runtime_schema => $runtime) : ()), %opts)->to_native_compact_struct;
-}
-
-sub compile_native_program_descriptor {
-  my ($self, $document, %opts) = @_;
-  return $self->compile_native_operation_descriptor($document, %opts);
 }
 
 sub compile_native_bundle_descriptor {
@@ -251,14 +226,9 @@ sub load_native_bundle_file {
   return $runtime->load_bundle_descriptor_file($path);
 }
 
-sub inflate_vm_operation {
-  my ($self, $descriptor, %opts) = @_;
-  return $self->inflate_operation($descriptor, %opts);
-}
-
 sub inflate_vm_program {
   my ($self, $descriptor, %opts) = @_;
-  return $self->inflate_vm_operation($descriptor, %opts);
+  return $self->inflate_program($descriptor, %opts);
 }
 
 sub inflate_native_bundle_descriptor {
@@ -267,17 +237,17 @@ sub inflate_native_bundle_descriptor {
   return $runtime->inflate_vm_native_bundle($descriptor);
 }
 
-sub dump_vm_operation_descriptor {
+sub dump_vm_program_descriptor {
   my ($self, $document, $path, %opts) = @_;
-  my $descriptor = $self->compile_operation_descriptor($document, %opts);
+  my $descriptor = $self->compile_program_descriptor($document, %opts);
   _write_json_descriptor($path, $descriptor);
   return $descriptor;
 }
 
-sub load_vm_operation_descriptor {
+sub load_vm_program_descriptor {
   my ($self, $path, %opts) = @_;
   my $descriptor = _read_json_descriptor($path);
-  return $self->inflate_vm_operation($descriptor, %opts);
+  return $self->inflate_vm_program($descriptor, %opts);
 }
 
 sub execute_native_bundle_descriptor {
@@ -285,11 +255,6 @@ sub execute_native_bundle_descriptor {
   my $runtime = $self->build_native_runtime;
   my $bundle = $runtime->load_bundle_descriptor($descriptor);
   return $bundle->execute(%opts);
-}
-
-sub execute_native_runtime {
-  my ($self, $document, %opts) = @_;
-  return $self->execute_native($document, %opts);
 }
 
 sub execute_native {

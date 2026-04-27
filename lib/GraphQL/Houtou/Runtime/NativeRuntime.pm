@@ -35,14 +35,9 @@ sub native_runtime_handle {
   return $self->{native_runtime_handle};
 }
 
-sub compile_operation {
-  my ($self, $document, %opts) = @_;
-  return $self->runtime_schema->compile_operation($document, %opts);
-}
-
 sub compile_program {
   my ($self, $document, %opts) = @_;
-  return $self->compile_operation($document, %opts);
+  return $self->runtime_schema->compile_program($document, %opts);
 }
 
 sub specialize_program {
@@ -108,11 +103,6 @@ sub execute_program {
   my ($self, $program, %opts) = @_;
   my $bundle = $self->compile_bundle($program, %opts);
   return $self->execute_bundle($bundle, %opts);
-}
-
-sub execute_operation {
-  my ($self, $program, %opts) = @_;
-  return $self->execute_program($program, %opts);
 }
 
 sub execute_bundle {

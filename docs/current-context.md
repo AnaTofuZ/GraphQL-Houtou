@@ -4632,6 +4632,22 @@ This fixes the first real bridge-design bug we hit in the reboot:
     - `Runtime::Outcome` は hash-based object ではなく fixed-slot array object にした。
     - `Runtime::BlockFrame` も fixed-slot array object にした。
     - kind/shape と payload を先に分ける方針を、hot path の実装にも反映した。
+    - `Runtime::Cursor`
+    - `Runtime::FieldFrame`
+    - `Runtime::Writer`
+      も fixed-slot array object にした。
+    - これで hot path の主要 state object は
+      - `Outcome`
+      - `BlockFrame`
+      - `Cursor`
+      - `FieldFrame`
+      - `Writer`
+      の 5 つが slot-first な内部通貨になった。
+    - 次の XS-ready checkpoint は、runtime state ではなく
+      - `VMOp`
+      - `VMBlock`
+      - `VMProgram`
+      の artifact 側を slot/opcode-first に寄せること。
   - runtime schema 側で `__typename` を first-class slot として扱うようにした。
     - object block は `__typename` slot を必ず先頭に持つ。
     - operation lowering も pseudo field ではなく real runtime slot を優先して bind する。

@@ -4,18 +4,24 @@ use 5.014;
 use strict;
 use warnings;
 
+use constant {
+  VALUES_SLOT => 0,
+  ERROR_RECORDS_SLOT => 1,
+  PENDING_SLOT => 2,
+};
+
 sub new {
   my ($class, %args) = @_;
-  return bless {
-    values => $args{values} || {},
-    error_records => $args{error_records} || [],
-    pending => $args{pending} || [],
-  }, $class;
+  return bless [
+    $args{values} || {},
+    $args{error_records} || [],
+    $args{pending} || [],
+  ], $class;
 }
 
-sub values { return $_[0]{values} }
-sub error_records { return $_[0]{error_records} }
-sub pending { return $_[0]{pending} }
+sub values { return $_[0][VALUES_SLOT] }
+sub error_records { return $_[0][ERROR_RECORDS_SLOT] }
+sub pending { return $_[0][PENDING_SLOT] }
 
 sub consume_outcome {
   my ($self, $data, $result_name, $outcome) = @_;
@@ -33,14 +39,14 @@ sub consume_outcome {
   else {
     $data->{$result_name} = undef;
   }
-  push @{ $self->{error_records} }, @{ $outcome->error_records || [] }
+  push @{ $self->[ERROR_RECORDS_SLOT] }, @{ $outcome->error_records || [] }
     if @{ $outcome->error_records || [] };
   return;
 }
 
 sub materialize_errors {
   my ($self) = @_;
-  return [ map { $_->to_error } @{ $self->{error_records} || [] } ];
+  return [ map { $_->to_error } @{ $self->[ERROR_RECORDS_SLOT] || [] } ];
 }
 
 1;

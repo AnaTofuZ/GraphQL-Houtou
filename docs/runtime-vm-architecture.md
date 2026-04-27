@@ -1034,3 +1034,36 @@ diagnostic escape hatches:
 
 This keeps callers off intermediate artifact shapes and makes the VM runtime
 the single mainline execution model.
+
+## Hot State And Slot-First Currency
+
+The current hot path should prefer fixed-slot state objects over hash-shaped
+Perl objects whenever the values are mutable but structurally fixed.
+
+The first completed wave of this is:
+
+- `Runtime::Outcome`
+- `Runtime::BlockFrame`
+- `Runtime::Cursor`
+- `Runtime::FieldFrame`
+- `Runtime::Writer`
+
+These objects are now treated as the runtime's internal currency for the hot
+path. This means:
+
+- kind is decided first
+- payload is carried separately
+- writer materialization happens as late as possible
+- helper boundaries should exchange slot-owned state, not ad hoc hashes
+
+The next XS-ready wave should target immutable VM artifacts:
+
+- `VMOp`
+- `VMBlock`
+- `VMProgram`
+
+Those objects should move toward:
+
+- fixed slot layout
+- integer opcode / family ids as primary dispatch keys
+- cold descriptor names retained only for serialization and debugging

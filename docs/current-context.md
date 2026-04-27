@@ -257,7 +257,7 @@ Current runtime coverage:
     - `execute_native_bundle(...)`
   - schema now also exposes native-first aliases:
     - `compile_native_program_descriptor(...)`
-    - `compile_native_program_descriptor(...)`
+    - `compile_native_runtime_descriptor(...)`
     - `compile_native_bundle_descriptor(...)`
     - `load_native_bundle_descriptor(...)`
     - `dump_native_bundle_descriptor(...)`
@@ -330,9 +330,9 @@ Current runtime coverage:
   so repeated field metadata does not have to be duplicated per op when the
   future XS executor inflates native operand tables
 - the runtime now also exports a native runtime-side slot catalog:
-  - `$schema->compile_runtime_native_descriptor(...)`
+  - `$schema->compile_native_runtime_descriptor(...)`
   - `$schema->compile_vm_native_bundle_descriptor(...)`
-  - `$schema->dump_runtime_native_descriptor(...)`
+  - `$schema->dump_native_runtime_descriptor(...)`
   - `$schema->dump_vm_native_bundle_descriptor(...)`
   - `$schema->inflate_vm_native_bundle_descriptor(...)`
   - `$schema->execute_vm_native_bundle_descriptor(...)`

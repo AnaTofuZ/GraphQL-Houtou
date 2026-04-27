@@ -93,7 +93,7 @@ subtest 'runtime graph can round-trip through descriptor form' => sub {
 };
 
 subtest 'runtime graph can emit native descriptor' => sub {
-  my $descriptor = $schema->compile_runtime_native_descriptor;
+  my $descriptor = $schema->compile_native_runtime_descriptor;
   my ($search_slot) = grep {
     (($_->{schema_slot_key} || q()) eq 'Query.search')
   } @{ $descriptor->{slot_catalog} || [] };
@@ -124,8 +124,8 @@ subtest 'runtime native descriptor can round-trip through JSON file helpers' => 
   my ($fh, $path) = tempfile();
   close $fh;
 
-  my $descriptor = $schema->dump_runtime_native_descriptor($path);
-  my $loaded = $schema->load_runtime_native_descriptor($path);
+  my $descriptor = $schema->dump_native_runtime_descriptor($path);
+  my $loaded = $schema->load_native_runtime_descriptor($path);
 
   is_deeply $loaded, $descriptor, 'schema helper preserves native runtime descriptor through file boundary';
 };

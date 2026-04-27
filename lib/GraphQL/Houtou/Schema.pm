@@ -102,7 +102,7 @@ sub compile_runtime_descriptor {
   return $self->compile_runtime(%opts)->to_struct;
 }
 
-sub compile_runtime_native_descriptor {
+sub compile_native_runtime_descriptor {
   my ($self, %opts) = @_;
   return $self->compile_runtime(%opts)->to_native_struct;
 }
@@ -119,9 +119,9 @@ sub dump_runtime_descriptor {
   return $descriptor;
 }
 
-sub dump_runtime_native_descriptor {
+sub dump_native_runtime_descriptor {
   my ($self, $path, %opts) = @_;
-  my $descriptor = $self->compile_runtime_native_descriptor(%opts);
+  my $descriptor = $self->compile_native_runtime_descriptor(%opts);
   _write_json_descriptor($path, $descriptor);
   return $descriptor;
 }
@@ -132,7 +132,7 @@ sub load_runtime_descriptor {
   return $self->inflate_runtime($descriptor);
 }
 
-sub load_runtime_native_descriptor {
+sub load_native_runtime_descriptor {
   my ($self, $path) = @_;
   return _read_json_descriptor($path);
 }

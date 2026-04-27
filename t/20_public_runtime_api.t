@@ -72,6 +72,30 @@ subtest 'top-level compile_runtime returns schema runtime' => sub {
   }, 'compiled runtime can execute operation';
 };
 
+subtest 'schema runtime descriptor helpers prefer program/native names' => sub {
+  my ($program_fh, $program_path) = tempfile();
+  close $program_fh;
+
+  my $program_descriptor = $schema->dump_program_descriptor('{ hello }', $program_path);
+  my $program = $schema->load_program_descriptor($program_path);
+
+  isa_ok $program, 'GraphQL::Houtou::Runtime::VMProgram';
+  ok $program_descriptor->{blocks}, 'program descriptor payload is written to disk';
+  is_deeply $schema->build_runtime->execute_program($program), {
+    data => { hello => 'world' },
+    errors => [],
+  }, 'program descriptor helpers round-trip through file boundary';
+
+  my ($runtime_fh, $runtime_path) = tempfile();
+  close $runtime_fh;
+
+  my $runtime_descriptor = $schema->dump_native_runtime_descriptor($runtime_path);
+  my $loaded = $schema->load_native_runtime_descriptor($runtime_path);
+
+  is_deeply $loaded, $runtime_descriptor,
+    'native runtime descriptor helpers use native_runtime names';
+};
+
 subtest 'top-level build_runtime returns cached schema runtime' => sub {
   my $first = build_runtime($schema);
   my $second = build_runtime($schema);

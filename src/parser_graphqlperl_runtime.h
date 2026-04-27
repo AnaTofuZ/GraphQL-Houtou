@@ -669,11 +669,11 @@ gql_parse_value(pTHX_ gql_parser_t *p, int is_const) {
     case TOK_NAME: {
       if (gql_peek_name(p, "true")) {
         gql_advance(aTHX_ p);
-        return gql_call_helper1(aTHX_ "GraphQL::Houtou::XS::Parser::_make_bool", newSViv(1));
+        return gql_call_helper1(aTHX_ "GraphQL::Houtou::Parser::Internal::_make_bool", newSViv(1));
       }
       if (gql_peek_name(p, "false")) {
         gql_advance(aTHX_ p);
-        return gql_call_helper1(aTHX_ "GraphQL::Houtou::XS::Parser::_make_bool", newSViv(0));
+        return gql_call_helper1(aTHX_ "GraphQL::Houtou::Parser::Internal::_make_bool", newSViv(0));
       }
       if (gql_peek_name(p, "null")) {
         gql_advance(aTHX_ p);

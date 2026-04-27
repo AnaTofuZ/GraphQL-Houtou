@@ -175,7 +175,7 @@ gql_copy_value_sv(pTHX_ gql_parser_t *p) {
   SV *raw = gql_make_string_sv(aTHX_ p, p->val_start, p->val_end);
   SV *ret;
   if (p->kind == TOK_BLOCK_STRING) {
-    ret = gql_call_helper1(aTHX_ "GraphQL::Houtou::XS::Parser::_block_string_value", raw);
+    ret = gql_call_helper1(aTHX_ "GraphQL::Houtou::Parser::Internal::_block_string_value", raw);
   } else {
     ret = gql_unescape_string_sv(aTHX_ raw);
   }
@@ -200,7 +200,7 @@ gql_throw_sv(pTHX_ gql_parser_t *p, STRLEN pos, SV *msg) {
   XPUSHs(sv_2mortal(newSVuv((UV)pos)));
   XPUSHs(sv_2mortal(msg));
   PUTBACK;
-  call_pv("GraphQL::Houtou::XS::Parser::_format_error", G_SCALAR);
+  call_pv("GraphQL::Houtou::Parser::Internal::_format_error", G_SCALAR);
   SPAGAIN;
   err = newSVsv(POPs);
   PUTBACK;

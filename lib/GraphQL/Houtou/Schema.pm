@@ -254,7 +254,7 @@ sub execute_native_bundle_descriptor {
   my ($self, $descriptor, %opts) = @_;
   my $runtime = $self->build_native_runtime;
   my $bundle = $runtime->load_bundle_descriptor($descriptor);
-  return $bundle->execute(%opts);
+  return $runtime->execute_bundle($bundle, %opts);
 }
 
 sub execute_native {

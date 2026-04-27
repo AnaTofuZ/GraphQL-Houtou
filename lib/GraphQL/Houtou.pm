@@ -285,7 +285,8 @@ If you need a reusable compiled runtime, use:
 If you want a boot-time native artifact, use:
 
     my $bundle = GraphQL::Houtou::compile_native_bundle($schema, $document);
-    my $result = $bundle->execute;
+    my $runtime = GraphQL::Houtou::build_native_runtime($schema);
+    my $result = $runtime->execute_bundle($bundle);
 
 Or execute directly through the cached native runtime:
 

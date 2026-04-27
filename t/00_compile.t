@@ -33,7 +33,6 @@ use_ok $_ for qw(
     GraphQL::Houtou::Runtime
     GraphQL::Houtou::Runtime::Compiler
     GraphQL::Houtou::Runtime::OperationCompiler
-    GraphQL::Houtou::Runtime::ProgramSpecializer
     GraphQL::Houtou::Runtime::SchemaGraph
     GraphQL::Houtou::Runtime::Block
     GraphQL::Houtou::Runtime::Slot
@@ -53,7 +52,6 @@ use_ok $_ for qw(
     GraphQL::Houtou::Runtime::VMOp
     GraphQL::Houtou::Runtime::VMExecutor
     GraphQL::Houtou::Runtime::NativeRuntime
-    GraphQL::Houtou::Runtime::NativeBundle
 );
 
 done_testing;

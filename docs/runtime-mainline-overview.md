@@ -29,7 +29,7 @@
 - `GraphQL::Houtou::Runtime::Compiler`
 - `GraphQL::Houtou::Runtime::SchemaGraph`
 - `GraphQL::Houtou::Runtime::NativeRuntime`
-- `GraphQL::Houtou::Runtime::NativeBundle`
+- opaque native bundle handle (`GraphQL::Houtou::Runtime::NativeBundle` package is provided by XS only)
 
 役割:
 
@@ -54,13 +54,12 @@
 
 - `GraphQL::Houtou::Runtime::OperationCompiler`
 - `GraphQL::Houtou::Runtime::Slot`
-- `GraphQL::Houtou::Runtime::ProgramSpecializer`
 
 役割:
 
 - query document を schema-aware な lowered program に変換する
 - variables / args / directives / fragments を execution しやすい shape に下げる
-- さらに VM lowering に渡す前段の IR を持つ
+- さらに native specialization に渡す前段の IR を持つ
 
 ### 5. VM Lowering
 

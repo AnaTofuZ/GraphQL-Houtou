@@ -147,7 +147,7 @@ subtest 'native runtime can compile reusable bundle from cached program' => sub 
   my $bundle = $native->compile_bundle($program);
 
   isa_ok $bundle, 'GraphQL::Houtou::Runtime::NativeBundle';
-  my $result = $bundle->execute;
+  my $result = $native->execute_bundle($bundle);
 
   is_deeply $result, {
     data => { hello => 'world' },
@@ -169,7 +169,7 @@ subtest 'native runtime can round-trip bundle descriptors' => sub {
     variables => { name => 'persisted' },
   );
   my $bundle = $native->load_bundle_descriptor_file($path);
-  my $result = $bundle->execute;
+  my $result = $native->execute_bundle($bundle);
 
   ok $descriptor->{program}, 'bundle descriptor keeps native program payload';
   is_deeply $result, {
@@ -180,8 +180,9 @@ subtest 'native runtime can round-trip bundle descriptors' => sub {
 
 subtest 'top-level compile_native_bundle returns executable bundle' => sub {
   my $bundle = compile_native_bundle($schema, '{ hello }');
+  my $native = build_native_runtime($schema);
   isa_ok $bundle, 'GraphQL::Houtou::Runtime::NativeBundle';
-  my $result = $bundle->execute;
+  my $result = $native->execute_bundle($bundle);
   is_deeply $result, {
     data => { hello => 'world' },
     errors => [],

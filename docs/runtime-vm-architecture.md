@@ -994,8 +994,8 @@ The intended shape is:
   - dynamic include/skip guards
 - only then cross the top-level native boundary
 
-This is why `Runtime::ProgramSpecializer` exists in Perl instead of trying to
-teach every child module to call XS:
+This is why request-time specialization now stays in `Runtime::NativeRuntime`
+instead of trying to teach every child module to call XS:
 
 - child modules stay language/runtime agnostic
 - request-local mutation happens on a cloned VM program

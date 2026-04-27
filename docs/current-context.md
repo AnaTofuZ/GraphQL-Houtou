@@ -171,6 +171,10 @@ fresh `./Build build` 済み環境で、
   は source tree から削除済み
 - parser public surface は `graphql-perl` 1 dialect に整理した
 - historical / internal parser 資料は docs にのみ残し、mainline の API からは `graphql-js` dialect を外した
+- parser compatibility 自体は要件から外したが、parser 本体と旧 compatibility 層が一部 helper を共有していたため、
+  まず `src/parser_shared_ast.h` を新設して mainline 共有 helper を切り出した
+  - `graphqljs_convert.h` は compatibility-only へ縮退させる対象
+  - `parser_compat.h` はまだ `gql_parse_document` を持つため active path に残る
 - 今後の高速化は旧 corridor widening の延長ではなく、runtime/VM 本体で進める
 - 特に注力するのは:
   - native VM executor の XS 化

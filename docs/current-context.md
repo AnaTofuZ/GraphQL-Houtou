@@ -65,10 +65,10 @@
    - `GraphQL::Houtou::Runtime::NativeBundle` は Perl wrapper ではなく XS が提供する opaque handle
 
 5. Parser Surface
-   - 公開 parser surface は `graphql-perl` 互換 AST の 1 dialect に固定
+   - 公開 parser surface は canonical parser AST の 1 dialect に固定
    - `parse_with_options(...)` は `no_location` / `noLocation` のような parser-local option だけを受ける
    - dialect/backend の選択 surface と benchmark/profile script 上の旧 option は削除済み
-  - compat parser XSUB の公開 entrypoint も active mainline から削除済み
+   - compat parser XSUB の公開 entrypoint も active mainline から削除済み
 
 ## 内部通貨
 

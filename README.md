@@ -57,12 +57,11 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
 # DESCRIPTION
 
 GraphQL::Houtou provides an XS-first GraphQL parser and runtime for Perl.
-The parser surface is normalized around the legacy `graphql-perl` AST,
-while the execution mainline is the compiled runtime / VM pipeline.
+The parser surface returns the library's canonical Perl AST, while the
+execution mainline is the compiled runtime / VM pipeline.
 
 The current direction is:
 
-- parser compatibility where the public API still needs it
 - XS-required public compiler / validation facades
 - runtime-first execution through compiled programs and native bundles
 - legacy implementation tests and snapshots preserved under `legacy-tests/`
@@ -72,8 +71,8 @@ instead of shaping the active mainline
 
 ## Parsing
 
-The default `parse()` entry point returns the traditional
-`graphql-perl`-compatible AST.
+The default `parse()` entry point returns the canonical parser AST used by
+this library.
 
     my $ast = parse($source);
 
@@ -99,7 +98,7 @@ The top-level runtime API is:
 Where `$document` can be either:
 
 - a source string
-- a pre-parsed `graphql-perl`-compatible AST
+- a pre-parsed parser AST returned by `parse()` or `parse_with_options()`
 
 If you need a reusable compiled runtime, use:
 
@@ -157,9 +156,9 @@ code for `Promises`, `Future`, `Promise::XS`, `Promise::ES6`,
 
 # PARSER SURFACE
 
-The public parser surface is fixed to the traditional `graphql-perl`
-compatible AST. `parse_with_options()` only accepts parser-local knobs such
-as `no_location`.
+The public parser surface is fixed to the library's canonical parser AST.
+`parse_with_options()` only accepts parser-local knobs such as
+`no_location`.
 
 # PERFORMANCE NOTES
 

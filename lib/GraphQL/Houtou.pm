@@ -182,16 +182,12 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
 =head1 DESCRIPTION
 
 GraphQL::Houtou provides an XS-first GraphQL parser and runtime for Perl.
-The parser surface is normalized around the legacy C<graphql-perl> AST,
-while the execution mainline is the compiled runtime / VM pipeline.
+The parser surface returns the library's canonical Perl AST, while the
+execution mainline is the compiled runtime / VM pipeline.
 
 The current direction is:
 
 =over 4
-
-=item *
-
-parser compatibility where the public API still needs it
 
 =item *
 
@@ -212,8 +208,8 @@ instead of shaping the active mainline
 
 =head2 Parsing
 
-The default C<parse()> entry point returns the traditional
-C<graphql-perl>-compatible AST.
+The default C<parse()> entry point returns the canonical parser AST used by
+this library.
 
     my $ast = parse($source);
 
@@ -246,7 +242,7 @@ a source string
 
 =item *
 
-a pre-parsed C<graphql-perl>-compatible AST
+a pre-parsed parser AST returned by C<parse()> or C<parse_with_options()>
 
 =back
 
@@ -324,9 +320,9 @@ C<Mojo::Promise>, or any other library with a suitable wrapper.
 
 =head1 PARSER SURFACE
 
-The public parser surface is fixed to the traditional C<graphql-perl>
-compatible AST. C<parse_with_options()> only accepts parser-local knobs such
-as C<no_location>.
+The public parser surface is fixed to the library's canonical parser AST.
+C<parse_with_options()> only accepts parser-local knobs such as
+C<no_location>.
 
 =head1 PERFORMANCE NOTES
 

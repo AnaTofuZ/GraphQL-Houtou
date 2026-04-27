@@ -14,7 +14,7 @@
 - 今後、独自構造体化の効果が出やすい層はどこか
 
 活動記録と benchmark の最新値は `docs/current-context.md` を参照。
-現行の公開 parser surface は `graphql-perl` 互換 AST に固定されている。
+現行の公開 parser surface は、このライブラリの canonical parser AST に固定されている。
 この文書に残っている旧 graphql-js 由来の記述は、parser-internal な履歴的背景として読む。
 runtime / VM mainline とは別物であり、現在の本命経路ではない。
 また、mainline と旧 parser 実装の shared helper は
@@ -29,7 +29,7 @@ executable-document 向けの IR 解析と lazy materialize は `src/parser_ir_r
 
 現在の parser 実装は、大きく次の 2 経路に分かれる。
 
-1. `graphql-perl` dialect を XS で直接 parse する経路
+1. canonical parser AST を XS で直接 parse する経路
 2. parser-internal helper による lazy loc / lazy array materialization 経路
 
 重要なのは、内部実装がすでに一枚岩ではないことである。
@@ -45,9 +45,9 @@ executable-document 向けの IR 解析と lazy materialize は `src/parser_ir_r
 
 ## 公開 API から見た内部経路
 
-### `graphql-perl` dialect
+### canonical parser AST
 
-`parse_xs()` は `gql_parse_document()` を呼び、XS 側でそのまま legacy AST を組み立てる。
+`parse_xs()` は `gql_parse_document()` を呼び、XS 側でそのまま parser AST を組み立てる。
 
 この経路では、各 node はその場で `HV` / `AV` / `SV` として生成される。
 たとえば field, selection set, variable definitions などは
@@ -106,19 +106,19 @@ legacy AST を Perl データ構造として作る。
 - 互換 AST を最短距離で返せる
 - その代わり parse 中の allocation 数は多くなりやすい
 
-現状の benchmark では、この「legacy AST を直接組む XS 経路」が依然として最速である。
+現状の benchmark では、この「parser AST を直接組む XS 経路」が依然として最速である。
 これは、追加の変換段がないことの効果が大きいと考えてよい。
 
 ## executable 用 IR 経路
 
 ### 目的
 
-`graphql-js` executable path では、legacy AST を経由せず、
-専用 IR を parse してから graphql-js AST を build する。
+executable document の一部 materialize では、parser AST をそのまま再帰的に辿るのではなく、
+専用 IR を parse してから必要な断片を build する。
 
 これは次の問題を避けるために導入された。
 
-- legacy AST を一度作ってから graphql-js AST へ変換する二重構築コスト
+- parser AST を一度作ってから別表現へ変換する二重構築コスト
 - `loc` を後段で再走査して付けるコスト
 - 大量の小さな Perl object を parse の途中段階で持つコスト
 
@@ -194,9 +194,9 @@ IR が完全に `SV` フリーというわけではない。
 
 このため、「独自構造体化」はすでに始まっているが、まだ完全ではない。
 
-## IR から graphql-js AST を build する経路
+## IR から parser AST 断片を build する経路
 
-IR parse 後は、専用 builder が graphql-js 風 AST を `HV` / `AV` として構築する。
+IR parse 後は、専用 builder が parser AST 断片を `HV` / `AV` として構築する。
 
 主な builder:
 

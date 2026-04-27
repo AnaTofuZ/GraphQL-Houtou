@@ -37,11 +37,8 @@
 - Pure Perl fallback は mainline の前提にしない
 - ただし legacy XS integration がまだ依存している内部互換モジュールは一時的に残す
 
-現在、一時的に残している内部互換モジュール:
-
-- `GraphQL::Houtou::Validation::PP`
-
-これらは public fallback surface ではなく、旧 path の内部互換用です。
+現時点では validation 側の internal PP bridge は削除済みで、旧 path に残る
+互換層は主に execution 側です。
 
 ## Runtime / VM Status
 

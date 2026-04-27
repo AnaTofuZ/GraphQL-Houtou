@@ -909,11 +909,11 @@ Already XS-owned:
 - common object/list/abstract completion fast paths
 - promise dispatch / merge / response shaping
 
-Still legacy PP/internal compatibility:
+Legacy PP/internal compatibility has been reduced further:
 
-- validation still retains `GraphQL::Houtou::Validation::PP` as an internal
-  compatibility layer behind the XS facade
-- this is no longer treated as an active public fallback surface
+- validation no longer depends on `GraphQL::Houtou::Validation::PP`
+- the active validation suite now runs directly out of `src/validation.h`
+- remaining PP bridges are in legacy execution, not validation
 
 ### IR direct execution
 

@@ -4516,3 +4516,9 @@ This fixes the first real bridge-design bug we hit in the reboot:
     - keep `VM*` as internal implementation names
     - move public/runtime-facing APIs toward runtime/program/block
       terminology
+- Runtime/VM を主系に寄せる整理として、旧 execution 系の active test
+  (`t/10_object_runtime.t`, `t/11_execution.t`, `t/12_promise.t`) は
+  `legacy-tests/original-t/` に退避した。以後の active suite は
+  runtime / VM / public runtime API を中心に維持する。
+- `Runtime.pm` は `GraphQL::Houtou::XS::VM` を直接 import せず、
+  `GraphQL::Houtou::Native` を native boundary として使うようにした。

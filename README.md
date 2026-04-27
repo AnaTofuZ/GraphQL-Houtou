@@ -127,8 +127,9 @@ features not yet lowered into the native engine automatically fall back to the
 Perl VM. The Perl VM remains available as an explicit cold path via
 `execute_runtime_perl(...)`/`execute_program_perl(...)`.
 
-The older `GraphQL::Houtou::Execution` entry point remains available for
-compatibility, but the intended mainline is the runtime-backed API above.
+The runtime-backed API above is the intended mainline. Older execution
+compatibility tests live under `legacy-tests/` and are no longer part of the
+active suite.
 
 ## Promise Hooks
 

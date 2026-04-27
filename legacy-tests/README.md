@@ -15,3 +15,4 @@
 
 - ここにあるテストは、そのまま新実装へ適用できるとは限りません
 - 新 runtime 向けには別のテスト harness / fixture / benchmark を再構築する想定です
+- active suite から外した旧 execution/PP/XS 比較テストもここに退避する

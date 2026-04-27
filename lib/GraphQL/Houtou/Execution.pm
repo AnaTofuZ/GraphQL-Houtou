@@ -5,27 +5,14 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use GraphQL::Houtou ();
 
 our @EXPORT_OK = qw(
   execute
 );
 
-my $HAS_XS;
-
 sub execute {
-  if (!defined $HAS_XS) {
-    $HAS_XS = eval {
-      require GraphQL::Houtou::XS::Execution;
-      1;
-    } ? 1 : 0;
-  }
-
-  if ($HAS_XS) {
-    return GraphQL::Houtou::XS::Execution::execute_xs(@_);
-  }
-
-  require GraphQL::Houtou::Execution::PP;
-  return GraphQL::Houtou::Execution::PP::execute(@_);
+  return GraphQL::Houtou::execute(@_);
 }
 
 1;
@@ -46,8 +33,9 @@ GraphQL::Houtou::Execution - GraphQL execution facade
 
 =head1 DESCRIPTION
 
-This module is the public entry point for GraphQL execution.
-It prefers an XS implementation when available and otherwise falls back
-to the pure-Perl executor.
+This module is a compatibility facade for the older execution entry point.
+Its implementation now delegates to the runtime-backed
+L<GraphQL::Houtou/Executing Queries> API so that old call sites follow the
+same mainline runtime path as the newer top-level interface.
 
 =cut

@@ -230,9 +230,19 @@ sub _preferred_engine_for_program {
     for my $op (@{ $block->ops || [] }) {
       return 'perl' if $op->has_args || $op->has_directives;
       my $slot = $op->bound_slot or next;
-      return 'perl' if ($slot->resolver_shape || q()) ne 'DEFAULT';
+      my $shape = $slot->resolver_shape || q();
+      my $mode = $slot->resolver_mode || q();
+      if ($shape ne 'DEFAULT') {
+        return 'perl' if $shape ne 'EXPLICIT';
+        return 'perl' if $mode ne 'NATIVE';
+      }
       my $dispatch = $slot->dispatch_family || q();
-      return 'perl' if $dispatch ne 'GENERIC' && $dispatch ne 'TAG';
+      return 'perl'
+        if $dispatch ne 'GENERIC'
+        && $dispatch ne 'TAG'
+        && $dispatch ne 'OBJECT'
+        && $dispatch ne 'LIST'
+        && $dispatch ne 'ABSTRACT';
     }
   }
 

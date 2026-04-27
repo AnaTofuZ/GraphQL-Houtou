@@ -36,6 +36,7 @@ my $Query = GraphQL::Houtou::Type::Object->new(
   fields => {
     viewer => {
       type => $User,
+      resolver_mode => 'native',
       resolve => sub { return { id => 'u1', name => 'Alice' } },
     },
     users => {

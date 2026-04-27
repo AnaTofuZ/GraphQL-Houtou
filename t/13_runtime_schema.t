@@ -43,6 +43,7 @@ my $schema = GraphQL::Houtou::Schema->new(
     fields => {
       viewer => {
         type => $User,
+        resolver_mode => 'native',
         resolve => sub { +{ kind => 'user', id => 'u1', name => 'Ana' } },
       },
       search => {
@@ -75,6 +76,7 @@ subtest 'runtime graph records field families and dispatch shapes' => sub {
 
   is $slots{viewer}->completion_family, 'OBJECT', 'viewer compiles to object family';
   is $slots{viewer}->resolver_shape, 'EXPLICIT', 'viewer keeps explicit resolver shape';
+  is $slots{viewer}->resolver_mode, 'NATIVE', 'viewer keeps native resolver mode';
   is $slots{search}->completion_family, 'LIST', 'search compiles to list family';
   is $compiled->type_index->{Node}{completion_family}, 'ABSTRACT', 'interface recorded as abstract family';
   is $compiled->dispatch_index->{SearchResult}{dispatch_family}, 'TAG', 'union tag dispatch is compiled';
@@ -98,6 +100,8 @@ subtest 'runtime graph can emit native descriptor' => sub {
     'native runtime slot keeps schema slot index';
   ok defined $descriptor->{slot_catalog}[0]{completion_family_code},
     'native runtime slot keeps numeric family code';
+  ok defined $descriptor->{slot_catalog}[0]{resolver_mode_code},
+    'native runtime slot keeps numeric resolver mode code';
   is $descriptor->{slot_catalog}[0]{schema_slot_key}, 'Query.search',
     'native runtime slot keeps stable schema slot key';
 };

@@ -31,6 +31,10 @@ Public execution policy for this design:
   live at the top-level runtime/native API
 - core schema/type objects should not own legacy execution behavior for the
   mainline runtime; execution belongs in the runtime/compiler/VM layers
+- explicit field resolvers may opt into the native hot path with
+  `resolver_mode => 'native'` when they do not require the lazy `info` ABI;
+  this should be treated as a deliberate fast-path contract rather than the
+  default behavior for all resolvers
 
 ## Design Principles
 

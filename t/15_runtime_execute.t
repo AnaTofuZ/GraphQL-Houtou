@@ -125,6 +125,40 @@ subtest 'runtime execute_program uses native engine by default' => sub {
   }, 'default execute_program path stays on native runtime';
 };
 
+subtest 'native resolver mode lets explicit resolver use native runtime' => sub {
+  my $called = 0;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_bundle;
+  my $native_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'NativeResolverQuery',
+      fields => {
+        nativeHello => {
+          type => $String,
+          resolver_mode => 'native',
+          resolve => sub { return 'native-hi' },
+        },
+      },
+    ),
+  );
+
+  {
+    no warnings 'redefine';
+    local *GraphQL::Houtou::Native::execute_native_bundle = sub {
+      $called = 1;
+      goto &$orig;
+    };
+    my $result = $native_schema->execute_runtime('{ nativeHello }');
+    is_deeply $result, {
+      data => {
+        nativeHello => 'native-hi',
+      },
+      errors => [],
+    }, 'native-safe explicit resolver still executes correctly';
+  }
+
+  ok $called, 'execute_runtime selected native engine for native-safe explicit resolver';
+};
+
 subtest 'schema helper can compile and execute in one call' => sub {
   my $result = $schema->execute_runtime('{ viewer { id } }');
   is_deeply $result, {

@@ -4527,3 +4527,15 @@ This fixes the first real bridge-design bug we hit in the reboot:
   では使わず、呼ばれた場合は runtime API へ移行するよう即座に失敗させる。
 - promise helper / hash merge の XS 呼び出しも `Promise::Adapter` から
   `Native` 境界へ寄せた。mainline runtime は `XS::Execution` を直接参照しない。
+- 2026-04-27
+  - field 定義に `resolver_mode => 'native'` を追加した。
+  - これは explicit resolver を native VM hot path に乗せる opt-in であり、
+    lazy `info` 互換を要求しない resolver に限定して使う。
+  - compiler / slot catalog / native descriptor まで `resolver_mode` を保持する。
+  - `Runtime::_preferred_engine_for_program(...)` は
+    - args / directives / variables が無い
+    - resolver shape が `DEFAULT`
+      または `EXPLICIT + resolver_mode=NATIVE`
+    の program を native 候補として扱う。
+  - `t/15_runtime_execute.t` では `execute_runtime(...)` が
+    native-safe explicit resolver を実際に native 境界へ流すことを固定した。

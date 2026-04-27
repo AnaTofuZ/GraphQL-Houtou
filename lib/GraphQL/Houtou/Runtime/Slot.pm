@@ -13,6 +13,7 @@ sub new {
     result_name => $args{result_name},
     return_type_name => $args{return_type_name},
     resolver_shape => $args{resolver_shape} || 'DEFAULT',
+    resolver_mode => $args{resolver_mode} || 'DEFAULT',
     completion_family => $args{completion_family} || 'GENERIC',
     dispatch_family => $args{dispatch_family} || 'GENERIC',
     arg_defs => $args{arg_defs} || {},
@@ -29,6 +30,7 @@ sub field_name { return $_[0]{field_name} }
 sub result_name { return $_[0]{result_name} }
 sub return_type_name { return $_[0]{return_type_name} }
 sub resolver_shape { return $_[0]{resolver_shape} }
+sub resolver_mode { return $_[0]{resolver_mode} }
 sub completion_family { return $_[0]{completion_family} }
 sub dispatch_family { return $_[0]{dispatch_family} }
 sub arg_defs { return $_[0]{arg_defs} }
@@ -46,6 +48,7 @@ sub to_struct {
     result_name => $self->{result_name},
     return_type_name => $self->{return_type_name},
     resolver_shape => $self->{resolver_shape},
+    resolver_mode => $self->{resolver_mode},
     completion_family => $self->{completion_family},
     dispatch_family => $self->{dispatch_family},
     arg_defs => _clone_value($self->{arg_defs}),
@@ -65,6 +68,8 @@ sub to_native_struct {
     return_type_kind_code => _type_kind_code($self->{return_type}),
     resolver_shape => $self->{resolver_shape},
     resolver_shape_code => _resolver_shape_code($self->{resolver_shape}),
+    resolver_mode => $self->{resolver_mode},
+    resolver_mode_code => _resolver_mode_code($self->{resolver_mode}),
     completion_family => $self->{completion_family},
     completion_family_code => _family_code($self->{completion_family}),
     dispatch_family => $self->{dispatch_family},
@@ -86,6 +91,12 @@ sub to_native_exec_struct {
 sub _resolver_shape_code {
   my ($shape) = @_;
   return 2 if ($shape || q()) eq 'EXPLICIT';
+  return 1;
+}
+
+sub _resolver_mode_code {
+  my ($mode) = @_;
+  return 2 if ($mode || q()) eq 'NATIVE';
   return 1;
 }
 

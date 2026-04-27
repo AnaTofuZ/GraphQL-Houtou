@@ -87,8 +87,6 @@
 
 - `GraphQL::Houtou::Internal::TypeSupport`
   - type constructor helper
-- `GraphQL::Houtou::Type::Library`
-  - Type::Tiny based helper constraints
 - `GraphQL::Houtou::Role::*`
   - marker role と最小 helper
 

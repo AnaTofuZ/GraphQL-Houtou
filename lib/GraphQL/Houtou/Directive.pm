@@ -6,7 +6,6 @@ use warnings;
 
 use parent 'GraphQL::Houtou::Type';
 use Role::Tiny::With;
-use GraphQL::Houtou::Type::Library qw(FieldMapInput);
 use GraphQL::Houtou::Internal::TypeSupport qw(description_doc_lines make_fieldtuples named_from_ast);
 
 use GraphQL::Houtou::Type::Scalar qw($Boolean $String);

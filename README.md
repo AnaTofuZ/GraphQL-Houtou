@@ -21,20 +21,9 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
 
     my $legacy_ast = parse('{ user { id } }');
 
-    my $js_ast = parse_with_options('{ user { id } }', {
-      dialect => 'graphql-js',
-      backend => 'xs',
-    });
-
     my $legacy_xs_ast = parse_with_options('{ user { id } }', {
       dialect => 'graphql-perl',
       backend => 'xs',
-    });
-
-    my $fast_js_ast = parse_with_options('{ user { id } }', {
-      dialect => 'graphql-js',
-      backend => 'xs',
-      no_location => 1,
     });
 
     my $schema = GraphQL::Houtou::Schema->new(
@@ -69,9 +58,8 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
 # DESCRIPTION
 
 GraphQL::Houtou provides an XS-first GraphQL parser and runtime for Perl.
-The parser still exposes both a legacy `graphql-perl` AST and a
-`graphql-js`-style AST, but the execution mainline is the compiled
-runtime / VM pipeline.
+The parser surface is normalized around the legacy `graphql-perl` AST,
+while the execution mainline is the compiled runtime / VM pipeline.
 
 The current direction is:
 
@@ -97,16 +85,11 @@ If you want to choose the dialect explicitly, use `parse_with_options()`.
       backend => 'xs',
     });
 
-    my $graphql_js = parse_with_options($source, {
-      dialect => 'graphql-js',
-      backend => 'xs',
-    });
-
 For throughput-sensitive parsing where you do not need location data, passing
 `no_location => 1` is still recommended.
 
     my $doc = parse_with_options($source, {
-      dialect => 'graphql-js',
+      dialect => 'graphql-perl',
       backend => 'xs',
       no_location => 1,
     });
@@ -192,19 +175,8 @@ If you want to be explicit about the backend, use `parse_with_options()`.
       backend => 'xs',
     });
 
-The `pegex` backend is still available for compatibility, but the intended
-default path is `xs`.
-
-## graphql-js compatible layer
-
-If you want a `graphql-js`-style AST, select the `graphql-js` dialect.
-
-    my $doc = parse_with_options($source, {
-      dialect => 'graphql-js',
-      backend => 'xs',
-    });
-
-The `graphql-js` parser currently supports only the `xs` backend.
+The public parser surface now exposes only the `graphql-perl` dialect. The
+intended backend is `xs`.
 
 # PERFORMANCE NOTES
 
@@ -215,7 +187,7 @@ recommended for throughput-sensitive workloads.
 Example:
 
     my $doc = parse_with_options($source, {
-      dialect => 'graphql-js',
+      dialect => 'graphql-perl',
       backend => 'xs',
       no_location => 1,
     });

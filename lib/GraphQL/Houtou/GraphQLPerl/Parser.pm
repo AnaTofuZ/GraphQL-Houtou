@@ -4,10 +4,6 @@ use 5.014;
 use strict;
 use warnings;
 use Exporter 'import';
-use GraphQL::Houtou::GraphQLPerl::FromGraphQLJS qw(
-  convert_canonical_document
-  enforce_legacy_compat
-);
 
 our @EXPORT_OK = qw(
   parse
@@ -16,7 +12,7 @@ our @EXPORT_OK = qw(
 
 my $HAS_XS_BACKEND = eval {
   require GraphQL::Houtou::XS::Parser;
-  GraphQL::Houtou::XS::Parser->import(qw(parse_xs graphqljs_parse_document_xs));
+  GraphQL::Houtou::XS::Parser->import(qw(parse_xs));
   1;
 };
 
@@ -24,28 +20,10 @@ sub _has_xs_backend {
   return $HAS_XS_BACKEND;
 }
 
-sub _parse_via_xs {
-  my ($source, $no_location, $options) = @_;
-  my $document = parse_xs($source, $no_location);
-  enforce_legacy_compat($source, $options);
-  return $document;
-}
-
-sub _parse_via_canonical_xs {
-  my ($source, $no_location, $options) = @_;
-  my $document = graphqljs_parse_document_xs(
-    $source,
-    $no_location ? 1 : 0,
-    0,
-    0,
-  );
-  return convert_canonical_document($document, $source, $options);
-}
-
 sub parse {
   my ($source, $no_location) = @_;
   die "XS parser backend is required for GraphQL::Houtou::parse().\n" if !_has_xs_backend();
-  return _parse_via_xs($source, $no_location, {});
+  return parse_xs($source, $no_location);
 }
 
 sub parse_with_options {
@@ -57,11 +35,7 @@ sub parse_with_options {
 
   if ($backend eq 'xs') {
     die "XS parser backend is required for GraphQL::Houtou::parse_with_options().\n" if !_has_xs_backend();
-    return _parse_via_xs($source, $no_location, $options);
-  }
-  if ($backend eq 'canonical-xs' || $backend eq 'graphqljs-xs') {
-    die "XS parser backend is required for GraphQL::Houtou::parse_with_options().\n" if !_has_xs_backend();
-    return _parse_via_canonical_xs($source, $no_location, $options);
+    return parse_xs($source, $no_location);
   }
 
   die "Unknown parser backend '$backend'.\n";

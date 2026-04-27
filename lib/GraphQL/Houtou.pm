@@ -42,18 +42,10 @@ sub parse {
 sub parse_with_options {
   my ($source, $options) = @_;
   $options ||= {};
-  my $dialect = $options->{dialect} || 'graphql-perl';
-
-  if ($dialect eq 'graphql-perl') {
-    require GraphQL::Houtou::GraphQLPerl::Parser;
-    return GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, $options);
-  }
-  if ($dialect eq 'graphql-js') {
-    require GraphQL::Houtou::GraphQLJS::Parser;
-    return GraphQL::Houtou::GraphQLJS::Parser::parse($source, $options);
-  }
-
-  die "Unknown parser dialect '$dialect'.\n";
+  die "Unknown parser dialect '$options->{dialect}'.\n"
+    if defined($options->{dialect}) && $options->{dialect} ne 'graphql-perl';
+  require GraphQL::Houtou::GraphQLPerl::Parser;
+  return GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, $options);
 }
 
 sub compile_runtime {
@@ -149,20 +141,9 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
 
     my $legacy_ast = parse('{ user { id } }');
 
-    my $js_ast = parse_with_options('{ user { id } }', {
-      dialect => 'graphql-js',
-      backend => 'xs',
-    });
-
     my $legacy_xs_ast = parse_with_options('{ user { id } }', {
       dialect => 'graphql-perl',
       backend => 'xs',
-    });
-
-    my $fast_js_ast = parse_with_options('{ user { id } }', {
-      dialect => 'graphql-js',
-      backend => 'xs',
-      no_location => 1,
     });
 
     my $schema = GraphQL::Houtou::Schema->new(
@@ -197,9 +178,8 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
 =head1 DESCRIPTION
 
 GraphQL::Houtou provides an XS-first GraphQL parser and runtime for Perl.
-The parser still exposes both a legacy C<graphql-perl> AST and a
-C<graphql-js>-style AST, but the execution mainline is the compiled
-runtime / VM pipeline.
+The parser surface is normalized around the legacy C<graphql-perl> AST,
+while the execution mainline is the compiled runtime / VM pipeline.
 
 The current direction is:
 
@@ -240,16 +220,11 @@ If you want to choose the dialect explicitly, use C<parse_with_options()>.
       backend => 'xs',
     });
 
-    my $graphql_js = parse_with_options($source, {
-      dialect => 'graphql-js',
-      backend => 'xs',
-    });
-
 For throughput-sensitive parsing where you do not need location data, passing
 C<no_location =E<gt> 1> is still recommended.
 
     my $doc = parse_with_options($source, {
-      dialect => 'graphql-js',
+      dialect => 'graphql-perl',
       backend => 'xs',
       no_location => 1,
     });
@@ -362,19 +337,8 @@ If you want to be explicit about the backend, use C<parse_with_options()>.
       backend => 'xs',
     });
 
-The C<pegex> backend is still available for compatibility, but the intended
-default path is C<xs>.
-
-=head2 graphql-js compatible layer
-
-If you want a C<graphql-js>-style AST, select the C<graphql-js> dialect.
-
-    my $doc = parse_with_options($source, {
-      dialect => 'graphql-js',
-      backend => 'xs',
-    });
-
-The C<graphql-js> parser currently supports only the C<xs> backend.
+The public parser surface now exposes only the C<graphql-perl> dialect. The
+intended backend is C<xs>.
 
 =head1 PERFORMANCE NOTES
 
@@ -385,7 +349,7 @@ recommended for throughput-sensitive workloads.
 Example:
 
     my $doc = parse_with_options($source, {
-      dialect => 'graphql-js',
+      dialect => 'graphql-perl',
       backend => 'xs',
       no_location => 1,
     });

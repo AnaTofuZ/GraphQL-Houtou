@@ -161,10 +161,8 @@ fresh `./Build build` 済み環境で、
   - `src/ir_execution.h`
   - `src/legacy_compat.h`
   は source tree から削除済み
-- parser / graphql-js 互換でまだ必要な実体は
-  - `src/parser_compat.h`
-  - `src/graphqljs_ir_runtime.h`
-  に責務分離して保持
+- parser public surface は `graphql-perl` 1 dialect に整理した
+- historical / internal parser 資料は docs にのみ残し、mainline の API からは `graphql-js` dialect を外した
 - 今後の高速化は旧 corridor widening の延長ではなく、runtime/VM 本体で進める
 - 特に注力するのは:
   - native VM executor の XS 化

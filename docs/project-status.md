@@ -30,7 +30,6 @@
 
 - parser surface では、必要な範囲で
   - `graphql-perl` 互換 AST
-  - `graphql-js` 風 AST
   を維持する
 - execution mainline は旧 mixed executor ではなく runtime / VM を優先する
 - Pure Perl fallback は mainline の前提にしない

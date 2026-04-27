@@ -5,11 +5,6 @@ use Test::More 0.98;
 
 use GraphQL::Houtou qw(parse parse_with_options);
 
-my $HAS_XS_PARSER = eval {
-  require GraphQL::Houtou::XS::Parser;
-  1;
-};
-
 subtest 'top-level parse returns legacy AST shape' => sub {
   my $ast = parse('{ viewer { id } }');
 
@@ -19,18 +14,17 @@ subtest 'top-level parse returns legacy AST shape' => sub {
   is $ast->[0]{selections}[0]{name}, 'viewer', 'legacy field name is preserved';
 };
 
-subtest 'graphql-js dialect remains available from top-level API' => sub {
-  plan skip_all => 'graphql-js facade requires XS parser support'
-    if !$HAS_XS_PARSER;
-
+subtest 'parse_with_options keeps graphql-perl dialect only' => sub {
   my $ast = parse_with_options('{ viewer { id } }', {
-    dialect => 'graphql-js',
-    no_location => 1,
+    dialect => 'graphql-perl',
+    backend => 'xs',
   });
 
-  is ref($ast), 'HASH', 'graphql-js parse returns hashref document';
-  is $ast->{kind}, 'Document', 'graphql-js document kind';
-  is ref($ast->{definitions}), 'ARRAY', 'graphql-js document has definitions';
+  is ref($ast), 'ARRAY', 'graphql-perl parse returns arrayref document';
+  my $error;
+  eval { parse_with_options('{ viewer { id } }', { dialect => 'graphql-js' }) };
+  $error = $@;
+  like($error, qr/Unknown parser dialect/, 'graphql-js dialect is no longer exposed');
 };
 
 done_testing;

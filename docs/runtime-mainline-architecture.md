@@ -128,6 +128,8 @@
 - native bundle は XS が提供する opaque handle
 - `Schema` が native bundle descriptor を手組みする経路は削除済み
 - `Runtime::execute_vm(...)` も compact descriptor を直組みせず `NativeRuntime` に委譲する
+- native 実行の hot path では `runtime + program` を 1 つの Perl hash にまとめず、
+  compact runtime struct と compact program struct を part-based API で XS に渡す
 
 ## 内部通貨
 

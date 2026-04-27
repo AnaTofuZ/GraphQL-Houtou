@@ -15,6 +15,7 @@ sub new {
   return bless {
     runtime_schema => $args{runtime_schema},
     native_runtime_struct => $args{native_runtime_struct},
+    native_runtime_compact_struct => $args{native_runtime_compact_struct},
     native_runtime_handle => $args{native_runtime_handle},
   }, $class;
 }
@@ -25,6 +26,12 @@ sub native_runtime_struct {
   my ($self) = @_;
   $self->{native_runtime_struct} ||= $self->runtime_schema->to_native_exec_struct;
   return $self->{native_runtime_struct};
+}
+
+sub native_runtime_compact_struct {
+  my ($self) = @_;
+  $self->{native_runtime_compact_struct} ||= $self->runtime_schema->to_native_compact_struct;
+  return $self->{native_runtime_compact_struct};
 }
 
 sub native_runtime_handle {
@@ -85,15 +92,15 @@ sub specialize_program_for_native {
 
 sub compile_bundle {
   my ($self, $program, %opts) = @_;
-  my $descriptor = $self->compile_bundle_descriptor($program, %opts);
-  return $self->load_bundle_descriptor($descriptor);
+  my $candidate = $self->specialize_program($program, %opts);
+  return $self->load_bundle_parts($candidate);
 }
 
 sub compile_bundle_descriptor {
   my ($self, $program, %opts) = @_;
   my $candidate = $self->specialize_program($program, %opts);
   return {
-    runtime => $self->runtime_schema->to_native_compact_struct,
+    runtime => $self->native_runtime_compact_struct,
     program => $candidate->to_native_compact_struct,
   };
 }
@@ -107,9 +114,17 @@ sub compile_bundle_descriptor_for_document {
 sub compact_bundle_descriptor {
   my ($self, $program) = @_;
   return {
-    runtime => $self->runtime_schema->to_native_compact_struct,
+    runtime => $self->native_runtime_compact_struct,
     program => $program->to_native_compact_struct,
   };
+}
+
+sub load_bundle_parts {
+  my ($self, $program) = @_;
+  return GraphQL::Houtou::Native::load_native_bundle_parts(
+    $self->native_runtime_compact_struct,
+    $program->to_native_compact_struct,
+  );
 }
 
 sub load_bundle_descriptor {
@@ -158,8 +173,8 @@ sub execute_program {
 
 sub execute_compact_program {
   my ($self, $program, %opts) = @_;
-  my $descriptor = $self->compact_bundle_descriptor($program);
-  return $self->execute_bundle_descriptor($descriptor, %opts);
+  my $bundle = $self->load_bundle_parts($program);
+  return $self->execute_bundle($bundle, %opts);
 }
 
 sub execute_bundle_descriptor {

@@ -967,6 +967,23 @@ load_native_bundle_xs(descriptor)
     RETVAL
 
 SV *
+load_native_bundle_parts_xs(runtime_descriptor, program_descriptor)
+    SV *runtime_descriptor
+    SV *program_descriptor
+  CODE:
+    {
+      gql_runtime_vm_native_bundle_t *bundle =
+        gql_runtime_vm_native_bundle_from_runtime_and_program_sv(
+          aTHX_ runtime_descriptor, program_descriptor
+        );
+      SV *inner = newSVuv(PTR2UV(bundle));
+      RETVAL = newRV_noinc(inner);
+      sv_bless(RETVAL, gv_stashpv("GraphQL::Houtou::Runtime::NativeBundle", GV_ADD));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 native_bundle_summary_xs(bundle_sv)
     SV *bundle_sv
   CODE:

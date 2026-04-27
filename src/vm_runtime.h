@@ -573,9 +573,8 @@ gql_runtime_vm_parse_native_block(pTHX_ SV *sv, gql_runtime_vm_native_block_t *o
 }
 
 static gql_runtime_vm_native_bundle_t *
-gql_runtime_vm_native_bundle_from_sv(pTHX_ SV *sv)
+gql_runtime_vm_native_bundle_from_runtime_and_program_sv(pTHX_ SV *runtime_sv, SV *program_sv)
 {
-  HV *bundle_hv;
   HV *runtime_hv;
   HV *program_hv;
   AV *runtime_slots_av;
@@ -584,17 +583,11 @@ gql_runtime_vm_native_bundle_from_sv(pTHX_ SV *sv)
   SV **svp;
   gql_runtime_vm_native_bundle_t *bundle;
 
-  if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &bundle_hv)) {
-    croak("native VM bundle descriptor must be a hash reference");
+  if (!gql_runtime_vm_sv_to_hv(aTHX_ runtime_sv, &runtime_hv)) {
+    croak("native VM runtime descriptor must be a hash reference");
   }
-
-  svp = hv_fetch(bundle_hv, "runtime", 7, 0);
-  if (!svp || !gql_runtime_vm_sv_to_hv(aTHX_ *svp, &runtime_hv)) {
-    croak("native VM bundle descriptor is missing runtime");
-  }
-  svp = hv_fetch(bundle_hv, "program", 7, 0);
-  if (!svp || !gql_runtime_vm_sv_to_hv(aTHX_ *svp, &program_hv)) {
-    croak("native VM bundle descriptor is missing program");
+  if (!gql_runtime_vm_sv_to_hv(aTHX_ program_sv, &program_hv)) {
+    croak("native VM program descriptor must be a hash reference");
   }
 
   Newxz(bundle, 1, gql_runtime_vm_native_bundle_t);
@@ -657,6 +650,31 @@ gql_runtime_vm_native_bundle_from_sv(pTHX_ SV *sv)
   }
 
   return bundle;
+}
+
+static gql_runtime_vm_native_bundle_t *
+gql_runtime_vm_native_bundle_from_sv(pTHX_ SV *sv)
+{
+  HV *bundle_hv;
+  SV **runtime_svp;
+  SV **program_svp;
+
+  if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &bundle_hv)) {
+    croak("native VM bundle descriptor must be a hash reference");
+  }
+
+  runtime_svp = hv_fetch(bundle_hv, "runtime", 7, 0);
+  if (!runtime_svp) {
+    croak("native VM bundle descriptor is missing runtime");
+  }
+  program_svp = hv_fetch(bundle_hv, "program", 7, 0);
+  if (!program_svp) {
+    croak("native VM bundle descriptor is missing program");
+  }
+
+  return gql_runtime_vm_native_bundle_from_runtime_and_program_sv(
+    aTHX_ *runtime_svp, *program_svp
+  );
 }
 
 #endif

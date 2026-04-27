@@ -39,6 +39,8 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 - native runtime / native bundle との境界を持つ
 - request-time specialization と native bundle descriptor 組み立てを `NativeRuntime` が所有する
 - `Runtime::execute_vm(...)` からの compact program 実行も `NativeRuntime` が所有する
+- hot path では `runtime + program` の Perl descriptor hash を組み立てず、
+  compact runtime struct と compact program struct を別引数のまま XS に渡して bundle を inflate する
 
 ### 3. Schema Graph
 

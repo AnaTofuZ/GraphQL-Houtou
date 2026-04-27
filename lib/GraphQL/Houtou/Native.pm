@@ -5,6 +5,7 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use GraphQL::Houtou ();
 
 our @EXPORT_OK = qw(
   native_codes
@@ -16,7 +17,7 @@ our @EXPORT_OK = qw(
 );
 
 sub _ensure_vm_xs_loaded {
-  require GraphQL::Houtou::XS::VM;
+  GraphQL::Houtou::_bootstrap_xs();
   return 1;
 }
 

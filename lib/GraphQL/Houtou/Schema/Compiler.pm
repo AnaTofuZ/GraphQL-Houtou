@@ -6,6 +6,7 @@ use warnings;
 
 use Exporter 'import';
 use Scalar::Util qw(blessed);
+use GraphQL::Houtou ();
 
 our @EXPORT_OK = qw(
   compile_schema
@@ -18,7 +19,7 @@ sub compile_schema {
     if !blessed($schema)
     || (!$schema->isa('GraphQL::Houtou::Schema') && !$schema->isa('GraphQL::Schema'));
 
-  require GraphQL::Houtou::XS::SchemaCompiler;
+  GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::SchemaCompiler::compile_schema_xs($schema);
 }
 

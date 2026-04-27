@@ -5,13 +5,14 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use GraphQL::Houtou ();
 
 our @EXPORT_OK = qw(
   validate
 );
 
 sub validate {
-  require GraphQL::Houtou::XS::Validation;
+  GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::Validation::validate_xs(@_);
 }
 

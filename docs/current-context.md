@@ -25,6 +25,7 @@
 - 旧テストは `legacy-tests/original-t/` に退避済み
 - PP fallback は設計上の主要求ではない
 - 子モジュールが XS を直接 `use` して hot path を組み立てる形は避ける
+- XS bundle のロード責務は `GraphQL::Houtou` だけが持つ
 - 旧実装は git history で追えればよく、source tree には残さない
 
 ## 現在のアーキテクチャ
@@ -48,10 +49,9 @@
    - `GraphQL::Houtou::Runtime::Writer`
    - `GraphQL::Houtou::Runtime::VMExecutor`
 4. XS Native Boundary
-   - `GraphQL::Houtou::XS::Parser`
-   - `GraphQL::Houtou::XS::SchemaCompiler`
-   - `GraphQL::Houtou::XS::Validation`
-   - `GraphQL::Houtou::XS::VM`
+   - bundle owner: `GraphQL::Houtou::_bootstrap_xs`
+   - parser helper: `GraphQL::Houtou::XS::Parser`
+   - compile / validation / native runtime は public facade から XSUB package を直接呼ぶ
 
 ## 内部通貨
 

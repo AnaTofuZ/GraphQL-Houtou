@@ -9,12 +9,13 @@ It exists so validation can be deprioritized without losing the current
 ## Current Architecture
 
 - public entrypoint: `GraphQL::Houtou::Validation`
-- XS entrypoint: `GraphQL::Houtou::XS::Validation::validate_xs`
+- XS bundle owner: `GraphQL::Houtou::_bootstrap_xs`
+- XSUB package: `GraphQL::Houtou::XS::Validation::validate_xs`
 - native implementation: `src/validation.h`
 
-The public facade requires the XS validator and now runs the active validation
-suite natively out of `src/validation.h`. The previous internal PP bridge has
-been removed from the mainline.
+The public facade bootstraps the shared XS bundle through `GraphQL::Houtou`
+and then calls the validation XSUB package directly. The previous internal PP
+bridge has been removed from the mainline.
 
 ## Rules Currently Implemented In XS
 

@@ -4,9 +4,6 @@ use 5.014;
 use strict;
 use warnings;
 use Exporter 'import';
-use GraphQL::Houtou::GraphQLJS::Parser ();
-use GraphQL::Houtou::GraphQLPerl::Parser ();
-use GraphQL::Houtou::Runtime ();
 use XSLoader ();
 use GraphQL::Houtou::Promise::Adapter qw(
   set_default_promise_code
@@ -38,6 +35,7 @@ sub _bootstrap_xs {
 }
 
 sub parse {
+  require GraphQL::Houtou::GraphQLPerl::Parser;
   return GraphQL::Houtou::GraphQLPerl::Parser::parse(@_);
 }
 
@@ -47,9 +45,11 @@ sub parse_with_options {
   my $dialect = $options->{dialect} || 'graphql-perl';
 
   if ($dialect eq 'graphql-perl') {
+    require GraphQL::Houtou::GraphQLPerl::Parser;
     return GraphQL::Houtou::GraphQLPerl::Parser::parse_with_options($source, $options);
   }
   if ($dialect eq 'graphql-js') {
+    require GraphQL::Houtou::GraphQLJS::Parser;
     return GraphQL::Houtou::GraphQLJS::Parser::parse($source, $options);
   }
 
@@ -58,6 +58,7 @@ sub parse_with_options {
 
 sub compile_runtime {
   my ($schema, %opts) = @_;
+  require GraphQL::Houtou::Runtime;
   return GraphQL::Houtou::Runtime::compile_schema($schema, %opts);
 }
 
@@ -68,6 +69,7 @@ sub build_runtime {
 
 sub build_native_runtime {
   my ($schema, %opts) = @_;
+  require GraphQL::Houtou::Runtime;
   return GraphQL::Houtou::Runtime::build_native_runtime($schema, %opts);
 }
 

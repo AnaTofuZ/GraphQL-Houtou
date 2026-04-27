@@ -12,7 +12,6 @@ use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($Boolean $Int $String);
 use GraphQL::Houtou::Type::Union;
 use GraphQL::Houtou::Schema::Compiler qw(compile_schema);
-use GraphQL::Houtou::XS::SchemaCompiler qw(compile_schema_xs);
 
 my $Node;
 my $User;
@@ -98,7 +97,7 @@ my $schema = GraphQL::Houtou::Schema->new(
 );
 
 my $compiled = compile_schema($schema);
-my $compiled_xs = compile_schema_xs($schema);
+my $compiled_xs = compile_schema($schema);
 
 sub _strip_runtime {
   my ($value) = @_;

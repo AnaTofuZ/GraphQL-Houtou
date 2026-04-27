@@ -239,6 +239,17 @@ and treat:
 
 as cold metadata. This keeps the Perl prototype aligned with the eventual XS
 layout and avoids reintroducing hash-based artifact mutation in the hot path.
+
+At the native boundary, these artifacts should also support a compact export:
+
+- keep readable `to_struct` / `to_native_struct` for debug and round-trip tests
+- add `to_native_compact_struct` for the actual XS entrypoint
+- keep the top-level descriptor hash stable
+- but encode block/op/slot payloads as arrays so XS can consume a denser
+  layout with fewer hash lookups
+
+This lets the Perl prototype preserve observability while the native boundary
+already moves toward the final compact descriptor format.
   - a state-owned top-level runner should execute the root block and emit the
     final response boundary
   - the executor object can then remain as a façade/API shell rather than a

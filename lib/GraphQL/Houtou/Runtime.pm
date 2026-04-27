@@ -185,7 +185,7 @@ sub execute_vm {
   }
   my $descriptor = {
     runtime => $runtime_schema->to_native_exec_struct,
-    program => $program->to_native_struct,
+    program => $program->to_native_compact_struct,
   };
   return execute_vm_native_bundle($runtime_schema, $descriptor, %opts);
 }

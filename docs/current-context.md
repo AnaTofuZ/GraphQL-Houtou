@@ -4657,6 +4657,17 @@ This fixes the first real bridge-design bug we hit in the reboot:
       は hash mutation ではなく accessor/setter 経由で VM artifact を bind する。
     - これで hot path state だけでなく、XS に渡す前の immutable artifact 側も
       slot-first な内部通貨へ揃い始めた。
+  - native boundary では compact descriptor を使うようにした。
+    - `to_native_struct` は debug/test 向けに残す。
+    - `to_native_compact_struct` を
+      - `VMProgram`
+      - `VMBlock`
+      - `VMOp`
+      に追加。
+    - top-level native API は compact descriptor を使い、XS loader は
+      hash/array の両方を受ける backward-compatible parser に広げた。
+    - これで child runtime module は依然 XS を直接呼ばず、top-level native boundary
+      だけが dense な descriptor を consume する構造を保てている。
   - runtime schema 側で `__typename` を first-class slot として扱うようにした。
     - object block は `__typename` slot を必ず先頭に持つ。
     - operation lowering も pseudo field ではなく real runtime slot を優先して bind する。

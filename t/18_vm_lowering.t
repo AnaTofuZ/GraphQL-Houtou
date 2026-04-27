@@ -85,16 +85,16 @@ subtest 'VM program descriptor can round-trip through schema helpers' => sub {
 subtest 'schema can emit XS-friendly native VM descriptor' => sub {
   my $descriptor = $schema->compile_native_operation_descriptor('{ viewer { id } node { id } }');
   ok defined $descriptor->{root_block_index}, 'native descriptor keeps root block index';
-  ok ref($descriptor->{blocks}) eq 'ARRAY' && @{$descriptor->{blocks}} >= 2,
+  ok ref($descriptor->{blocks_compact}) eq 'ARRAY' && @{$descriptor->{blocks_compact}} >= 2,
     'native descriptor keeps indexed blocks';
-  my $root = $descriptor->{blocks}[ $descriptor->{root_block_index} ];
-  ok ref($root->{slots}) eq 'ARRAY' && @{$root->{slots}} >= 2,
+  my $root = $descriptor->{blocks_compact}[ $descriptor->{root_block_index} ];
+  ok ref($root->[3]) eq 'ARRAY' && @{$root->[3]} >= 2,
     'native block keeps compact slot table';
-  ok defined $root->{slots}[0]{schema_slot_index},
+  ok defined $root->[3][0][3],
     'native block slot keeps schema slot index';
-  ok $root->{ops}[0]{opcode_code}, 'native op keeps opcode code';
-  ok defined $root->{ops}[0]{slot_index}, 'native op keeps slot index';
-  ok exists $root->{ops}[1]{abstract_child_block_indexes}{VmUser},
+  ok $root->[4][0][0], 'native op keeps opcode code';
+  ok defined $root->[4][0][4], 'native op keeps slot index';
+  ok exists $root->[4][1][6]{VmUser},
     'native op keeps abstract child block indexes';
 };
 
@@ -110,17 +110,17 @@ subtest 'schema can emit bundled native runtime and VM descriptor' => sub {
     'native runtime family code matches XS header constant';
   is $runtime_slots{'VmQuery.node'}{return_type_kind_code}, $codes->{kind_interface},
     'native runtime slot keeps return type kind code';
-  ok ref($bundle->{program}{blocks}) eq 'ARRAY' && @{$bundle->{program}{blocks}} >= 2,
+  ok ref($bundle->{program}{blocks_compact}) eq 'ARRAY' && @{$bundle->{program}{blocks_compact}} >= 2,
     'native bundle keeps vm program blocks';
   is $bundle->{program}{operation_type_code}, $codes->{optype_query},
     'native bundle keeps operation type code';
-  is $bundle->{program}{blocks}[ $bundle->{program}{root_block_index} ]{family_code}, $codes->{family_object},
+  is $bundle->{program}{blocks_compact}[ $bundle->{program}{root_block_index} ][2], $codes->{family_object},
     'native bundle keeps block family code';
-  ok defined $bundle->{program}{blocks}[ $bundle->{program}{root_block_index} ]{ops}[0]{slot_index},
+  ok defined $bundle->{program}{blocks_compact}[ $bundle->{program}{root_block_index} ][4][0][4],
     'native bundle op keeps slot index';
-  is $bundle->{program}{blocks}[ $bundle->{program}{root_block_index} ]{ops}[0]{resolve_code}, $codes->{resolve_explicit},
+  is $bundle->{program}{blocks_compact}[ $bundle->{program}{root_block_index} ][4][0][1], $codes->{resolve_explicit},
     'native op resolve code matches XS header constant';
-  is $bundle->{program}{blocks}[ $bundle->{program}{root_block_index} ]{ops}[1]{dispatch_family_code}, $codes->{dispatch_tag},
+  is $bundle->{program}{blocks_compact}[ $bundle->{program}{root_block_index} ][4][1][3], $codes->{dispatch_tag},
     'native op dispatch family code matches XS header constant';
 };
 
@@ -152,7 +152,7 @@ subtest 'XS can inflate native VM bundle descriptor into a native handle' => sub
   my $summary = native_bundle_summary($handle);
   is $summary->{runtime_slot_count}, scalar(@{ $bundle->{runtime}{slot_catalog} || [] }),
     'XS native handle sees runtime slot count';
-  is $summary->{block_count}, scalar(@{ $bundle->{program}{blocks} || [] }),
+  is $summary->{block_count}, scalar(@{ $bundle->{program}{blocks_compact} || [] }),
     'XS native handle sees block count';
   is $summary->{root_block_index}, $bundle->{program}{root_block_index},
     'XS native handle keeps root block index';

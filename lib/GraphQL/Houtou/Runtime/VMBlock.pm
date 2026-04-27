@@ -61,6 +61,38 @@ sub to_native_struct {
   };
 }
 
+sub to_native_compact_struct {
+  my ($self, $block_index) = @_;
+  my @slot_table;
+  my %slot_index;
+  for my $op (@{ $self->ops || [] }) {
+    my $slot = $op->bound_slot or next;
+    my $id = join("\x1E", refaddr($slot), ($op->result_name // q()));
+    next if exists $slot_index{$id};
+    $slot_index{$id} = scalar @slot_table;
+    my $native_slot = $slot->to_native_struct;
+    push @slot_table, [
+      $native_slot->{field_name},
+      ($op->result_name // $native_slot->{result_name}),
+      $native_slot->{return_type_name},
+      $native_slot->{schema_slot_index},
+      $native_slot->{resolver_shape_code},
+      $native_slot->{completion_family_code},
+      $native_slot->{dispatch_family_code},
+      $native_slot->{return_type_kind_code},
+      $native_slot->{has_args},
+      $native_slot->{has_directives},
+    ];
+  }
+  return [
+    $self->name,
+    $self->type_name,
+    _family_code($self->family),
+    \@slot_table,
+    [ map { $_->to_native_compact_struct($block_index, \%slot_index) } @{ $self->ops || [] } ],
+  ];
+}
+
 sub _family_code {
   my ($family) = @_;
   return 2 if ($family || q()) eq 'OBJECT';

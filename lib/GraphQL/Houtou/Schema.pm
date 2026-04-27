@@ -237,7 +237,7 @@ sub compile_vm_program_descriptor {
 sub compile_vm_native_descriptor {
   my ($self, $document, %opts) = @_;
   my $runtime = delete $opts{runtime_schema};
-  return $self->compile_vm_operation($document, ($runtime ? (runtime_schema => $runtime) : ()), %opts)->to_native_struct;
+  return $self->compile_vm_operation($document, ($runtime ? (runtime_schema => $runtime) : ()), %opts)->to_native_compact_struct;
 }
 
 sub compile_native_operation_descriptor {
@@ -278,7 +278,7 @@ sub compile_vm_native_bundle_descriptor {
   my $vm = $runtime->compile_operation($document, %opts);
   return {
     runtime => $runtime->to_native_struct,
-    program => $vm->to_native_struct,
+    program => $vm->to_native_compact_struct,
   };
 }
 

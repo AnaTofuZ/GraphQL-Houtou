@@ -74,7 +74,8 @@ sub inflate_program {
 sub inflate_native_bundle {
   my ($class, $runtime_schema, $struct) = @_;
   my $program_struct = $struct->{program} || {};
-  my @blocks = map { _inflate_native_block($_) } @{ $program_struct->{blocks} || [] };
+  my $block_entries = $program_struct->{blocks_compact} || $program_struct->{blocks} || [];
+  my @blocks = map { _inflate_native_block($_) } @{ $block_entries };
   my $root_block = defined $program_struct->{root_block_index}
     ? $blocks[ $program_struct->{root_block_index} ]
     : undef;
@@ -167,6 +168,15 @@ sub _inflate_op {
 
 sub _inflate_native_block {
   my ($struct) = @_;
+  if (ref($struct) eq 'ARRAY') {
+    my ($name, $type_name, $family_code, $slots, $ops) = @$struct;
+    return GraphQL::Houtou::Runtime::VMBlock->new(
+      name => $name,
+      type_name => $type_name,
+      family => _family_from_code($family_code),
+      ops => [ map { _inflate_native_op($_) } @{ $ops || [] } ],
+    );
+  }
   return GraphQL::Houtou::Runtime::VMBlock->new(
     name => $struct->{name},
     type_name => $struct->{type_name},
@@ -177,6 +187,30 @@ sub _inflate_native_block {
 
 sub _inflate_native_op {
   my ($struct) = @_;
+  if (ref($struct) eq 'ARRAY') {
+    my ($opcode_code, $resolve_code, $complete_code, $dispatch_family_code, $slot_index, $child_block_index, $abstract_child_block_indexes, $args_mode_code, $args_payload, $has_args, $has_directives, $field_name, $result_name, $return_type_name) = @$struct;
+    my $resolve_family = _resolve_family_from_code($resolve_code);
+    my $complete_family = _complete_family_from_code($complete_code);
+    my $op = GraphQL::Houtou::Runtime::VMOp->new(
+      opcode => join(q(:), $resolve_family, $complete_family),
+      opcode_code => $opcode_code || 0,
+      resolve_family => $resolve_family,
+      resolve_code => $resolve_code || 0,
+      complete_family => $complete_family,
+      complete_code => $complete_code || 0,
+      field_name => $field_name,
+      result_name => $result_name,
+      return_type_name => $return_type_name,
+      args_mode => _args_mode_from_code($args_mode_code),
+      args_payload => $args_payload,
+      has_args => $has_args,
+      has_directives => $has_directives,
+    );
+    $op->set_native_slot_index($slot_index);
+    $op->set_native_child_block_index($child_block_index);
+    $op->set_native_abstract_child_block_indexes($abstract_child_block_indexes || {});
+    return $op;
+  }
   my $resolve_family = _resolve_family_from_code($struct->{resolve_code});
   my $complete_family = _complete_family_from_code($struct->{complete_code});
   my $op = GraphQL::Houtou::Runtime::VMOp->new(
@@ -196,6 +230,21 @@ sub _inflate_native_op {
   $op->set_native_child_block_index($struct->{child_block_index});
   $op->set_native_abstract_child_block_indexes($struct->{abstract_child_block_indexes} || {});
   return $op;
+}
+
+sub _family_from_code {
+  my ($code) = @_;
+  return 'OBJECT' if ($code || 0) == 2;
+  return 'LIST' if ($code || 0) == 3;
+  return 'ABSTRACT' if ($code || 0) == 4;
+  return 'GENERIC';
+}
+
+sub _args_mode_from_code {
+  my ($code) = @_;
+  return 'STATIC' if ($code || 0) == 1;
+  return 'DYNAMIC' if ($code || 0) == 2;
+  return 'NONE';
 }
 
 sub _bind_vm_ops {

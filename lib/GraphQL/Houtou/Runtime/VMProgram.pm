@@ -19,8 +19,8 @@ sub new {
   my ($class, %args) = @_;
   my $root_block = $args{root_block};
   my @blocks = @{ $args{blocks} || [] };
-  my %block_map = map { ($_->name => $_) } @blocks;
-  $block_map{ $root_block->name } = $root_block if $root_block;
+  my %block_map = map { defined $_->name ? ($_->name => $_) : () } @blocks;
+  $block_map{ $root_block->name } = $root_block if $root_block && defined $root_block->name;
   return bless [
     $args{version} || 1,
     $args{operation_type} || 'query',
@@ -73,6 +73,20 @@ sub to_native_struct {
     variable_defs => { %{ $self->variable_defs || {} } },
     root_block_index => $self->root_block ? $block_index{ $self->root_block->name } : undef,
     blocks => [ map { $_->to_native_struct(\%block_index) } @blocks ],
+  };
+}
+
+sub to_native_compact_struct {
+  my ($self) = @_;
+  my @blocks = @{ $self->blocks || [] };
+  my %block_index = map { ($blocks[$_]->name => $_) } 0 .. $#blocks;
+  return {
+    version => $self->version,
+    operation_type_code => _operation_type_code($self->operation_type),
+    operation_name => $self->operation_name,
+    variable_defs => { %{ $self->variable_defs || {} } },
+    root_block_index => $self->root_block ? $block_index{ $self->root_block->name } : undef,
+    blocks_compact => [ map { $_->to_native_compact_struct(\%block_index) } @blocks ],
   };
 }
 

@@ -287,6 +287,52 @@ static int
 gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out)
 {
   HV *hv;
+  AV *av;
+  SV **svp;
+  if (gql_runtime_vm_sv_to_av(aTHX_ sv, &av)) {
+    svp = av_fetch(av, 0, 0);
+    if (!svp || !SvOK(*svp)) croak("native VM slot entry is missing field_name");
+    {
+      STRLEN len;
+      const char *pv = SvPV(*svp, len);
+      Newxz(out->field_name, len + 1, char);
+      Copy(pv, out->field_name, len, char);
+      out->field_name[len] = '\0';
+    }
+    svp = av_fetch(av, 1, 0);
+    if (!svp || !SvOK(*svp)) croak("native VM slot entry is missing result_name");
+    {
+      STRLEN len;
+      const char *pv = SvPV(*svp, len);
+      Newxz(out->result_name, len + 1, char);
+      Copy(pv, out->result_name, len, char);
+      out->result_name[len] = '\0';
+    }
+    svp = av_fetch(av, 2, 0);
+    if (!svp || !SvOK(*svp)) croak("native VM slot entry is missing return_type_name");
+    {
+      STRLEN len;
+      const char *pv = SvPV(*svp, len);
+      Newxz(out->return_type_name, len + 1, char);
+      Copy(pv, out->return_type_name, len, char);
+      out->return_type_name[len] = '\0';
+    }
+    svp = av_fetch(av, 3, 0);
+    out->schema_slot_index = (svp && SvOK(*svp)) ? SvIV(*svp) : -1;
+    svp = av_fetch(av, 4, 0);
+    out->resolver_shape_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
+    svp = av_fetch(av, 5, 0);
+    out->completion_family_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
+    svp = av_fetch(av, 6, 0);
+    out->dispatch_family_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
+    svp = av_fetch(av, 7, 0);
+    out->return_type_kind_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
+    svp = av_fetch(av, 8, 0);
+    out->has_args = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
+    svp = av_fetch(av, 9, 0);
+    out->has_directives = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
+    return 1;
+  }
   if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &hv)) {
     croak("native VM slot entry must be a hash reference");
   }
@@ -327,10 +373,59 @@ static int
 gql_runtime_vm_parse_native_op(pTHX_ SV *sv, gql_runtime_vm_native_op_t *out)
 {
   HV *hv;
+  AV *av;
   HV *children_hv;
   HE *he;
   SV **svp;
   IV idx;
+  if (gql_runtime_vm_sv_to_av(aTHX_ sv, &av)) {
+    svp = av_fetch(av, 0, 0);
+    out->opcode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
+    svp = av_fetch(av, 1, 0);
+    out->resolve_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
+    svp = av_fetch(av, 2, 0);
+    out->complete_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
+    svp = av_fetch(av, 3, 0);
+    out->dispatch_family_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
+    svp = av_fetch(av, 4, 0);
+    out->slot_index = (svp && SvOK(*svp)) ? SvIV(*svp) : -1;
+    svp = av_fetch(av, 5, 0);
+    out->child_block_index = (svp && SvOK(*svp)) ? SvIV(*svp) : -1;
+    svp = av_fetch(av, 6, 0);
+    if (svp && SvOK(*svp) && SvROK(*svp) && SvTYPE(SvRV(*svp)) == SVt_PVHV) {
+      children_hv = (HV *)SvRV(*svp);
+      out->abstract_child_count = hv_iterinit(children_hv);
+      if (out->abstract_child_count > 0) {
+        Newxz(out->abstract_child_names, out->abstract_child_count, char *);
+        Newxz(out->abstract_child_indexes, out->abstract_child_count, IV);
+        idx = 0;
+        hv_iterinit(children_hv);
+        while ((he = hv_iternext(children_hv))) {
+          STRLEN keylen;
+          const char *key = HePV(he, keylen);
+          SV *val = HeVAL(he);
+          Newxz(out->abstract_child_names[idx], keylen + 1, char);
+          Copy(key, out->abstract_child_names[idx], keylen, char);
+          out->abstract_child_names[idx][keylen] = '\0';
+          out->abstract_child_indexes[idx] = (val && SvOK(val)) ? SvIV(val) : -1;
+          idx++;
+        }
+      }
+    } else {
+      out->abstract_child_count = 0;
+      out->abstract_child_names = NULL;
+      out->abstract_child_indexes = NULL;
+    }
+    svp = av_fetch(av, 7, 0);
+    out->args_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : GQL_VM_ARGS_NONE;
+    svp = av_fetch(av, 8, 0);
+    out->args_payload_sv = (svp && SvOK(*svp)) ? newSVsv(*svp) : NULL;
+    svp = av_fetch(av, 9, 0);
+    out->has_args = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
+    svp = av_fetch(av, 10, 0);
+    out->has_directives = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
+    return 1;
+  }
   if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &hv)) {
     croak("native VM op entry must be a hash reference");
   }
@@ -392,10 +487,49 @@ static int
 gql_runtime_vm_parse_native_block(pTHX_ SV *sv, gql_runtime_vm_native_block_t *out)
 {
   HV *hv;
+  AV *av;
   AV *slots_av;
   AV *ops_av;
   IV i;
   SV **svp;
+  if (gql_runtime_vm_sv_to_av(aTHX_ sv, &av)) {
+    SV **name_svp = av_fetch(av, 0, 0);
+    SV **type_svp = av_fetch(av, 1, 0);
+    SV **family_svp = av_fetch(av, 2, 0);
+    SV **slots_svp = av_fetch(av, 3, 0);
+    SV **ops_svp = av_fetch(av, 4, 0);
+    if (!family_svp || !SvOK(*family_svp)) return 0;
+    if (!type_svp || !SvOK(*type_svp)) croak("native VM block entry is missing type_name");
+    out->family_code = SvIV(*family_svp);
+    {
+      STRLEN len;
+      const char *pv = SvPV(*type_svp, len);
+      Newxz(out->type_name, len + 1, char);
+      Copy(pv, out->type_name, len, char);
+      out->type_name[len] = '\0';
+    }
+    if (!slots_svp || !gql_runtime_vm_sv_to_av(aTHX_ *slots_svp, &slots_av)) return 0;
+    if (!ops_svp || !gql_runtime_vm_sv_to_av(aTHX_ *ops_svp, &ops_av)) return 0;
+    out->slot_count = av_count(slots_av);
+    out->op_count = av_count(ops_av);
+    out->slots = NULL;
+    out->ops = NULL;
+    if (out->slot_count > 0) {
+      Newxz(out->slots, out->slot_count, gql_runtime_vm_native_slot_t);
+      for (i = 0; i < out->slot_count; i++) {
+        SV **slot_svp = av_fetch(slots_av, i, 0);
+        if (!slot_svp || !gql_runtime_vm_parse_native_slot(aTHX_ *slot_svp, &out->slots[i])) return 0;
+      }
+    }
+    if (out->op_count > 0) {
+      Newxz(out->ops, out->op_count, gql_runtime_vm_native_op_t);
+      for (i = 0; i < out->op_count; i++) {
+        SV **op_svp = av_fetch(ops_av, i, 0);
+        if (!op_svp || !gql_runtime_vm_parse_native_op(aTHX_ *op_svp, &out->ops[i])) return 0;
+      }
+    }
+    return 1;
+  }
   if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &hv)) {
     return 0;
   }
@@ -495,7 +629,10 @@ gql_runtime_vm_native_bundle_from_sv(pTHX_ SV *sv)
     }
   }
 
-  svp = hv_fetch(program_hv, "blocks", 6, 0);
+  svp = hv_fetch(program_hv, "blocks_compact", 14, 0);
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &blocks_av)) {
+    svp = hv_fetch(program_hv, "blocks", 6, 0);
+  }
   if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &blocks_av)) {
     gql_runtime_vm_native_bundle_destroy(bundle);
     croak("native VM program descriptor is missing blocks");

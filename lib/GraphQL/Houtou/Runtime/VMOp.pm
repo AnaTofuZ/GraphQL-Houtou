@@ -192,6 +192,27 @@ sub to_native_struct {
   };
 }
 
+sub to_native_compact_struct {
+  my ($self, $block_index, $slot_index) = @_;
+  my $struct = $self->to_native_struct($block_index, $slot_index);
+  return [
+    $struct->{opcode_code},
+    $struct->{resolve_code},
+    $struct->{complete_code},
+    $struct->{dispatch_family_code},
+    $struct->{slot_index},
+    $struct->{child_block_index},
+    $struct->{abstract_child_block_indexes},
+    $struct->{args_mode_code},
+    $struct->{args_payload},
+    $struct->{has_args},
+    $struct->{has_directives},
+    $self->field_name,
+    $self->result_name,
+    $self->return_type_name,
+  ];
+}
+
 sub _dispatch_family_code {
   my ($family) = @_;
   return 2 if ($family || q()) eq 'RESOLVE_TYPE';

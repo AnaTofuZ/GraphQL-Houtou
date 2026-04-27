@@ -4,7 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 
-use Moo::Role;
+use Role::Tiny;
 
 # Utility helpers for hash-shaped GraphQL values and field maps.
 

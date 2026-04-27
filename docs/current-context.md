@@ -167,7 +167,6 @@ fresh `./Build build` 済み環境で、
   - `src/execution.h`
   - `src/ir_engine.h`
   - `src/ir_execution.h`
-  - `src/legacy_compat.h`
   は source tree から削除済み
 - parser public surface は canonical parser AST の 1 dialect に整理した
 - type model の `Moo` 依存削減を開始し、`Type`, `Type::List`, `Type::NonNull` は plain Perl object に置き換えた
@@ -176,7 +175,7 @@ fresh `./Build build` 済み環境で、
 - historical / internal parser 資料は docs にのみ残し、mainline の API からは `graphql-js` dialect を外した
 - parser compatibility 自体は要件から外し、parser 本体と旧互換層が共有していた helper は
   `src/parser_shared_ast.h` へ切り出したうえで parser-internal 層に閉じ込めた
-- parser 本体は `src/parser_graphqlperl_runtime.h` に移し、`parser_compat.h` は source tree から削除した
+- parser 本体は `src/parser_graphqlperl_runtime.h` に寄せ、互換層の名前は active source から外した
 - 今後の高速化は旧 corridor widening の延長ではなく、runtime/VM 本体で進める
 - 特に注力するのは:
   - native VM executor の XS 化

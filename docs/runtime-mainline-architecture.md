@@ -202,7 +202,6 @@ active tree からは次を削除済みです。
 - `src/execution.h`
 - `src/ir_engine.h`
 - `src/ir_execution.h`
-- `src/legacy_compat.h`
 - `Runtime::Program`
 - `Runtime::ProgramSpecializer`
 - `Runtime::NativeBundle` Perl wrapper

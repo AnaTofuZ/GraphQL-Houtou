@@ -33,7 +33,7 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 
 ### 2. Schema Runtime
 
-- `GraphQL::Houtou::Runtime::Compiler`
+- `GraphQL::Houtou::Runtime::SchemaGraph`
 - `GraphQL::Houtou::Runtime::SchemaGraph`
 - `GraphQL::Houtou::Runtime::NativeRuntime`
 - opaque native bundle handle (`GraphQL::Houtou::Runtime::NativeBundle` package is provided by XS only)
@@ -57,7 +57,7 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 
 ### 3. Schema Graph
 
-- `GraphQL::Houtou::Runtime::Compiler`
+- `GraphQL::Houtou::Runtime::SchemaGraph`
 - `GraphQL::Houtou::Runtime::SchemaGraph`
 - `GraphQL::Houtou::Runtime::Block`
 - `GraphQL::Houtou::Runtime::Slot`

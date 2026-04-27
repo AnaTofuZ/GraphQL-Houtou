@@ -47,7 +47,7 @@
    - `GraphQL::Houtou`
    - `GraphQL::Houtou::Schema`
 2. Compile / Lowering
-   - `GraphQL::Houtou::Runtime::Compiler`
+   - `GraphQL::Houtou::Runtime::SchemaGraph`
    - `GraphQL::Houtou::Runtime::OperationCompiler`
    - `GraphQL::Houtou::Runtime::VMCompiler`
 3. Runtime / VM

@@ -41,7 +41,7 @@
 
 主なモジュール:
 
-- `GraphQL::Houtou::Runtime::Compiler`
+- `GraphQL::Houtou::Runtime::SchemaGraph`
 - `GraphQL::Houtou::Runtime::SchemaGraph`
 - `GraphQL::Houtou::Runtime::Block`
 - `GraphQL::Houtou::Runtime::Slot`

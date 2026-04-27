@@ -10,8 +10,8 @@ use Moo;
 use Types::Standard qw(HashRef Object ArrayRef);
 
 use GraphQL::Houtou::Directive ();
-use GraphQL::Houtou::Runtime::Compiler ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
+use GraphQL::Houtou::Runtime::SchemaGraph ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Type::Scalar qw($Int $Float $String $Boolean $ID);
 use GraphQL::Houtou::Introspection qw($SCHEMA_META_TYPE);
@@ -75,7 +75,7 @@ sub prepare_runtime {
 
 sub compile_runtime {
   my ($self, %opts) = @_;
-  return GraphQL::Houtou::Runtime::Compiler->compile_schema($self, %opts);
+  return GraphQL::Houtou::Runtime::SchemaGraph->compile_schema($self, %opts);
 }
 
 sub build_native_runtime {
@@ -113,7 +113,7 @@ sub compile_native_runtime_descriptor {
 
 sub inflate_runtime {
   my ($self, $descriptor) = @_;
-  return GraphQL::Houtou::Runtime::Compiler->inflate_schema($self, $descriptor);
+  return GraphQL::Houtou::Runtime::SchemaGraph->inflate_schema($self, $descriptor);
 }
 
 sub dump_runtime_descriptor {

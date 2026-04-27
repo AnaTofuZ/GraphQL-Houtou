@@ -963,6 +963,36 @@ native_runtime_summary_xs(runtime_sv)
     RETVAL
 
 SV *
+materialize_dynamic_value_xs(value, variables)
+    SV *value
+    SV *variables
+  CODE:
+    {
+      HV *variables_hv = NULL;
+      if (variables && SvOK(variables) && SvROK(variables) && SvTYPE(SvRV(variables)) == SVt_PVHV) {
+        variables_hv = (HV *)SvRV(variables);
+      }
+      RETVAL = gql_runtime_vm_materialize_dynamic_value_sv(aTHX_ value, variables_hv);
+    }
+  OUTPUT:
+    RETVAL
+
+int
+evaluate_runtime_guards_xs(guards, variables)
+    SV *guards
+    SV *variables
+  CODE:
+    {
+      HV *variables_hv = NULL;
+      if (variables && SvOK(variables) && SvROK(variables) && SvTYPE(SvRV(variables)) == SVt_PVHV) {
+        variables_hv = (HV *)SvRV(variables);
+      }
+      RETVAL = gql_runtime_vm_evaluate_runtime_guards_hv(aTHX_ guards, variables_hv);
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef)
     SV *runtime_schema
     SV *bundle_sv

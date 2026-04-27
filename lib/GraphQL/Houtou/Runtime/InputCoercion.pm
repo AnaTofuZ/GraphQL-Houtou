@@ -4,6 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 
+use GraphQL::Houtou ();
 use GraphQL::Houtou::Schema ();
 
 sub prepare_variables {
@@ -92,27 +93,20 @@ sub coerce_dynamic_arg_value {
 
 sub materialize_dynamic_args {
   my ($value, $variables) = @_;
-  my $ref = ref($value);
-  return $value if !$ref;
-  return (exists $variables->{$$value} ? $variables->{$$value} : undef) if $ref eq 'SCALAR';
-  return $$$value if $ref eq 'REF';
-  return [ map { materialize_dynamic_args($_, $variables) } @$value ] if $ref eq 'ARRAY';
-  return { map { $_ => materialize_dynamic_args($value->{$_}, $variables) } keys %$value } if $ref eq 'HASH';
-  return $value;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::materialize_dynamic_value_xs(
+    $value,
+    ($variables || {}),
+  );
 }
 
 sub evaluate_runtime_guards {
   my ($guards, $variables) = @_;
-  for my $directive (@{ $guards || [] }) {
-    next if !$directive;
-    my $name = $directive->{name} || '';
-    my $arguments = $directive->{arguments} || {};
-    my $if_value = materialize_dynamic_args($arguments->{if}, $variables);
-    my $bool = $if_value ? 1 : 0;
-    return 0 if $name eq 'skip' && $bool;
-    return 0 if $name eq 'include' && !$bool;
-  }
-  return 1;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::evaluate_runtime_guards_xs(
+    ($guards || []),
+    ($variables || {}),
+  );
 }
 
 sub lookup_input_type {

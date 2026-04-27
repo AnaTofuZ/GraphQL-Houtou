@@ -128,6 +128,135 @@ typedef struct {
   IV op_index;
 } gql_runtime_vm_exec_state_t;
 
+static SV *
+gql_runtime_vm_materialize_dynamic_value_sv(pTHX_ SV *value, HV *variables)
+{
+  SV *inner;
+
+  if (!value || !SvOK(value)) {
+    return newSV(0);
+  }
+
+  if (!SvROK(value)) {
+    return newSVsv(value);
+  }
+
+  inner = SvRV(value);
+
+  if (SvTYPE(inner) == SVt_PVAV) {
+    AV *src = (AV *)inner;
+    AV *dst = newAV();
+    SSize_t max = av_len(src);
+    SSize_t i;
+    av_extend(dst, max);
+    for (i = 0; i <= max; i++) {
+      SV **svp = av_fetch(src, i, 0);
+      av_store(dst, i, gql_runtime_vm_materialize_dynamic_value_sv(
+        aTHX_
+        (svp ? *svp : &PL_sv_undef),
+        variables
+      ));
+    }
+    return newRV_noinc((SV *)dst);
+  }
+
+  if (SvTYPE(inner) == SVt_PVHV) {
+    HV *src = (HV *)inner;
+    HV *dst = newHV();
+    HE *he;
+    (void)hv_iterinit(src);
+    while ((he = hv_iternext(src))) {
+      SV *key_sv = HeSVKEY_force(he);
+      SV *val_sv = HeVAL(he);
+      hv_store_ent(
+        dst,
+        newSVsv(key_sv),
+        gql_runtime_vm_materialize_dynamic_value_sv(aTHX_ val_sv, variables),
+        0
+      );
+    }
+    return newRV_noinc((SV *)dst);
+  }
+
+  if (SvROK(inner)) {
+    return newSVsv(SvRV(inner));
+  }
+
+  if (variables) {
+    STRLEN len;
+    const char *name = SvPV(inner, len);
+    SV **svp = hv_fetch(variables, name, (I32)len, 0);
+    return svp ? newSVsv(*svp) : newSV(0);
+  }
+
+  return newSV(0);
+}
+
+static int
+gql_runtime_vm_evaluate_runtime_guards_hv(pTHX_ SV *guards_sv, HV *variables)
+{
+  AV *guards_av;
+  SSize_t i;
+
+  if (!guards_sv || !SvOK(guards_sv) || !SvROK(guards_sv) || SvTYPE(SvRV(guards_sv)) != SVt_PVAV) {
+    return 1;
+  }
+
+  guards_av = (AV *)SvRV(guards_sv);
+  for (i = 0; i <= av_len(guards_av); i++) {
+    SV **directive_svp = av_fetch(guards_av, i, 0);
+    SV *directive_sv;
+    HV *directive_hv;
+    SV **name_svp;
+    SV **arguments_svp;
+    HV *arguments_hv;
+    SV **if_svp;
+    SV *if_value_sv;
+    int bool_value;
+    STRLEN name_len;
+    const char *name;
+
+    if (!directive_svp || !(directive_sv = *directive_svp) || !SvOK(directive_sv)) {
+      continue;
+    }
+    if (!SvROK(directive_sv) || SvTYPE(SvRV(directive_sv)) != SVt_PVHV) {
+      continue;
+    }
+    directive_hv = (HV *)SvRV(directive_sv);
+    name_svp = hv_fetch(directive_hv, "name", 4, 0);
+    arguments_svp = hv_fetch(directive_hv, "arguments", 9, 0);
+    if (!name_svp || !SvOK(*name_svp) || !arguments_svp || !SvOK(*arguments_svp)) {
+      continue;
+    }
+    if (!SvROK(*arguments_svp) || SvTYPE(SvRV(*arguments_svp)) != SVt_PVHV) {
+      continue;
+    }
+    arguments_hv = (HV *)SvRV(*arguments_svp);
+    if_svp = hv_fetch(arguments_hv, "if", 2, 0);
+    if (!if_svp) {
+      continue;
+    }
+
+    if_value_sv = gql_runtime_vm_materialize_dynamic_value_sv(
+      aTHX_
+      *if_svp,
+      variables
+    );
+    bool_value = SvTRUE(if_value_sv) ? 1 : 0;
+    SvREFCNT_dec(if_value_sv);
+
+    name = SvPV(*name_svp, name_len);
+    if (name_len == 4 && memEQ(name, "skip", 4) && bool_value) {
+      return 0;
+    }
+    if (name_len == 7 && memEQ(name, "include", 7) && !bool_value) {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
 static void
 gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
 {

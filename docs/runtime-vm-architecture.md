@@ -987,6 +987,8 @@ The current public wrappers for this are:
 - `Runtime::NativeRuntime->compile_program(...)`
 - `Runtime::NativeRuntime->execute_program(...)`
 - `Runtime::NativeRuntime->compile_bundle(...)`
+- `Runtime::NativeRuntime->compile_bundle_descriptor(...)`
+- `Runtime::NativeRuntime->load_bundle_descriptor(...)`
 
 This keeps the control plane in Perl while ensuring child modules do not call
 XS directly.

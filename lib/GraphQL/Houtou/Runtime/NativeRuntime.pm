@@ -7,6 +7,7 @@ use warnings;
 use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Runtime::NativeBundle ();
 use GraphQL::Houtou::Runtime::ProgramSpecializer ();
+use JSON::PP ();
 
 sub new {
   my ($class, %args) = @_;
@@ -59,18 +60,48 @@ sub specialize_program {
 
 sub compile_bundle {
   my ($self, $program, %opts) = @_;
+  my $descriptor = $self->compile_bundle_descriptor($program, %opts);
+  return $self->load_bundle_descriptor($descriptor);
+}
+
+sub compile_bundle_descriptor {
+  my ($self, $program, %opts) = @_;
   my $candidate = $self->specialize_program($program, %opts);
-  my $descriptor = {
-    runtime => $self->native_runtime_struct,
+  return {
+    runtime => $self->runtime_schema->to_native_struct,
     program => $candidate->to_native_struct,
   };
+}
+
+sub load_bundle_descriptor {
+  my ($self, $descriptor) = @_;
   my $bundle_handle = GraphQL::Houtou::Native::load_native_bundle($descriptor);
+  my $program = $self->runtime_schema->inflate_vm_native_bundle($descriptor);
   return GraphQL::Houtou::Runtime::NativeBundle->new(
     runtime => $self,
-    program => $candidate,
+    program => $program,
     descriptor => $descriptor,
     native_bundle_handle => $bundle_handle,
   );
+}
+
+sub dump_bundle_descriptor {
+  my ($self, $program, $path, %opts) = @_;
+  my $descriptor = $self->compile_bundle_descriptor($program, %opts);
+  open my $fh, '>', $path or die "Cannot open $path for write: $!";
+  print {$fh} JSON::PP::encode_json($descriptor);
+  close $fh;
+  return $descriptor;
+}
+
+sub load_bundle_descriptor_file {
+  my ($self, $path) = @_;
+  open my $fh, '<', $path or die "Cannot open $path for read: $!";
+  local $/;
+  my $json = <$fh>;
+  close $fh;
+  my $descriptor = JSON::PP::decode_json($json);
+  return $self->load_bundle_descriptor($descriptor);
 }
 
 sub execute_program {

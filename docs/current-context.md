@@ -4578,3 +4578,11 @@ This fixes the first real bridge-design bug we hit in the reboot:
     - request ごとに specialization
     - top-level native boundary で execute
     という 4 段に固定された。
+  - `Runtime::NativeRuntime` はさらに
+    - `compile_bundle_descriptor`
+    - `load_bundle_descriptor`
+    - `dump_bundle_descriptor`
+    - `load_bundle_descriptor_file`
+    を持つようにした。
+  - これにより cached VM program から request-specialized native bundle descriptor を生成し、
+    file boundary を跨いで load し直して execute できる。

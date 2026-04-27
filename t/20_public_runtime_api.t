@@ -1,6 +1,7 @@
 use strict;
 use warnings;
 use Test::More;
+use File::Temp qw(tempfile);
 
 use lib 'lib';
 use GraphQL::Houtou qw(execute compile_runtime build_native_runtime);
@@ -90,6 +91,29 @@ subtest 'native runtime can compile reusable bundle from cached program' => sub 
     data => { hello => 'world' },
     errors => [],
   }, 'compiled native bundle executes through wrapper';
+};
+
+subtest 'native runtime can round-trip bundle descriptors' => sub {
+  my $native = $schema->build_native_runtime;
+  my $program = $native->compile_program(
+    'query Q($name: String = "bob") { greet(name: $name) }',
+  );
+  my ($fh, $path) = tempfile();
+  close $fh;
+
+  my $descriptor = $native->dump_bundle_descriptor(
+    $program,
+    $path,
+    variables => { name => 'persisted' },
+  );
+  my $bundle = $native->load_bundle_descriptor_file($path);
+  my $result = $bundle->execute;
+
+  ok $descriptor->{program}, 'bundle descriptor keeps native program payload';
+  is_deeply $result, {
+    data => { greet => 'hello persisted' },
+    errors => [],
+  }, 'dumped and loaded native bundle descriptor still executes';
 };
 
 done_testing;

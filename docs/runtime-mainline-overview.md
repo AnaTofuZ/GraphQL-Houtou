@@ -92,7 +92,6 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 
 ### 6. VM Execution
 
-- `GraphQL::Houtou::Runtime::VMExecutor`
 - `GraphQL::Houtou::Runtime::ExecState`
 - `GraphQL::Houtou::Runtime::Cursor`
 - `GraphQL::Houtou::Runtime::BlockFrame`

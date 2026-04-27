@@ -89,7 +89,6 @@
 
 主なモジュール:
 
-- `GraphQL::Houtou::Runtime::VMExecutor`
 - `GraphQL::Houtou::Runtime::ExecState`
 - `GraphQL::Houtou::Runtime::Cursor`
 - `GraphQL::Houtou::Runtime::BlockFrame`
@@ -167,7 +166,7 @@ hot path の一次通貨は以下です。
 1. `Schema->build_runtime`
 2. `Runtime::OperationCompiler->compile_operation`
 3. `Runtime::VMCompiler->lower_program`
-4. `Runtime::VMExecutor` が `ExecState` を回す
+4. `Runtime::ExecState` が VM state machine を回す
 5. `Writer` が最終 response を materialize
 
 ### Native VM path

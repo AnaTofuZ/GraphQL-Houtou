@@ -113,7 +113,7 @@ sub execute_program {
   my ($self, $program, %opts) = @_;
   require GraphQL::Houtou::Runtime::NativeRuntime;
   require GraphQL::Houtou::Runtime::VMCompiler;
-  require GraphQL::Houtou::Runtime::VMExecutor;
+  require GraphQL::Houtou::Runtime::ExecState;
   my $vm_program = $program->isa('GraphQL::Houtou::Runtime::VMProgram')
     ? $program
     : GraphQL::Houtou::Runtime::VMCompiler->lower_program($self, $program);
@@ -132,7 +132,7 @@ sub execute_program {
   die "Requested native engine for a program that cannot be specialized into the native VM path.\n"
     if $engine eq 'native'
     && _preferred_engine_for_program($candidate_program, %opts) ne 'native';
-  return GraphQL::Houtou::Runtime::VMExecutor->execute_program($self, $vm_program, %opts)
+  return GraphQL::Houtou::Runtime::ExecState->run_program($self, $vm_program, %opts)
     if $engine eq 'perl';
   my $native_runtime = GraphQL::Houtou::Runtime::NativeRuntime->new(
     runtime_schema => $self,

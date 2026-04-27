@@ -55,7 +55,6 @@
    - `GraphQL::Houtou::Runtime::BlockFrame`
    - `GraphQL::Houtou::Runtime::FieldFrame`
    - `GraphQL::Houtou::Runtime::Writer`
-   - `GraphQL::Houtou::Runtime::VMExecutor`
 4. XS Native Boundary
    - bundle owner: `GraphQL::Houtou::_bootstrap_xs`
    - parser helper: `GraphQL::Houtou::XS::Parser` は公開 facade ではなく、top-level `GraphQL::Houtou::parse*` と XS callback 用の internal helper

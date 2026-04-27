@@ -464,7 +464,7 @@ sub execute_block {
   while (my $op = $self->advance_current_op) {
     next if !$self->should_execute_current_op($op);
     $self->enter_current_field($source, $base_path);
-    my $dispatch = $op->run_dispatch || \&GraphQL::Houtou::Runtime::VMExecutor::_execute_op;
+    my $dispatch = $op->run_dispatch || \&GraphQL::Houtou::Runtime::ExecState::execute_current_op;
     my $outcome = $dispatch->($self);
     $self->consume_current_field_outcome($outcome);
   }

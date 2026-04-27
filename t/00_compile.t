@@ -47,7 +47,6 @@ use_ok $_ for qw(
     GraphQL::Houtou::Runtime::VMProgram
     GraphQL::Houtou::Runtime::VMBlock
     GraphQL::Houtou::Runtime::VMOp
-    GraphQL::Houtou::Runtime::VMExecutor
     GraphQL::Houtou::Runtime::NativeRuntime
 );
 

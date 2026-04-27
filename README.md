@@ -1,4 +1,4 @@
-[![Actions Status](https://github.com/AnaTofuZ/GraphQL-Houtou/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/AnaTofuZ/GraphQL-Houtou/actions?workflow=test)
+[![Actions Status](https://github.com/AnaTofuZ/GraphQL-Houtou/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/AnaTofuZ/GraphQL-Houtou/actions?workflow=test)
 # NAME
 
 GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl

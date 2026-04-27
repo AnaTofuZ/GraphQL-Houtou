@@ -15,6 +15,7 @@
   - runtime graph / program / native bundle の compile 入口
 - `GraphQL::Houtou::Validation`
   - validation の最小 facade
+  - 公開面は `validate` のみ
 - `GraphQL::Houtou::Native`
   - native bundle / native runtime の低レベル facade
 

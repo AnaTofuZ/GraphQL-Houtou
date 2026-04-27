@@ -9,6 +9,7 @@ use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Runtime::Compiler ();
 use GraphQL::Houtou::Runtime::Executor ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
+use GraphQL::Houtou::Runtime::ProgramSpecializer ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Runtime::VMExecutor ();
 
@@ -98,11 +99,23 @@ sub execute_program {
   my $vm_program = _is_vm_program($program)
     ? $program
     : lower_program_to_vm($runtime_schema, $program);
+  my $candidate_program = $vm_program;
   $opts{engine} = delete $opts{vm_engine}
     if !defined $opts{engine} && exists $opts{vm_engine};
-  $opts{engine} = _preferred_engine_for_program($vm_program, %opts)
+  if (!defined $opts{engine} || $opts{engine} eq 'native') {
+    $candidate_program = GraphQL::Houtou::Runtime::ProgramSpecializer->specialize_for_native(
+      $runtime_schema,
+      $vm_program,
+      %opts,
+    );
+  }
+  $opts{engine} = _preferred_engine_for_program($candidate_program, %opts)
     if !defined $opts{engine};
-  return execute_vm($runtime_schema, $vm_program, %opts);
+  if ($opts{engine} eq 'native' && _preferred_engine_for_program($candidate_program, %opts) ne 'native') {
+    die "Requested native engine for a program that cannot be specialized into the native VM path.\n";
+  }
+  my $program_for_exec = $opts{engine} eq 'native' ? $candidate_program : $vm_program;
+  return execute_vm($runtime_schema, $program_for_exec, %opts);
 }
 
 sub execute_operation {

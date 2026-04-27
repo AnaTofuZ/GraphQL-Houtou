@@ -942,6 +942,34 @@ For static literal args, this boundary is:
 
 This keeps the architecture coherent even after the pure-Perl VM is replaced
 by the native runtime.
+
+## Request-Time Specialization
+
+Native execution should not require child modules to call XS directly, and it
+should not force descriptor compilation to know request-local state.
+
+The intended shape is:
+
+- compile schema once
+- lower operation to a VM program artifact
+- at request time, specialize that VM program for:
+  - provided variables
+  - variable defaults
+  - coerced args
+  - dynamic include/skip guards
+- only then cross the top-level native boundary
+
+This is why `Runtime::ProgramSpecializer` exists in Perl instead of trying to
+teach every child module to call XS:
+
+- child modules stay language/runtime agnostic
+- request-local mutation happens on a cloned VM program
+- the top-level runtime bridge remains the only native execution boundary
+
+In practice this means `Schema->execute_native_runtime(...)` should behave like
+`Runtime->execute_program(engine => 'native')`, not like a raw static bundle
+loader. Dynamic variables and directives are resolved before native execution,
+but execution itself still happens on the native VM.
 ## Public API direction
 
 The runtime-facing public API should treat VM artifacts as the primary

@@ -350,8 +350,9 @@ sub execute_native_bundle_descriptor {
 
 sub execute_vm_native_runtime {
   my ($self, $document, %opts) = @_;
-  my $descriptor = $self->compile_vm_native_bundle_descriptor($document, %opts);
-  return $self->execute_vm_native_bundle_descriptor($descriptor, %opts);
+  my $runtime = $self->compile_runtime(%opts);
+  my $program = $runtime->compile_operation($document, %opts);
+  return $runtime->execute_program($program, engine => 'native', %opts);
 }
 
 sub execute_native_runtime {

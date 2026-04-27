@@ -4547,3 +4547,20 @@ This fixes the first real bridge-design bug we hit in the reboot:
     - no-arg
     - static literal args
     の 2 パターンまで native hot path に乗る。
+  - request-time specialization を追加した。
+  - `Runtime::ProgramSpecializer` が native 実行前に
+    - variable defaults / provided variables の merge
+    - variable coercion
+    - dynamic arg payload の static 化
+    - dynamic `@include` / `@skip` guard の評価
+    を行い、native 実行可能な VM program へ特化する。
+  - この specialization は child module から XS を呼ばず、
+    `Runtime->execute_program(engine => 'native')` および
+    `Schema->execute_native_runtime(...)` の top-level native boundary だけが使う。
+  - `execute_native_runtime(...)` は静的 bundle descriptor 直行ではなく、
+    request-time specialization 後の VM program を native 実行へ渡す。
+  - これにより native-safe な explicit resolver について、
+    - variable args
+    - dynamic include/skip
+    - abstract tag dispatch
+    を含む query も top-level native API で通るようになった。

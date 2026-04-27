@@ -58,6 +58,7 @@ my $schema = GraphQL::Houtou::Schema->new(
       },
       greet => {
         type => $String,
+        resolver_mode => 'native',
         args => {
           name => { type => $String },
         },
@@ -68,6 +69,7 @@ my $schema = GraphQL::Houtou::Schema->new(
       },
       addOne => {
         type => $Int,
+        resolver_mode => 'native',
         args => {
           value => { type => $Int->non_null },
         },
@@ -78,6 +80,7 @@ my $schema = GraphQL::Houtou::Schema->new(
       },
       describeProfile => {
         type => $String,
+        resolver_mode => 'native',
         args => {
           profile => { type => $ProfileInput->non_null },
         },
@@ -197,6 +200,137 @@ subtest 'native resolver mode supports static literal args on native runtime' =>
   }
 
   ok $called, 'execute_runtime selected native engine for native-safe explicit resolver with static args';
+};
+
+subtest 'native runtime specializes variable args before bundle execution' => sub {
+  my $called = 0;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_bundle;
+
+  {
+    no warnings 'redefine';
+    local *GraphQL::Houtou::Native::execute_native_bundle = sub {
+      $called = 1;
+      goto &$orig;
+    };
+    my $result = $schema->execute_runtime(
+      'query Q($name: String = "Bob") { greet(name: $name) }',
+    );
+    is_deeply $result, {
+      data => {
+        greet => 'hello Bob',
+      },
+      errors => [],
+    }, 'native runtime materializes variable args before execution';
+  }
+
+  ok $called, 'dynamic variable args stayed on native runtime through specialization';
+};
+
+subtest 'native runtime specializes directive guards before bundle execution' => sub {
+  my $called = 0;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_bundle;
+
+  {
+    no warnings 'redefine';
+    local *GraphQL::Houtou::Native::execute_native_bundle = sub {
+      $called = 1;
+      goto &$orig;
+    };
+    my $result = $schema->execute_runtime(
+      'query Q($show: Boolean = true) { greet(name: "Ana") @include(if: $show) }',
+    );
+    is_deeply $result, {
+      data => {
+        greet => 'hello Ana',
+      },
+      errors => [],
+    }, 'native runtime prunes dynamic include guard before execution';
+  }
+
+  ok $called, 'dynamic directives stayed on native runtime through specialization';
+};
+
+subtest 'native runtime preserves static arg coercion and defaults' => sub {
+  my $called = 0;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_bundle;
+
+  {
+    no warnings 'redefine';
+    local *GraphQL::Houtou::Native::execute_native_bundle = sub {
+      $called = 1;
+      goto &$orig;
+    };
+    my $result = $schema->execute_runtime(
+      '{ describeProfile(profile: { name: "Ana" }) }',
+    );
+    is_deeply $result, {
+      data => {
+        describeProfile => 'Ana:20',
+      },
+      errors => [],
+    }, 'native runtime sees coerced static args with input defaults applied';
+  }
+
+  ok $called, 'static input-object args also stayed on native runtime';
+};
+
+subtest 'cached runtime program can execute on native runtime with request variables' => sub {
+  my $runtime = $schema->build_runtime;
+  my $program = $runtime->compile_operation(
+    'query Q($name: String = "Bob") { greet(name: $name) }',
+  );
+
+  my $called = 0;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_bundle;
+  my $result;
+  {
+    no warnings 'redefine';
+    local *GraphQL::Houtou::Native::execute_native_bundle = sub {
+      $called = 1;
+      goto &$orig;
+    };
+    $result = $runtime->execute_program(
+      $program,
+      engine => 'native',
+      variables => { name => 'cached' },
+    );
+  }
+
+  is_deeply $result, {
+    data => {
+      greet => 'hello cached',
+    },
+    errors => [],
+  }, 'cached program uses request-time specialization before native execution';
+  ok $called, 'cached runtime/program still reached native engine';
+};
+
+subtest 'inflated runtime descriptor can still drive native specialization' => sub {
+  my $runtime = $schema->build_runtime;
+  my $inflated = GraphQL::Houtou::Runtime::inflate_schema($schema, $runtime->to_struct);
+  my $program = $inflated->compile_operation(
+    'query Q($show: Boolean = true) { greet(name: "Ana") @include(if: $show) }',
+  );
+
+  my $called = 0;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_bundle;
+  my $result;
+  {
+    no warnings 'redefine';
+    local *GraphQL::Houtou::Native::execute_native_bundle = sub {
+      $called = 1;
+      goto &$orig;
+    };
+    $result = $inflated->execute_program($program, engine => 'native');
+  }
+
+  is_deeply $result, {
+    data => {
+      greet => 'hello Ana',
+    },
+    errors => [],
+  }, 'inflated runtime still specializes directive guards before native execution';
+  ok $called, 'inflated runtime also uses native engine';
 };
 
 subtest 'schema helper can compile and execute in one call' => sub {

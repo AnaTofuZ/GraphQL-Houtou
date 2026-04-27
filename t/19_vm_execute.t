@@ -43,8 +43,20 @@ my $Query = GraphQL::Houtou::Type::Object->new(
       type => GraphQL::Houtou::Type::List->new(of => $User),
       resolve => sub { return [ { id => 'u1', name => 'Alice' }, { id => 'u2', name => 'Bob' } ] },
     },
+    greet => {
+      type => $String,
+      resolver_mode => 'native',
+      args => {
+        name => { type => $String },
+      },
+      resolve => sub {
+        my ($source, $args) = @_;
+        return 'hello ' . ($args->{name} || 'nobody');
+      },
+    },
     node => {
       type => $Node,
+      resolver_mode => 'native',
       resolve => sub { return { kind => 'user', id => 'u3', name => 'Carol' } },
     },
   },
@@ -104,6 +116,34 @@ subtest 'schema helper can compile and execute native VM bundle in one call' => 
     data => { viewer => { id => 'u1' } },
     errors => [],
   }, 'schema helper executes native VM bundle runtime';
+};
+
+subtest 'schema helper can execute native VM runtime with specialized variables' => sub {
+  my $result = $schema->execute_native_runtime(
+    'query Q($name: String = "dora") { greet(name: $name) }',
+  );
+  is_deeply $result, {
+    data => { greet => 'hello dora' },
+    errors => [],
+  }, 'native runtime specializes variable args before native execution';
+};
+
+subtest 'schema helper can execute native VM runtime with specialized directives' => sub {
+  my $result = $schema->execute_native_runtime(
+    'query Q($show: Boolean = true) { greet(name: "eve") @include(if: $show) }',
+  );
+  is_deeply $result, {
+    data => { greet => 'hello eve' },
+    errors => [],
+  }, 'native runtime specializes dynamic include guard before native execution';
+};
+
+subtest 'schema helper can execute native VM runtime through abstract tag dispatch' => sub {
+  my $result = $schema->execute_native_runtime('{ node { id } }');
+  is_deeply $result, {
+    data => { node => { id => 'u3' } },
+    errors => [],
+  }, 'native runtime keeps abstract tag dispatch on native path';
 };
 
 subtest 'XS native bundle handle can execute directly' => sub {

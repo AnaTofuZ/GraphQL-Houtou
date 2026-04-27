@@ -180,3 +180,15 @@ perl -Ilib t/19_vm_execute.t
 2. `XS::VM` 側に native VM executor を実装する
 3. `Schema->build_native_runtime` / `compile_native_bundle` 経由の実行を本命にする
 4. 現在の Perl VM を validation / bring-up / fallback 用に位置づける
+## Persisted Queries
+
+- 固定 query / 固定 specialization:
+  - `compile_native_bundle`
+  - `compile_native_bundle_descriptor`
+  を persisted artifact として使う
+- 変数つき persisted query:
+  - `compile_program`
+  - `execute_program`
+  を使う
+- 詳細:
+  - `docs/persisted-queries.md`

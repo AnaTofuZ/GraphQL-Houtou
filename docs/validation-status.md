@@ -10,11 +10,12 @@ It exists so validation can be deprioritized without losing the current
 
 - public entrypoint: `GraphQL::Houtou::Validation`
 - XS entrypoint: `GraphQL::Houtou::XS::Validation::validate_xs`
-- PP implementation: `GraphQL::Houtou::Validation::PP`
+- internal compatibility implementation: `GraphQL::Houtou::Validation::PP`
 
-The public facade prefers XS when available. The XS layer currently owns
-selected validation rules and then delegates the remaining work to the PP
-validator through `validate_prepared`.
+The public facade now requires the XS validator. `GraphQL::Houtou::Validation::PP`
+still exists only as an internal compatibility layer because the current legacy
+XS validation path still delegates part of the remaining rule set through
+`validate_prepared`.
 
 ## Rules Currently Implemented In XS
 
@@ -26,7 +27,7 @@ validator through `validate_prepared`.
 
 These rules are executed in `src/validation.h`.
 
-## Rules Still Running In PP
+## Rules Still Running In Internal PP Compatibility
 
 - root operation type existence
 - variable definitions are input types
@@ -51,8 +52,8 @@ The current transition pattern is:
 4. pass seeded errors and skip flags into PP
 5. let PP run the remaining rules
 
-This keeps error ordering close to the PP implementation while allowing rule
- migration one piece at a time.
+This keeps error ordering close to the old Perl validator while allowing rule
+migration one piece at a time.
 
 ## Current Priority
 
@@ -62,7 +63,7 @@ The current implementation is considered sufficient for now, and further rule
 
 That means:
 
-- keep the existing XS/PP split working
+- keep the existing XS facade + internal PP compatibility working
 - do not spend more time moving minor rules into XS unless needed for a real
   workload
 - shift focus to other compatibility surfaces such as introspection,

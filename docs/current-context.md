@@ -909,10 +909,13 @@ Already XS-owned:
 - common object/list/abstract completion fast paths
 - promise dispatch / merge / response shaping
 
-Still PP fallback:
+Still legacy PP/internal compatibility:
 
-- full argument coercion fallback
-- complex object/list completion fallback
+- validation still retains `GraphQL::Houtou::Validation::PP` as an internal
+  compatibility layer behind the XS facade
+- schema compilation still retains `GraphQL::Houtou::Schema::Compiler::PP` as
+  an internal compatibility module for old paths and tests
+- these are no longer treated as active public fallback surfaces
 
 ### IR direct execution
 

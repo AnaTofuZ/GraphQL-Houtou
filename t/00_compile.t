@@ -13,7 +13,6 @@ use_ok $_ for qw(
     GraphQL::Houtou::GraphQLPerl::Parser
     GraphQL::Houtou::GraphQLJS::Parser
     GraphQL::Houtou::Schema::Compiler
-    GraphQL::Houtou::Schema::Compiler::PP
     GraphQL::Houtou::Schema
     GraphQL::Houtou::Directive
     GraphQL::Houtou::Introspection
@@ -40,7 +39,6 @@ use_ok $_ for qw(
     GraphQL::Houtou::Type::Scalar
     GraphQL::Houtou::Promise::Adapter
     GraphQL::Houtou::Validation
-    GraphQL::Houtou::Validation::PP
     GraphQL::Houtou::XS::Validation
     GraphQL::Houtou::GraphQLJS::Util
     GraphQL::Houtou::XS::Parser

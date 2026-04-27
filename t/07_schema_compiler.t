@@ -12,7 +12,6 @@ use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($Boolean $Int $String);
 use GraphQL::Houtou::Type::Union;
 use GraphQL::Houtou::Schema::Compiler qw(compile_schema);
-use GraphQL::Houtou::Schema::Compiler::PP ();
 use GraphQL::Houtou::XS::SchemaCompiler qw(compile_schema_xs);
 
 my $Node;
@@ -99,7 +98,6 @@ my $schema = GraphQL::Houtou::Schema->new(
 );
 
 my $compiled = compile_schema($schema);
-my $compiled_pp = GraphQL::Houtou::Schema::Compiler::PP::compile_schema($schema);
 my $compiled_xs = compile_schema_xs($schema);
 
 sub _strip_runtime {
@@ -125,8 +123,7 @@ sub _strip_runtime {
   return ref $value;
 }
 
-subtest 'facade, PP, and XS agree on normalized shape' => sub {
-  is_deeply _strip_runtime($compiled), _strip_runtime($compiled_pp), 'facade matches PP';
+subtest 'facade and XS agree on normalized shape' => sub {
   is_deeply _strip_runtime($compiled), _strip_runtime($compiled_xs), 'facade matches XS';
 };
 

@@ -11,8 +11,6 @@ our @EXPORT_OK = qw(
   compile_schema
 );
 
-my $HAS_XS;
-
 sub compile_schema {
   my ($schema) = @_;
 
@@ -20,18 +18,8 @@ sub compile_schema {
     if !blessed($schema)
     || (!$schema->isa('GraphQL::Houtou::Schema') && !$schema->isa('GraphQL::Schema'));
 
-  if (!defined $HAS_XS) {
-    $HAS_XS = eval {
-      require GraphQL::Houtou::XS::SchemaCompiler;
-      1;
-    } ? 1 : 0;
-  }
-
-  return GraphQL::Houtou::XS::SchemaCompiler::compile_schema_xs($schema)
-    if $HAS_XS;
-
-  require GraphQL::Houtou::Schema::Compiler::PP;
-  return GraphQL::Houtou::Schema::Compiler::PP::compile_schema($schema);
+  require GraphQL::Houtou::XS::SchemaCompiler;
+  return GraphQL::Houtou::XS::SchemaCompiler::compile_schema_xs($schema);
 }
 
 1;
@@ -53,11 +41,7 @@ GraphQL::Houtou::Schema::Compiler - Compile graphql-perl schema objects into a n
 =head1 DESCRIPTION
 
 This module is the public facade for schema compilation.
-It prefers the XS implementation when available and falls back to the
-pure-Perl implementation otherwise.
-
-The returned structure is intentionally shared between the XS and PP
-implementations so it can act as a stable boundary for future execution
-and validation work.
+The current mainline requires the XS compiler and does not keep a pure-Perl
+fallback in the active runtime path.
 
 =cut

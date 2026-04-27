@@ -20,6 +20,9 @@ The goal is:
 - delay Perl object materialization until an API boundary truly requires it
 - keep the runtime's internal currency native, small, and specialized
 - not design around a Pure Perl fallback for the hot runtime
+- tolerate temporary internal Perl compatibility modules only where legacy XS
+  integration still depends on them, but do not treat them as public runtime
+  surfaces
 
 Public execution policy for this design:
 

@@ -5,24 +5,14 @@ use strict;
 use warnings;
 use GraphQL::Houtou ();
 
-use constant {
-  KIND_SLOT          => 0,
-  SCALAR_VALUE_SLOT  => 1,
-  OBJECT_VALUE_SLOT  => 2,
-  LIST_VALUE_SLOT    => 3,
-  ERROR_RECORDS_SLOT => 4,
-};
-
 sub new {
   my ($class, %args) = @_;
   my $kind = $args{kind} || 'NONE';
-  return bless [
-    $kind,
-    (exists $args{scalar_value} ? $args{scalar_value} : undef),
-    (exists $args{object_value} ? $args{object_value} : undef),
-    (exists $args{list_value} ? $args{list_value} : undef),
-    ($args{error_records} || []),
-  ], $class;
+  return $class->scalar($args{scalar_value}, $args{error_records}) if $kind eq 'SCALAR';
+  return $class->object($args{object_value}, $args{error_records}) if $kind eq 'OBJECT';
+  return $class->list($args{list_value}, $args{error_records}) if $kind eq 'LIST';
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::outcome_scalar_xs(undef, ($args{error_records} || []));
 }
 
 sub scalar {
@@ -43,17 +33,45 @@ sub list {
   return GraphQL::Houtou::XS::VM::outcome_list_xs($value, ($error_records || []));
 }
 
-sub kind { return $_[0][KIND_SLOT] }
-sub scalar_value { return $_[0][SCALAR_VALUE_SLOT] }
-sub object_value { return $_[0][OBJECT_VALUE_SLOT] }
-sub list_value { return $_[0][LIST_VALUE_SLOT] }
+sub kind {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::outcome_kind_xs($_[0]);
+}
+
+sub scalar_value {
+  my ($self) = @_;
+  return undef if ($self->kind || q()) ne 'SCALAR';
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::outcome_value_xs($self);
+}
+
+sub object_value {
+  my ($self) = @_;
+  return undef if ($self->kind || q()) ne 'OBJECT';
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::outcome_value_xs($self);
+}
+
+sub list_value {
+  my ($self) = @_;
+  return undef if ($self->kind || q()) ne 'LIST';
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::outcome_value_xs($self);
+}
+
 sub value {
   my ($self) = @_;
-  return $self->[SCALAR_VALUE_SLOT] if ($self->[KIND_SLOT] || '') eq 'SCALAR';
-  return $self->[OBJECT_VALUE_SLOT] if ($self->[KIND_SLOT] || '') eq 'OBJECT';
-  return $self->[LIST_VALUE_SLOT] if ($self->[KIND_SLOT] || '') eq 'LIST';
+  my $kind = $self->kind || q();
+  return undef if !$kind;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::outcome_value_xs($self)
+    if $kind eq 'SCALAR' || $kind eq 'OBJECT' || $kind eq 'LIST';
   return undef;
 }
-sub error_records { return $_[0][ERROR_RECORDS_SLOT] }
+
+sub error_records {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::outcome_error_records_xs($_[0]);
+}
 
 1;

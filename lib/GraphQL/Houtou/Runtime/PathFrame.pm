@@ -3,30 +3,27 @@ package GraphQL::Houtou::Runtime::PathFrame;
 use 5.014;
 use strict;
 use warnings;
+use GraphQL::Houtou ();
 
 sub new {
   my ($class, %args) = @_;
-  return bless {
-    parent => $args{parent},
-    key => $args{key},
-  }, $class;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::path_frame_new_xs($class, $args{parent}, $args{key});
 }
 
-sub parent { return $_[0]{parent} }
-sub key { return $_[0]{key} }
+sub parent {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::path_frame_parent_xs($_[0]);
+}
+
+sub key {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::path_frame_key_xs($_[0]);
+}
 
 sub materialize_path {
-  my ($self) = @_;
-  return [] if !$self;
-
-  my @path;
-  my $cursor = $self;
-  while ($cursor) {
-    unshift @path, $cursor->{key} if exists $cursor->{key};
-    $cursor = $cursor->{parent};
-  }
-
-  return \@path;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::path_frame_materialize_path_xs($_[0]);
 }
 
 1;

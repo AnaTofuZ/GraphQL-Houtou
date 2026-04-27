@@ -194,6 +194,15 @@ fresh `./Build build` 済み環境で、
   - `resolve_type`
   - `possible_types + is_type_of`
   の orchestration を Perl hot path から外した
+- `Runtime::Cursor`, `FieldFrame`, `PathFrame`, `BlockFrame`, `Outcome`, `Writer`, `ExecState` は
+  いずれも XS の opaque handle owner に寄せた thin facade として再実装を進めている
+- `ExecState` の
+  - current op advance
+  - enter/leave field
+  - enter/leave block
+  は XSUB owner へ移し、Perl 側は orchestrator だけを残す形に移行した
+- `Cursor` の snapshot / restore は XSUB 関数名呼び出しではなく `src/vm_runtime.h` の C helper に降ろし、
+  `ExecState` の block lifecycle も native helper から直接扱えるようにした
 - historical / internal parser 資料は docs にのみ残し、mainline の API からは `graphql-js` dialect を外した
 - parser compatibility 自体は要件から外し、parser 本体と旧互換層が共有していた helper は
   `src/parser_shared_ast.h` へ切り出したうえで parser-internal 層に閉じ込めた

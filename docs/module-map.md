@@ -40,24 +40,32 @@
   - native specialization と native execute の owner
   - engine selection と native fast path 実行の owner
 - `GraphQL::Houtou::Runtime::ExecState`
-  - perl VM path の state machine
+  - perl VM path の state machine facade
+  - hot lifecycle は段階的に XS owner へ移している
+  - 現在は op advance / enter-leave field / enter-leave block が XSUB owner
 
 ## Runtime State Objects
 
 - `Cursor`
   - 現在の block / op / slot
+  - XS opaque handle
 - `BlockFrame`
   - block-local result and pending state
+  - XS opaque handle
 - `FieldFrame`
   - field-local execution state
+  - XS opaque handle
 - `Outcome`
   - kind-first の内部通貨
+  - XS opaque handle
 - `Writer`
   - outcome から response payload を構築
+  - XS opaque handle
 - `LazyInfo`
   - info の lazy materialization
 - `PathFrame`
   - path の lazy materialization
+  - XS opaque handle
 - `ErrorRecord`
   - error payload の record
 - `InputCoercion`

@@ -3,39 +3,50 @@ package GraphQL::Houtou::Runtime::FieldFrame;
 use 5.014;
 use strict;
 use warnings;
-
-use constant {
-  SOURCE_SLOT => 0,
-  PATH_FRAME_SLOT => 1,
-  RESOLVED_VALUE_SLOT => 2,
-  OUTCOME_SLOT => 3,
-};
+use GraphQL::Houtou ();
 
 sub new {
   my ($class, %args) = @_;
-  return bless [
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::field_frame_new_xs(
+    $class,
     $args{source},
     $args{path_frame},
     $args{resolved_value},
     $args{outcome},
-  ], $class;
+  );
 }
 
-sub source { return $_[0][SOURCE_SLOT] }
-sub path_frame { return $_[0][PATH_FRAME_SLOT] }
-sub resolved_value { return $_[0][RESOLVED_VALUE_SLOT] }
-sub outcome { return $_[0][OUTCOME_SLOT] }
+sub source {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::field_frame_source_xs($_[0]);
+}
+
+sub path_frame {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::field_frame_path_frame_xs($_[0]);
+}
+
+sub resolved_value {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::field_frame_resolved_value_xs($_[0]);
+}
+
+sub outcome {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::field_frame_outcome_xs($_[0]);
+}
 
 sub set_resolved_value {
-  my ($self, $value) = @_;
-  $self->[RESOLVED_VALUE_SLOT] = $value;
-  return $value;
+  GraphQL::Houtou::_bootstrap_xs();
+  GraphQL::Houtou::XS::VM::field_frame_set_resolved_value_xs($_[0], $_[1]);
+  return $_[1];
 }
 
 sub set_outcome {
-  my ($self, $outcome) = @_;
-  $self->[OUTCOME_SLOT] = $outcome;
-  return $outcome;
+  GraphQL::Houtou::_bootstrap_xs();
+  GraphQL::Houtou::XS::VM::field_frame_set_outcome_xs($_[0], $_[1]);
+  return $_[1];
 }
 
 1;

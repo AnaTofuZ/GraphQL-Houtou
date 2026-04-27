@@ -129,95 +129,182 @@ typedef struct {
   IV op_index;
 } gql_runtime_vm_exec_state_t;
 
+typedef struct {
+  SV *runtime_schema;
+  SV *program;
+  SV *cursor;
+  SV *frame;
+  AV *frame_stack_av;
+  SV *field_frame;
+  SV *writer;
+  SV *context;
+  SV *variables;
+  SV *root_value;
+  SV *promise_code;
+  SV *empty_args;
+} gql_runtime_vm_exec_state_handle_t;
+
+typedef struct {
+  SV *block;
+  IV slot_index;
+  IV op_index;
+  SV *current_slot;
+  SV *current_op;
+} gql_runtime_vm_cursor_t;
+
+typedef struct {
+  SV *source;
+  SV *path_frame;
+  SV *resolved_value;
+  SV *outcome;
+} gql_runtime_vm_field_frame_t;
+
+typedef struct {
+  SV *parent;
+  SV *key;
+} gql_runtime_vm_path_frame_t;
+
+typedef struct {
+  HV *values_hv;
+  AV *pending_names_av;
+  AV *pending_outcomes_av;
+} gql_runtime_vm_block_frame_t;
+
+typedef struct {
+  U8 kind_code;
+  SV *value_sv;
+  AV *error_records_av;
+} gql_runtime_vm_outcome_t;
+
+typedef struct {
+  AV *error_records_av;
+} gql_runtime_vm_writer_t;
+
+static SV *gql_runtime_vm_new_handle_sv(pTHX_ const char *pkg, void *ptr);
+static gql_runtime_vm_cursor_t *gql_runtime_vm_expect_cursor(pTHX_ SV *self);
+
 static SV *
-gql_runtime_vm_new_outcome_sv(pTHX_ const char *kind, STRLEN kind_len, SV *value, SV *error_records)
+gql_runtime_vm_new_cursor_handle(pTHX_ const char *pkg, gql_runtime_vm_cursor_t *cursor)
 {
-  AV *av = newAV();
-  HV *stash = gv_stashpv("GraphQL::Houtou::Runtime::Outcome", GV_ADD);
-  SV *errors_sv;
+  return gql_runtime_vm_new_handle_sv(aTHX_ pkg, cursor);
+}
 
-  av_extend(av, 4);
-  av_store(av, 0, newSVpvn(kind, kind_len));
-  if (kind_len == 6 && memEQ(kind, "SCALAR", 6)) {
-    av_store(av, 1, value ? newSVsv(value) : newSV(0));
-    av_store(av, 2, newSV(0));
-    av_store(av, 3, newSV(0));
-  }
-  else if (kind_len == 6 && memEQ(kind, "OBJECT", 6)) {
-    av_store(av, 1, newSV(0));
-    av_store(av, 2, value ? newSVsv(value) : newSV(0));
-    av_store(av, 3, newSV(0));
-  }
-  else if (kind_len == 4 && memEQ(kind, "LIST", 4)) {
-    av_store(av, 1, newSV(0));
-    av_store(av, 2, newSV(0));
-    av_store(av, 3, value ? newSVsv(value) : newSV(0));
-  }
-  else {
-    av_store(av, 1, newSV(0));
-    av_store(av, 2, newSV(0));
-    av_store(av, 3, newSV(0));
+static SV *
+gql_runtime_vm_cursor_snapshot_sv(pTHX_ SV *cursor_sv)
+{
+  gql_runtime_vm_cursor_t *cursor;
+  gql_runtime_vm_cursor_t *snapshot;
+
+  if (!cursor_sv || !SvOK(cursor_sv) || !SvROK(cursor_sv)) {
+    return newSVsv(&PL_sv_undef);
   }
 
-  errors_sv = error_records ? newSVsv(error_records) : newRV_noinc((SV *)newAV());
-  av_store(av, 4, errors_sv);
-  return sv_bless(newRV_noinc((SV *)av), stash);
+  cursor = gql_runtime_vm_expect_cursor(aTHX_ cursor_sv);
+  Newxz(snapshot, 1, gql_runtime_vm_cursor_t);
+  snapshot->block = newSVsv(cursor->block ? cursor->block : &PL_sv_undef);
+  snapshot->slot_index = cursor->slot_index;
+  snapshot->op_index = cursor->op_index;
+  snapshot->current_slot = newSVsv(cursor->current_slot ? cursor->current_slot : &PL_sv_undef);
+  snapshot->current_op = newSVsv(cursor->current_op ? cursor->current_op : &PL_sv_undef);
+
+  return gql_runtime_vm_new_cursor_handle(aTHX_ "GraphQL::Houtou::Runtime::Cursor", snapshot);
 }
 
 static void
-gql_runtime_vm_consume_outcome_sv(pTHX_ HV *data_hv, SV *result_name_sv, SV *outcome_sv, AV *writer_errors_av)
+gql_runtime_vm_cursor_restore_sv(pTHX_ gql_runtime_vm_cursor_t *dst, SV *snapshot_sv)
 {
-  AV *outcome_av;
-  SV **kind_svp;
-  SV **value_svp = NULL;
-  SV **errors_svp;
-  AV *errors_av;
-  const char *kind;
-  STRLEN kind_len;
+  gql_runtime_vm_cursor_t *src;
+
+  if (!dst || !snapshot_sv || !SvOK(snapshot_sv) || !SvROK(snapshot_sv)) {
+    return;
+  }
+
+  src = gql_runtime_vm_expect_cursor(aTHX_ snapshot_sv);
+  SvREFCNT_dec(dst->block);
+  SvREFCNT_dec(dst->current_slot);
+  SvREFCNT_dec(dst->current_op);
+  dst->block = newSVsv(src->block ? src->block : &PL_sv_undef);
+  dst->slot_index = src->slot_index;
+  dst->op_index = src->op_index;
+  dst->current_slot = newSVsv(src->current_slot ? src->current_slot : &PL_sv_undef);
+  dst->current_op = newSVsv(src->current_op ? src->current_op : &PL_sv_undef);
+}
+
+static AV *
+gql_runtime_vm_expect_error_records_av(pTHX_ SV *error_records)
+{
+  if (error_records && SvOK(error_records) && SvROK(error_records) && SvTYPE(SvRV(error_records)) == SVt_PVAV) {
+    return (AV *)SvRV(error_records);
+  }
+  return newAV();
+}
+
+static gql_runtime_vm_outcome_t *
+gql_runtime_vm_new_outcome_struct(pTHX_ U8 kind_code, SV *value, SV *error_records)
+{
+  gql_runtime_vm_outcome_t *outcome;
+  AV *errors_av = gql_runtime_vm_expect_error_records_av(aTHX_ error_records);
+
+  Newxz(outcome, 1, gql_runtime_vm_outcome_t);
+  outcome->kind_code = kind_code;
+  outcome->value_sv = value ? newSVsv(value) : newSV(0);
+  outcome->error_records_av = (AV *)SvREFCNT_inc((SV *)errors_av);
+
+  return outcome;
+}
+
+static SV *
+gql_runtime_vm_outcome_kind_sv(pTHX_ const gql_runtime_vm_outcome_t *outcome)
+{
+  if (!outcome) {
+    return newSVpvs("");
+  }
+  switch (outcome->kind_code) {
+    case GQL_VM_KIND_SCALAR:
+      return newSVpvs("SCALAR");
+    case GQL_VM_KIND_OBJECT:
+      return newSVpvs("OBJECT");
+    case GQL_VM_KIND_LIST:
+      return newSVpvs("LIST");
+    default:
+      return newSVpvs("");
+  }
+}
+
+static gql_runtime_vm_writer_t *
+gql_runtime_vm_new_writer_struct(pTHX_)
+{
+  gql_runtime_vm_writer_t *writer;
+
+  Newxz(writer, 1, gql_runtime_vm_writer_t);
+  writer->error_records_av = newAV();
+  return writer;
+}
+
+static void
+gql_runtime_vm_consume_outcome_struct(pTHX_ HV *data_hv, SV *result_name_sv, const gql_runtime_vm_outcome_t *outcome, gql_runtime_vm_writer_t *writer)
+{
   SSize_t i;
 
-  if (!data_hv || !result_name_sv || !outcome_sv || !SvOK(outcome_sv) || !SvROK(outcome_sv) || SvTYPE(SvRV(outcome_sv)) != SVt_PVAV) {
+  if (!data_hv || !result_name_sv || !outcome) {
     return;
-  }
-
-  outcome_av = (AV *)SvRV(outcome_sv);
-  kind_svp = av_fetch(outcome_av, 0, 0);
-  if (!kind_svp || !SvOK(*kind_svp)) {
-    return;
-  }
-
-  kind = SvPV(*kind_svp, kind_len);
-  if (kind_len == 6 && memEQ(kind, "SCALAR", 6)) {
-    value_svp = av_fetch(outcome_av, 1, 0);
-  }
-  else if (kind_len == 6 && memEQ(kind, "OBJECT", 6)) {
-    value_svp = av_fetch(outcome_av, 2, 0);
-  }
-  else if (kind_len == 4 && memEQ(kind, "LIST", 4)) {
-    value_svp = av_fetch(outcome_av, 3, 0);
   }
 
   hv_store_ent(
     data_hv,
     result_name_sv,
-    (value_svp && *value_svp) ? newSVsv(*value_svp) : newSV(0),
+    outcome->value_sv ? newSVsv(outcome->value_sv) : newSV(0),
     0
   );
 
-  if (!writer_errors_av) {
+  if (!writer || !writer->error_records_av || !outcome->error_records_av) {
     return;
   }
 
-  errors_svp = av_fetch(outcome_av, 4, 0);
-  if (!errors_svp || !SvOK(*errors_svp) || !SvROK(*errors_svp) || SvTYPE(SvRV(*errors_svp)) != SVt_PVAV) {
-    return;
-  }
-
-  errors_av = (AV *)SvRV(*errors_svp);
-  for (i = 0; i <= av_len(errors_av); i++) {
-    SV **err_svp = av_fetch(errors_av, i, 0);
+  for (i = 0; i <= av_len(outcome->error_records_av); i++) {
+    SV **err_svp = av_fetch(outcome->error_records_av, i, 0);
     if (err_svp && *err_svp) {
-      av_push(writer_errors_av, newSVsv(*err_svp));
+      av_push(writer->error_records_av, newSVsv(*err_svp));
     }
   }
 }

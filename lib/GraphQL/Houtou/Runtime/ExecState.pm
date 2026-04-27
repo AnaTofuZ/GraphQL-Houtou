@@ -3,6 +3,7 @@ package GraphQL::Houtou::Runtime::ExecState;
 use 5.014;
 use strict;
 use warnings;
+use GraphQL::Houtou ();
 
 use GraphQL::Houtou::Promise::Adapter qw(is_promise_value normalize_promise_code then_promise);
 use GraphQL::Houtou::Runtime::BlockFrame ();
@@ -17,20 +18,19 @@ use GraphQL::Houtou::Runtime::Writer ();
 
 sub new {
   my ($class, %args) = @_;
-  return bless {
-    runtime_schema => $args{runtime_schema},
-    program => $args{program},
-    cursor => $args{cursor},
-    frame => $args{frame},
-    frame_stack => $args{frame_stack} || [],
-    field_frame => $args{field_frame},
-    writer => $args{writer},
-    context => $args{context},
-    variables => $args{variables} || {},
-    root_value => $args{root_value},
-    promise_code => $args{promise_code},
-    empty_args => $args{empty_args} || {},
-  }, $class;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_new_xs(
+    $class,
+    $args{runtime_schema},
+    $args{program},
+    $args{cursor},
+    $args{writer},
+    $args{context},
+    ($args{variables} || {}),
+    $args{root_value},
+    $args{promise_code},
+    ($args{empty_args} || {}),
+  );
 }
 
 sub build_for_program {
@@ -59,61 +59,98 @@ sub run_program {
   return $state->finalize_response($data);
 }
 
-sub runtime_schema { return $_[0]{runtime_schema} }
-sub program { return $_[0]{program} }
-sub cursor { return $_[0]{cursor} }
-sub current_block { return $_[0]{cursor}->block }
-sub current_op { return $_[0]{cursor}->current_op }
-sub current_slot { return $_[0]{cursor}->current_slot }
-sub frame { return $_[0]{frame} }
-sub frame_stack { return $_[0]{frame_stack} }
-sub field_frame { return $_[0]{field_frame} }
-sub writer { return $_[0]{writer} }
-sub context { return $_[0]{context} }
-sub variables { return $_[0]{variables} }
-sub root_value { return $_[0]{root_value} }
-sub promise_code { return $_[0]{promise_code} }
-sub empty_args { return $_[0]{empty_args} }
+sub runtime_schema {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_runtime_schema_xs($_[0]);
+}
+
+sub program {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_program_xs($_[0]);
+}
+
+sub cursor {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_cursor_xs($_[0]);
+}
+
+sub current_block { return $_[0]->cursor->block }
+sub current_op { return $_[0]->cursor->current_op }
+sub current_slot { return $_[0]->cursor->current_slot }
+
+sub frame {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_frame_xs($_[0]);
+}
+
+sub frame_stack {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_frame_stack_xs($_[0]);
+}
+
+sub field_frame {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_field_frame_xs($_[0]);
+}
+
+sub writer {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_writer_xs($_[0]);
+}
+
+sub context {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_context_xs($_[0]);
+}
+
+sub variables {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_variables_xs($_[0]);
+}
+
+sub root_value {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_root_value_xs($_[0]);
+}
+
+sub promise_code {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_promise_code_xs($_[0]);
+}
+
+sub empty_args {
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_empty_args_xs($_[0]);
+}
 
 sub push_frame {
-  my ($self, $frame) = @_;
-  push @{ $self->{frame_stack} }, $frame;
-  $self->{frame} = $frame;
-  return $frame;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_push_frame_xs($_[0], $_[1]);
 }
 
 sub pop_frame {
-  my ($self) = @_;
-  my $frame = pop @{ $self->{frame_stack} };
-  $self->{frame} = $self->{frame_stack}[-1];
-  return $frame;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_pop_frame_xs($_[0]);
 }
 
-sub current_frame { return $_[0]{frame} }
+sub current_frame { return $_[0]->frame }
 
 sub enter_field {
-  my ($self, $source, $path_frame) = @_;
-  my $field = GraphQL::Houtou::Runtime::FieldFrame->new(
-    source => $source,
-    path_frame => $path_frame,
-  );
-  $self->{field_frame} = $field;
-  return $field;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_enter_field_xs($_[0], $_[1], $_[2]);
 }
 
 sub leave_field {
-  my ($self) = @_;
-  my $field = $self->{field_frame};
-  $self->{field_frame} = undef;
-  return $field;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_leave_field_xs($_[0]);
 }
 
-sub current_field_frame { return $_[0]{field_frame} }
-sub current_path_frame { return $_[0]{field_frame} ? $_[0]{field_frame}->path_frame : undef }
+sub current_field_frame { return $_[0]->field_frame }
+sub current_path_frame { return $_[0]->field_frame ? $_[0]->field_frame->path_frame : undef }
 
 sub advance_current_op {
-  my ($self) = @_;
-  return $self->{cursor}->advance_op;
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_advance_current_op_xs($_[0]);
 }
 
 sub enter_current_field {
@@ -142,18 +179,16 @@ sub consume_current_field_outcome {
 
 sub enter_block {
   my ($self, $block) = @_;
-  my $snapshot = {
-    cursor => $self->{cursor}->snapshot,
-  };
-  $self->{cursor}->enter_block($block);
-  my $frame = $self->push_frame(GraphQL::Houtou::Runtime::BlockFrame->new);
+  my $frame = GraphQL::Houtou::Runtime::BlockFrame->new;
+  GraphQL::Houtou::_bootstrap_xs();
+  my $snapshot = GraphQL::Houtou::XS::VM::exec_state_enter_block_xs($self, $block, $frame);
   return ($snapshot, $frame);
 }
 
 sub leave_block {
   my ($self, $snapshot, $result) = @_;
-  $self->pop_frame;
-  $self->{cursor}->restore($snapshot->{cursor}) if $snapshot && $snapshot->{cursor};
+  GraphQL::Houtou::_bootstrap_xs();
+  GraphQL::Houtou::XS::VM::exec_state_leave_block_xs($self, $snapshot);
   return $result;
 }
 

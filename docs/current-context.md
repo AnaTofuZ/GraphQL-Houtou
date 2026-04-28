@@ -188,6 +188,14 @@ fresh `./Build build` 済み環境で、
 - `ExecState` と `NativeRuntime` が別々に持っていた variable / arg coercion は `InputCoercion` に集約した
 - `InputCoercion` の dynamic arg materialization と runtime guard evaluation は `GraphQL::Houtou::XS::VM` helper に移し、Perl 側での再帰 walk を hot path から外した
 - `Runtime::Outcome` の constructor と `Runtime::Writer` の `consume_outcome(...)` は `GraphQL::Houtou::XS::VM` helper に移し、kind-first outcome の生成と consume を XS 側へ寄せた
+- `gql_runtime_vm_native_runtime_t` は callback 用 `SV*` 群を hot struct に直置きせず、
+  `gql_runtime_vm_native_callback_catalog_t` へ分離した。resolver / abstract dispatch で
+  必要な Perl object は callback 境界まで遅らせ、sync native 実行状態は slot/block 中心の
+  C struct に近づける方針を取っている
+- top-level sync `execute` は `promise_code` が無く `engine => 'perl'` でもない限り、
+  `build_runtime -> compile_program -> execute_program` を通らず
+  `build_native_runtime -> execute_document` に直行する。通常系で Perl VM artifact を
+  eager に作らないための変更である
 - `ExecState` の abstract runtime type resolution は `GraphQL::Houtou::XS::VM::resolve_runtime_type_xs(...)` に移し、
   - `tag_resolver`
   - `tag_map`

@@ -161,6 +161,12 @@ sub inflate_program {
 
 sub execute {
   my ($self, $document, %opts) = @_;
+
+  if (!$opts{promise_code} && (!defined $opts{engine} || $opts{engine} ne 'perl')) {
+    my $runtime = $self->build_native_runtime;
+    return $runtime->execute_document($document, %opts);
+  }
+
   my $runtime = $self->build_runtime;
   my $program = $runtime->compile_program($document, %opts);
   return $runtime->execute_program($program, %opts);

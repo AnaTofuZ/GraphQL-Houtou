@@ -119,6 +119,11 @@ sub execute {
     $opts{variables} = $variables_or_opts;
   }
 
+  if (!$opts{promise_code} && (!defined $opts{engine} || $opts{engine} ne 'perl')) {
+    my $runtime = $schema->build_native_runtime;
+    return $runtime->execute_document($document, %opts);
+  }
+
   my $runtime = $schema->build_runtime;
   my $program = $runtime->compile_program($document, %opts);
   return $runtime->execute_program($program, %opts);

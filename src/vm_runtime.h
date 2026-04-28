@@ -81,6 +81,18 @@ typedef struct {
 } gql_runtime_vm_native_possible_type_entry_t;
 
 typedef struct {
+  SV *runtime_schema;
+  SV **slot_resolvers;
+  SV **slot_type_objects;
+  SV **slot_tag_resolvers;
+  SV **slot_resolve_types;
+  gql_runtime_vm_native_tag_entry_t **slot_tag_entries;
+  IV *slot_tag_entry_counts;
+  gql_runtime_vm_native_possible_type_entry_t **slot_possible_type_entries;
+  IV *slot_possible_type_entry_counts;
+} gql_runtime_vm_native_callback_catalog_t;
+
+typedef struct {
   char **abstract_child_names;
   IV *abstract_child_indexes;
   IV opcode_code;
@@ -106,17 +118,9 @@ typedef struct {
 } gql_runtime_vm_native_block_t;
 
 typedef struct {
-  SV *runtime_schema;
   IV runtime_slot_count;
   gql_runtime_vm_native_slot_t *runtime_slots;
-  SV **slot_resolvers;
-  SV **slot_type_objects;
-  SV **slot_tag_resolvers;
-  SV **slot_resolve_types;
-  gql_runtime_vm_native_tag_entry_t **slot_tag_entries;
-  IV *slot_tag_entry_counts;
-  gql_runtime_vm_native_possible_type_entry_t **slot_possible_type_entries;
-  IV *slot_possible_type_entry_counts;
+  gql_runtime_vm_native_callback_catalog_t *callback_catalog;
 } gql_runtime_vm_native_runtime_t;
 
 typedef struct {
@@ -144,15 +148,20 @@ typedef struct gql_runtime_vm_field_frame_t gql_runtime_vm_field_frame_t;
 typedef struct gql_runtime_vm_block_frame_t gql_runtime_vm_block_frame_t;
 typedef struct gql_runtime_vm_writer_t gql_runtime_vm_writer_t;
 typedef struct gql_runtime_vm_pending_entry_t gql_runtime_vm_pending_entry_t;
+typedef struct gql_runtime_vm_callback_context gql_runtime_vm_callback_context_t;
 
-typedef struct {
-  gql_runtime_vm_native_runtime_t *runtime;
-  gql_runtime_vm_native_bundle_t *bundle;
+struct gql_runtime_vm_callback_context {
   SV *runtime_schema;
   SV *program;
   SV *context;
   SV *variables;
   SV *root_value;
+};
+
+typedef struct {
+  gql_runtime_vm_native_runtime_t *runtime;
+  gql_runtime_vm_native_bundle_t *bundle;
+  gql_runtime_vm_callback_context_t *callback_ctx;
   gql_runtime_vm_path_frame_t *path_frame;
   gql_runtime_vm_writer_t *writer;
   const gql_runtime_vm_native_block_t *block;
@@ -655,15 +664,17 @@ gql_runtime_vm_find_tagged_type_name(
   const char *tag_name = NULL;
   gql_runtime_vm_native_tag_entry_t *entries;
   IV count;
+  gql_runtime_vm_native_callback_catalog_t *catalog;
 
   if (!runtime || slot_index < 0 || slot_index >= runtime->runtime_slot_count || !tag_sv || !SvOK(tag_sv)) {
     return NULL;
   }
-  if (!runtime->slot_tag_entries || !runtime->slot_tag_entry_counts) {
+  catalog = runtime->callback_catalog;
+  if (!catalog || !catalog->slot_tag_entries || !catalog->slot_tag_entry_counts) {
     return NULL;
   }
-  entries = runtime->slot_tag_entries[slot_index];
-  count = runtime->slot_tag_entry_counts[slot_index];
+  entries = catalog->slot_tag_entries[slot_index];
+  count = catalog->slot_tag_entry_counts[slot_index];
   if (!entries || count <= 0) {
     return NULL;
   }
@@ -694,15 +705,17 @@ gql_runtime_vm_find_matching_possible_type(
   IV i;
   gql_runtime_vm_native_possible_type_entry_t *entries;
   IV count;
+  gql_runtime_vm_native_callback_catalog_t *catalog;
 
   if (!runtime || slot_index < 0 || slot_index >= runtime->runtime_slot_count) {
     return NULL;
   }
-  if (!runtime->slot_possible_type_entries || !runtime->slot_possible_type_entry_counts) {
+  catalog = runtime->callback_catalog;
+  if (!catalog || !catalog->slot_possible_type_entries || !catalog->slot_possible_type_entry_counts) {
     return NULL;
   }
-  entries = runtime->slot_possible_type_entries[slot_index];
-  count = runtime->slot_possible_type_entry_counts[slot_index];
+  entries = catalog->slot_possible_type_entries[slot_index];
+  count = catalog->slot_possible_type_entry_counts[slot_index];
   if (!entries || count <= 0) {
     return NULL;
   }
@@ -1639,49 +1652,51 @@ gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
     }
   }
   Safefree(runtime->runtime_slots);
-  if (runtime->slot_resolvers) {
+  if (runtime->callback_catalog && runtime->callback_catalog->slot_resolvers) {
+    gql_runtime_vm_native_callback_catalog_t *catalog = runtime->callback_catalog;
     for (i = 0; i < runtime->runtime_slot_count; i++) {
-      if (runtime->slot_resolvers[i]) {
-        SvREFCNT_dec(runtime->slot_resolvers[i]);
+      if (catalog->slot_resolvers[i]) {
+        SvREFCNT_dec(catalog->slot_resolvers[i]);
       }
-      if (runtime->slot_type_objects && runtime->slot_type_objects[i]) {
-        SvREFCNT_dec(runtime->slot_type_objects[i]);
+      if (catalog->slot_type_objects && catalog->slot_type_objects[i]) {
+        SvREFCNT_dec(catalog->slot_type_objects[i]);
       }
-      if (runtime->slot_tag_resolvers && runtime->slot_tag_resolvers[i]) {
-        SvREFCNT_dec(runtime->slot_tag_resolvers[i]);
+      if (catalog->slot_tag_resolvers && catalog->slot_tag_resolvers[i]) {
+        SvREFCNT_dec(catalog->slot_tag_resolvers[i]);
       }
-      if (runtime->slot_resolve_types && runtime->slot_resolve_types[i]) {
-        SvREFCNT_dec(runtime->slot_resolve_types[i]);
+      if (catalog->slot_resolve_types && catalog->slot_resolve_types[i]) {
+        SvREFCNT_dec(catalog->slot_resolve_types[i]);
       }
-      if (runtime->slot_tag_entries && runtime->slot_tag_entries[i]) {
+      if (catalog->slot_tag_entries && catalog->slot_tag_entries[i]) {
         IV j;
-        for (j = 0; j < runtime->slot_tag_entry_counts[i]; j++) {
-          Safefree(runtime->slot_tag_entries[i][j].tag_name);
-          Safefree(runtime->slot_tag_entries[i][j].type_name);
+        for (j = 0; j < catalog->slot_tag_entry_counts[i]; j++) {
+          Safefree(catalog->slot_tag_entries[i][j].tag_name);
+          Safefree(catalog->slot_tag_entries[i][j].type_name);
         }
-        Safefree(runtime->slot_tag_entries[i]);
+        Safefree(catalog->slot_tag_entries[i]);
       }
-      if (runtime->slot_possible_type_entries && runtime->slot_possible_type_entries[i]) {
+      if (catalog->slot_possible_type_entries && catalog->slot_possible_type_entries[i]) {
         IV j;
-        for (j = 0; j < runtime->slot_possible_type_entry_counts[i]; j++) {
-          Safefree(runtime->slot_possible_type_entries[i][j].type_name);
-          SvREFCNT_dec(runtime->slot_possible_type_entries[i][j].type_sv);
-          SvREFCNT_dec(runtime->slot_possible_type_entries[i][j].is_type_of_cb);
+        for (j = 0; j < catalog->slot_possible_type_entry_counts[i]; j++) {
+          Safefree(catalog->slot_possible_type_entries[i][j].type_name);
+          SvREFCNT_dec(catalog->slot_possible_type_entries[i][j].type_sv);
+          SvREFCNT_dec(catalog->slot_possible_type_entries[i][j].is_type_of_cb);
         }
-        Safefree(runtime->slot_possible_type_entries[i]);
+        Safefree(catalog->slot_possible_type_entries[i]);
       }
     }
-  }
-  Safefree(runtime->slot_resolvers);
-  Safefree(runtime->slot_type_objects);
-  Safefree(runtime->slot_tag_resolvers);
-  Safefree(runtime->slot_tag_entries);
-  Safefree(runtime->slot_tag_entry_counts);
-  Safefree(runtime->slot_resolve_types);
-  Safefree(runtime->slot_possible_type_entries);
-  Safefree(runtime->slot_possible_type_entry_counts);
-  if (runtime->runtime_schema) {
-    SvREFCNT_dec(runtime->runtime_schema);
+    Safefree(catalog->slot_resolvers);
+    Safefree(catalog->slot_type_objects);
+    Safefree(catalog->slot_tag_resolvers);
+    Safefree(catalog->slot_tag_entries);
+    Safefree(catalog->slot_tag_entry_counts);
+    Safefree(catalog->slot_resolve_types);
+    Safefree(catalog->slot_possible_type_entries);
+    Safefree(catalog->slot_possible_type_entry_counts);
+    if (catalog->runtime_schema) {
+      SvREFCNT_dec(catalog->runtime_schema);
+    }
+    Safefree(catalog);
   }
   Safefree(runtime);
 }

@@ -1412,18 +1412,19 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
   catalog_av = gql_runtime_vm_expect_arrayref(aTHX_ catalog_sv, "runtime schema slot_catalog");
 
   Newxz(runtime, 1, gql_runtime_vm_native_runtime_t);
-  runtime->runtime_schema = newSVsv(runtime_schema ? runtime_schema : &PL_sv_undef);
+  Newxz(runtime->callback_catalog, 1, gql_runtime_vm_native_callback_catalog_t);
+  runtime->callback_catalog->runtime_schema = newSVsv(runtime_schema ? runtime_schema : &PL_sv_undef);
   runtime->runtime_slot_count = av_count(catalog_av);
   if (runtime->runtime_slot_count > 0) {
     Newxz(runtime->runtime_slots, runtime->runtime_slot_count, gql_runtime_vm_native_slot_t);
-    Newxz(runtime->slot_resolvers, runtime->runtime_slot_count, SV *);
-    Newxz(runtime->slot_type_objects, runtime->runtime_slot_count, SV *);
-    Newxz(runtime->slot_tag_resolvers, runtime->runtime_slot_count, SV *);
-    Newxz(runtime->slot_resolve_types, runtime->runtime_slot_count, SV *);
-    Newxz(runtime->slot_tag_entries, runtime->runtime_slot_count, gql_runtime_vm_native_tag_entry_t *);
-    Newxz(runtime->slot_tag_entry_counts, runtime->runtime_slot_count, IV);
-    Newxz(runtime->slot_possible_type_entries, runtime->runtime_slot_count, gql_runtime_vm_native_possible_type_entry_t *);
-    Newxz(runtime->slot_possible_type_entry_counts, runtime->runtime_slot_count, IV);
+    Newxz(runtime->callback_catalog->slot_resolvers, runtime->runtime_slot_count, SV *);
+    Newxz(runtime->callback_catalog->slot_type_objects, runtime->runtime_slot_count, SV *);
+    Newxz(runtime->callback_catalog->slot_tag_resolvers, runtime->runtime_slot_count, SV *);
+    Newxz(runtime->callback_catalog->slot_resolve_types, runtime->runtime_slot_count, SV *);
+    Newxz(runtime->callback_catalog->slot_tag_entries, runtime->runtime_slot_count, gql_runtime_vm_native_tag_entry_t *);
+    Newxz(runtime->callback_catalog->slot_tag_entry_counts, runtime->runtime_slot_count, IV);
+    Newxz(runtime->callback_catalog->slot_possible_type_entries, runtime->runtime_slot_count, gql_runtime_vm_native_possible_type_entry_t *);
+    Newxz(runtime->callback_catalog->slot_possible_type_entry_counts, runtime->runtime_slot_count, IV);
     for (i = 0; i < runtime->runtime_slot_count; i++) {
       SV **slot_svp = av_fetch(catalog_av, i, 0);
       HV *slot_hv;
@@ -1439,7 +1440,7 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
       slot_hv = gql_runtime_vm_expect_hashref(aTHX_ *slot_svp, "runtime slot");
       resolver_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ slot_hv, "resolve", 7);
       if (resolver_sv) {
-        runtime->slot_resolvers[i] = newSVsv(resolver_sv);
+        runtime->callback_catalog->slot_resolvers[i] = newSVsv(resolver_sv);
       }
     }
   }
@@ -1482,12 +1483,12 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
         }
         type_svp = hv_fetch(name2type_hv, return_type_name, (I32)strlen(return_type_name), 0);
         if (type_svp && SvOK(*type_svp)) {
-          runtime->slot_type_objects[i] = newSVsv(*type_svp);
+          runtime->callback_catalog->slot_type_objects[i] = newSVsv(*type_svp);
         }
         if (tag_resolver_map_hv) {
           SV **svp = hv_fetch(tag_resolver_map_hv, return_type_name, (I32)strlen(return_type_name), 0);
           if (svp && SvOK(*svp)) {
-            runtime->slot_tag_resolvers[i] = newSVsv(*svp);
+            runtime->callback_catalog->slot_tag_resolvers[i] = newSVsv(*svp);
           }
         }
         if (runtime_tag_map_hv) {
@@ -1498,15 +1499,15 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
             if (count > 0) {
               HE *he;
               IV j = 0;
-              Newxz(runtime->slot_tag_entries[i], count, gql_runtime_vm_native_tag_entry_t);
-              runtime->slot_tag_entry_counts[i] = count;
+              Newxz(runtime->callback_catalog->slot_tag_entries[i], count, gql_runtime_vm_native_tag_entry_t);
+              runtime->callback_catalog->slot_tag_entry_counts[i] = count;
               hv_iterinit(tag_map_hv);
               while ((he = hv_iternext(tag_map_hv))) {
                 SV *val = HeVAL(he);
                 const char *tag_name = HeKEY(he);
                 const char *type_name = (val && SvOK(val)) ? gql_runtime_vm_type_name_from_sv(aTHX_ val) : NULL;
-                runtime->slot_tag_entries[i][j].tag_name = gql_runtime_vm_copy_cstr(tag_name);
-                runtime->slot_tag_entries[i][j].type_name = gql_runtime_vm_copy_cstr(type_name);
+                runtime->callback_catalog->slot_tag_entries[i][j].tag_name = gql_runtime_vm_copy_cstr(tag_name);
+                runtime->callback_catalog->slot_tag_entries[i][j].type_name = gql_runtime_vm_copy_cstr(type_name);
                 j++;
               }
             }
@@ -1515,7 +1516,7 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
         if (resolve_type_map_hv) {
           SV **svp = hv_fetch(resolve_type_map_hv, return_type_name, (I32)strlen(return_type_name), 0);
           if (svp && SvOK(*svp)) {
-            runtime->slot_resolve_types[i] = newSVsv(*svp);
+            runtime->callback_catalog->slot_resolve_types[i] = newSVsv(*svp);
           }
         }
         if (possible_types_hv && is_type_of_map_hv) {
@@ -1525,8 +1526,8 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
             IV count = av_count(possible_types_av);
             if (count > 0) {
               IV j;
-              Newxz(runtime->slot_possible_type_entries[i], count, gql_runtime_vm_native_possible_type_entry_t);
-              runtime->slot_possible_type_entry_counts[i] = count;
+              Newxz(runtime->callback_catalog->slot_possible_type_entries[i], count, gql_runtime_vm_native_possible_type_entry_t);
+              runtime->callback_catalog->slot_possible_type_entry_counts[i] = count;
               for (j = 0; j < count; j++) {
                 SV **type_entry_svp = av_fetch(possible_types_av, j, 0);
                 SV *type_sv;
@@ -1544,9 +1545,9 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
                 if (!cb_svp || !SvOK(*cb_svp)) {
                   continue;
                 }
-                runtime->slot_possible_type_entries[i][j].type_name = gql_runtime_vm_copy_cstr(type_name);
-                runtime->slot_possible_type_entries[i][j].type_sv = newSVsv(type_sv);
-                runtime->slot_possible_type_entries[i][j].is_type_of_cb = newSVsv(*cb_svp);
+                runtime->callback_catalog->slot_possible_type_entries[i][j].type_name = gql_runtime_vm_copy_cstr(type_name);
+                runtime->callback_catalog->slot_possible_type_entries[i][j].type_sv = newSVsv(type_sv);
+                runtime->callback_catalog->slot_possible_type_entries[i][j].is_type_of_cb = newSVsv(*cb_svp);
               }
             }
           }
@@ -1685,10 +1686,11 @@ gql_runtime_vm_lookup_slot_type_object_sv(
   slot_index = slot->schema_slot_index;
   if (slot_index >= 0
       && slot_index < runtime->runtime_slot_count
-      && runtime->slot_type_objects
-      && runtime->slot_type_objects[slot_index]
-      && SvOK(runtime->slot_type_objects[slot_index])) {
-    return runtime->slot_type_objects[slot_index];
+      && runtime->callback_catalog
+      && runtime->callback_catalog->slot_type_objects
+      && runtime->callback_catalog->slot_type_objects[slot_index]
+      && SvOK(runtime->callback_catalog->slot_type_objects[slot_index])) {
+    return runtime->callback_catalog->slot_type_objects[slot_index];
   }
 
   if (slot->return_type_name && *slot->return_type_name) {
@@ -1710,6 +1712,7 @@ gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_state_t *sta
   SV *return_type_sv;
   SV *parent_type_sv;
   SV *path_sv;
+  const gql_runtime_vm_callback_context_t *ctx = state ? state->callback_ctx : NULL;
 
   if (!state) {
     return newRV_noinc((SV *)newHV());
@@ -1722,12 +1725,15 @@ gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_state_t *sta
   return_type_lookup = gql_runtime_vm_lookup_slot_type_object_sv(
     aTHX_
     state->runtime,
-    state->runtime_schema,
+    ctx ? ctx->runtime_schema : &PL_sv_undef,
     state->slot
   );
   return_type_sv = newSVsv(return_type_lookup ? return_type_lookup : &PL_sv_undef);
   if (state->block && state->block->type_name) {
-    SV *parent_type_lookup = gql_runtime_vm_lookup_type_object_by_name_sv(aTHX_ state->runtime_schema, state->block->type_name);
+    SV *parent_type_lookup = gql_runtime_vm_lookup_type_object_by_name_sv(
+      aTHX_ ctx ? ctx->runtime_schema : &PL_sv_undef,
+      state->block->type_name
+    );
     parent_type_sv = newSVsv(parent_type_lookup ? parent_type_lookup : &PL_sv_undef);
   } else {
     parent_type_sv = newSVsv(&PL_sv_undef);
@@ -1741,11 +1747,11 @@ gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_state_t *sta
   hv_store(info_hv, "return_type", 11, return_type_sv, 0);
   hv_store(info_hv, "parent_type", 11, parent_type_sv, 0);
   hv_store(info_hv, "path", 4, path_sv, 0);
-  hv_store(info_hv, "context_value", 13, newSVsv(state->context ? state->context : &PL_sv_undef), 0);
-  hv_store(info_hv, "root_value", 10, newSVsv(state->root_value ? state->root_value : &PL_sv_undef), 0);
-  hv_store(info_hv, "variable_values", 15, newSVsv(state->variables ? state->variables : &PL_sv_undef), 0);
-  hv_store(info_hv, "operation", 9, newSVsv(state->program ? state->program : &PL_sv_undef), 0);
-  hv_store(info_hv, "runtime_schema", 14, newSVsv(state->runtime_schema ? state->runtime_schema : &PL_sv_undef), 0);
+  hv_store(info_hv, "context_value", 13, newSVsv((ctx && ctx->context) ? ctx->context : &PL_sv_undef), 0);
+  hv_store(info_hv, "root_value", 10, newSVsv((ctx && ctx->root_value) ? ctx->root_value : &PL_sv_undef), 0);
+  hv_store(info_hv, "variable_values", 15, newSVsv((ctx && ctx->variables) ? ctx->variables : &PL_sv_undef), 0);
+  hv_store(info_hv, "operation", 9, newSVsv((ctx && ctx->program) ? ctx->program : &PL_sv_undef), 0);
+  hv_store(info_hv, "runtime_schema", 14, newSVsv((ctx && ctx->runtime_schema) ? ctx->runtime_schema : &PL_sv_undef), 0);
 
   return newRV_noinc((SV *)info_hv);
 }
@@ -1848,9 +1854,11 @@ gql_runtime_vm_resolve_current_field_default(pTHX_ gql_runtime_vm_exec_state_t *
   if (!runtime || slot->schema_slot_index < 0 || slot->schema_slot_index >= runtime->runtime_slot_count) {
     croak("native VM schema slot index %ld is invalid", (long)slot->schema_slot_index);
   }
-  resolver_sv = runtime->slot_resolvers ? runtime->slot_resolvers[slot->schema_slot_index] : NULL;
+  resolver_sv = (runtime->callback_catalog && runtime->callback_catalog->slot_resolvers)
+    ? runtime->callback_catalog->slot_resolvers[slot->schema_slot_index]
+    : NULL;
   return_type_sv = gql_runtime_vm_lookup_slot_type_object_sv(
-    aTHX_ runtime, state->runtime_schema, slot
+    aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
   );
 
   if (resolver_sv && SvOK(resolver_sv)) {
@@ -1861,7 +1869,7 @@ gql_runtime_vm_resolve_current_field_default(pTHX_ gql_runtime_vm_exec_state_t *
       resolver_sv,
       source,
       args,
-      state->context,
+      state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
       info_sv,
       return_type_sv ? return_type_sv : &PL_sv_undef,
       error_out
@@ -1900,14 +1908,19 @@ gql_runtime_vm_complete_current_abstract(pTHX_ gql_runtime_vm_exec_state_t *stat
     return gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);
   }
   if (op->dispatch_family_code == GQL_VM_DISPATCH_TAG) {
-    SV *tag_resolver = runtime->slot_tag_resolvers ? runtime->slot_tag_resolvers[slot_index] : NULL;
+    SV *tag_resolver = (runtime->callback_catalog && runtime->callback_catalog->slot_tag_resolvers)
+      ? runtime->callback_catalog->slot_tag_resolvers[slot_index]
+      : NULL;
     SV *abstract_type = gql_runtime_vm_lookup_slot_type_object_sv(
-      aTHX_ runtime, state->runtime_schema, slot
+      aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
     );
     SV *info_sv;
     SV *tag_sv;
     const char *type_name = NULL;
-    if (!tag_resolver || !runtime->slot_tag_entries || runtime->slot_tag_entry_counts[slot_index] <= 0) {
+    if (!tag_resolver
+        || !runtime->callback_catalog
+        || !runtime->callback_catalog->slot_tag_entries
+        || runtime->callback_catalog->slot_tag_entry_counts[slot_index] <= 0) {
       return gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);
     }
     info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
@@ -1915,7 +1928,7 @@ gql_runtime_vm_complete_current_abstract(pTHX_ gql_runtime_vm_exec_state_t *stat
       aTHX_
       tag_resolver,
       value,
-      state->context,
+      state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
       info_sv,
       abstract_type ? abstract_type : &PL_sv_undef,
       error_out
@@ -1927,9 +1940,11 @@ gql_runtime_vm_complete_current_abstract(pTHX_ gql_runtime_vm_exec_state_t *stat
     child_block_index = gql_runtime_vm_find_abstract_child_block_index(op, type_name);
     SvREFCNT_dec(tag_sv);
   } else if (op->dispatch_family_code == GQL_VM_DISPATCH_RESOLVE_TYPE) {
-    SV *resolve_type = runtime->slot_resolve_types ? runtime->slot_resolve_types[slot_index] : NULL;
+    SV *resolve_type = (runtime->callback_catalog && runtime->callback_catalog->slot_resolve_types)
+      ? runtime->callback_catalog->slot_resolve_types[slot_index]
+      : NULL;
     SV *abstract_type = gql_runtime_vm_lookup_slot_type_object_sv(
-      aTHX_ runtime, state->runtime_schema, slot
+      aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
     );
     SV *info_sv;
     SV *type_sv;
@@ -1942,7 +1957,7 @@ gql_runtime_vm_complete_current_abstract(pTHX_ gql_runtime_vm_exec_state_t *stat
       aTHX_
       resolve_type,
       value,
-      state->context,
+      state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
       info_sv,
       abstract_type ? abstract_type : &PL_sv_undef,
       error_out
@@ -1961,7 +1976,7 @@ gql_runtime_vm_complete_current_abstract(pTHX_ gql_runtime_vm_exec_state_t *stat
         runtime,
         slot_index,
         value,
-        state->context,
+        state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
         info_sv,
         error_out
       );
@@ -2050,9 +2065,11 @@ gql_runtime_vm_resolve_current_field_explicit(pTHX_ gql_runtime_vm_exec_state_t 
   if (!runtime || slot->schema_slot_index < 0 || slot->schema_slot_index >= runtime->runtime_slot_count) {
     croak("native VM schema slot index %ld is invalid", (long)slot->schema_slot_index);
   }
-  resolver_sv = runtime->slot_resolvers ? runtime->slot_resolvers[slot->schema_slot_index] : NULL;
+  resolver_sv = (runtime->callback_catalog && runtime->callback_catalog->slot_resolvers)
+    ? runtime->callback_catalog->slot_resolvers[slot->schema_slot_index]
+    : NULL;
   return_type_sv = gql_runtime_vm_lookup_slot_type_object_sv(
-    aTHX_ runtime, state->runtime_schema, slot
+    aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
   );
 
   if (!resolver_sv || !SvOK(resolver_sv)) {
@@ -2067,7 +2084,7 @@ gql_runtime_vm_resolve_current_field_explicit(pTHX_ gql_runtime_vm_exec_state_t 
       resolver_sv,
       source,
       args,
-      state->context,
+      state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
       info_sv,
       return_type_sv ? return_type_sv : &PL_sv_undef,
       error_out
@@ -2619,9 +2636,9 @@ native_runtime_summary_xs(runtime_sv)
 
       hv = newHV();
       hv_store(hv, "runtime_slot_count", 18, newSViv(runtime->runtime_slot_count), 0);
-      hv_store(hv, "has_slot_type_objects", 21, newSViv(runtime->slot_type_objects ? 1 : 0), 0);
-      hv_store(hv, "has_tag_dispatch_tables", 23, newSViv(runtime->slot_tag_entries ? 1 : 0), 0);
-      hv_store(hv, "has_possible_type_entries", 25, newSViv(runtime->slot_possible_type_entries ? 1 : 0), 0);
+      hv_store(hv, "has_slot_type_objects", 21, newSViv(runtime->callback_catalog && runtime->callback_catalog->slot_type_objects ? 1 : 0), 0);
+      hv_store(hv, "has_tag_dispatch_tables", 23, newSViv(runtime->callback_catalog && runtime->callback_catalog->slot_tag_entries ? 1 : 0), 0);
+      hv_store(hv, "has_possible_type_entries", 25, newSViv(runtime->callback_catalog && runtime->callback_catalog->slot_possible_type_entries ? 1 : 0), 0);
       RETVAL = newRV_noinc((SV *)hv);
     }
   OUTPUT:
@@ -4074,6 +4091,7 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
       gql_runtime_vm_native_bundle_t *bundle;
       gql_runtime_vm_native_runtime_t *runtime = NULL;
       gql_runtime_vm_exec_state_t state;
+      gql_runtime_vm_callback_context_t callback_ctx;
       int owns_runtime = 0;
       HV *hv;
       SV *data_sv;
@@ -4100,13 +4118,15 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
       }
 
       Zero(&state, 1, gql_runtime_vm_exec_state_t);
+      Zero(&callback_ctx, 1, gql_runtime_vm_callback_context_t);
       state.runtime = runtime;
       state.bundle = bundle;
-      state.runtime_schema = (runtime_schema && !sv_derived_from(runtime_schema, "GraphQL::Houtou::Runtime::NativeRuntime"))
+      callback_ctx.runtime_schema = (runtime_schema && !sv_derived_from(runtime_schema, "GraphQL::Houtou::Runtime::NativeRuntime"))
         ? runtime_schema
-        : (runtime && runtime->runtime_schema ? runtime->runtime_schema : &PL_sv_undef);
-      state.root_value = root_value;
-      state.context = context_value;
+        : (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema ? runtime->callback_catalog->runtime_schema : &PL_sv_undef);
+      callback_ctx.root_value = root_value;
+      callback_ctx.context = context_value;
+      state.callback_ctx = &callback_ctx;
       writer = gql_runtime_vm_new_writer_struct(aTHX);
       state.writer = writer;
       state.path_frame = NULL;
@@ -4146,6 +4166,7 @@ execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor
       gql_runtime_vm_native_bundle_t *bundle;
       gql_runtime_vm_native_runtime_t *runtime = NULL;
       gql_runtime_vm_exec_state_t state;
+      gql_runtime_vm_callback_context_t callback_ctx;
       int owns_runtime = 0;
       HV *hv;
       SV *data_sv;
@@ -4169,13 +4190,15 @@ execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor
       }
 
       Zero(&state, 1, gql_runtime_vm_exec_state_t);
+      Zero(&callback_ctx, 1, gql_runtime_vm_callback_context_t);
       state.runtime = runtime;
       state.bundle = bundle;
-      state.runtime_schema = (runtime_schema && !sv_derived_from(runtime_schema, "GraphQL::Houtou::Runtime::NativeRuntime"))
+      callback_ctx.runtime_schema = (runtime_schema && !sv_derived_from(runtime_schema, "GraphQL::Houtou::Runtime::NativeRuntime"))
         ? runtime_schema
-        : (runtime && runtime->runtime_schema ? runtime->runtime_schema : &PL_sv_undef);
-      state.root_value = root_value;
-      state.context = context_value;
+        : (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema ? runtime->callback_catalog->runtime_schema : &PL_sv_undef);
+      callback_ctx.root_value = root_value;
+      callback_ctx.context = context_value;
+      state.callback_ctx = &callback_ctx;
       writer = gql_runtime_vm_new_writer_struct(aTHX);
       state.writer = writer;
       state.path_frame = NULL;
@@ -4216,6 +4239,7 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
       gql_runtime_vm_native_program_t *program;
       gql_runtime_vm_native_bundle_t *bundle;
       gql_runtime_vm_exec_state_t state;
+      gql_runtime_vm_callback_context_t callback_ctx;
       HV *hv;
       SV *data_sv;
       SV *errors_sv;
@@ -4233,11 +4257,13 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
       bundle = gql_runtime_vm_native_bundle_from_runtime_and_program_handles(runtime, program);
 
       Zero(&state, 1, gql_runtime_vm_exec_state_t);
+      Zero(&callback_ctx, 1, gql_runtime_vm_callback_context_t);
       state.runtime = runtime;
       state.bundle = bundle;
-      state.runtime_schema = (runtime && runtime->runtime_schema) ? runtime->runtime_schema : &PL_sv_undef;
-      state.root_value = root_value;
-      state.context = context_value;
+      callback_ctx.runtime_schema = (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema) ? runtime->callback_catalog->runtime_schema : &PL_sv_undef;
+      callback_ctx.root_value = root_value;
+      callback_ctx.context = context_value;
+      state.callback_ctx = &callback_ctx;
       writer = gql_runtime_vm_new_writer_struct(aTHX);
       state.writer = writer;
       state.path_frame = NULL;

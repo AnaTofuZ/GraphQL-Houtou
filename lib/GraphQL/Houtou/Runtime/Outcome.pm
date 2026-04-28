@@ -4,23 +4,9 @@ use 5.014;
 use strict;
 use warnings;
 use GraphQL::Houtou ();
-use Scalar::Util qw(reftype);
 
 sub new {
   my ($class, %args) = @_;
-  if ($args{perl_only}) {
-    my $kind = $args{kind} || 'NONE';
-    my $value =
-        $kind eq 'SCALAR' ? $args{scalar_value}
-      : $kind eq 'OBJECT' ? $args{object_value}
-      : $kind eq 'LIST'   ? $args{list_value}
-      : undef;
-    return bless {
-      kind => $kind,
-      value => $value,
-      error_records => ($args{error_records} || []),
-    }, $class;
-  }
   my $kind = $args{kind} || 'NONE';
   return $class->scalar($args{scalar_value}, $args{error_records}) if $kind eq 'SCALAR';
   return $class->object($args{object_value}, $args{error_records}) if $kind eq 'OBJECT';
@@ -31,45 +17,23 @@ sub new {
 
 sub scalar {
   my ($class, $value, $error_records, %opts) = @_;
-  if ($opts{perl_only}) {
-    return bless {
-      kind => 'SCALAR',
-      value => $value,
-      error_records => ($error_records || []),
-    }, $class;
-  }
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_scalar_xs($value, ($error_records || []));
 }
 
 sub object {
   my ($class, $value, $error_records, %opts) = @_;
-  if ($opts{perl_only}) {
-    return bless {
-      kind => 'OBJECT',
-      value => $value,
-      error_records => ($error_records || []),
-    }, $class;
-  }
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_object_xs($value, ($error_records || []));
 }
 
 sub list {
   my ($class, $value, $error_records, %opts) = @_;
-  if ($opts{perl_only}) {
-    return bless {
-      kind => 'LIST',
-      value => $value,
-      error_records => ($error_records || []),
-    }, $class;
-  }
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_list_xs($value, ($error_records || []));
 }
 
 sub kind {
-  return $_[0]{kind} if reftype($_[0]) && reftype($_[0]) eq 'HASH';
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_kind_xs($_[0]);
 }
@@ -97,7 +61,6 @@ sub list_value {
 
 sub value {
   my ($self) = @_;
-  return $self->{value} if reftype($self) && reftype($self) eq 'HASH';
   my $kind = $self->kind || q();
   return undef if !$kind;
   GraphQL::Houtou::_bootstrap_xs();
@@ -107,7 +70,6 @@ sub value {
 }
 
 sub error_records {
-  return $_[0]{error_records} if reftype($_[0]) && reftype($_[0]) eq 'HASH';
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_error_records_xs($_[0]);
 }

@@ -68,11 +68,8 @@ sub build_for_program {
     program => $program,
     cursor => GraphQL::Houtou::Runtime::Cursor->new(
       block => $program->root_block,
-      ($promise_code ? (perl_only => 1) : ()),
     ),
-    writer => GraphQL::Houtou::Runtime::Writer->new(
-      ($promise_code ? (perl_only => 1) : ()),
-    ),
+    writer => GraphQL::Houtou::Runtime::Writer->new(),
     context => $opts{context},
     variables => GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
       $runtime_schema,
@@ -237,7 +234,6 @@ sub enter_field {
     $_[0]{field_frame} = GraphQL::Houtou::Runtime::FieldFrame->new(
       source => $_[1],
       path_frame => $_[2],
-      perl_only => 1,
     );
     return $_[0]{field_frame};
   }
@@ -274,7 +270,6 @@ sub enter_current_field {
     my $path_frame = GraphQL::Houtou::Runtime::PathFrame->new(
       parent => $base_path,
       key => defined $result_name ? $result_name : undef,
-      perl_only => 1,
     );
     return $self->enter_field($source, $path_frame);
   }
@@ -290,11 +285,11 @@ sub consume_current_field_outcome {
   my ($self, $outcome) = @_;
   if (_is_perl_state($self)) {
     my $field = $self->field_frame;
-    $field->set_outcome($outcome);
     my $result_name = $self->current_op ? $self->current_op->result_name : undef;
     if ($self->promise_code && is_promise_value($self->promise_code, $outcome)) {
       $self->current_frame->add_pending($result_name, $outcome);
     } else {
+      $field->set_outcome($outcome);
       $self->current_frame->consume_outcome($self->writer, $result_name, $outcome);
     }
     return $field;
@@ -313,7 +308,7 @@ sub enter_block {
       frame_depth => scalar @{ $self->frame_stack },
     };
     $self->cursor->enter_block($block);
-    $self->push_frame(GraphQL::Houtou::Runtime::BlockFrame->new(perl_only => 1));
+    $self->push_frame(GraphQL::Houtou::Runtime::BlockFrame->new());
     $self->{field_frame} = undef;
     return ($snapshot, $self->current_frame);
   }
@@ -523,14 +518,12 @@ sub object_outcome_from_child_block {
       return GraphQL::Houtou::Runtime::Outcome->object(
         $_[0],
         undef,
-        perl_only => 1,
       );
     });
   }
   return GraphQL::Houtou::Runtime::Outcome->object(
     $child_value,
     undef,
-    ($self->promise_code ? (perl_only => 1) : ()),
   );
 }
 
@@ -539,7 +532,6 @@ sub scalar_outcome {
   return GraphQL::Houtou::Runtime::Outcome->scalar(
     $value,
     ($error_record ? [ $error_record ] : []),
-    ($self->promise_code ? (perl_only => 1) : ()),
   );
 }
 
@@ -570,7 +562,6 @@ sub complete_list_value {
       return GraphQL::Houtou::Runtime::Outcome->list(
         \@resolved,
         undef,
-        ($self->promise_code ? (perl_only => 1) : ()),
       );
     });
   }
@@ -578,7 +569,6 @@ sub complete_list_value {
   return GraphQL::Houtou::Runtime::Outcome->list(
     \@items,
     undef,
-    ($self->promise_code ? (perl_only => 1) : ()),
   );
 }
 
@@ -790,7 +780,6 @@ sub _error_outcome {
   return GraphQL::Houtou::Runtime::Outcome->scalar(
     undef,
     [ $self->_error_record($error, $path_frame) ],
-    ($self->promise_code ? (perl_only => 1) : ()),
   );
 }
 

@@ -266,3 +266,16 @@ perl -Ilib t/19_vm_execute.t
   を使う
 - 詳細:
   - `docs/persisted-queries.md`
+
+## 最新 checkpoint
+
+- Runtime hot subobject の `perl_only` 分岐を削除し、
+  - `Cursor`
+  - `FieldFrame`
+  - `PathFrame`
+  - `BlockFrame`
+  - `Outcome`
+  - `Writer`
+  を XS opaque handle owner に統一した
+- `ExecState` も subobject 生成時に Perl owner へ戻さず、promise path を含めて native subobject を使う形に揃えた
+- `./Build test` / `minil test` はこの状態で通過

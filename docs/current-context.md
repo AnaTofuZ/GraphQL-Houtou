@@ -39,6 +39,14 @@
 - `GraphQL::Houtou::Native` は public low-level facade に限定し、internal 専用 API の受け皿にはしない
 - `GraphQL::Houtou::Validation` は `validate` のみの最小 public facade として固定した
 - 旧実装は git history で追えればよく、source tree には残さない
+- promise path の current checkpoint では、`ExecState` の `perl_only` 分岐でも
+  - `Cursor`
+  - `Writer`
+  - `FieldFrame`
+  - `BlockFrame`
+  を native handle owner に寄せている
+- `Outcome->scalar/object/list` は class constructor 経由でも常に XS outcome handle を返す
+- これにより `t/16_runtime_promise.t` の `outcome handle is no longer valid` 系の破損は解消済み
 
 ## 現在のアーキテクチャ
 

@@ -18,48 +18,18 @@ sub new {
 
 sub scalar {
   my ($class, $value, $error_records) = @_;
-  if ($class) {
-    my $pkg = ref($class) || $class;
-    if ($pkg eq __PACKAGE__) {
-      return bless {
-        kind => 'SCALAR',
-        value => $value,
-        error_records => ($error_records || []),
-      }, $pkg;
-    }
-  }
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_scalar_xs($value, ($error_records || []));
 }
 
 sub object {
   my ($class, $value, $error_records) = @_;
-  if ($class) {
-    my $pkg = ref($class) || $class;
-    if ($pkg eq __PACKAGE__) {
-      return bless {
-        kind => 'OBJECT',
-        value => $value,
-        error_records => ($error_records || []),
-      }, $pkg;
-    }
-  }
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_object_xs($value, ($error_records || []));
 }
 
 sub list {
   my ($class, $value, $error_records) = @_;
-  if ($class) {
-    my $pkg = ref($class) || $class;
-    if ($pkg eq __PACKAGE__) {
-      return bless {
-        kind => 'LIST',
-        value => $value,
-        error_records => ($error_records || []),
-      }, $pkg;
-    }
-  }
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_list_xs($value, ($error_records || []));
 }

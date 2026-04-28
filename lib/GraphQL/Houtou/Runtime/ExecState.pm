@@ -68,10 +68,9 @@ sub build_for_program {
       runtime_schema => $runtime_schema,
       program => $program,
       cursor => GraphQL::Houtou::Runtime::Cursor->new(
-        perl_only => 1,
         block => $program->root_block,
       ),
-      writer => GraphQL::Houtou::Runtime::Writer->new(perl_only => 1),
+      writer => GraphQL::Houtou::Runtime::Writer->new,
       context => $opts{context},
       variables => GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
         $runtime_schema,
@@ -250,7 +249,6 @@ sub current_frame { return $_[0]->frame }
 sub enter_field {
   if (_is_perl_state($_[0])) {
     $_[0]{field_frame} = GraphQL::Houtou::Runtime::FieldFrame->new(
-      perl_only => 1,
       source => $_[1],
       path_frame => $_[2],
     );
@@ -313,7 +311,9 @@ sub consume_current_field_outcome {
     $frame->add_pending($op->result_name, $outcome);
     return $self->leave_field;
   }
-  $field->set_outcome($outcome) if $field;
+  if ($field && ref($field) eq 'HASH') {
+    $field->set_outcome($outcome);
+  }
   $frame->consume_outcome($self->writer, $op->result_name, $outcome);
   return $self->leave_field;
 }
@@ -327,7 +327,7 @@ sub enter_block {
       frame_depth => scalar @{ $self->frame_stack },
     };
     $self->cursor->enter_block($block);
-    $self->push_frame(GraphQL::Houtou::Runtime::BlockFrame->new(perl_only => 1));
+    $self->push_frame(GraphQL::Houtou::Runtime::BlockFrame->new);
     $self->{field_frame} = undef;
     return ($snapshot, $self->current_frame);
   }

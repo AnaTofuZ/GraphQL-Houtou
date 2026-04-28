@@ -4,6 +4,8 @@ use 5.014;
 use strict;
 use warnings;
 
+use GraphQL::Houtou ();
+
 use constant {
   VERSION_SLOT        => 0,
   OPERATION_TYPE_SLOT => 1,
@@ -14,6 +16,7 @@ use constant {
   BLOCK_MAP_SLOT      => 6,
   DISPATCH_BOUND_SLOT => 7,
   NATIVE_COMPACT_STRUCT_SLOT => 8,
+  NATIVE_PROGRAM_HANDLE_SLOT => 9,
 };
 
 sub new {
@@ -32,6 +35,7 @@ sub new {
     \%block_map,
     0,
     undef,
+    undef,
   ], $class;
 }
 
@@ -45,9 +49,15 @@ sub dispatch_bound { return $_[0][DISPATCH_BOUND_SLOT] }
 sub set_variable_defs {
   $_[0][VARIABLE_DEFS_SLOT] = $_[1] || {};
   $_[0][NATIVE_COMPACT_STRUCT_SLOT] = undef;
+  $_[0][NATIVE_PROGRAM_HANDLE_SLOT] = undef;
   return $_[0][VARIABLE_DEFS_SLOT];
 }
-sub set_dispatch_bound { $_[0][DISPATCH_BOUND_SLOT] = $_[1] ? 1 : 0; return $_[0][DISPATCH_BOUND_SLOT] }
+sub set_dispatch_bound {
+  $_[0][DISPATCH_BOUND_SLOT] = $_[1] ? 1 : 0;
+  $_[0][NATIVE_COMPACT_STRUCT_SLOT] = undef;
+  $_[0][NATIVE_PROGRAM_HANDLE_SLOT] = undef;
+  return $_[0][DISPATCH_BOUND_SLOT];
+}
 
 sub block_by_name {
   my ($self, $name) = @_;
@@ -95,6 +105,14 @@ sub to_native_compact_struct {
     root_block_index => $self->root_block ? $block_index{ $self->root_block->name } : undef,
     blocks_compact => [ map { $_->to_native_compact_struct(\%block_index) } @blocks ],
   };
+}
+
+sub to_native_program_handle {
+  my ($self) = @_;
+  return $self->[NATIVE_PROGRAM_HANDLE_SLOT] if $self->[NATIVE_PROGRAM_HANDLE_SLOT];
+  GraphQL::Houtou::_bootstrap_xs();
+  return $self->[NATIVE_PROGRAM_HANDLE_SLOT] =
+    GraphQL::Houtou::XS::VM::load_native_program_xs($self->to_native_compact_struct);
 }
 
 sub _operation_type_code {

@@ -24,20 +24,40 @@ sub FETCH {
   return $self->{cache}{$key} if exists $self->{cache}{$key};
 
   my $args = $self->{args};
+  my $state = $args->{state};
   my $value;
   if ($key eq 'field_name') {
-    $value = $args->{instruction} ? $args->{instruction}->field_name : undef;
+    $value = $args->{field_name} if exists $args->{field_name};
+    if (!defined $value && $state && $state->can('current_field_name')) {
+      $value = $state->current_field_name;
+    }
+    $value = $args->{instruction} ? $args->{instruction}->field_name : undef if !defined $value;
   }
   elsif ($key eq 'return_type') {
-    my $type_name = $args->{instruction} ? $args->{instruction}->return_type_name : undef;
-    $value = $type_name ? $args->{runtime_schema}->runtime_cache->{name2type}{$type_name} : undef;
+    $value = $args->{return_type} if exists $args->{return_type};
+    if (!defined $value && $state && $state->can('current_return_type')) {
+      $value = $state->current_return_type;
+    }
+    my $type_name = !defined $value && $args->{instruction} ? $args->{instruction}->return_type_name : undef;
+    $value = $type_name ? $args->{runtime_schema}->runtime_cache->{name2type}{$type_name} : undef if !defined $value;
   }
   elsif ($key eq 'parent_type') {
-    my $type_name = $args->{block} ? $args->{block}->type_name : undef;
-    $value = $type_name ? $args->{runtime_schema}->runtime_cache->{name2type}{$type_name} : undef;
+    my $type_name;
+    $value = $args->{parent_type} if exists $args->{parent_type};
+    if (!defined $value && $state && $state->can('current_parent_type')) {
+      $value = $state->current_parent_type;
+    }
+    if (!defined $value) {
+      $type_name = $args->{block} ? $args->{block}->type_name : undef;
+      $value = $type_name ? $args->{runtime_schema}->runtime_cache->{name2type}{$type_name} : undef;
+    }
   }
   elsif ($key eq 'path') {
-    $value = $args->{path_frame} ? $args->{path_frame}->materialize_path : undef;
+    $value = $args->{path} if exists $args->{path};
+    if (!defined $value && $state && $state->can('current_path')) {
+      $value = $state->current_path($args->{path_frame});
+    }
+    $value = $args->{path_frame} ? $args->{path_frame}->materialize_path : undef if !defined $value;
   }
   elsif ($key eq 'schema') {
     $value = $args->{runtime_schema}->schema;
@@ -46,16 +66,20 @@ sub FETCH {
     $value = $args->{runtime_schema}->runtime_cache;
   }
   elsif ($key eq 'variable_values') {
-    $value = $args->{state} ? $args->{state}->variables : undef;
+    $value = $args->{variable_values} if exists $args->{variable_values};
+    $value = $state ? $state->variables : undef if !defined $value;
   }
   elsif ($key eq 'root_value') {
-    $value = $args->{state} ? $args->{state}->root_value : undef;
+    $value = $args->{root_value} if exists $args->{root_value};
+    $value = $state ? $state->root_value : undef if !defined $value;
   }
   elsif ($key eq 'context_value') {
-    $value = $args->{state} ? $args->{state}->context : undef;
+    $value = $args->{context_value} if exists $args->{context_value};
+    $value = $state ? $state->context : undef if !defined $value;
   }
   elsif ($key eq 'operation') {
-    $value = $args->{state} ? $args->{state}->program : undef;
+    $value = $args->{operation} if exists $args->{operation};
+    $value = $state ? $state->program : undef if !defined $value;
   }
   elsif ($key eq 'field_nodes') {
     $value = undef;

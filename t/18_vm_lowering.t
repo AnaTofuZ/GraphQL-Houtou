@@ -6,9 +6,11 @@ use File::Temp qw(tempfile);
 use lib 'lib';
 use GraphQL::Houtou::Native qw(
   load_native_bundle
+  load_native_program
   load_native_runtime
   native_bundle_summary
   native_codes
+  native_program_summary
   native_runtime_summary
 );
 use GraphQL::Houtou::Schema;
@@ -62,10 +64,9 @@ subtest 'schema can lower operation into VM program' => sub {
   like $node->opcode, qr/^RESOLVE_.*:COMPLETE_ABSTRACT$/, 'node lowers to abstract completion opcode';
   is $node->abstract_child_blocks->{VmUser}, 'QUERY.node.VmUser#1',
     'abstract op keeps lowered child block mapping';
-  ok $viewer->resolve_handler, 'viewer op binds resolve handler';
-  ok $viewer->complete_handler, 'viewer op binds complete handler';
-  ok $viewer->resolve_dispatch, 'viewer op binds resolve dispatch coderef';
-  ok $viewer->complete_dispatch, 'viewer op binds complete dispatch coderef';
+  ok $viewer->resolve_code, 'viewer op has resolve code';
+  ok $viewer->complete_code, 'viewer op has complete code';
+  ok $viewer->opcode_code, 'viewer op has opcode code';
   ok $viewer->opcode_code, 'viewer op binds numeric opcode code';
   is $viewer->resolve_code, 2, 'viewer op binds resolve family code';
   is $viewer->complete_code, 2, 'viewer op binds complete family code';
@@ -96,6 +97,18 @@ subtest 'schema can emit XS-friendly native VM descriptor' => sub {
   ok defined $root->[4][0][4], 'native op keeps slot index';
   ok exists $root->[4][1][6]{VmUser},
     'native op keeps abstract child block indexes';
+};
+
+subtest 'native VM program descriptor can inflate into a native program handle' => sub {
+  my $descriptor = $schema->compile_native_program_descriptor('{ viewer { id } node { id } }');
+  my $handle = load_native_program($descriptor);
+
+  isa_ok $handle, 'GraphQL::Houtou::Runtime::NativeProgram';
+  my $summary = native_program_summary($handle);
+  is $summary->{block_count}, scalar(@{ $descriptor->{blocks_compact} || [] }),
+    'native program handle sees block count';
+  is $summary->{root_block_index}, $descriptor->{root_block_index},
+    'native program handle keeps root block index';
 };
 
 subtest 'schema can emit bundled native runtime and VM descriptor' => sub {
@@ -172,9 +185,9 @@ subtest 'XS can inflate runtime schema into a native runtime handle' => sub {
   my $summary = native_runtime_summary($handle);
   is $summary->{runtime_slot_count}, scalar(@{ $runtime->slot_catalog || [] }),
     'native runtime handle sees slot catalog count';
-  ok $summary->{has_runtime_cache}, 'native runtime handle keeps runtime cache';
-  ok $summary->{has_name2type}, 'native runtime handle keeps name2type map';
-  ok $summary->{has_dispatch_index}, 'native runtime handle keeps dispatch index';
+  ok $summary->{has_slot_type_objects}, 'native runtime handle keeps concrete type objects';
+  ok $summary->{has_tag_dispatch_tables}, 'native runtime handle keeps tag dispatch tables';
+  ok $summary->{has_possible_type_entries}, 'native runtime handle keeps possible-type entries';
 };
 
 done_testing;

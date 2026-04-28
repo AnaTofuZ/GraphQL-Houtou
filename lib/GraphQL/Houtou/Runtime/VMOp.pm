@@ -30,14 +30,9 @@ use constant {
   BOUND_CHILD_BLOCK_SLOT                     => 20,
   BOUND_ABSTRACT_CHILD_BLOCKS_SLOT           => 21,
   ABSTRACT_DISPATCH_SLOT                     => 22,
-  RESOLVE_HANDLER_SLOT                       => 23,
-  COMPLETE_HANDLER_SLOT                      => 24,
-  RESOLVE_DISPATCH_SLOT                      => 25,
-  COMPLETE_DISPATCH_SLOT                     => 26,
-  RUN_DISPATCH_SLOT                          => 27,
-  NATIVE_SLOT_INDEX_SLOT                     => 28,
-  NATIVE_CHILD_BLOCK_INDEX_SLOT              => 29,
-  NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT   => 30,
+  NATIVE_SLOT_INDEX_SLOT                     => 23,
+  NATIVE_CHILD_BLOCK_INDEX_SLOT              => 24,
+  NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT   => 25,
 };
 
 sub new {
@@ -66,11 +61,6 @@ sub new {
     $args{bound_child_block},
     $args{bound_abstract_child_blocks} || {},
     $args{abstract_dispatch},
-    $args{resolve_handler},
-    $args{complete_handler},
-    $args{resolve_dispatch},
-    $args{complete_dispatch},
-    $args{run_dispatch},
     $args{native_slot_index},
     $args{native_child_block_index},
     $args{native_abstract_child_block_indexes} || {},
@@ -100,11 +90,6 @@ sub bound_slot { return $_[0][BOUND_SLOT_SLOT] }
 sub bound_child_block { return $_[0][BOUND_CHILD_BLOCK_SLOT] }
 sub bound_abstract_child_blocks { return $_[0][BOUND_ABSTRACT_CHILD_BLOCKS_SLOT] }
 sub abstract_dispatch { return $_[0][ABSTRACT_DISPATCH_SLOT] }
-sub resolve_handler { return $_[0][RESOLVE_HANDLER_SLOT] }
-sub complete_handler { return $_[0][COMPLETE_HANDLER_SLOT] }
-sub resolve_dispatch { return $_[0][RESOLVE_DISPATCH_SLOT] }
-sub complete_dispatch { return $_[0][COMPLETE_DISPATCH_SLOT] }
-sub run_dispatch { return $_[0][RUN_DISPATCH_SLOT] }
 sub native_slot_index { return $_[0][NATIVE_SLOT_INDEX_SLOT] }
 sub native_child_block_index { return $_[0][NATIVE_CHILD_BLOCK_INDEX_SLOT] }
 sub native_abstract_child_block_indexes { return $_[0][NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT] }
@@ -115,11 +100,6 @@ sub set_bound_slot { $_[0][BOUND_SLOT_SLOT] = $_[1]; return $_[1] }
 sub set_bound_child_block { $_[0][BOUND_CHILD_BLOCK_SLOT] = $_[1]; return $_[1] }
 sub set_bound_abstract_child_blocks { $_[0][BOUND_ABSTRACT_CHILD_BLOCKS_SLOT] = $_[1] || {}; return $_[0][BOUND_ABSTRACT_CHILD_BLOCKS_SLOT] }
 sub set_abstract_dispatch { $_[0][ABSTRACT_DISPATCH_SLOT] = $_[1]; return $_[1] }
-sub set_resolve_handler { $_[0][RESOLVE_HANDLER_SLOT] = $_[1]; return $_[1] }
-sub set_complete_handler { $_[0][COMPLETE_HANDLER_SLOT] = $_[1]; return $_[1] }
-sub set_resolve_dispatch { $_[0][RESOLVE_DISPATCH_SLOT] = $_[1]; return $_[1] }
-sub set_complete_dispatch { $_[0][COMPLETE_DISPATCH_SLOT] = $_[1]; return $_[1] }
-sub set_run_dispatch { $_[0][RUN_DISPATCH_SLOT] = $_[1]; return $_[1] }
 sub set_native_slot_index { $_[0][NATIVE_SLOT_INDEX_SLOT] = $_[1]; return $_[1] }
 sub set_native_child_block_index { $_[0][NATIVE_CHILD_BLOCK_INDEX_SLOT] = $_[1]; return $_[1] }
 sub set_native_abstract_child_block_indexes { $_[0][NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT] = $_[1] || {}; return $_[0][NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT] }

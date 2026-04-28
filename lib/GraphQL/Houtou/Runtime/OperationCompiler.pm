@@ -7,26 +7,14 @@ use warnings;
 use GraphQL::Houtou ();
 use GraphQL::Houtou::Runtime::Slot ();
 use GraphQL::Houtou::Runtime::VMBlock ();
-use GraphQL::Houtou::Runtime::VMDispatch ();
 use GraphQL::Houtou::Runtime::VMOp ();
 use GraphQL::Houtou::Runtime::VMProgram ();
-
-my %RESOLVE_HANDLER = (
-  RESOLVE_DEFAULT  => 'resolve_default',
-  RESOLVE_EXPLICIT => 'resolve_explicit',
-);
 
 my %RESOLVE_CODE = (
   RESOLVE_DEFAULT  => 1,
   RESOLVE_EXPLICIT => 2,
 );
 
-my %COMPLETE_HANDLER = (
-  COMPLETE_GENERIC  => 'complete_generic',
-  COMPLETE_OBJECT   => 'complete_object',
-  COMPLETE_LIST     => 'complete_list',
-  COMPLETE_ABSTRACT => 'complete_abstract',
-);
 
 my %COMPLETE_CODE = (
   COMPLETE_GENERIC  => 1,
@@ -71,7 +59,6 @@ sub compile_operation {
   );
 
   _bind_instruction_blocks($program);
-  GraphQL::Houtou::Runtime::VMDispatch->bind_program($program);
   return $program;
 }
 
@@ -90,7 +77,6 @@ sub inflate_operation {
     root_block => $root_block,
   );
   _bind_instruction_blocks($program);
-  GraphQL::Houtou::Runtime::VMDispatch->bind_program($program);
   return $program;
 }
 
@@ -160,8 +146,6 @@ sub _lower_selection_block {
       abstract_dispatch => (($slot->completion_family || '') eq 'ABSTRACT')
         ? _bind_abstract_dispatch($state->{runtime_schema}, $slot->return_type_name)
         : undef,
-      resolve_handler => $RESOLVE_HANDLER{$resolve_family},
-      complete_handler => $COMPLETE_HANDLER{$complete_family},
     );
   }
 
@@ -215,8 +199,6 @@ sub _inflate_instruction {
     directives_payload => _clone_argument_value($struct->{directives_payload}),
     child_block_name => $struct->{child_block_name},
     abstract_child_blocks => _clone_argument_value($struct->{abstract_child_blocks} || {}),
-    resolve_handler => $RESOLVE_HANDLER{$resolve_family},
-    complete_handler => $COMPLETE_HANDLER{$complete_family},
   );
 }
 
@@ -374,8 +356,6 @@ sub _build_typename_instruction {
     directives_mode => $directives_mode,
     directives_payload => $directives_payload,
     bound_slot => $slot,
-    resolve_handler => $RESOLVE_HANDLER{$resolve_family},
-    complete_handler => $COMPLETE_HANDLER{$complete_family},
   );
 }
 

@@ -7,26 +7,14 @@ use warnings;
 use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::Slot ();
 use GraphQL::Houtou::Runtime::VMBlock ();
-use GraphQL::Houtou::Runtime::VMDispatch ();
 use GraphQL::Houtou::Runtime::VMOp ();
 use GraphQL::Houtou::Runtime::VMProgram ();
-
-my %RESOLVE_HANDLER = (
-  RESOLVE_DEFAULT => 'resolve_default',
-  RESOLVE_EXPLICIT => 'resolve_explicit',
-);
 
 my %RESOLVE_CODE = (
   RESOLVE_DEFAULT => 1,
   RESOLVE_EXPLICIT => 2,
 );
 
-my %COMPLETE_HANDLER = (
-  COMPLETE_GENERIC => 'complete_generic',
-  COMPLETE_OBJECT => 'complete_object',
-  COMPLETE_LIST => 'complete_list',
-  COMPLETE_ABSTRACT => 'complete_abstract',
-);
 
 my %COMPLETE_CODE = (
   COMPLETE_GENERIC => 1,
@@ -49,7 +37,6 @@ sub lower_program {
     root_block => $root_block,
   );
   _bind_vm_ops($runtime_schema, $vm_program);
-  GraphQL::Houtou::Runtime::VMDispatch->bind_program($vm_program);
   return $vm_program;
 }
 
@@ -67,7 +54,6 @@ sub inflate_program {
     root_block => $root_block,
   );
   _bind_vm_ops($runtime_schema, $vm_program);
-  GraphQL::Houtou::Runtime::VMDispatch->bind_program($vm_program);
   return $vm_program;
 }
 
@@ -88,7 +74,6 @@ sub inflate_native_bundle {
     root_block => $root_block,
   );
   _bind_native_vm_ops($runtime_schema, $vm_program, $program_struct);
-  GraphQL::Houtou::Runtime::VMDispatch->bind_program($vm_program);
   return $vm_program;
 }
 
@@ -281,8 +266,6 @@ sub _bind_vm_ops {
           ($_ => ($child_name ? $blocks{$child_name} : undef))
         } keys %{ $op->abstract_child_blocks || {} }
       });
-      $op->set_resolve_handler($op->resolve_handler || $RESOLVE_HANDLER{ $op->resolve_family || '' });
-      $op->set_complete_handler($op->complete_handler || $COMPLETE_HANDLER{ $op->complete_family || '' });
     }
   }
 
@@ -330,8 +313,6 @@ sub _bind_native_vm_ops {
           ($_ => (defined $idx ? $blocks[$idx] : undef))
         } keys %{ $op->native_abstract_child_block_indexes || {} }
       });
-      $op->set_resolve_handler($op->resolve_handler || $RESOLVE_HANDLER{ $op->resolve_family || q() });
-      $op->set_complete_handler($op->complete_handler || $COMPLETE_HANDLER{ $op->complete_family || q() });
     }
   }
 

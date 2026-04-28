@@ -10,11 +10,15 @@ use GraphQL::Houtou ();
 our @EXPORT_OK = qw(
   native_codes
   load_native_bundle
+  load_native_bundle_from_handles
+  load_native_program
   load_native_runtime
   native_bundle_summary
+  native_program_summary
   native_runtime_summary
   execute_native_bundle
   execute_native_program
+  execute_native_program_handle
 );
 
 sub _ensure_vm_xs_loaded {
@@ -32,6 +36,16 @@ sub load_native_bundle {
   return GraphQL::Houtou::XS::VM::load_native_bundle_xs(@_);
 }
 
+sub load_native_bundle_from_handles {
+  _ensure_vm_xs_loaded();
+  return GraphQL::Houtou::XS::VM::load_native_bundle_from_handles_xs(@_);
+}
+
+sub load_native_program {
+  _ensure_vm_xs_loaded();
+  return GraphQL::Houtou::XS::VM::load_native_program_xs(@_);
+}
+
 sub load_native_runtime {
   _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::load_native_runtime_xs(@_);
@@ -40,6 +54,11 @@ sub load_native_runtime {
 sub native_bundle_summary {
   _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::native_bundle_summary_xs(@_);
+}
+
+sub native_program_summary {
+  _ensure_vm_xs_loaded();
+  return GraphQL::Houtou::XS::VM::native_program_summary_xs(@_);
 }
 
 sub native_runtime_summary {
@@ -55,6 +74,11 @@ sub execute_native_bundle {
 sub execute_native_program {
   _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::execute_native_program_xs(@_);
+}
+
+sub execute_native_program_handle {
+  _ensure_vm_xs_loaded();
+  return GraphQL::Houtou::XS::VM::execute_native_program_handle_xs(@_);
 }
 
 1;

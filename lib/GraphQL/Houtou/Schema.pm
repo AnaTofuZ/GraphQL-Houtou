@@ -172,6 +172,13 @@ sub compile_native_program_descriptor {
   return $self->compile_program($document, ($runtime ? (runtime_schema => $runtime) : ()), %opts)->to_native_compact_struct;
 }
 
+sub compile_native_program {
+  my ($self, $document, %opts) = @_;
+  my $program = $self->compile_program($document, %opts);
+  require GraphQL::Houtou::Runtime::NativeProgram;
+  return GraphQL::Houtou::Runtime::NativeProgram->from_vm_program($program);
+}
+
 sub compile_native_bundle_descriptor {
   my ($self, $document, %opts) = @_;
   my $runtime = $self->build_native_runtime;

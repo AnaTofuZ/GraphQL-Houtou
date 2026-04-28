@@ -4,6 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 use GraphQL::Houtou ();
+use Scalar::Util qw(reftype);
 
 sub new {
   my ($class, %args) = @_;
@@ -17,23 +18,54 @@ sub new {
 
 sub scalar {
   my ($class, $value, $error_records) = @_;
+  if ($class) {
+    my $pkg = ref($class) || $class;
+    if ($pkg eq __PACKAGE__) {
+      return bless {
+        kind => 'SCALAR',
+        value => $value,
+        error_records => ($error_records || []),
+      }, $pkg;
+    }
+  }
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_scalar_xs($value, ($error_records || []));
 }
 
 sub object {
   my ($class, $value, $error_records) = @_;
+  if ($class) {
+    my $pkg = ref($class) || $class;
+    if ($pkg eq __PACKAGE__) {
+      return bless {
+        kind => 'OBJECT',
+        value => $value,
+        error_records => ($error_records || []),
+      }, $pkg;
+    }
+  }
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_object_xs($value, ($error_records || []));
 }
 
 sub list {
   my ($class, $value, $error_records) = @_;
+  if ($class) {
+    my $pkg = ref($class) || $class;
+    if ($pkg eq __PACKAGE__) {
+      return bless {
+        kind => 'LIST',
+        value => $value,
+        error_records => ($error_records || []),
+      }, $pkg;
+    }
+  }
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_list_xs($value, ($error_records || []));
 }
 
 sub kind {
+  return $_[0]{kind} if reftype($_[0]) && reftype($_[0]) eq 'HASH';
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_kind_xs($_[0]);
 }
@@ -61,6 +93,7 @@ sub list_value {
 
 sub value {
   my ($self) = @_;
+  return $self->{value} if reftype($self) && reftype($self) eq 'HASH';
   my $kind = $self->kind || q();
   return undef if !$kind;
   GraphQL::Houtou::_bootstrap_xs();
@@ -70,6 +103,7 @@ sub value {
 }
 
 sub error_records {
+  return $_[0]{error_records} if reftype($_[0]) && reftype($_[0]) eq 'HASH';
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_error_records_xs($_[0]);
 }

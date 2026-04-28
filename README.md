@@ -116,11 +116,10 @@ Or execute directly through the cached native runtime:
 
     my $result = GraphQL::Houtou::execute_native($schema, $document);
 
-This runtime-backed API prefers the native XS engine when the lowered program
-stays within the current native-safe subset. Programs that still require
-features not yet lowered into the native engine automatically fall back to the
-Perl VM. The Perl VM remains available as an explicit cold path via
-`engine => 'perl'`.
+This runtime-backed API is native-first on the sync path. Programs that stay
+within the current native-safe subset are specialized into the native VM and
+executed there. Promise-backed execution still uses an isolated Perl slow path
+until the promise runtime is moved fully into XS.
 
 The runtime-backed API above is the intended mainline. The public compiler and
 validation facades now require XS. Older implementation tests and snapshots

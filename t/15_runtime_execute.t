@@ -130,7 +130,7 @@ subtest 'runtime execute_program uses native engine by default' => sub {
 
 subtest 'native resolver mode lets explicit resolver use native runtime' => sub {
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
   my $native_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
       name => 'NativeResolverQuery',
@@ -146,7 +146,7 @@ subtest 'native resolver mode lets explicit resolver use native runtime' => sub 
 
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
       $called = 1;
       goto &$orig;
     };
@@ -164,7 +164,7 @@ subtest 'native resolver mode lets explicit resolver use native runtime' => sub 
 
 subtest 'native resolver mode supports static literal args on native runtime' => sub {
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
   my $native_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
       name => 'NativeArgsQuery',
@@ -186,7 +186,7 @@ subtest 'native resolver mode supports static literal args on native runtime' =>
 
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
       $called = 1;
       goto &$orig;
     };
@@ -204,11 +204,11 @@ subtest 'native resolver mode supports static literal args on native runtime' =>
 
 subtest 'native runtime specializes variable args before bundle execution' => sub {
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
 
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
       $called = 1;
       goto &$orig;
     };
@@ -228,11 +228,11 @@ subtest 'native runtime specializes variable args before bundle execution' => su
 
 subtest 'native runtime specializes directive guards before bundle execution' => sub {
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
 
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
       $called = 1;
       goto &$orig;
     };
@@ -266,11 +266,11 @@ subtest 'runtime keeps __typename on abstract/object corridors' => sub {
 
 subtest 'native runtime preserves static arg coercion and defaults' => sub {
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
 
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
       $called = 1;
       goto &$orig;
     };
@@ -295,11 +295,11 @@ subtest 'cached runtime program can execute on native runtime with request varia
   );
 
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
   my $result;
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
       $called = 1;
       goto &$orig;
     };
@@ -327,11 +327,11 @@ subtest 'inflated runtime descriptor can still drive native specialization' => s
   );
 
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program;
+  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
   my $result;
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program = sub {
+    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
       $called = 1;
       goto &$orig;
     };
@@ -357,14 +357,10 @@ subtest 'schema helper can compile and execute in one call' => sub {
   }, 'schema helper executes runtime program';
 };
 
-subtest 'schema helper can still force the Perl executor' => sub {
-  my $result = $schema->execute('{ viewer { id } }', engine => 'perl');
-  is_deeply $result, {
-    data => {
-      viewer => { id => 'u1' },
-    },
-    errors => [],
-  }, 'Perl executor remains available as an explicit cold path';
+subtest 'schema helper rejects explicit Perl engine on sync path' => sub {
+  my $error = eval { $schema->execute('{ viewer { id } }', engine => 'perl') ; 1 } ? undef : $@;
+  like $error, qr/engine => 'perl' is no longer supported/,
+    'sync runtime no longer exposes explicit Perl engine';
 };
 
 subtest 'default resolver path reads root hash values' => sub {

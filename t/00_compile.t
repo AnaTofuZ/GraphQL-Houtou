@@ -42,7 +42,6 @@ use_ok $_ for qw(
     GraphQL::Houtou::Runtime::Cursor
     GraphQL::Houtou::Runtime::ExecState
     GraphQL::Houtou::Runtime::VMCompiler
-    GraphQL::Houtou::Runtime::VMDispatch
     GraphQL::Houtou::Runtime::VMProgram
     GraphQL::Houtou::Runtime::VMBlock
     GraphQL::Houtou::Runtime::VMOp

@@ -10,6 +10,7 @@ use GraphQL::Houtou qw(
   compile_runtime
   build_runtime
   build_native_runtime
+  compile_native_program
   compile_native_bundle
   compile_native_bundle_descriptor
 );
@@ -187,6 +188,17 @@ subtest 'top-level compile_native_bundle returns executable bundle' => sub {
     data => { hello => 'world' },
     errors => [],
   }, 'top-level bundle compile returns executable native bundle';
+};
+
+subtest 'top-level compile_native_program returns executable native program handle' => sub {
+  my $program = compile_native_program($schema, '{ hello }');
+  my $native = build_native_runtime($schema);
+  isa_ok $program, 'GraphQL::Houtou::Runtime::NativeProgram';
+  my $result = $native->execute_program($program);
+  is_deeply $result, {
+    data => { hello => 'world' },
+    errors => [],
+  }, 'top-level native program compile returns executable handle';
 };
 
 subtest 'top-level compile_native_bundle_descriptor returns compact descriptor' => sub {

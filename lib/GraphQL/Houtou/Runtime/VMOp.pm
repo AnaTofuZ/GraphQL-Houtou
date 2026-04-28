@@ -29,10 +29,9 @@ use constant {
   BOUND_SLOT_SLOT                            => 19,
   BOUND_CHILD_BLOCK_SLOT                     => 20,
   BOUND_ABSTRACT_CHILD_BLOCKS_SLOT           => 21,
-  ABSTRACT_DISPATCH_SLOT                     => 22,
-  NATIVE_SLOT_INDEX_SLOT                     => 23,
-  NATIVE_CHILD_BLOCK_INDEX_SLOT              => 24,
-  NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT   => 25,
+  NATIVE_SLOT_INDEX_SLOT                     => 22,
+  NATIVE_CHILD_BLOCK_INDEX_SLOT              => 23,
+  NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT   => 24,
 };
 
 sub new {
@@ -60,7 +59,6 @@ sub new {
     $args{bound_slot},
     $args{bound_child_block},
     $args{bound_abstract_child_blocks} || {},
-    $args{abstract_dispatch},
     $args{native_slot_index},
     $args{native_child_block_index},
     $args{native_abstract_child_block_indexes} || {},
@@ -89,7 +87,6 @@ sub has_directives { return $_[0][HAS_DIRECTIVES_SLOT] }
 sub bound_slot { return $_[0][BOUND_SLOT_SLOT] }
 sub bound_child_block { return $_[0][BOUND_CHILD_BLOCK_SLOT] }
 sub bound_abstract_child_blocks { return $_[0][BOUND_ABSTRACT_CHILD_BLOCKS_SLOT] }
-sub abstract_dispatch { return $_[0][ABSTRACT_DISPATCH_SLOT] }
 sub native_slot_index { return $_[0][NATIVE_SLOT_INDEX_SLOT] }
 sub native_child_block_index { return $_[0][NATIVE_CHILD_BLOCK_INDEX_SLOT] }
 sub native_abstract_child_block_indexes { return $_[0][NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT] }
@@ -99,7 +96,6 @@ sub set_result_name { $_[0][RESULT_NAME_SLOT] = $_[1]; return $_[1] }
 sub set_bound_slot { $_[0][BOUND_SLOT_SLOT] = $_[1]; return $_[1] }
 sub set_bound_child_block { $_[0][BOUND_CHILD_BLOCK_SLOT] = $_[1]; return $_[1] }
 sub set_bound_abstract_child_blocks { $_[0][BOUND_ABSTRACT_CHILD_BLOCKS_SLOT] = $_[1] || {}; return $_[0][BOUND_ABSTRACT_CHILD_BLOCKS_SLOT] }
-sub set_abstract_dispatch { $_[0][ABSTRACT_DISPATCH_SLOT] = $_[1]; return $_[1] }
 sub set_native_slot_index { $_[0][NATIVE_SLOT_INDEX_SLOT] = $_[1]; return $_[1] }
 sub set_native_child_block_index { $_[0][NATIVE_CHILD_BLOCK_INDEX_SLOT] = $_[1]; return $_[1] }
 sub set_native_abstract_child_block_indexes { $_[0][NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT] = $_[1] || {}; return $_[0][NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT] }
@@ -141,16 +137,12 @@ sub to_native_struct {
   my $slot_id = $slot
     ? join("\x1E", refaddr($slot), ($self->result_name // q()))
     : undef;
-  my $abstract_dispatch = $self->abstract_dispatch;
-  my $dispatch_family = $abstract_dispatch
-    ? $abstract_dispatch->{dispatch_family}
-    : $self->dispatch_family;
   return {
     opcode_code => $self->opcode_code,
     resolve_code => $self->resolve_code,
     complete_code => $self->complete_code,
     return_type_name => $self->return_type_name,
-    dispatch_family_code => _dispatch_family_code($dispatch_family),
+    dispatch_family_code => _dispatch_family_code($self->dispatch_family),
     slot_index => defined $slot_id && exists $slot_index->{$slot_id}
       ? $slot_index->{$slot_id}
       : undef,

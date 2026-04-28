@@ -84,6 +84,14 @@ sub merge_resolved_pending {
   return $merged;
 }
 
+sub _xs_finalize_callback {
+  my ($merge) = @_;
+  return sub {
+    my @resolved = @_ == 1 && ref($_[0]) eq 'ARRAY' ? @{ $_[0] } : @_;
+    return GraphQL::Houtou::XS::VM::block_frame_merge_pending_state_xs($merge, \@resolved);
+  };
+}
+
 sub finalize {
   my ($self, $promise_code, $writer) = @_;
   my $pending = $self->pending_outcomes;

@@ -62,31 +62,17 @@ sub new {
 sub build_for_program {
   my ($class, $runtime_schema, $program, %opts) = @_;
   my $promise_code = normalize_promise_code($opts{promise_code});
-  if ($promise_code) {
-    return $class->new(
-      perl_only => 1,
-      runtime_schema => $runtime_schema,
-      program => $program,
-      cursor => GraphQL::Houtou::Runtime::Cursor->new(
-        block => $program->root_block,
-      ),
-      writer => GraphQL::Houtou::Runtime::Writer->new,
-      context => $opts{context},
-      variables => GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
-        $runtime_schema,
-        $program,
-        $opts{variables} || {},
-      ),
-      root_value => $opts{root_value},
-      promise_code => $promise_code,
-      empty_args => {},
-    );
-  }
   return $class->new(
+    perl_only => $promise_code ? 1 : 0,
     runtime_schema => $runtime_schema,
     program => $program,
-    cursor => GraphQL::Houtou::Runtime::Cursor->new(block => $program->root_block),
-    writer => GraphQL::Houtou::Runtime::Writer->new,
+    cursor => GraphQL::Houtou::Runtime::Cursor->new(
+      block => $program->root_block,
+      ($promise_code ? (perl_only => 1) : ()),
+    ),
+    writer => GraphQL::Houtou::Runtime::Writer->new(
+      ($promise_code ? (perl_only => 1) : ()),
+    ),
     context => $opts{context},
     variables => GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
       $runtime_schema,
@@ -251,6 +237,7 @@ sub enter_field {
     $_[0]{field_frame} = GraphQL::Houtou::Runtime::FieldFrame->new(
       source => $_[1],
       path_frame => $_[2],
+      perl_only => 1,
     );
     return $_[0]{field_frame};
   }
@@ -281,41 +268,40 @@ sub advance_current_op {
 
 sub enter_current_field {
   my ($self, $source, $base_path) = @_;
-  if (!$self->promise_code) {
-    GraphQL::Houtou::_bootstrap_xs();
-    return GraphQL::Houtou::XS::VM::exec_state_enter_current_field_xs(
-      $self,
-      $source,
-      $base_path,
+  if (_is_perl_state($self)) {
+    my $op = $self->current_op;
+    my $result_name = $op ? $op->result_name : undef;
+    my $path_frame = GraphQL::Houtou::Runtime::PathFrame->new(
+      parent => $base_path,
+      key => defined $result_name ? $result_name : undef,
+      perl_only => 1,
     );
+    return $self->enter_field($source, $path_frame);
   }
-  my $op = $self->current_op or return;
-  my $path_frame = GraphQL::Houtou::Runtime::PathFrame->new(
-    parent => $base_path,
-    key => $op->result_name,
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_enter_current_field_xs(
+    $self,
+    $source,
+    $base_path,
   );
-  return $self->enter_field($source, $path_frame);
 }
 
 sub consume_current_field_outcome {
   my ($self, $outcome) = @_;
-  if (!$self->promise_code) {
-    GraphQL::Houtou::_bootstrap_xs();
-    GraphQL::Houtou::XS::VM::exec_state_consume_current_field_outcome_xs($self, $outcome);
-    return $self->field_frame;
-  }
-  my $op = $self->current_op or return;
-  my $frame = $self->current_frame or return;
-  my $field = $self->current_field_frame;
-  if ($self->promise_code && is_promise_value($self->promise_code, $outcome)) {
-    $frame->add_pending($op->result_name, $outcome);
-    return $self->leave_field;
-  }
-  if ($field && ref($field) eq 'HASH') {
+  if (_is_perl_state($self)) {
+    my $field = $self->field_frame;
     $field->set_outcome($outcome);
+    my $result_name = $self->current_op ? $self->current_op->result_name : undef;
+    if ($self->promise_code && is_promise_value($self->promise_code, $outcome)) {
+      $self->current_frame->add_pending($result_name, $outcome);
+    } else {
+      $self->current_frame->consume_outcome($self->writer, $result_name, $outcome);
+    }
+    return $field;
   }
-  $frame->consume_outcome($self->writer, $op->result_name, $outcome);
-  return $self->leave_field;
+  GraphQL::Houtou::_bootstrap_xs();
+  GraphQL::Houtou::XS::VM::exec_state_consume_current_result_xs($self, $outcome);
+  return $self->field_frame;
 }
 
 sub enter_block {
@@ -327,7 +313,7 @@ sub enter_block {
       frame_depth => scalar @{ $self->frame_stack },
     };
     $self->cursor->enter_block($block);
-    $self->push_frame(GraphQL::Houtou::Runtime::BlockFrame->new);
+    $self->push_frame(GraphQL::Houtou::Runtime::BlockFrame->new(perl_only => 1));
     $self->{field_frame} = undef;
     return ($snapshot, $self->current_frame);
   }
@@ -351,13 +337,13 @@ sub leave_block {
 
 sub finalize_current_block {
   my ($self, $snapshot) = @_;
-  if (!$self->promise_code) {
-    GraphQL::Houtou::_bootstrap_xs();
-    return GraphQL::Houtou::XS::VM::exec_state_finalize_current_block_xs($self, $snapshot);
+  if (_is_perl_state($self)) {
+    my $frame = $self->current_frame;
+    my $result = $frame->finalize($self->promise_code, $self->writer);
+    return $self->leave_block($snapshot, $result);
   }
-  my $frame = $self->current_frame;
-  my $result = $frame->finalize($self->promise_code, $self->writer);
-  return $self->leave_block($snapshot, $result);
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_finalize_current_block_xs($self, $snapshot);
 }
 
 sub run_current_field_via {
@@ -374,7 +360,6 @@ sub run_current_field_via {
   if ($self->promise_code && is_promise_value($self->promise_code, $value)) {
     return GraphQL::Houtou::Promise::Adapter::then_promise($self->promise_code, $value, sub {
       my ($resolved_value) = @_;
-      $field->set_resolved_value($resolved_value);
       my ($complete_ok, $outcome) = $self->_capture_eval(sub {
         return $complete_cb->($self, $resolved_value, $path_frame);
       });
@@ -535,10 +520,18 @@ sub object_outcome_from_child_block {
   my $child_value = $self->execute_child_block($block, $value, $path_frame);
   if ($self->promise_code && is_promise_value($self->promise_code, $child_value)) {
     return then_promise($self->promise_code, $child_value, sub {
-      return GraphQL::Houtou::Runtime::Outcome->object($_[0]);
+      return GraphQL::Houtou::Runtime::Outcome->object(
+        $_[0],
+        undef,
+        perl_only => 1,
+      );
     });
   }
-  return GraphQL::Houtou::Runtime::Outcome->object($child_value);
+  return GraphQL::Houtou::Runtime::Outcome->object(
+    $child_value,
+    undef,
+    ($self->promise_code ? (perl_only => 1) : ()),
+  );
 }
 
 sub scalar_outcome {
@@ -546,6 +539,7 @@ sub scalar_outcome {
   return GraphQL::Houtou::Runtime::Outcome->scalar(
     $value,
     ($error_record ? [ $error_record ] : []),
+    ($self->promise_code ? (perl_only => 1) : ()),
   );
 }
 
@@ -573,11 +567,19 @@ sub complete_list_value {
     my $aggregate = GraphQL::Houtou::Promise::Adapter::all_promise($self->promise_code, @items);
     return then_promise($self->promise_code, $aggregate, sub {
       my @resolved = _promise_all_values_to_array(@_);
-      return GraphQL::Houtou::Runtime::Outcome->list(\@resolved);
+      return GraphQL::Houtou::Runtime::Outcome->list(
+        \@resolved,
+        undef,
+        ($self->promise_code ? (perl_only => 1) : ()),
+      );
     });
   }
 
-  return GraphQL::Houtou::Runtime::Outcome->list(\@items);
+  return GraphQL::Houtou::Runtime::Outcome->list(
+    \@items,
+    undef,
+    ($self->promise_code ? (perl_only => 1) : ()),
+  );
 }
 
 sub complete_abstract_value {
@@ -597,16 +599,15 @@ sub complete_abstract_value {
 sub resolve_runtime_type_for_current_field {
   my ($self, $value, $path_frame, %args) = @_;
   my $op = $self->current_op;
-  my $dispatch = $args{dispatch} || $op->abstract_dispatch;
   my $cache = $self->runtime_schema->runtime_cache;
   my $slot = $args{slot} || $self->current_slot || $op->bound_slot;
-  my $abstract_type = $dispatch ? $dispatch->{abstract_type} : ($slot ? $slot->return_type : undef);
+  my $abstract_type = $slot ? $slot->return_type : undef;
   return if !$abstract_type;
-  my $abstract_name = $dispatch ? $dispatch->{abstract_name} : $abstract_type->name;
+  my $abstract_name = $slot ? $slot->return_type_name : $abstract_type->name;
   my $has_callbacks =
-       ($dispatch ? $dispatch->{tag_resolver} : $cache->{tag_resolver_map}{$abstract_name})
-    || ($dispatch ? $dispatch->{resolve_type} : $cache->{resolve_type_map}{$abstract_name})
-    || @{ ($dispatch ? $dispatch->{possible_types} : $cache->{possible_types}{$abstract_name}) || [] };
+       $cache->{tag_resolver_map}{$abstract_name}
+    || $cache->{resolve_type_map}{$abstract_name}
+    || @{ $cache->{possible_types}{$abstract_name} || [] };
   my $info = $args{info};
   if (!$info && $has_callbacks) {
     my $field_name = $self->current_field_name;
@@ -633,9 +634,9 @@ sub resolve_runtime_type_for_current_field {
     );
   }
 
-  my ($runtime_type, $error) = GraphQL::Houtou::XS::VM::resolve_runtime_type_xs(
-    $dispatch,
+  my ($runtime_type, $error) = GraphQL::Houtou::XS::VM::resolve_runtime_type_for_abstract_xs(
     $cache,
+    $abstract_name,
     $value,
     $self->context,
     $info,
@@ -789,6 +790,7 @@ sub _error_outcome {
   return GraphQL::Houtou::Runtime::Outcome->scalar(
     undef,
     [ $self->_error_record($error, $path_frame) ],
+    ($self->promise_code ? (perl_only => 1) : ()),
   );
 }
 

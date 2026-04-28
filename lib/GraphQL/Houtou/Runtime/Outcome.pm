@@ -8,6 +8,19 @@ use Scalar::Util qw(reftype);
 
 sub new {
   my ($class, %args) = @_;
+  if ($args{perl_only}) {
+    my $kind = $args{kind} || 'NONE';
+    my $value =
+        $kind eq 'SCALAR' ? $args{scalar_value}
+      : $kind eq 'OBJECT' ? $args{object_value}
+      : $kind eq 'LIST'   ? $args{list_value}
+      : undef;
+    return bless {
+      kind => $kind,
+      value => $value,
+      error_records => ($args{error_records} || []),
+    }, $class;
+  }
   my $kind = $args{kind} || 'NONE';
   return $class->scalar($args{scalar_value}, $args{error_records}) if $kind eq 'SCALAR';
   return $class->object($args{object_value}, $args{error_records}) if $kind eq 'OBJECT';
@@ -17,19 +30,40 @@ sub new {
 }
 
 sub scalar {
-  my ($class, $value, $error_records) = @_;
+  my ($class, $value, $error_records, %opts) = @_;
+  if ($opts{perl_only}) {
+    return bless {
+      kind => 'SCALAR',
+      value => $value,
+      error_records => ($error_records || []),
+    }, $class;
+  }
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_scalar_xs($value, ($error_records || []));
 }
 
 sub object {
-  my ($class, $value, $error_records) = @_;
+  my ($class, $value, $error_records, %opts) = @_;
+  if ($opts{perl_only}) {
+    return bless {
+      kind => 'OBJECT',
+      value => $value,
+      error_records => ($error_records || []),
+    }, $class;
+  }
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_object_xs($value, ($error_records || []));
 }
 
 sub list {
-  my ($class, $value, $error_records) = @_;
+  my ($class, $value, $error_records, %opts) = @_;
+  if ($opts{perl_only}) {
+    return bless {
+      kind => 'LIST',
+      value => $value,
+      error_records => ($error_records || []),
+    }, $class;
+  }
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::outcome_list_xs($value, ($error_records || []));
 }

@@ -122,7 +122,6 @@ sub _lower_instruction {
     directives_payload => $instruction->directives_payload,
     has_directives => $instruction->has_directives,
     bound_slot => $instruction->bound_slot,
-    abstract_dispatch => $instruction->abstract_dispatch,
   );
 }
 
@@ -259,14 +258,6 @@ sub _bind_vm_ops {
     for my $op (@{ $block->ops || [] }) {
       $op->set_bound_slot($op->bound_slot || $slots{ $op->field_name });
       $op->set_bound_slot($op->bound_slot || _bind_typename_slot($runtime_schema, $block, $op));
-      if (!$op->abstract_dispatch && (($op->opcode || q()) =~ /:COMPLETE_ABSTRACT$/)) {
-        my $slot = $op->bound_slot;
-        my $return_type = $slot ? $slot->return_type_name : undef;
-        $op->set_abstract_dispatch(GraphQL::Houtou::Runtime::OperationCompiler::_bind_abstract_dispatch(
-          $runtime_schema,
-          $return_type,
-        )) if defined $return_type;
-      }
       $op->set_bound_child_block($op->child_block_name
         ? $blocks{ $op->child_block_name }
         : undef);
@@ -305,14 +296,6 @@ sub _bind_native_vm_ops {
       $op->set_field_name($slot_struct->{field_name}) if $slot_struct && defined $slot_struct->{field_name};
       $op->set_result_name($slot_struct->{result_name}) if $slot_struct && defined $slot_struct->{result_name};
       $op->set_bound_slot($op->bound_slot || _bind_typename_slot($runtime_schema, $block, $op, $slot_struct));
-
-      if (!$op->abstract_dispatch && (($op->complete_family || q()) eq 'COMPLETE_ABSTRACT')) {
-        my $return_type = $runtime_slot ? $runtime_slot->return_type_name : ($slot_struct ? $slot_struct->{return_type_name} : undef);
-        $op->set_abstract_dispatch(GraphQL::Houtou::Runtime::OperationCompiler::_bind_abstract_dispatch(
-          $runtime_schema,
-          $return_type,
-        )) if defined $return_type;
-      }
 
       $op->set_bound_child_block(defined $op->native_child_block_index
         ? $blocks[ $op->native_child_block_index ]

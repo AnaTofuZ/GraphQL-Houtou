@@ -71,6 +71,10 @@ sub add_pending {
 
 sub merge_resolved_pending {
   my ($self, $writer, $resolved) = @_;
+  if (!(reftype($self) && reftype($self) eq 'HASH')) {
+    GraphQL::Houtou::_bootstrap_xs();
+    return GraphQL::Houtou::XS::VM::block_frame_merge_pending_xs($self, $writer, $resolved);
+  }
   my $merged = $self->values;
   my $names = $self->pending_names;
   my @resolved = ref($resolved) eq 'ARRAY' ? @$resolved : ($resolved);
@@ -94,6 +98,10 @@ sub _xs_finalize_callback {
 
 sub finalize {
   my ($self, $promise_code, $writer) = @_;
+  if (!(reftype($self) && reftype($self) eq 'HASH')) {
+    GraphQL::Houtou::_bootstrap_xs();
+    return GraphQL::Houtou::XS::VM::block_frame_finalize_xs($self, $promise_code, $writer);
+  }
   my $pending = $self->pending_outcomes;
   return $self->values if !@$pending;
 

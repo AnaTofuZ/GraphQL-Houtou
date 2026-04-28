@@ -382,11 +382,10 @@ sub benchmark_case {
     [ 'upstream_string', sub {
       return maybe_get(execute($up_schema, $query, undef, undef, $vars, $op, undef, $promise_code));
     } ],
-    [ 'houtou_runtime_cached_perl', sub {
+    [ 'houtou_runtime_program', sub {
       return maybe_get(
         $runtime->execute_program(
           $program,
-          engine => 'perl',
           (defined($vars) ? (variables => $vars) : ()),
           ($promise_code ? (promise_code => $promise_code) : ()),
         )

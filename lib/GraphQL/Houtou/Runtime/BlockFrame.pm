@@ -4,7 +4,6 @@ use 5.014;
 use strict;
 use warnings;
 use GraphQL::Houtou ();
-use GraphQL::Houtou::Promise::Adapter qw(all_promise then_promise);
 
 sub new {
   my ($class, %args) = @_;
@@ -22,16 +21,6 @@ sub values {
   return GraphQL::Houtou::XS::VM::block_frame_values_xs($_[0]);
 }
 
-sub pending_names {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::block_frame_pending_names_xs($_[0]);
-}
-
-sub pending_outcomes {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::block_frame_pending_outcomes_xs($_[0]);
-}
-
 sub has_pending {
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::block_frame_has_pending_xs($_[0]);
@@ -46,12 +35,6 @@ sub consume_outcome {
 sub add_pending {
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::block_frame_add_pending_xs($_[0], $_[1], $_[2]);
-}
-
-sub merge_resolved_pending {
-  my ($self, $writer, $resolved) = @_;
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::block_frame_merge_pending_xs($self, $writer, $resolved);
 }
 
 sub _xs_finalize_callback {

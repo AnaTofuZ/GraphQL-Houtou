@@ -279,3 +279,5 @@ perl -Ilib t/19_vm_execute.t
   を XS opaque handle owner に統一した
 - `ExecState` も subobject 生成時に Perl owner へ戻さず、promise path を含めて native subobject を使う形に揃えた
 - `./Build test` / `minil test` はこの状態で通過
+- `BlockFrame` の pending inspection / aggregate 用 Perl surface は未使用だったため削除し、
+  promise finalize の public 面は `finalize` と XS callback bridge だけに縮小した

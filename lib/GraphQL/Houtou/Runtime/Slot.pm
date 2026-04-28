@@ -58,7 +58,8 @@ sub to_struct {
 }
 
 sub to_native_struct {
-  my ($self) = @_;
+  my ($self, %opts) = @_;
+  my $include_arg_defs = exists $opts{include_arg_defs} ? $opts{include_arg_defs} : 1;
   return {
     schema_slot_key => $self->{schema_slot_key},
     schema_slot_index => $self->{schema_slot_index},
@@ -74,14 +75,15 @@ sub to_native_struct {
     completion_family_code => _family_code($self->{completion_family}),
     dispatch_family => $self->{dispatch_family},
     dispatch_family_code => _family_code($self->{dispatch_family}),
-    arg_defs => _clone_value($self->{arg_defs}),
+    ($include_arg_defs ? (arg_defs => _clone_value($self->{arg_defs})) : ()),
     has_args => $self->{has_args},
     has_directives => $self->{has_directives},
   };
 }
 
 sub to_native_compact_struct {
-  my ($self) = @_;
+  my ($self, %opts) = @_;
+  my $include_arg_defs = exists $opts{include_arg_defs} ? $opts{include_arg_defs} : 1;
   my $native = $self->to_native_struct;
   return [
     $native->{field_name},
@@ -95,6 +97,7 @@ sub to_native_compact_struct {
     $native->{has_args},
     $native->{has_directives},
     $native->{resolver_mode_code},
+    ($include_arg_defs ? _arg_defs_to_compact($self->{arg_defs}) : undef),
   ];
 }
 
@@ -146,6 +149,21 @@ sub _clone_value {
   return [ map { _clone_value($_) } @$value ] if $ref eq 'ARRAY';
   return { map { $_ => _clone_value($value->{$_}) } keys %$value } if $ref eq 'HASH';
   return $value;
+}
+
+sub _arg_defs_to_compact {
+  my ($arg_defs) = @_;
+  my @entries;
+  for my $name (sort keys %{ $arg_defs || {} }) {
+    my $def = $arg_defs->{$name} || {};
+    push @entries, [
+      $name,
+      $def->{type},
+      $def->{has_default} ? 1 : 0,
+      _clone_value($def->{default_value}),
+    ];
+  }
+  return \@entries;
 }
 
 1;

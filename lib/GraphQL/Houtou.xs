@@ -1477,9 +1477,11 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
     if (runtime->runtime_slot_count > 0 && name2type_hv) {
       for (i = 0; i < runtime->runtime_slot_count; i++) {
         const char *return_type_name = runtime->runtime_slots[i].return_type_name;
+        gql_runtime_vm_native_slot_t *slot = &runtime->runtime_slots[i];
+        IV arg_index;
         SV **type_svp;
         if (!return_type_name) {
-          continue;
+          goto finalize_arg_defs;
         }
         type_svp = hv_fetch(name2type_hv, return_type_name, (I32)strlen(return_type_name), 0);
         if (type_svp && SvOK(*type_svp)) {
@@ -1550,6 +1552,25 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
                 runtime->callback_catalog->slot_possible_type_entries[i][j].is_type_of_cb = newSVsv(*cb_svp);
               }
             }
+          }
+        }
+finalize_arg_defs:
+        for (arg_index = 0; arg_index < slot->arg_def_count; arg_index++) {
+          gql_runtime_vm_native_arg_def_t *arg_def = &slot->arg_defs[arg_index];
+          if (arg_def->type_def_sv && !arg_def->input_type_sv) {
+            arg_def->input_type_sv = gql_runtime_vm_lookup_input_type_by_typedef_sv(
+              aTHX_ runtime_schema, arg_def->type_def_sv
+            );
+          }
+          if (arg_def->has_default
+              && arg_def->default_value_sv
+              && arg_def->input_type_sv
+              && !arg_def->default_native_value) {
+            SV *raw_sv = newSVsv(arg_def->default_value_sv);
+            SV *coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv);
+            SvREFCNT_dec(raw_sv);
+            arg_def->default_native_value = gql_runtime_vm_native_value_from_sv(aTHX_ coerced_sv);
+            SvREFCNT_dec(coerced_sv);
           }
         }
       }
@@ -1833,11 +1854,34 @@ static SV *
 gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
 {
   const gql_runtime_vm_native_op_t *op = state->op;
+  const gql_runtime_vm_native_slot_t *slot = state->slot;
+  gql_runtime_vm_native_runtime_t *runtime = state->runtime;
+  gql_runtime_vm_callback_context_t *callback_ctx = state->callback_ctx;
+  HV *variables_hv = NULL;
+  SV *specialized_sv;
   if (!op) {
+    return newRV_noinc((SV *)newHV());
+  }
+  if (callback_ctx
+      && callback_ctx->variables
+      && SvROK(callback_ctx->variables)
+      && SvTYPE(SvRV(callback_ctx->variables)) == SVt_PVHV) {
+    variables_hv = (HV *)SvRV(callback_ctx->variables);
+  }
+  if (slot && (slot->arg_def_count > 0 || op->has_args)) {
+    specialized_sv = gql_runtime_vm_specialize_arg_payload_sv(
+      aTHX_ runtime, slot, op, variables_hv
+    );
+    if (specialized_sv) {
+      return specialized_sv;
+    }
     return newRV_noinc((SV *)newHV());
   }
   if (op->args_mode_code == GQL_VM_ARGS_STATIC && op->args_payload_sv) {
     return gql_runtime_vm_clone_args_payload_sv(aTHX_ op->args_payload_sv);
+  }
+  if (op->args_mode_code == GQL_VM_ARGS_DYNAMIC && op->args_payload_sv) {
+    return gql_runtime_vm_materialize_dynamic_value_sv(aTHX_ op->args_payload_sv, variables_hv);
   }
   return newRV_noinc((SV *)newHV());
 }
@@ -2550,6 +2594,42 @@ load_native_program_xs(program_descriptor)
       gql_runtime_vm_native_program_t *program =
         gql_runtime_vm_native_program_from_sv(aTHX_ program_descriptor);
       SV *inner = newSVuv(PTR2UV(program));
+      RETVAL = newRV_noinc(inner);
+      sv_bless(RETVAL, gv_stashpv("GraphQL::Houtou::Runtime::NativeProgram", GV_ADD));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+specialize_native_program_xs(runtime_sv, program_descriptor, variables = &PL_sv_undef)
+    SV *runtime_sv
+    SV *program_descriptor
+    SV *variables
+  CODE:
+    {
+      gql_runtime_vm_native_runtime_t *runtime;
+      gql_runtime_vm_native_program_t *program;
+      HV *variables_hv = NULL;
+      SV *inner;
+
+      if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
+      }
+      runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
+      if (!runtime) {
+        croak("native VM runtime handle is no longer valid");
+      }
+      if (variables && SvOK(variables) && SvROK(variables) && SvTYPE(SvRV(variables)) == SVt_PVHV) {
+        variables_hv = (HV *)SvRV(variables);
+      }
+
+      program = gql_runtime_vm_native_program_from_sv(aTHX_ program_descriptor);
+      if (program_descriptor && SvROK(program_descriptor) && sv_derived_from(program_descriptor, "GraphQL::Houtou::Runtime::NativeProgram")) {
+        program = gql_runtime_vm_clone_native_program(aTHX_ program);
+      }
+      gql_runtime_vm_specialize_native_program_in_place(aTHX_ runtime, program, variables_hv);
+
+      inner = newSVuv(PTR2UV(program));
       RETVAL = newRV_noinc(inner);
       sv_bless(RETVAL, gv_stashpv("GraphQL::Houtou::Runtime::NativeProgram", GV_ADD));
     }
@@ -4081,11 +4161,12 @@ exec_state_run_program_xs(state, root_value = &PL_sv_undef)
     RETVAL
 
 SV *
-execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef)
+execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
     SV *runtime_schema
     SV *bundle_sv
     SV *root_value
     SV *context_value
+    SV *variables
   CODE:
     {
       gql_runtime_vm_native_bundle_t *bundle;
@@ -4126,6 +4207,7 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
         : (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema ? runtime->callback_catalog->runtime_schema : &PL_sv_undef);
       callback_ctx.root_value = root_value;
       callback_ctx.context = context_value;
+      callback_ctx.variables = variables;
       state.callback_ctx = &callback_ctx;
       writer = gql_runtime_vm_new_writer_struct(aTHX);
       state.writer = writer;
@@ -4155,12 +4237,13 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
     RETVAL
 
 SV *
-execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor, root_value = &PL_sv_undef, context_value = &PL_sv_undef)
+execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
     SV *runtime_schema
     SV *runtime_descriptor
     SV *program_descriptor
     SV *root_value
     SV *context_value
+    SV *variables
   CODE:
     {
       gql_runtime_vm_native_bundle_t *bundle;
@@ -4198,6 +4281,7 @@ execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor
         : (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema ? runtime->callback_catalog->runtime_schema : &PL_sv_undef);
       callback_ctx.root_value = root_value;
       callback_ctx.context = context_value;
+      callback_ctx.variables = variables;
       state.callback_ctx = &callback_ctx;
       writer = gql_runtime_vm_new_writer_struct(aTHX);
       state.writer = writer;
@@ -4228,11 +4312,12 @@ execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor
     RETVAL
 
 SV *
-execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef)
+execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
     SV *runtime_sv
     SV *program_sv
     SV *root_value
     SV *context_value
+    SV *variables
   CODE:
     {
       gql_runtime_vm_native_runtime_t *runtime;
@@ -4263,6 +4348,7 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
       callback_ctx.runtime_schema = (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema) ? runtime->callback_catalog->runtime_schema : &PL_sv_undef;
       callback_ctx.root_value = root_value;
       callback_ctx.context = context_value;
+      callback_ctx.variables = variables;
       state.callback_ctx = &callback_ctx;
       writer = gql_runtime_vm_new_writer_struct(aTHX);
       state.writer = writer;

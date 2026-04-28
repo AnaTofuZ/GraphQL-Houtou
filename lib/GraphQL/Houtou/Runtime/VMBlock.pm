@@ -47,7 +47,7 @@ sub to_native_struct {
     my $id = join("\x1E", refaddr($slot), ($op->result_name // q()));
     next if exists $slot_index{$id};
     $slot_index{$id} = scalar @slot_table;
-    my $native_slot = $slot->to_native_struct;
+    my $native_slot = $slot->to_native_struct(include_arg_defs => 0);
     $native_slot->{result_name} = $op->result_name;
     push @slot_table, $native_slot;
   }
@@ -70,20 +70,9 @@ sub to_native_compact_struct {
     my $id = join("\x1E", refaddr($slot), ($op->result_name // q()));
     next if exists $slot_index{$id};
     $slot_index{$id} = scalar @slot_table;
-    my $native_slot = $slot->to_native_struct;
-    push @slot_table, [
-      $native_slot->{field_name},
-      ($op->result_name // $native_slot->{result_name}),
-      $native_slot->{return_type_name},
-      $native_slot->{schema_slot_index},
-      $native_slot->{resolver_shape_code},
-      $native_slot->{completion_family_code},
-      $native_slot->{dispatch_family_code},
-      $native_slot->{return_type_kind_code},
-      $native_slot->{has_args},
-      $native_slot->{has_directives},
-      $native_slot->{resolver_mode_code},
-    ];
+    my $native_slot = $slot->to_native_compact_struct(include_arg_defs => 0);
+    $native_slot->[1] = ($op->result_name // $native_slot->[1]);
+    push @slot_table, $native_slot;
   }
   return [
     $self->name,

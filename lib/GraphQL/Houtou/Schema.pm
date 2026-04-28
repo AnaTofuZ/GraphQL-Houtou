@@ -168,15 +168,20 @@ sub execute {
 
 sub compile_native_program_descriptor {
   my ($self, $document, %opts) = @_;
-  my $runtime = delete $opts{runtime_schema};
-  return $self->compile_program($document, ($runtime ? (runtime_schema => $runtime) : ()), %opts)->to_native_compact_struct;
+  my $runtime = $self->build_native_runtime;
+  return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation_native_compact(
+    $runtime->runtime_schema,
+    $document,
+    %opts,
+  );
 }
 
 sub compile_native_program {
   my ($self, $document, %opts) = @_;
-  my $program = $self->compile_program($document, %opts);
   require GraphQL::Houtou::Runtime::NativeProgram;
-  return GraphQL::Houtou::Runtime::NativeProgram->from_vm_program($program);
+  return GraphQL::Houtou::Runtime::NativeProgram->from_descriptor(
+    $self->compile_native_program_descriptor($document, %opts),
+  );
 }
 
 sub compile_native_bundle_descriptor {

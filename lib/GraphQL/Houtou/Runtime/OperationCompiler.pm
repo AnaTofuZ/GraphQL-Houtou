@@ -3,6 +3,7 @@ package GraphQL::Houtou::Runtime::OperationCompiler;
 use 5.014;
 use strict;
 use warnings;
+use Scalar::Util qw(refaddr);
 
 use GraphQL::Houtou ();
 use GraphQL::Houtou::Runtime::Slot ();
@@ -60,6 +61,43 @@ sub compile_operation {
 
   _bind_instruction_blocks($program);
   return $program;
+}
+
+sub compile_operation_native_compact {
+  my ($class, $runtime_schema, $document, %opts) = @_;
+  my $ast = ref($document) ? $document : GraphQL::Houtou::parse($document);
+  my ($operation) = grep { ($_->{kind} || '') eq 'operation' } @{ $ast || [] };
+  die "No operation found for runtime compiler.\n" if !$operation;
+  my %fragments = map { (($_->{name} || '') => $_) }
+    grep { ($_->{kind} || '') eq 'fragment' } @{ $ast || [] };
+
+  my $operation_type = $operation->{operation} || 'query';
+  my $schema_block = $runtime_schema->root_block($operation_type)
+    or die "No root block for operation type '$operation_type'.\n";
+
+  my %state = (
+    runtime_schema => $runtime_schema,
+    block_index => 0,
+    blocks_compact => [],
+    fragments => \%fragments,
+  );
+
+  my $root_block_index = _lower_selection_block_compact(
+    \%state,
+    $schema_block->root_type_name,
+    $schema_block,
+    $operation->{selections} || [],
+    uc($operation_type),
+  );
+
+  return {
+    version => 1,
+    operation_type_code => _operation_type_code($operation_type),
+    operation_name => $operation->{name},
+    variable_defs => _lower_variable_defs($operation->{variables}),
+    root_block_index => $root_block_index,
+    blocks_compact => $state{blocks_compact},
+  };
 }
 
 sub inflate_operation {
@@ -157,6 +195,102 @@ sub _lower_selection_block {
   );
   push @{ $state->{blocks} }, $block;
   return $block;
+}
+
+sub _lower_selection_block_compact {
+  my ($state, $type_name, $schema_block, $selections, $base_name) = @_;
+  my %schema_slots = map { ($_->field_name => $_) } @{ $schema_block->slots || [] };
+  my @ops;
+  my @slot_table;
+  my %slot_index;
+  my $field_selections = _normalize_selections($state, $selections, $type_name);
+
+  for my $selection (@{ $field_selections || [] }) {
+    next if !$selection || ($selection->{kind} || '') ne 'field';
+    my $field_name = $selection->{name};
+
+    if (($field_name || q()) eq '__typename') {
+      my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
+      my $result_name = ($selection->{alias} || '__typename');
+      my $slot = _lookup_typename_slot($state->{runtime_schema}, $type_name, $result_name, $directives_mode);
+      my $slot_compact_index = _intern_slot_compact(\@slot_table, \%slot_index, $slot, $result_name);
+      push @ops, _build_compact_op(
+        field_name => '__typename',
+        result_name => $result_name,
+        return_type_name => 'String',
+        resolve_family => 'RESOLVE_DEFAULT',
+        complete_family => 'COMPLETE_GENERIC',
+        dispatch_family => 'DEFAULT',
+        slot_index => $slot_compact_index,
+        args_mode => 'NONE',
+        args_payload => undef,
+        has_args => 0,
+        has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
+        child_block_index => undef,
+        abstract_child_block_indexes => {},
+      );
+      next;
+    }
+
+    my $slot = $schema_slots{$field_name} or next;
+    my $child_block_index;
+    my $abstract_child_block_indexes = {};
+    my ($args_mode, $args_payload) = _lower_arguments($selection->{arguments});
+    my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
+
+    if ($selection->{selections} && @{ $selection->{selections} }) {
+      my $child_type_name = $slot->return_type_name;
+      if (($slot->completion_family || '') eq 'ABSTRACT') {
+        $abstract_child_block_indexes = _lower_abstract_child_blocks_compact(
+          $state,
+          $child_type_name,
+          $selection->{selections},
+          $base_name . q(.) . $field_name,
+        );
+      }
+      elsif (my $child_schema_block = $state->{runtime_schema}->block_by_type_name($child_type_name)) {
+        $child_block_index = _lower_selection_block_compact(
+          $state,
+          $child_type_name,
+          $child_schema_block,
+          $selection->{selections},
+          $base_name . q(.) . $field_name,
+        );
+      }
+    }
+
+    my $resolve_family = _resolve_op_for_slot($slot);
+    my $complete_family = _complete_op_for_slot($slot);
+    my $result_name = ($selection->{alias} || $field_name);
+    my $slot_compact_index = _intern_slot_compact(\@slot_table, \%slot_index, $slot, $result_name);
+
+    push @ops, _build_compact_op(
+      field_name => $field_name,
+      result_name => $result_name,
+      return_type_name => $slot->return_type_name,
+      resolve_family => $resolve_family,
+      complete_family => $complete_family,
+      dispatch_family => $slot->dispatch_family,
+      slot_index => $slot_compact_index,
+      args_mode => $args_mode,
+      args_payload => $args_payload,
+      has_args => $slot->has_args,
+      has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
+      child_block_index => $child_block_index,
+      abstract_child_block_indexes => $abstract_child_block_indexes,
+    );
+  }
+
+  my $name = _next_block_name($state, $base_name);
+  my $block = [
+    $name,
+    $type_name,
+    2,
+    \@slot_table,
+    \@ops,
+  ];
+  push @{ $state->{blocks_compact} }, $block;
+  return $#{$state->{blocks_compact}};
 }
 
 sub _next_block_name {
@@ -289,6 +423,95 @@ sub _lower_abstract_child_blocks {
   }
 
   return \%blocks;
+}
+
+sub _lower_abstract_child_blocks_compact {
+  my ($state, $abstract_type_name, $selections, $base_name) = @_;
+  my $possible_types = $state->{runtime_schema}->runtime_cache->{possible_types}{$abstract_type_name} || [];
+  my %blocks;
+
+  for my $type (@$possible_types) {
+    next if !$type || !$type->isa('GraphQL::Houtou::Type::Object');
+    my $schema_block = $state->{runtime_schema}->block_by_type_name($type->name) or next;
+    my $block_index = _lower_selection_block_compact(
+      $state,
+      $type->name,
+      $schema_block,
+      $selections,
+      $base_name . q(.) . $type->name,
+    );
+    $blocks{ $type->name } = $block_index if defined $block_index;
+  }
+
+  return \%blocks;
+}
+
+sub _intern_slot_compact {
+  my ($slot_table, $slot_index, $slot, $result_name) = @_;
+  my $id = join("\x1E", refaddr($slot), ($result_name // q()));
+  return $slot_index->{$id} if exists $slot_index->{$id};
+  my $native_slot = $slot->to_native_struct;
+  my $compact = [
+    $native_slot->{field_name},
+    ($result_name // $native_slot->{result_name}),
+    $native_slot->{return_type_name},
+    $native_slot->{schema_slot_index},
+    $native_slot->{resolver_shape_code},
+    $native_slot->{completion_family_code},
+    $native_slot->{dispatch_family_code},
+    $native_slot->{return_type_kind_code},
+    $native_slot->{has_args},
+    $native_slot->{has_directives},
+    $native_slot->{resolver_mode_code},
+  ];
+  my $index = @$slot_table;
+  push @$slot_table, $compact;
+  $slot_index->{$id} = $index;
+  return $index;
+}
+
+sub _build_compact_op {
+  my (%args) = @_;
+  my $resolve_code = $RESOLVE_CODE{ $args{resolve_family} || 'RESOLVE_DEFAULT' } || 0;
+  my $complete_code = $COMPLETE_CODE{ $args{complete_family} || 'COMPLETE_GENERIC' } || 0;
+  return [
+    ($resolve_code * 16) + $complete_code,
+    $resolve_code,
+    $complete_code,
+    _dispatch_family_code($args{dispatch_family}),
+    $args{slot_index},
+    $args{child_block_index},
+    $args{abstract_child_block_indexes} || {},
+    _args_mode_code($args{args_mode}),
+    $args{args_payload},
+    $args{has_args} ? 1 : 0,
+    $args{has_directives} ? 1 : 0,
+    $args{field_name},
+    $args{result_name},
+    $args{return_type_name},
+  ];
+}
+
+sub _dispatch_family_code {
+  my ($family) = @_;
+  return 2 if ($family || q()) eq 'RESOLVE_TYPE';
+  return 3 if ($family || q()) eq 'TAG';
+  return 4 if ($family || q()) eq 'POSSIBLE_TYPES';
+  return 1;
+}
+
+sub _args_mode_code {
+  my ($mode) = @_;
+  return 1 if ($mode || q()) eq 'STATIC';
+  return 2 if ($mode || q()) eq 'DYNAMIC';
+  return 0;
+}
+
+sub _operation_type_code {
+  my ($type) = @_;
+  return 2 if ($type || q()) eq 'mutation';
+  return 3 if ($type || q()) eq 'subscription';
+  return 1;
 }
 
 sub _normalize_selections {

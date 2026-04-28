@@ -51,8 +51,8 @@ sub compile_program {
 
 sub compile_bundle_for_document {
   my ($self, $document, %opts) = @_;
-  my $program = $self->compile_program($document, %opts);
-  return $self->compile_bundle($program, %opts);
+  my $descriptor = $self->compile_bundle_descriptor_for_document($document, %opts);
+  return $self->load_bundle_descriptor($descriptor);
 }
 
 sub specialize_program {
@@ -130,8 +130,14 @@ sub compile_bundle_descriptor {
 
 sub compile_bundle_descriptor_for_document {
   my ($self, $document, %opts) = @_;
-  my $program = $self->compile_program($document, %opts);
-  return $self->_compact_bundle_descriptor($program);
+  return {
+    runtime => $self->_native_runtime_compact_struct,
+    program => GraphQL::Houtou::Runtime::OperationCompiler->compile_operation_native_compact(
+      $self->runtime_schema,
+      $document,
+      %opts,
+    ),
+  };
 }
 
 sub _compact_bundle_descriptor {

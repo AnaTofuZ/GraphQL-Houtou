@@ -58,8 +58,6 @@ gql_runtime_vm_cursor_decref(pTHX_ gql_runtime_vm_cursor_t *cursor)
     return;
   }
   SvREFCNT_dec(cursor->block);
-  SvREFCNT_dec(cursor->current_slot);
-  SvREFCNT_dec(cursor->current_op);
   Safefree(cursor);
 }
 
@@ -378,7 +376,7 @@ gql_runtime_vm_enter_field_now(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *
     return;
   }
 
-  op_sv = s->cursor->current_op;
+  op_sv = gql_runtime_vm_cursor_current_op_borrowed_sv(aTHX_ s->cursor);
   result_name_sv = gql_runtime_vm_op_result_name_sv(aTHX_ op_sv);
   path_frame = gql_runtime_vm_new_path_frame_struct(
     aTHX_
@@ -432,7 +430,7 @@ gql_runtime_vm_consume_current_outcome_now(pTHX_ gql_runtime_vm_exec_state_handl
 
   frame = s->frame;
   writer = s->writer;
-  op_sv = s->cursor ? s->cursor->current_op : NULL;
+  op_sv = s->cursor ? gql_runtime_vm_cursor_current_op_borrowed_sv(aTHX_ s->cursor) : NULL;
   result_name_sv = gql_runtime_vm_op_result_name_sv(aTHX_ op_sv);
   if (result_name_sv && SvOK(result_name_sv)) {
     result_name_pv = SvPV(result_name_sv, result_name_len);
@@ -661,7 +659,7 @@ gql_runtime_vm_state_current_field_name_sv(pTHX_ gql_runtime_vm_exec_state_handl
     return NULL;
   }
 
-  op_sv = s->cursor->current_op;
+  op_sv = gql_runtime_vm_cursor_current_op_borrowed_sv(aTHX_ s->cursor);
   if (op_sv && SvOK(op_sv) && SvROK(op_sv) && SvTYPE(SvRV(op_sv)) == SVt_PVAV) {
     field_name_sv = gql_runtime_vm_op_slot_sv(aTHX_ op_sv, 6);
     if (field_name_sv && SvOK(field_name_sv)) {
@@ -669,7 +667,7 @@ gql_runtime_vm_state_current_field_name_sv(pTHX_ gql_runtime_vm_exec_state_handl
     }
   }
 
-  slot_sv = s->cursor->current_slot;
+  slot_sv = gql_runtime_vm_cursor_current_slot_borrowed_sv(aTHX_ s->cursor);
   if (slot_sv && SvOK(slot_sv) && SvROK(slot_sv) && SvTYPE(SvRV(slot_sv)) == SVt_PVHV) {
     field_name_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ (HV *)SvRV(slot_sv), "field_name", 10);
     if (field_name_sv && SvOK(field_name_sv)) {
@@ -748,7 +746,7 @@ gql_runtime_vm_new_lazy_info_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_ha
 {
   dSP;
   SV *instruction_sv = s && s->cursor
-    ? s->cursor->current_op
+    ? gql_runtime_vm_cursor_current_op_borrowed_sv(aTHX_ s->cursor)
     : &PL_sv_undef;
   SV *block_sv = s && s->cursor
     ? s->cursor->block
@@ -756,7 +754,7 @@ gql_runtime_vm_new_lazy_info_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_ha
   SV *field_name_sv = s ? gql_runtime_vm_state_current_field_name_sv(aTHX_ s) : &PL_sv_undef;
   SV *parent_type_sv = s ? gql_runtime_vm_state_current_parent_type_sv(aTHX_ s) : &PL_sv_undef;
   SV *return_type_sv = s
-    ? gql_runtime_vm_state_current_return_type_sv(aTHX_ s, instruction_sv, s && s->cursor ? s->cursor->current_slot : NULL)
+    ? gql_runtime_vm_state_current_return_type_sv(aTHX_ s, instruction_sv, s && s->cursor ? gql_runtime_vm_cursor_current_slot_borrowed_sv(aTHX_ s->cursor) : NULL)
     : &PL_sv_undef;
   SV *path_sv = NULL;
   SV *path_value_sv = NULL;
@@ -1073,13 +1071,9 @@ gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_
   if (s->cursor) {
     gql_runtime_vm_cursor_t *dst = s->cursor;
     SvREFCNT_dec(dst->block);
-    SvREFCNT_dec(dst->current_slot);
-    SvREFCNT_dec(dst->current_op);
     dst->block = newSVsv(block ? block : &PL_sv_undef);
     dst->slot_index = 0;
     dst->op_index = -1;
-    dst->current_slot = newSVsv(&PL_sv_undef);
-    dst->current_op = newSVsv(&PL_sv_undef);
   }
 
   if (s->frame_stack_count == s->frame_stack_capacity) {
@@ -1092,44 +1086,26 @@ gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_
 
   while (1) {
     gql_runtime_vm_cursor_t *dst;
-    AV *block_av;
     AV *ops_av;
-    SV **svp;
     IV next_index;
     SV *op_sv;
-    SV *slot_sv;
     gql_runtime_vm_outcome_t *outcome;
 
     if (!s->cursor) {
       break;
     }
     dst = s->cursor;
-    if (!dst->block || !SvOK(dst->block) || !SvROK(dst->block) || SvTYPE(SvRV(dst->block)) != SVt_PVAV) {
+    ops_av = gql_runtime_vm_cursor_ops_av(aTHX_ dst);
+    if (!ops_av) {
       break;
     }
-    block_av = (AV *)SvRV(dst->block);
-    svp = av_fetch(block_av, 3, 0);
-    if (!svp || !SvOK(*svp) || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVAV) {
-      break;
-    }
-    ops_av = (AV *)SvRV(*svp);
     next_index = dst->op_index + 1;
     if (next_index > av_len(ops_av)) {
       dst->op_index = next_index;
-      SvREFCNT_dec(dst->current_slot);
-      SvREFCNT_dec(dst->current_op);
-      dst->current_slot = newSVsv(&PL_sv_undef);
-      dst->current_op = newSVsv(&PL_sv_undef);
       break;
     }
-    svp = av_fetch(ops_av, next_index, 0);
-    op_sv = (svp && *svp) ? *svp : &PL_sv_undef;
     dst->op_index = next_index;
-    SvREFCNT_dec(dst->current_op);
-    SvREFCNT_dec(dst->current_slot);
-    dst->current_op = newSVsv(op_sv);
-    slot_sv = gql_runtime_vm_op_slot_sv(aTHX_ op_sv, 19);
-    dst->current_slot = newSVsv(slot_sv ? slot_sv : &PL_sv_undef);
+    op_sv = gql_runtime_vm_cursor_current_op_borrowed_sv(aTHX_ dst);
 
     if (!gql_runtime_vm_should_execute_op_now(aTHX_ s, op_sv)) {
       continue;
@@ -1189,8 +1165,8 @@ gql_runtime_vm_exec_state_execute_current_op_sync_now(pTHX_ SV *state_sv, gql_ru
     return gql_runtime_vm_new_outcome_struct(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, &PL_sv_undef);
   }
 
-  op_sv = s->cursor->current_op;
-  slot_sv = s->cursor->current_slot;
+  op_sv = gql_runtime_vm_cursor_current_op_borrowed_sv(aTHX_ s->cursor);
+  slot_sv = gql_runtime_vm_cursor_current_slot_borrowed_sv(aTHX_ s->cursor);
   source_sv = s->field_frame->source;
   resolve_code = gql_runtime_vm_op_slot_sv(aTHX_ op_sv, 3) ? SvIV(gql_runtime_vm_op_slot_sv(aTHX_ op_sv, 3)) : 0;
   complete_code = gql_runtime_vm_op_slot_sv(aTHX_ op_sv, 5) ? SvIV(gql_runtime_vm_op_slot_sv(aTHX_ op_sv, 5)) : 0;
@@ -1869,13 +1845,17 @@ gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
     variables_hv = (HV *)SvRV(callback_ctx->variables);
   }
   if (slot && (slot->arg_def_count > 0 || op->has_args)) {
-    specialized_sv = gql_runtime_vm_specialize_arg_payload_sv(
-      aTHX_ runtime, slot, op, variables_hv
-    );
+    if (op->args_mode_code == GQL_VM_ARGS_STATIC && op->args_payload_native) {
+      return gql_runtime_vm_native_args_payload_materialize_sv(aTHX_ op->args_payload_native);
+    }
+    specialized_sv = gql_runtime_vm_specialize_arg_payload_sv(aTHX_ runtime, slot, op, variables_hv);
     if (specialized_sv) {
       return specialized_sv;
     }
     return newRV_noinc((SV *)newHV());
+  }
+  if (op->args_mode_code == GQL_VM_ARGS_STATIC && op->args_payload_native) {
+    return gql_runtime_vm_native_args_payload_materialize_sv(aTHX_ op->args_payload_native);
   }
   if (op->args_mode_code == GQL_VM_ARGS_STATIC && op->args_payload_sv) {
     return gql_runtime_vm_clone_args_payload_sv(aTHX_ op->args_payload_sv);
@@ -2980,13 +2960,13 @@ cursor_new_xs(class, block, slot_index = 0, op_index = 0, current_slot = &PL_sv_
     {
       gql_runtime_vm_cursor_t *cursor;
       const char *pkg = SvPV_nolen(class);
+      (void)current_slot;
+      (void)current_op;
       Newxz(cursor, 1, gql_runtime_vm_cursor_t);
       cursor->refcount = 1;
       cursor->block = newSVsv(block ? block : &PL_sv_undef);
       cursor->slot_index = slot_index;
       cursor->op_index = op_index;
-      cursor->current_slot = newSVsv(current_slot ? current_slot : &PL_sv_undef);
-      cursor->current_op = newSVsv(current_op ? current_op : &PL_sv_undef);
       RETVAL = gql_runtime_vm_new_handle_sv(aTHX_ pkg, cursor);
     }
   OUTPUT:
@@ -3018,13 +2998,9 @@ cursor_enter_block_xs(cursor, block)
     {
       gql_runtime_vm_cursor_t *dst = gql_runtime_vm_expect_cursor(aTHX_ cursor);
       SvREFCNT_dec(dst->block);
-      SvREFCNT_dec(dst->current_slot);
-      SvREFCNT_dec(dst->current_op);
       dst->block = newSVsv(block ? block : &PL_sv_undef);
       dst->slot_index = 0;
       dst->op_index = -1;
-      dst->current_slot = newSVsv(&PL_sv_undef);
-      dst->current_op = newSVsv(&PL_sv_undef);
     }
 
 void
@@ -3034,19 +3010,23 @@ cursor_set_current_op_xs(cursor, op, index = -2147483647)
     IV index
   CODE:
     {
-      SV *slot_sv = &PL_sv_undef;
       gql_runtime_vm_cursor_t *dst = gql_runtime_vm_expect_cursor(aTHX_ cursor);
       if (index != -2147483647) {
         dst->op_index = index;
       }
-      if (op && SvOK(op) && SvROK(op) && SvTYPE(SvRV(op)) == SVt_PVAV) {
-        SV **svp = av_fetch((AV *)SvRV(op), 19, 0);
-        slot_sv = (svp && *svp) ? *svp : &PL_sv_undef;
+      if (index == -2147483647 && op && SvOK(op) && SvROK(op) && SvTYPE(SvRV(op)) == SVt_PVAV && dst->block && SvOK(dst->block)) {
+        AV *ops_av = gql_runtime_vm_cursor_ops_av(aTHX_ dst);
+        IV i;
+        if (ops_av) {
+          for (i = 0; i <= av_len(ops_av); i++) {
+            SV **svp = av_fetch(ops_av, i, 0);
+            if (svp && *svp && sv_eq(*svp, op)) {
+              dst->op_index = i;
+              break;
+            }
+          }
+        }
       }
-      SvREFCNT_dec(dst->current_op);
-      SvREFCNT_dec(dst->current_slot);
-      dst->current_op = newSVsv(op ? op : &PL_sv_undef);
-      dst->current_slot = newSVsv(slot_sv);
     }
 
 SV *
@@ -3057,43 +3037,22 @@ cursor_advance_op_xs(cursor)
       gql_runtime_vm_cursor_t *dst = gql_runtime_vm_expect_cursor(aTHX_ cursor);
       AV *block_av;
       AV *ops_av;
-      SV **svp;
       IV next_index;
       SV *op_sv;
-      if (!dst->block || !SvOK(dst->block) || !SvROK(dst->block) || SvTYPE(SvRV(dst->block)) != SVt_PVAV) {
+      ops_av = gql_runtime_vm_cursor_ops_av(aTHX_ dst);
+      if (!ops_av) {
         RETVAL = &PL_sv_undef;
         goto done_cursor_advance;
       }
-      block_av = (AV *)SvRV(dst->block);
-      svp = av_fetch(block_av, 3, 0);
-      if (!svp || !SvOK(*svp) || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVAV) {
-        RETVAL = &PL_sv_undef;
-        goto done_cursor_advance;
-      }
-      ops_av = (AV *)SvRV(*svp);
       next_index = dst->op_index + 1;
       if (next_index > av_len(ops_av)) {
         dst->op_index = next_index;
-        SvREFCNT_dec(dst->current_slot);
-        SvREFCNT_dec(dst->current_op);
-        dst->current_slot = newSVsv(&PL_sv_undef);
-        dst->current_op = newSVsv(&PL_sv_undef);
         RETVAL = &PL_sv_undef;
         goto done_cursor_advance;
       }
-      svp = av_fetch(ops_av, next_index, 0);
-      op_sv = (svp && *svp) ? *svp : &PL_sv_undef;
       dst->op_index = next_index;
-      SvREFCNT_dec(dst->current_op);
-      SvREFCNT_dec(dst->current_slot);
-      dst->current_op = newSVsv(op_sv);
-      if (op_sv && SvOK(op_sv) && SvROK(op_sv) && SvTYPE(SvRV(op_sv)) == SVt_PVAV) {
-        SV **slot_svp = av_fetch((AV *)SvRV(op_sv), 19, 0);
-        dst->current_slot = newSVsv((slot_svp && *slot_svp) ? *slot_svp : &PL_sv_undef);
-      } else {
-        dst->current_slot = newSVsv(&PL_sv_undef);
-      }
-      RETVAL = newSVsv(op_sv);
+      op_sv = gql_runtime_vm_cursor_current_op_borrowed_sv(aTHX_ dst);
+      RETVAL = newSVsv(op_sv ? op_sv : &PL_sv_undef);
 	done_cursor_advance:
 	      ;
     }
@@ -3133,7 +3092,8 @@ cursor_current_slot_xs(cursor)
   CODE:
     {
       gql_runtime_vm_cursor_t *state = gql_runtime_vm_expect_cursor(aTHX_ cursor);
-      RETVAL = newSVsv(state->current_slot ? state->current_slot : &PL_sv_undef);
+      SV *slot_sv = gql_runtime_vm_cursor_current_slot_borrowed_sv(aTHX_ state);
+      RETVAL = newSVsv(slot_sv ? slot_sv : &PL_sv_undef);
     }
   OUTPUT:
     RETVAL
@@ -3144,7 +3104,8 @@ cursor_current_op_xs(cursor)
   CODE:
     {
       gql_runtime_vm_cursor_t *state = gql_runtime_vm_expect_cursor(aTHX_ cursor);
-      RETVAL = newSVsv(state->current_op ? state->current_op : &PL_sv_undef);
+      SV *op_sv = gql_runtime_vm_cursor_current_op_borrowed_sv(aTHX_ state);
+      RETVAL = newSVsv(op_sv ? op_sv : &PL_sv_undef);
     }
   OUTPUT:
     RETVAL
@@ -3763,8 +3724,8 @@ exec_state_current_return_type_xs(state)
   CODE:
     {
       gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      SV *op_sv = (s && s->cursor) ? s->cursor->current_op : NULL;
-      SV *slot_sv = (s && s->cursor) ? s->cursor->current_slot : NULL;
+      SV *op_sv = (s && s->cursor) ? gql_runtime_vm_cursor_current_op_borrowed_sv(aTHX_ s->cursor) : NULL;
+      SV *slot_sv = (s && s->cursor) ? gql_runtime_vm_cursor_current_slot_borrowed_sv(aTHX_ s->cursor) : NULL;
       SV *value = gql_runtime_vm_state_current_return_type_sv(aTHX_ s, op_sv, slot_sv);
       RETVAL = newSVsv(value ? value : &PL_sv_undef);
     }
@@ -3892,9 +3853,7 @@ exec_state_advance_current_op_xs(state)
     {
       gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
       gql_runtime_vm_cursor_t *dst;
-      AV *block_av;
       AV *ops_av;
-      SV **svp;
       IV next_index;
       SV *op_sv;
       if (!s->cursor) {
@@ -3902,40 +3861,20 @@ exec_state_advance_current_op_xs(state)
         goto done_exec_state_advance;
       }
       dst = s->cursor;
-      if (!dst->block || !SvOK(dst->block) || !SvROK(dst->block) || SvTYPE(SvRV(dst->block)) != SVt_PVAV) {
+      ops_av = gql_runtime_vm_cursor_ops_av(aTHX_ dst);
+      if (!ops_av) {
         RETVAL = newSVsv(&PL_sv_undef);
         goto done_exec_state_advance;
       }
-      block_av = (AV *)SvRV(dst->block);
-      svp = av_fetch(block_av, 3, 0);
-      if (!svp || !SvOK(*svp) || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVAV) {
-        RETVAL = newSVsv(&PL_sv_undef);
-        goto done_exec_state_advance;
-      }
-      ops_av = (AV *)SvRV(*svp);
       next_index = dst->op_index + 1;
       if (next_index > av_len(ops_av)) {
         dst->op_index = next_index;
-        SvREFCNT_dec(dst->current_slot);
-        SvREFCNT_dec(dst->current_op);
-        dst->current_slot = newSVsv(&PL_sv_undef);
-        dst->current_op = newSVsv(&PL_sv_undef);
         RETVAL = newSVsv(&PL_sv_undef);
         goto done_exec_state_advance;
       }
-      svp = av_fetch(ops_av, next_index, 0);
-      op_sv = (svp && *svp) ? *svp : &PL_sv_undef;
       dst->op_index = next_index;
-      SvREFCNT_dec(dst->current_op);
-      SvREFCNT_dec(dst->current_slot);
-      dst->current_op = newSVsv(op_sv);
-      if (op_sv && SvOK(op_sv) && SvROK(op_sv) && SvTYPE(SvRV(op_sv)) == SVt_PVAV) {
-        SV **slot_svp = av_fetch((AV *)SvRV(op_sv), 19, 0);
-        dst->current_slot = newSVsv((slot_svp && *slot_svp) ? *slot_svp : &PL_sv_undef);
-      } else {
-        dst->current_slot = newSVsv(&PL_sv_undef);
-      }
-      RETVAL = newSVsv(op_sv);
+      op_sv = gql_runtime_vm_cursor_current_op_borrowed_sv(aTHX_ dst);
+      RETVAL = newSVsv(op_sv ? op_sv : &PL_sv_undef);
 done_exec_state_advance:
       ;
     }
@@ -4033,13 +3972,9 @@ exec_state_enter_block_xs(state, block, frame = &PL_sv_undef)
       if (s->cursor) {
         gql_runtime_vm_cursor_t *dst = s->cursor;
         SvREFCNT_dec(dst->block);
-        SvREFCNT_dec(dst->current_slot);
-        SvREFCNT_dec(dst->current_op);
         dst->block = newSVsv(block ? block : &PL_sv_undef);
         dst->slot_index = 0;
         dst->op_index = -1;
-        dst->current_slot = newSVsv(&PL_sv_undef);
-        dst->current_op = newSVsv(&PL_sv_undef);
       }
       if (s->frame_stack_count == s->frame_stack_capacity) {
         IV new_cap = s->frame_stack_capacity ? s->frame_stack_capacity * 2 : 4;

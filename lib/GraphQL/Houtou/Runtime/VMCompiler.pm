@@ -173,7 +173,7 @@ sub _inflate_native_block {
 sub _inflate_native_op {
   my ($struct) = @_;
   if (ref($struct) eq 'ARRAY') {
-    my ($opcode_code, $resolve_code, $complete_code, $dispatch_family_code, $slot_index, $child_block_index, $abstract_child_block_indexes, $args_mode_code, $args_payload, $has_args, $has_directives, $field_name, $result_name, $return_type_name) = @$struct;
+    my ($opcode_code, $resolve_code, $complete_code, $dispatch_family_code, $slot_index, $child_block_index, $abstract_child_block_indexes, $args_mode_code, $args_payload, $has_args, $directives_mode_code, $directives_payload, $has_directives, $field_name, $result_name, $return_type_name) = @$struct;
     my $resolve_family = _resolve_family_from_code($resolve_code);
     my $complete_family = _complete_family_from_code($complete_code);
     my $op = GraphQL::Houtou::Runtime::VMOp->new(
@@ -189,6 +189,8 @@ sub _inflate_native_op {
       args_mode => _args_mode_from_code($args_mode_code),
       args_payload => $args_payload,
       has_args => $has_args,
+      directives_mode => _directives_mode_from_code($directives_mode_code),
+      directives_payload => $directives_payload,
       has_directives => $has_directives,
     );
     $op->set_native_slot_index($slot_index);
@@ -208,7 +210,8 @@ sub _inflate_native_op {
     return_type_name => $struct->{return_type_name},
     args_mode => $struct->{args_mode} || 'NONE',
     has_args => $struct->{has_args},
-    directives_mode => $struct->{directives_mode} || 'NONE',
+    directives_mode => $struct->{directives_mode} || _directives_mode_from_code($struct->{directives_mode_code}),
+    directives_payload => $struct->{directives_payload},
     has_directives => $struct->{has_directives},
   );
   $op->set_native_slot_index($struct->{slot_index});
@@ -226,6 +229,13 @@ sub _family_from_code {
 }
 
 sub _args_mode_from_code {
+  my ($code) = @_;
+  return 'STATIC' if ($code || 0) == 1;
+  return 'DYNAMIC' if ($code || 0) == 2;
+  return 'NONE';
+}
+
+sub _directives_mode_from_code {
   my ($code) = @_;
   return 'STATIC' if ($code || 0) == 1;
   return 'DYNAMIC' if ($code || 0) == 2;

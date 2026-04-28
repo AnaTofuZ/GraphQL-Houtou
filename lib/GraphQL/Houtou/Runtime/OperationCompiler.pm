@@ -450,20 +450,8 @@ sub _intern_slot_compact {
   my ($slot_table, $slot_index, $slot, $result_name) = @_;
   my $id = join("\x1E", refaddr($slot), ($result_name // q()));
   return $slot_index->{$id} if exists $slot_index->{$id};
-  my $native_slot = $slot->to_native_struct;
-  my $compact = [
-    $native_slot->{field_name},
-    ($result_name // $native_slot->{result_name}),
-    $native_slot->{return_type_name},
-    $native_slot->{schema_slot_index},
-    $native_slot->{resolver_shape_code},
-    $native_slot->{completion_family_code},
-    $native_slot->{dispatch_family_code},
-    $native_slot->{return_type_kind_code},
-    $native_slot->{has_args},
-    $native_slot->{has_directives},
-    $native_slot->{resolver_mode_code},
-  ];
+  my $compact = $slot->to_native_compact_struct;
+  $compact->[1] = ($result_name // $compact->[1]);
   my $index = @$slot_table;
   push @$slot_table, $compact;
   $slot_index->{$id} = $index;
@@ -485,6 +473,8 @@ sub _build_compact_op {
     _args_mode_code($args{args_mode}),
     $args{args_payload},
     $args{has_args} ? 1 : 0,
+    _directives_mode_code($args{directives_mode}),
+    $args{directives_payload},
     $args{has_directives} ? 1 : 0,
     $args{field_name},
     $args{result_name},
@@ -501,6 +491,13 @@ sub _dispatch_family_code {
 }
 
 sub _args_mode_code {
+  my ($mode) = @_;
+  return 1 if ($mode || q()) eq 'STATIC';
+  return 2 if ($mode || q()) eq 'DYNAMIC';
+  return 0;
+}
+
+sub _directives_mode_code {
   my ($mode) = @_;
   return 1 if ($mode || q()) eq 'STATIC';
   return 2 if ($mode || q()) eq 'DYNAMIC';

@@ -155,10 +155,12 @@ sub to_native_struct {
       ? $slot_index->{$slot_id}
       : undef,
     args_mode_code => _args_mode_code($self->args_mode),
-    args_payload => _clone_value(($self->args_mode || q()) eq 'STATIC' ? $self->args_payload : undef),
+    args_payload => _clone_value($self->args_payload),
     args_mode => $self->args_mode,
     has_args => $self->has_args,
     directives_mode => $self->directives_mode,
+    directives_mode_code => _directives_mode_code($self->directives_mode),
+    directives_payload => _clone_value($self->directives_payload),
     has_directives => $self->has_directives,
     child_block_index => defined $self->child_block_name && exists $block_index->{ $self->child_block_name }
       ? $block_index->{ $self->child_block_name }
@@ -186,6 +188,8 @@ sub to_native_compact_struct {
     $struct->{args_mode_code},
     $struct->{args_payload},
     $struct->{has_args},
+    $struct->{directives_mode_code},
+    $struct->{directives_payload},
     $struct->{has_directives},
     $self->field_name,
     $self->result_name,
@@ -202,6 +206,13 @@ sub _dispatch_family_code {
 }
 
 sub _args_mode_code {
+  my ($mode) = @_;
+  return 1 if ($mode || q()) eq 'STATIC';
+  return 2 if ($mode || q()) eq 'DYNAMIC';
+  return 0;
+}
+
+sub _directives_mode_code {
   my ($mode) = @_;
   return 1 if ($mode || q()) eq 'STATIC';
   return 2 if ($mode || q()) eq 'DYNAMIC';

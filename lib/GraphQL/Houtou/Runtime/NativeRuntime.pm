@@ -225,19 +225,21 @@ sub execute_program {
   die "engine => 'perl' is no longer supported for sync runtime execution.\n"
     if defined $opts{engine} && $opts{engine} eq 'perl';
 
-  my $candidate = $vm_program;
   $opts{engine} = delete $opts{vm_engine}
     if !defined $opts{engine} && exists $opts{vm_engine};
-  $candidate = __PACKAGE__->specialize_program_for_native(
+  my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
     $self->runtime_schema,
     $vm_program,
-    %opts,
+    $opts{variables} || {},
   );
-
-  die "Program cannot be specialized into the native VM path.\n"
-    if __PACKAGE__->preferred_engine_for_program($candidate, %opts) ne 'native';
-
-  return $self->execute_compact_program($candidate, %opts);
+  GraphQL::Houtou::_bootstrap_xs();
+  my $native_program = $vm_program->to_native_program_handle;
+  my $candidate = GraphQL::Houtou::XS::VM::specialize_native_program_xs(
+    $self->_native_runtime_handle,
+    $native_program,
+    $prepared_variables,
+  );
+  return $self->execute_compact_program($candidate, %opts, variables => $prepared_variables);
 }
 
 sub execute_compact_program {
@@ -248,6 +250,7 @@ sub execute_compact_program {
     $native_program,
     $opts{root_value},
     $opts{context},
+    $opts{variables},
   );
 }
 
@@ -270,6 +273,7 @@ sub execute_bundle {
     $bundle,
     $opts{root_value},
     $opts{context},
+    $opts{variables},
   );
 }
 

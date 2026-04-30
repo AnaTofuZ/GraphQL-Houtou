@@ -33,6 +33,7 @@ use constant {
   NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT   => 23,
   ARGS_PAYLOAD_INDEX_SLOT                    => 24,
   DIRECTIVES_PAYLOAD_INDEX_SLOT              => 25,
+  BLOCK_SLOT                                 => 26,
 };
 
 sub new {
@@ -64,6 +65,7 @@ sub new {
     $args{native_abstract_child_block_indexes} || {},
     $args{args_payload_index},
     $args{directives_payload_index},
+    undef,
   ], $class;
 }
 
@@ -80,10 +82,14 @@ sub dispatch_family { return $_[0][DISPATCH_FAMILY_SLOT] }
 sub child_block_name { return $_[0][CHILD_BLOCK_NAME_SLOT] }
 sub abstract_child_blocks { return $_[0][ABSTRACT_CHILD_BLOCKS_SLOT] }
 sub args_mode { return $_[0][ARGS_MODE_SLOT] }
-sub args_payload { return $_[0][ARGS_PAYLOAD_SLOT] }
+sub args_payload {
+  return _catalog_payload($_[0], ARGS_PAYLOAD_SLOT, ARGS_PAYLOAD_INDEX_SLOT, 'args_payloads');
+}
 sub has_args { return $_[0][HAS_ARGS_SLOT] }
 sub directives_mode { return $_[0][DIRECTIVES_MODE_SLOT] }
-sub directives_payload { return $_[0][DIRECTIVES_PAYLOAD_SLOT] }
+sub directives_payload {
+  return _catalog_payload($_[0], DIRECTIVES_PAYLOAD_SLOT, DIRECTIVES_PAYLOAD_INDEX_SLOT, 'directives_payloads');
+}
 sub has_directives { return $_[0][HAS_DIRECTIVES_SLOT] }
 sub bound_slot { return $_[0][BOUND_SLOT_SLOT] }
 sub bound_child_block { return $_[0][BOUND_CHILD_BLOCK_SLOT] }
@@ -93,6 +99,7 @@ sub native_child_block_index { return $_[0][NATIVE_CHILD_BLOCK_INDEX_SLOT] }
 sub native_abstract_child_block_indexes { return $_[0][NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT] }
 sub args_payload_index { return $_[0][ARGS_PAYLOAD_INDEX_SLOT] }
 sub directives_payload_index { return $_[0][DIRECTIVES_PAYLOAD_INDEX_SLOT] }
+sub block { return $_[0][BLOCK_SLOT] }
 
 sub set_field_name { $_[0][FIELD_NAME_SLOT] = $_[1]; return $_[1] }
 sub set_result_name { $_[0][RESULT_NAME_SLOT] = $_[1]; return $_[1] }
@@ -110,6 +117,12 @@ sub set_args_payload { $_[0][ARGS_PAYLOAD_SLOT] = $_[1]; return $_[1] }
 sub set_has_directives { $_[0][HAS_DIRECTIVES_SLOT] = $_[1] ? 1 : 0; return $_[0][HAS_DIRECTIVES_SLOT] }
 sub set_directives_mode { $_[0][DIRECTIVES_MODE_SLOT] = $_[1] || 'NONE'; return $_[0][DIRECTIVES_MODE_SLOT] }
 sub set_directives_payload { $_[0][DIRECTIVES_PAYLOAD_SLOT] = $_[1]; return $_[1] }
+sub set_block {
+  my ($self, $block) = @_;
+  $self->[BLOCK_SLOT] = $block;
+  Scalar::Util::weaken($self->[BLOCK_SLOT]) if ref($self->[BLOCK_SLOT]);
+  return $self->[BLOCK_SLOT];
+}
 
 sub to_struct {
   my ($self) = @_;
@@ -232,6 +245,18 @@ sub _clone_value {
   return [ map { _clone_value($_) } @$value ] if $ref eq 'ARRAY';
   return { map { $_ => _clone_value($value->{$_}) } keys %$value } if $ref eq 'HASH';
   return $value;
+}
+
+sub _catalog_payload {
+  my ($self, $payload_slot, $index_slot, $catalog_method) = @_;
+  my $payload = $self->[$payload_slot];
+  return $payload if defined $payload;
+  my $index = $self->[$index_slot];
+  return undef if !defined $index;
+  my $block = $self->block or return undef;
+  my $program = $block->program or return undef;
+  my $catalog = $program->$catalog_method || [];
+  return $catalog->[$index];
 }
 
 1;

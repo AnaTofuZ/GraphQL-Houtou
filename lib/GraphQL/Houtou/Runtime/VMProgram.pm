@@ -3,6 +3,7 @@ package GraphQL::Houtou::Runtime::VMProgram;
 use 5.014;
 use strict;
 use warnings;
+use Scalar::Util qw(refaddr);
 
 use GraphQL::Houtou ();
 
@@ -99,7 +100,7 @@ sub new {
   my @blocks = @{ $args{blocks} || [] };
   my %block_map = map { defined $_->name ? ($_->name => $_) : () } @blocks;
   $block_map{ $root_block->name } = $root_block if $root_block && defined $root_block->name;
-  return bless [
+  my $self = bless [
     $args{version} || 1,
     $args{operation_type} || 'query',
     $args{operation_name},
@@ -114,6 +115,14 @@ sub new {
     $args{args_payloads} || [],
     $args{directives_payloads} || [],
   ], $class;
+  for my $block (@blocks, ($root_block || ())) {
+    next if !$block;
+    my $owner = $block->can('program') ? $block->program : undef;
+    next if $owner && refaddr($owner) == refaddr($self);
+    $block->set_program($self) if $block->can('set_program');
+  }
+  _canonicalize_catalog_backed_payloads($self);
+  return $self;
 }
 
 sub version { return $_[0][VERSION_SLOT] }
@@ -232,6 +241,37 @@ sub _clone_value {
   return [ map { _clone_value($_) } @$value ] if $ref eq 'ARRAY';
   return { map { $_ => _clone_value($value->{$_}) } keys %$value } if $ref eq 'HASH';
   return $value;
+}
+
+sub _canonicalize_catalog_backed_payloads {
+  my ($self) = @_;
+  my $catalog = GraphQL::Houtou::Runtime::VMProgram::PayloadCatalog->new(
+    args_payloads => $self->args_payloads,
+    directives_payloads => $self->directives_payloads,
+  );
+  for my $block (@{ $self->blocks || [] }, ($self->root_block || ())) {
+    next if !$block;
+    $block->set_program($self) if $block->can('set_program');
+    for my $op (@{ $block->ops || [] }) {
+      next if !$op;
+      my $args_payload = $op->args_payload;
+      if (GraphQL::Houtou::Runtime::VMProgram::PayloadCatalog::_payload_present($args_payload)) {
+        my $index = $catalog->intern_args_payload($args_payload);
+        $op->set_args_payload_index($index);
+        $op->set_args_payload(undef);
+      }
+      my $directives_payload = $op->directives_payload;
+      if (GraphQL::Houtou::Runtime::VMProgram::PayloadCatalog::_payload_present($directives_payload)) {
+        my $index = $catalog->intern_directives_payload($directives_payload);
+        $op->set_directives_payload_index($index);
+        $op->set_directives_payload(undef);
+      }
+    }
+  }
+  $self->[ARGS_PAYLOADS_SLOT] = $catalog->args_payloads;
+  $self->[DIRECTIVES_PAYLOADS_SLOT] = $catalog->directives_payloads;
+  $self->[NATIVE_COMPACT_STRUCT_SLOT] = undef;
+  $self->[NATIVE_PROGRAM_HANDLE_SLOT] = undef;
 }
 
 1;

@@ -3,13 +3,14 @@ package GraphQL::Houtou::Runtime::VMBlock;
 use 5.014;
 use strict;
 use warnings;
-use Scalar::Util qw(refaddr);
+use Scalar::Util qw(refaddr weaken);
 
 use constant {
   NAME_SLOT      => 0,
   TYPE_NAME_SLOT => 1,
   FAMILY_SLOT    => 2,
   OPS_SLOT       => 3,
+  PROGRAM_SLOT   => 4,
 };
 
 sub new {
@@ -19,6 +20,7 @@ sub new {
     $args{type_name},
     $args{family} || 'OBJECT',
     $args{ops} || [],
+    undef,
   ], $class;
 }
 
@@ -26,7 +28,18 @@ sub name { return $_[0][NAME_SLOT] }
 sub type_name { return $_[0][TYPE_NAME_SLOT] }
 sub family { return $_[0][FAMILY_SLOT] }
 sub ops { return $_[0][OPS_SLOT] }
+sub program { return $_[0][PROGRAM_SLOT] }
 sub set_ops { $_[0][OPS_SLOT] = $_[1] || []; return $_[0][OPS_SLOT] }
+sub set_program {
+  my ($self, $program) = @_;
+  $self->[PROGRAM_SLOT] = $program;
+  weaken($self->[PROGRAM_SLOT]) if ref($self->[PROGRAM_SLOT]);
+  for my $op (@{ $self->ops || [] }) {
+    next if !$op || !$op->can('set_block');
+    $op->set_block($self);
+  }
+  return $self->[PROGRAM_SLOT];
+}
 
 sub to_struct {
   my ($self) = @_;

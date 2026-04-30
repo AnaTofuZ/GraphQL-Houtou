@@ -7,14 +7,9 @@ use GraphQL::Houtou ();
 
 use GraphQL::Houtou::Promise::Adapter qw(is_promise_value normalize_promise_code then_promise);
 use GraphQL::Houtou::Runtime::BlockFrame ();
-use GraphQL::Houtou::Runtime::Cursor ();
 use GraphQL::Houtou::Runtime::ErrorRecord ();
-use GraphQL::Houtou::Runtime::FieldFrame ();
 use GraphQL::Houtou::Runtime::InputCoercion ();
 use GraphQL::Houtou::Runtime::LazyInfo ();
-use GraphQL::Houtou::Runtime::Outcome ();
-use GraphQL::Houtou::Runtime::PathFrame ();
-use GraphQL::Houtou::Runtime::Writer ();
 use Scalar::Util qw(reftype);
 
 use constant {
@@ -49,12 +44,17 @@ sub build_for_program {
   return $class->new(
     runtime_schema => $runtime_schema,
     program => $program,
-    cursor => GraphQL::Houtou::Runtime::Cursor->new(
-      block => undef,
-      native_program => $program->to_native_program_handle,
-      block_index => (defined $program->root_block_index ? $program->root_block_index : -1),
+    cursor => GraphQL::Houtou::XS::VM::cursor_new_xs(
+      'GraphQL::Houtou::Runtime::Cursor',
+      undef,
+      $program->to_native_program_handle,
+      (defined $program->root_block_index ? $program->root_block_index : -1),
+      0,
+      0,
+      undef,
+      undef,
     ),
-    writer => GraphQL::Houtou::Runtime::Writer->new(),
+    writer => GraphQL::Houtou::XS::VM::writer_new_xs('GraphQL::Houtou::Runtime::Writer'),
     context => $opts{context},
     variables => GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
       $runtime_schema,
@@ -237,13 +237,13 @@ sub finalize_current_block {
 sub run_current_field_via {
   my ($self, $resolve_cb, $complete_cb) = @_;
   my $field = $self->current_field_frame;
-  my $source = $field->source;
-  my $path_frame = $field->path_frame;
+  my $source = GraphQL::Houtou::XS::VM::field_frame_source_xs($field);
+  my $path_frame = GraphQL::Houtou::XS::VM::field_frame_path_frame_xs($field);
   my ($ok, $value) = $self->_capture_eval(sub {
     return $resolve_cb->($self, $source, $path_frame);
   });
   return $self->_error_outcome($value, $path_frame) if !$ok;
-  $field->set_resolved_value($value);
+  GraphQL::Houtou::XS::VM::field_frame_set_resolved_value_xs($field, $value);
 
   if ($self->promise_code && is_promise_value($self->promise_code, $value)) {
     return GraphQL::Houtou::Promise::Adapter::then_promise($self->promise_code, $value, sub {
@@ -398,13 +398,13 @@ sub object_outcome_from_child_block {
   my $child_value = $self->execute_child_block($block_index, $value, $path_frame);
   if ($self->promise_code && is_promise_value($self->promise_code, $child_value)) {
     return then_promise($self->promise_code, $child_value, sub {
-      return GraphQL::Houtou::Runtime::Outcome->object(
+      return GraphQL::Houtou::XS::VM::outcome_object_xs(
         $_[0],
         undef,
       );
     });
   }
-  return GraphQL::Houtou::Runtime::Outcome->object(
+  return GraphQL::Houtou::XS::VM::outcome_object_xs(
     $child_value,
     undef,
   );
@@ -412,7 +412,7 @@ sub object_outcome_from_child_block {
 
 sub scalar_outcome {
   my ($self, $value, $error_record) = @_;
-  return GraphQL::Houtou::Runtime::Outcome->scalar(
+  return GraphQL::Houtou::XS::VM::outcome_scalar_xs(
     $value,
     ($error_record ? [ $error_record ] : []),
   );
@@ -432,9 +432,13 @@ sub complete_list_value {
   return $self->scalar_outcome($value) if ref($value) ne 'ARRAY';
 
   my $child = $self->current_child_block;
-  my @items;
+    my @items;
   for my $i (0 .. $#$value) {
-    my $item_path = GraphQL::Houtou::Runtime::PathFrame->new(parent => $path_frame, key => $i);
+    my $item_path = GraphQL::Houtou::XS::VM::path_frame_new_xs(
+      'GraphQL::Houtou::Runtime::PathFrame',
+      $path_frame,
+      $i,
+    );
     push @items, $child ? $self->execute_block($child, $value->[$i], $item_path) : $value->[$i];
   }
 
@@ -442,14 +446,14 @@ sub complete_list_value {
     my $aggregate = GraphQL::Houtou::Promise::Adapter::all_promise($self->promise_code, @items);
     return then_promise($self->promise_code, $aggregate, sub {
       my @resolved = _promise_all_values_to_array(@_);
-      return GraphQL::Houtou::Runtime::Outcome->list(
+      return GraphQL::Houtou::XS::VM::outcome_list_xs(
         \@resolved,
         undef,
       );
     });
   }
 
-  return GraphQL::Houtou::Runtime::Outcome->list(
+  return GraphQL::Houtou::XS::VM::outcome_list_xs(
     \@items,
     undef,
   );
@@ -595,23 +599,23 @@ sub finalize_response {
     GraphQL::Houtou::_bootstrap_xs();
     return GraphQL::Houtou::XS::VM::exec_state_run_program_xs($self, $self->root_value)
       if !defined $data;
-    return {
-      data => $data,
-      errors => $self->writer->materialize_errors,
-    };
-  }
-  if ($self->promise_code && is_promise_value($self->promise_code, $data)) {
-    return then_promise($self->promise_code, $data, sub {
-      return {
-        data => $_[0],
-        errors => $self->writer->materialize_errors,
-      };
-    });
-  }
   return {
     data => $data,
-    errors => $self->writer->materialize_errors,
+    errors => GraphQL::Houtou::XS::VM::writer_materialize_errors_xs($self->writer),
   };
+}
+if ($self->promise_code && is_promise_value($self->promise_code, $data)) {
+  return then_promise($self->promise_code, $data, sub {
+    return {
+      data => $_[0],
+      errors => GraphQL::Houtou::XS::VM::writer_materialize_errors_xs($self->writer),
+    };
+  });
+}
+return {
+  data => $data,
+  errors => GraphQL::Houtou::XS::VM::writer_materialize_errors_xs($self->writer),
+};
 }
 
 sub should_execute_current_op {
@@ -643,7 +647,7 @@ sub _error_record {
 
 sub _error_outcome {
   my ($self, $error, $path_frame) = @_;
-  return GraphQL::Houtou::Runtime::Outcome->scalar(
+  return GraphQL::Houtou::XS::VM::outcome_scalar_xs(
     undef,
     [ $self->_error_record($error, $path_frame) ],
   );

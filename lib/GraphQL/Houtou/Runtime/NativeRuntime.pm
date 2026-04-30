@@ -128,16 +128,22 @@ sub compile_bundle_descriptor {
   };
 }
 
+sub compile_program_descriptor {
+  my ($self, $program, %opts) = @_;
+  my $candidate = $self->specialize_program($program, %opts);
+  return $candidate->to_native_compact_struct;
+}
+
+sub compile_program_descriptor_for_document {
+  my ($self, $document, %opts) = @_;
+  my $program = $self->compile_program($document, %opts);
+  return $self->compile_program_descriptor($program, %opts);
+}
+
 sub compile_bundle_descriptor_for_document {
   my ($self, $document, %opts) = @_;
-  return {
-    runtime => $self->_native_runtime_compact_struct,
-    program => GraphQL::Houtou::Runtime::OperationCompiler->compile_operation_native_compact(
-      $self->runtime_schema,
-      $document,
-      %opts,
-    ),
-  };
+  my $program = $self->compile_program($document, %opts);
+  return $self->compile_bundle_descriptor($program, %opts);
 }
 
 sub _compact_bundle_descriptor {
@@ -293,7 +299,8 @@ sub _specialize_directives {
 
 sub _specialize_args {
   my ($runtime_schema, $op, $variables) = @_;
-  my $arg_defs = $op->arg_defs || {};
+  my $slot = $op->bound_slot;
+  my $arg_defs = $slot ? ($slot->arg_defs || {}) : {};
   if (!keys %$arg_defs) {
     $op->set_has_args(0);
     $op->set_args_mode('NONE');

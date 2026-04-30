@@ -39,7 +39,7 @@ sub to_struct {
 }
 
 sub to_native_struct {
-  my ($self, $block_index) = @_;
+  my ($self, $block_index, $payload_catalog) = @_;
   my @slot_table;
   my %slot_index;
   for my $op (@{ $self->ops || [] }) {
@@ -57,12 +57,12 @@ sub to_native_struct {
     family => $self->family,
     family_code => _family_code($self->family),
     slots => \@slot_table,
-    ops => [ map { $_->to_native_struct($block_index, \%slot_index) } @{ $self->ops || [] } ],
+    ops => [ map { $_->to_native_struct($block_index, \%slot_index, $payload_catalog) } @{ $self->ops || [] } ],
   };
 }
 
 sub to_native_compact_struct {
-  my ($self, $block_index) = @_;
+  my ($self, $block_index, $payload_catalog) = @_;
   my @slot_table;
   my %slot_index;
   for my $op (@{ $self->ops || [] }) {
@@ -79,7 +79,7 @@ sub to_native_compact_struct {
     $self->type_name,
     _family_code($self->family),
     \@slot_table,
-    [ map { $_->to_native_compact_struct($block_index, \%slot_index) } @{ $self->ops || [] } ],
+    [ map { $_->to_native_compact_struct($block_index, \%slot_index, $payload_catalog) } @{ $self->ops || [] } ],
   ];
 }
 

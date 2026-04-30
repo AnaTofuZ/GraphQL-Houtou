@@ -11,6 +11,8 @@ sub new {
   return GraphQL::Houtou::XS::VM::cursor_new_xs(
     $class,
     $args{block},
+    $args{native_program},
+    (defined $args{block_index} ? $args{block_index} : -1),
     ($args{slot_index} || 0),
     ($args{op_index} || 0),
     $args{current_slot},
@@ -56,7 +58,7 @@ sub restore {
 
 sub enter_block {
   GraphQL::Houtou::_bootstrap_xs();
-  GraphQL::Houtou::XS::VM::cursor_enter_block_xs($_[0], $_[1]);
+  GraphQL::Houtou::XS::VM::cursor_enter_block_xs($_[0], $_[1], (@_ > 2 ? $_[2] : -1));
   return $_[0];
 }
 

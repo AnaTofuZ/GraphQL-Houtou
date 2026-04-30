@@ -175,11 +175,7 @@ sub execute {
 sub compile_native_program_descriptor {
   my ($self, $document, %opts) = @_;
   my $runtime = $self->build_native_runtime;
-  return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation_native_compact(
-    $runtime->runtime_schema,
-    $document,
-    %opts,
-  );
+  return $runtime->compile_program_descriptor_for_document($document, %opts);
 }
 
 sub compile_native_program {

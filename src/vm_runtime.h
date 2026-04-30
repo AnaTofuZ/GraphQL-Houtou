@@ -147,6 +147,8 @@ typedef struct {
   IV abstract_child_count;
   IV args_mode_code;
   IV directives_mode_code;
+  IV args_payload_index;
+  IV directives_payload_index;
   gql_runtime_vm_native_args_payload_t *args_payload_native;
   gql_runtime_vm_native_directives_payload_t *directives_payload_native;
   U8 has_args;
@@ -183,7 +185,11 @@ typedef struct {
   IV operation_type_code;
   IV root_block_index;
   IV block_count;
+  IV args_payload_count;
+  IV directives_payload_count;
   gql_runtime_vm_native_block_t *blocks;
+  gql_runtime_vm_native_args_payload_t **args_payloads;
+  gql_runtime_vm_native_directives_payload_t **directives_payloads;
 } gql_runtime_vm_native_program_t;
 
 typedef struct gql_runtime_vm_path_frame gql_runtime_vm_path_frame_t;
@@ -274,6 +280,8 @@ struct gql_runtime_vm_native_dynamic_value {
 typedef struct {
   SV *runtime_schema;
   SV *program;
+  gql_runtime_vm_native_runtime_t *native_runtime;
+  gql_runtime_vm_native_program_t *native_program;
   gql_runtime_vm_cursor_t *cursor;
   gql_runtime_vm_block_frame_t *frame;
   IV frame_stack_count;
@@ -290,7 +298,8 @@ typedef struct {
 
 struct gql_runtime_vm_cursor_t {
   UV refcount;
-  SV *block;
+  gql_runtime_vm_native_program_t *native_program;
+  IV block_index;
   IV slot_index;
   IV op_index;
 };
@@ -361,6 +370,9 @@ static SV *gql_runtime_vm_op_result_name_sv(pTHX_ SV *op_sv);
 static AV *gql_runtime_vm_cursor_ops_av(pTHX_ const gql_runtime_vm_cursor_t *cursor);
 static SV *gql_runtime_vm_cursor_current_op_borrowed_sv(pTHX_ const gql_runtime_vm_cursor_t *cursor);
 static SV *gql_runtime_vm_cursor_current_slot_borrowed_sv(pTHX_ const gql_runtime_vm_cursor_t *cursor);
+static const gql_runtime_vm_native_block_t *gql_runtime_vm_cursor_current_native_block(const gql_runtime_vm_cursor_t *cursor);
+static const gql_runtime_vm_native_op_t *gql_runtime_vm_cursor_current_native_op(const gql_runtime_vm_cursor_t *cursor);
+static const gql_runtime_vm_native_slot_t *gql_runtime_vm_cursor_current_native_slot(const gql_runtime_vm_cursor_t *cursor);
 static SV *gql_runtime_vm_new_handle_sv(pTHX_ const char *pkg, void *ptr);
 static SV *gql_runtime_vm_fetch_hash_entry_sv(pTHX_ HV *hv, const char *key, I32 keylen);
 static gql_runtime_vm_cursor_t *gql_runtime_vm_expect_cursor(pTHX_ SV *self);
@@ -371,7 +383,15 @@ static void gql_runtime_vm_error_record_decref(pTHX_ gql_runtime_vm_error_record
 static void gql_runtime_vm_outcome_incref(gql_runtime_vm_outcome_t *outcome);
 static void gql_runtime_vm_outcome_decref(pTHX_ gql_runtime_vm_outcome_t *outcome);
 static void gql_runtime_vm_writer_push_error_record(gql_runtime_vm_writer_t *writer, gql_runtime_vm_error_record_t *record);
+static void gql_runtime_vm_block_frame_push_pending_pvn(
+  pTHX_
+  gql_runtime_vm_block_frame_t *frame,
+  const char *result_name_pv,
+  STRLEN result_name_len,
+  SV *outcome
+);
 static void gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, SV *result_name, SV *outcome);
+static SV *gql_runtime_vm_program_block_by_index_sv(pTHX_ SV *program_sv, IV block_index);
 static void gql_runtime_vm_block_frame_clear_pending(pTHX_ gql_runtime_vm_block_frame_t *frame);
 static void gql_runtime_vm_path_frame_decref(gql_runtime_vm_path_frame_t *frame);
 static SV *gql_runtime_vm_call_cb4(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV *arg3);
@@ -456,45 +476,88 @@ gql_runtime_vm_op_result_name_sv(pTHX_ SV *op_sv)
   return gql_runtime_vm_op_slot_sv(aTHX_ op_sv, 7);
 }
 
+static const gql_runtime_vm_native_block_t *
+gql_runtime_vm_cursor_current_native_block(const gql_runtime_vm_cursor_t *cursor)
+{
+  if (!cursor || !cursor->native_program) {
+    return NULL;
+  }
+  if (cursor->block_index < 0 || cursor->block_index >= cursor->native_program->block_count) {
+    return NULL;
+  }
+  return &cursor->native_program->blocks[cursor->block_index];
+}
+
+static const gql_runtime_vm_native_op_t *
+gql_runtime_vm_cursor_current_native_op(const gql_runtime_vm_cursor_t *cursor)
+{
+  const gql_runtime_vm_native_block_t *block = gql_runtime_vm_cursor_current_native_block(cursor);
+  if (!block) {
+    return NULL;
+  }
+  if (cursor->op_index < 0 || cursor->op_index >= block->op_count) {
+    return NULL;
+  }
+  return &block->ops[cursor->op_index];
+}
+
+static const gql_runtime_vm_native_slot_t *
+gql_runtime_vm_cursor_current_native_slot(const gql_runtime_vm_cursor_t *cursor)
+{
+  const gql_runtime_vm_native_block_t *block = gql_runtime_vm_cursor_current_native_block(cursor);
+  if (!block) {
+    return NULL;
+  }
+  if (cursor->slot_index < 0 || cursor->slot_index >= block->slot_count) {
+    return NULL;
+  }
+  return &block->slots[cursor->slot_index];
+}
+
 static AV *
 gql_runtime_vm_cursor_ops_av(pTHX_ const gql_runtime_vm_cursor_t *cursor)
 {
-  AV *block_av;
-  SV **svp;
-
-  if (!cursor || !cursor->block || !SvOK(cursor->block) || !SvROK(cursor->block) || SvTYPE(SvRV(cursor->block)) != SVt_PVAV) {
-    return NULL;
-  }
-
-  block_av = (AV *)SvRV(cursor->block);
-  svp = av_fetch(block_av, 3, 0);
-  if (!svp || !SvOK(*svp) || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVAV) {
-    return NULL;
-  }
-
-  return (AV *)SvRV(*svp);
+  (void)cursor;
+  return NULL;
 }
 
 static SV *
 gql_runtime_vm_cursor_current_op_borrowed_sv(pTHX_ const gql_runtime_vm_cursor_t *cursor)
 {
-  AV *ops_av;
-  SV **svp;
-
-  ops_av = gql_runtime_vm_cursor_ops_av(aTHX_ cursor);
-  if (!ops_av || !cursor || cursor->op_index < 0 || cursor->op_index > av_len(ops_av)) {
-    return NULL;
-  }
-
-  svp = av_fetch(ops_av, cursor->op_index, 0);
-  return (svp && SvOK(*svp)) ? *svp : NULL;
+  (void)cursor;
+  return NULL;
 }
 
 static SV *
 gql_runtime_vm_cursor_current_slot_borrowed_sv(pTHX_ const gql_runtime_vm_cursor_t *cursor)
 {
-  SV *op_sv = gql_runtime_vm_cursor_current_op_borrowed_sv(aTHX_ cursor);
-  return op_sv ? gql_runtime_vm_op_slot_sv(aTHX_ op_sv, 19) : NULL;
+  (void)cursor;
+  return NULL;
+}
+
+static SV *
+gql_runtime_vm_program_block_by_index_sv(pTHX_ SV *program_sv, IV block_index)
+{
+  AV *program_av;
+  SV **blocks_svp;
+  AV *blocks_av;
+  SV **block_svp;
+
+  if (!program_sv || !SvOK(program_sv) || !SvROK(program_sv) || SvTYPE(SvRV(program_sv)) != SVt_PVAV) {
+    return NULL;
+  }
+  if (block_index < 0) {
+    return NULL;
+  }
+
+  program_av = (AV *)SvRV(program_sv);
+  blocks_svp = av_fetch(program_av, 4, 0);
+  if (!blocks_svp || !*blocks_svp || !SvOK(*blocks_svp) || !SvROK(*blocks_svp) || SvTYPE(SvRV(*blocks_svp)) != SVt_PVAV) {
+    return NULL;
+  }
+  blocks_av = (AV *)SvRV(*blocks_svp);
+  block_svp = av_fetch(blocks_av, block_index, 0);
+  return (block_svp && *block_svp && SvOK(*block_svp)) ? *block_svp : NULL;
 }
 
 static gql_runtime_vm_native_value_t *
@@ -1402,19 +1465,25 @@ gql_runtime_vm_writer_push_error_record(gql_runtime_vm_writer_t *writer, gql_run
 }
 
 static void
-gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, SV *result_name, SV *outcome)
+gql_runtime_vm_block_frame_push_pending_pvn(
+  pTHX_
+  gql_runtime_vm_block_frame_t *frame,
+  const char *result_name_pv,
+  STRLEN result_name_len,
+  SV *outcome
+)
 {
-  STRLEN result_name_len = 0;
-  const char *result_name_pv = NULL;
   gql_runtime_vm_pending_entry_t *entry = NULL;
-  if (!frame || !result_name || !outcome) {
+
+  if (!frame || !result_name_pv || result_name_len == 0 || !outcome) {
     return;
   }
-  result_name_pv = SvPV(result_name, result_name_len);
+
   if (frame->pending_count == frame->pending_capacity) {
     frame->pending_capacity = frame->pending_capacity ? frame->pending_capacity * 2 : 4;
     Renew(frame->pending_entries, frame->pending_capacity, gql_runtime_vm_pending_entry_t);
   }
+
   entry = &frame->pending_entries[frame->pending_count];
   entry->result_name_pv = savepvn(result_name_pv, result_name_len);
   entry->result_name_len = result_name_len;
@@ -1427,6 +1496,23 @@ gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *fram
     entry->payload.promise_sv = newSVsv(outcome);
   }
   frame->pending_count++;
+}
+
+static void
+gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, SV *result_name, SV *outcome)
+{
+  STRLEN result_name_len = 0;
+  const char *result_name_pv = NULL;
+  if (!frame || !result_name || !outcome) {
+    return;
+  }
+  result_name_pv = SvPV(result_name, result_name_len);
+  gql_runtime_vm_block_frame_push_pending_pvn(
+    aTHX_ frame,
+    result_name_pv,
+    result_name_len,
+    outcome
+  );
 }
 
 static void
@@ -1462,7 +1548,8 @@ gql_runtime_vm_cursor_snapshot_sv(pTHX_ SV *cursor_sv)
 
   cursor = gql_runtime_vm_expect_cursor(aTHX_ cursor_sv);
   Newxz(snapshot, 1, gql_runtime_vm_cursor_t);
-  snapshot->block = newSVsv(cursor->block ? cursor->block : &PL_sv_undef);
+  snapshot->native_program = cursor->native_program;
+  snapshot->block_index = cursor->block_index;
   snapshot->slot_index = cursor->slot_index;
   snapshot->op_index = cursor->op_index;
 
@@ -1477,10 +1564,12 @@ gql_runtime_vm_cursor_snapshot_copy(pTHX_ gql_runtime_vm_cursor_t *dst, const gq
   }
   Zero(dst, 1, gql_runtime_vm_cursor_t);
   if (!src) {
-    dst->block = newSVsv(&PL_sv_undef);
+    dst->native_program = NULL;
+    dst->block_index = -1;
     return;
   }
-  dst->block = newSVsv(src->block ? src->block : &PL_sv_undef);
+  dst->native_program = src->native_program;
+  dst->block_index = src->block_index;
   dst->slot_index = src->slot_index;
   dst->op_index = src->op_index;
 }
@@ -1491,7 +1580,6 @@ gql_runtime_vm_cursor_destroy_copy(pTHX_ gql_runtime_vm_cursor_t *cursor)
   if (!cursor) {
     return;
   }
-  SvREFCNT_dec(cursor->block);
   Zero(cursor, 1, gql_runtime_vm_cursor_t);
 }
 
@@ -1501,7 +1589,6 @@ gql_runtime_vm_cursor_restore_copy(pTHX_ gql_runtime_vm_cursor_t *dst, const gql
   if (!dst) {
     return;
   }
-  SvREFCNT_dec(dst->block);
   gql_runtime_vm_cursor_snapshot_copy(aTHX_ dst, src);
 }
 
@@ -1515,7 +1602,6 @@ gql_runtime_vm_cursor_restore_sv(pTHX_ gql_runtime_vm_cursor_t *dst, SV *snapsho
   }
 
   src = gql_runtime_vm_expect_cursor(aTHX_ snapshot_sv);
-  SvREFCNT_dec(dst->block);
   gql_runtime_vm_cursor_snapshot_copy(aTHX_ dst, src);
 }
 
@@ -2364,6 +2450,18 @@ gql_runtime_vm_native_program_destroy(gql_runtime_vm_native_program_t *program)
       Safefree(program->blocks[i].ops);
     }
   }
+  if (program->args_payloads) {
+    for (i = 0; i < program->args_payload_count; i++) {
+      gql_runtime_vm_native_args_payload_destroy(aTHX_ program->args_payloads[i]);
+    }
+  }
+  if (program->directives_payloads) {
+    for (i = 0; i < program->directives_payload_count; i++) {
+      gql_runtime_vm_native_directives_payload_destroy(aTHX_ program->directives_payloads[i]);
+    }
+  }
+  Safefree(program->args_payloads);
+  Safefree(program->directives_payloads);
   Safefree(program->blocks);
   Safefree(program);
 }
@@ -2890,19 +2988,23 @@ gql_runtime_vm_parse_native_op(pTHX_ SV *sv, gql_runtime_vm_native_op_t *out)
     svp = av_fetch(av, 7, 0);
     out->args_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : GQL_VM_ARGS_NONE;
     svp = av_fetch(av, 8, 0);
+    out->args_payload_index = (svp && SvOK(*svp)) ? SvIV(*svp) : -1;
+    svp = av_fetch(av, 9, 0);
     out->args_payload_native =
       (svp && SvOK(*svp) && SvROK(*svp) && SvTYPE(SvRV(*svp)) == SVt_PVHV)
       ? gql_runtime_vm_native_args_payload_from_hv(aTHX_ (HV *)SvRV(*svp))
       : NULL;
-    svp = av_fetch(av, 9, 0);
-    out->has_args = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
     svp = av_fetch(av, 10, 0);
-    out->directives_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : GQL_VM_ARGS_NONE;
+    out->has_args = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
     svp = av_fetch(av, 11, 0);
+    out->directives_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : GQL_VM_ARGS_NONE;
+    svp = av_fetch(av, 12, 0);
+    out->directives_payload_index = (svp && SvOK(*svp)) ? SvIV(*svp) : -1;
+    svp = av_fetch(av, 13, 0);
     out->directives_payload_native = (svp && SvOK(*svp))
       ? gql_runtime_vm_native_directives_payload_from_sv(aTHX_ *svp)
       : NULL;
-    svp = av_fetch(av, 12, 0);
+    svp = av_fetch(av, 14, 0);
     out->has_directives = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
     return 1;
   }
@@ -2960,16 +3062,174 @@ gql_runtime_vm_parse_native_op(pTHX_ SV *sv, gql_runtime_vm_native_op_t *out)
   }
   svp = hv_fetch(hv, "args_mode_code", 14, 0);
   out->args_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : GQL_VM_ARGS_NONE;
+  svp = hv_fetch(hv, "args_payload_index", 18, 0);
+  out->args_payload_index = (svp && SvOK(*svp)) ? SvIV(*svp) : -1;
   svp = hv_fetch(hv, "args_payload", 12, 0);
   out->args_payload_native =
     (svp && SvOK(*svp) && SvROK(*svp) && SvTYPE(SvRV(*svp)) == SVt_PVHV)
     ? gql_runtime_vm_native_args_payload_from_hv(aTHX_ (HV *)SvRV(*svp))
     : NULL;
+  svp = hv_fetch(hv, "directives_payload_index", 24, 0);
+  out->directives_payload_index = (svp && SvOK(*svp)) ? SvIV(*svp) : -1;
   svp = hv_fetch(hv, "directives_payload", 18, 0);
   out->directives_payload_native = (svp && SvOK(*svp))
     ? gql_runtime_vm_native_directives_payload_from_sv(aTHX_ *svp)
     : NULL;
   return 1;
+}
+
+static void
+gql_runtime_vm_parse_native_program_payload_catalogs(
+  pTHX_
+  HV *program_hv,
+  gql_runtime_vm_native_program_t *program
+)
+{
+  AV *payloads_av;
+  IV i;
+  SV **svp;
+
+  svp = hv_fetch(program_hv, "args_payloads_compact", 21, 0);
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &payloads_av)) {
+    svp = hv_fetch(program_hv, "args_payloads", 13, 0);
+  }
+  if (svp && gql_runtime_vm_sv_to_av(aTHX_ *svp, &payloads_av)) {
+    program->args_payload_count = av_len(payloads_av) + 1;
+    if (program->args_payload_count > 0) {
+      Newxz(program->args_payloads, program->args_payload_count, gql_runtime_vm_native_args_payload_t *);
+      for (i = 0; i < program->args_payload_count; i++) {
+        SV **payload_svp = av_fetch(payloads_av, i, 0);
+        if (!payload_svp) {
+          gql_runtime_vm_native_program_destroy(program);
+          croak("native VM args payload entry %ld is missing", (long)i);
+        }
+        if (*payload_svp && SvOK(*payload_svp) && SvROK(*payload_svp) && SvTYPE(SvRV(*payload_svp)) == SVt_PVHV) {
+          program->args_payloads[i] =
+            gql_runtime_vm_native_args_payload_from_hv(aTHX_ (HV *)SvRV(*payload_svp));
+        }
+      }
+    }
+  }
+
+  svp = hv_fetch(program_hv, "directives_payloads_compact", 27, 0);
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &payloads_av)) {
+    svp = hv_fetch(program_hv, "directives_payloads", 19, 0);
+  }
+  if (svp && gql_runtime_vm_sv_to_av(aTHX_ *svp, &payloads_av)) {
+    program->directives_payload_count = av_len(payloads_av) + 1;
+    if (program->directives_payload_count > 0) {
+      Newxz(program->directives_payloads, program->directives_payload_count, gql_runtime_vm_native_directives_payload_t *);
+      for (i = 0; i < program->directives_payload_count; i++) {
+        SV **payload_svp = av_fetch(payloads_av, i, 0);
+        if (!payload_svp) {
+          gql_runtime_vm_native_program_destroy(program);
+          croak("native VM directives payload entry %ld is missing", (long)i);
+        }
+        if (*payload_svp && SvOK(*payload_svp)) {
+          program->directives_payloads[i] =
+            gql_runtime_vm_native_directives_payload_from_sv(aTHX_ *payload_svp);
+        }
+      }
+    }
+  }
+}
+
+static void
+gql_runtime_vm_free_native_payload_catalogs(
+  pTHX_
+  gql_runtime_vm_native_args_payload_t **args_payloads,
+  IV args_payload_count,
+  gql_runtime_vm_native_directives_payload_t **directives_payloads,
+  IV directives_payload_count
+)
+{
+  IV i;
+  if (args_payloads) {
+    for (i = 0; i < args_payload_count; i++) {
+      gql_runtime_vm_native_args_payload_destroy(aTHX_ args_payloads[i]);
+    }
+  }
+  if (directives_payloads) {
+    for (i = 0; i < directives_payload_count; i++) {
+      gql_runtime_vm_native_directives_payload_destroy(aTHX_ directives_payloads[i]);
+    }
+  }
+  Safefree(args_payloads);
+  Safefree(directives_payloads);
+}
+
+static void
+gql_runtime_vm_parse_native_payload_catalogs(
+  pTHX_
+  HV *program_hv,
+  gql_runtime_vm_native_args_payload_t ***args_payloads_out,
+  IV *args_payload_count_out,
+  gql_runtime_vm_native_directives_payload_t ***directives_payloads_out,
+  IV *directives_payload_count_out
+)
+{
+  AV *payloads_av;
+  IV i;
+  SV **svp;
+
+  *args_payloads_out = NULL;
+  *args_payload_count_out = 0;
+  *directives_payloads_out = NULL;
+  *directives_payload_count_out = 0;
+
+  svp = hv_fetch(program_hv, "args_payloads_compact", 21, 0);
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &payloads_av)) {
+    svp = hv_fetch(program_hv, "args_payloads", 13, 0);
+  }
+  if (svp && gql_runtime_vm_sv_to_av(aTHX_ *svp, &payloads_av)) {
+    *args_payload_count_out = av_len(payloads_av) + 1;
+    if (*args_payload_count_out > 0) {
+      Newxz(*args_payloads_out, *args_payload_count_out, gql_runtime_vm_native_args_payload_t *);
+      for (i = 0; i < *args_payload_count_out; i++) {
+        SV **payload_svp = av_fetch(payloads_av, i, 0);
+        if (!payload_svp) {
+          gql_runtime_vm_free_native_payload_catalogs(
+            aTHX_ *args_payloads_out,
+            *args_payload_count_out,
+            *directives_payloads_out,
+            *directives_payload_count_out
+          );
+          croak("native VM args payload entry %ld is missing", (long)i);
+        }
+        if (*payload_svp && SvOK(*payload_svp) && SvROK(*payload_svp) && SvTYPE(SvRV(*payload_svp)) == SVt_PVHV) {
+          (*args_payloads_out)[i] =
+            gql_runtime_vm_native_args_payload_from_hv(aTHX_ (HV *)SvRV(*payload_svp));
+        }
+      }
+    }
+  }
+
+  svp = hv_fetch(program_hv, "directives_payloads_compact", 27, 0);
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &payloads_av)) {
+    svp = hv_fetch(program_hv, "directives_payloads", 19, 0);
+  }
+  if (svp && gql_runtime_vm_sv_to_av(aTHX_ *svp, &payloads_av)) {
+    *directives_payload_count_out = av_len(payloads_av) + 1;
+    if (*directives_payload_count_out > 0) {
+      Newxz(*directives_payloads_out, *directives_payload_count_out, gql_runtime_vm_native_directives_payload_t *);
+      for (i = 0; i < *directives_payload_count_out; i++) {
+        SV **payload_svp = av_fetch(payloads_av, i, 0);
+        if (!payload_svp) {
+          gql_runtime_vm_free_native_payload_catalogs(
+            aTHX_ *args_payloads_out,
+            *args_payload_count_out,
+            *directives_payloads_out,
+            *directives_payload_count_out
+          );
+          croak("native VM directives payload entry %ld is missing", (long)i);
+        }
+        if (*payload_svp && SvOK(*payload_svp)) {
+          (*directives_payloads_out)[i] =
+            gql_runtime_vm_native_directives_payload_from_sv(aTHX_ *payload_svp);
+        }
+      }
+    }
+  }
 }
 
 static int
@@ -3068,7 +3328,12 @@ gql_runtime_vm_native_bundle_from_runtime_and_program_sv(pTHX_ SV *runtime_sv, S
   HV *program_hv;
   AV *runtime_slots_av;
   AV *blocks_av;
+  gql_runtime_vm_native_args_payload_t **args_payloads = NULL;
+  gql_runtime_vm_native_directives_payload_t **directives_payloads = NULL;
+  IV args_payload_count = 0;
+  IV directives_payload_count = 0;
   IV i;
+  IV j;
   SV **svp;
   gql_runtime_vm_native_bundle_t *bundle;
 
@@ -3090,7 +3355,19 @@ gql_runtime_vm_native_bundle_from_runtime_and_program_sv(pTHX_ SV *runtime_sv, S
     croak("native VM program descriptor is missing root_block_index");
   }
 
-  svp = hv_fetch(runtime_hv, "slot_catalog_compact", 20, 0);
+  gql_runtime_vm_parse_native_payload_catalogs(
+    aTHX_
+    program_hv,
+    &args_payloads,
+    &args_payload_count,
+    &directives_payloads,
+    &directives_payload_count
+  );
+
+  svp = hv_fetch(runtime_hv, "slot_catalog_exec", 17, 0);
+  if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &runtime_slots_av)) {
+    svp = hv_fetch(runtime_hv, "slot_catalog_compact", 20, 0);
+  }
   if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &runtime_slots_av)) {
     svp = hv_fetch(runtime_hv, "slot_catalog", 12, 0);
   }
@@ -3120,6 +3397,12 @@ gql_runtime_vm_native_bundle_from_runtime_and_program_sv(pTHX_ SV *runtime_sv, S
     svp = hv_fetch(program_hv, "blocks", 6, 0);
   }
   if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &blocks_av)) {
+    gql_runtime_vm_free_native_payload_catalogs(
+      aTHX_ args_payloads,
+      args_payload_count,
+      directives_payloads,
+      directives_payload_count
+    );
     gql_runtime_vm_native_bundle_destroy(bundle);
     croak("native VM program descriptor is missing blocks");
   }
@@ -3130,15 +3413,69 @@ gql_runtime_vm_native_bundle_from_runtime_and_program_sv(pTHX_ SV *runtime_sv, S
     for (i = 0; i < bundle->block_count; i++) {
       SV **block_svp = av_fetch(blocks_av, i, 0);
       if (!block_svp) {
+        gql_runtime_vm_free_native_payload_catalogs(
+          aTHX_ args_payloads,
+          args_payload_count,
+          directives_payloads,
+          directives_payload_count
+        );
         gql_runtime_vm_native_bundle_destroy(bundle);
         croak("native VM block entry %ld is missing", (long)i);
       }
       if (!gql_runtime_vm_parse_native_block(aTHX_ *block_svp, &bundle->blocks[i])) {
+        gql_runtime_vm_free_native_payload_catalogs(
+          aTHX_ args_payloads,
+          args_payload_count,
+          directives_payloads,
+          directives_payload_count
+        );
         gql_runtime_vm_native_bundle_destroy(bundle);
         croak("native VM block entry %ld is invalid", (long)i);
       }
+      for (j = 0; j < bundle->blocks[i].op_count; j++) {
+        gql_runtime_vm_native_op_t *op = &bundle->blocks[i].ops[j];
+        if (!op->args_payload_native && op->args_payload_index >= 0) {
+          if (op->args_payload_index >= args_payload_count ||
+              !args_payloads ||
+              !args_payloads[op->args_payload_index]) {
+            gql_runtime_vm_free_native_payload_catalogs(
+              aTHX_ args_payloads,
+              args_payload_count,
+              directives_payloads,
+              directives_payload_count
+            );
+            gql_runtime_vm_native_bundle_destroy(bundle);
+            croak("native VM args payload index %ld is invalid", (long)op->args_payload_index);
+          }
+          op->args_payload_native =
+            gql_runtime_vm_native_args_payload_clone(aTHX_ args_payloads[op->args_payload_index]);
+        }
+        if (!op->directives_payload_native && op->directives_payload_index >= 0) {
+          if (op->directives_payload_index >= directives_payload_count ||
+              !directives_payloads ||
+              !directives_payloads[op->directives_payload_index]) {
+            gql_runtime_vm_free_native_payload_catalogs(
+              aTHX_ args_payloads,
+              args_payload_count,
+              directives_payloads,
+              directives_payload_count
+            );
+            gql_runtime_vm_native_bundle_destroy(bundle);
+            croak("native VM directives payload index %ld is invalid", (long)op->directives_payload_index);
+          }
+          op->directives_payload_native =
+            gql_runtime_vm_native_directives_payload_clone(aTHX_ directives_payloads[op->directives_payload_index]);
+        }
+      }
     }
   }
+
+  gql_runtime_vm_free_native_payload_catalogs(
+    aTHX_ args_payloads,
+    args_payload_count,
+    directives_payloads,
+    directives_payload_count
+  );
 
   return bundle;
 }
@@ -3149,6 +3486,7 @@ gql_runtime_vm_native_program_from_sv(pTHX_ SV *sv)
   HV *program_hv;
   AV *blocks_av;
   IV i;
+  IV j;
   SV **svp;
   gql_runtime_vm_native_program_t *program;
 
@@ -3175,6 +3513,8 @@ gql_runtime_vm_native_program_from_sv(pTHX_ SV *sv)
     croak("native VM program descriptor is missing root_block_index");
   }
 
+  gql_runtime_vm_parse_native_program_payload_catalogs(aTHX_ program_hv, program);
+
   svp = hv_fetch(program_hv, "blocks_compact", 14, 0);
   if (!svp || !gql_runtime_vm_sv_to_av(aTHX_ *svp, &blocks_av)) {
     svp = hv_fetch(program_hv, "blocks", 6, 0);
@@ -3196,6 +3536,29 @@ gql_runtime_vm_native_program_from_sv(pTHX_ SV *sv)
       if (!gql_runtime_vm_parse_native_block(aTHX_ *block_svp, &program->blocks[i])) {
         gql_runtime_vm_native_program_destroy(program);
         croak("native VM block entry %ld is invalid", (long)i);
+      }
+      for (j = 0; j < program->blocks[i].op_count; j++) {
+        gql_runtime_vm_native_op_t *op = &program->blocks[i].ops[j];
+        if (!op->args_payload_native && op->args_payload_index >= 0) {
+          if (op->args_payload_index >= program->args_payload_count ||
+              !program->args_payloads ||
+              !program->args_payloads[op->args_payload_index]) {
+            gql_runtime_vm_native_program_destroy(program);
+            croak("native VM args payload index %ld is invalid", (long)op->args_payload_index);
+          }
+          op->args_payload_native =
+            gql_runtime_vm_native_args_payload_clone(aTHX_ program->args_payloads[op->args_payload_index]);
+        }
+        if (!op->directives_payload_native && op->directives_payload_index >= 0) {
+          if (op->directives_payload_index >= program->directives_payload_count ||
+              !program->directives_payloads ||
+              !program->directives_payloads[op->directives_payload_index]) {
+            gql_runtime_vm_native_program_destroy(program);
+            croak("native VM directives payload index %ld is invalid", (long)op->directives_payload_index);
+          }
+          op->directives_payload_native =
+            gql_runtime_vm_native_directives_payload_clone(aTHX_ program->directives_payloads[op->directives_payload_index]);
+        }
       }
     }
   }

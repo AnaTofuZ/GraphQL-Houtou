@@ -19,19 +19,20 @@ use constant {
   DISPATCH_FAMILY_SLOT                       => 9,
   CHILD_BLOCK_NAME_SLOT                      => 10,
   ABSTRACT_CHILD_BLOCKS_SLOT                 => 11,
-  ARG_DEFS_SLOT                              => 12,
-  ARGS_MODE_SLOT                             => 13,
-  ARGS_PAYLOAD_SLOT                          => 14,
-  HAS_ARGS_SLOT                              => 15,
-  DIRECTIVES_MODE_SLOT                       => 16,
-  DIRECTIVES_PAYLOAD_SLOT                    => 17,
-  HAS_DIRECTIVES_SLOT                        => 18,
-  BOUND_SLOT_SLOT                            => 19,
-  BOUND_CHILD_BLOCK_SLOT                     => 20,
-  BOUND_ABSTRACT_CHILD_BLOCKS_SLOT           => 21,
-  NATIVE_SLOT_INDEX_SLOT                     => 22,
-  NATIVE_CHILD_BLOCK_INDEX_SLOT              => 23,
-  NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT   => 24,
+  ARGS_MODE_SLOT                             => 12,
+  ARGS_PAYLOAD_SLOT                          => 13,
+  HAS_ARGS_SLOT                              => 14,
+  DIRECTIVES_MODE_SLOT                       => 15,
+  DIRECTIVES_PAYLOAD_SLOT                    => 16,
+  HAS_DIRECTIVES_SLOT                        => 17,
+  BOUND_SLOT_SLOT                            => 18,
+  BOUND_CHILD_BLOCK_SLOT                     => 19,
+  BOUND_ABSTRACT_CHILD_BLOCKS_SLOT           => 20,
+  NATIVE_SLOT_INDEX_SLOT                     => 21,
+  NATIVE_CHILD_BLOCK_INDEX_SLOT              => 22,
+  NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT   => 23,
+  ARGS_PAYLOAD_INDEX_SLOT                    => 24,
+  DIRECTIVES_PAYLOAD_INDEX_SLOT              => 25,
 };
 
 sub new {
@@ -49,7 +50,6 @@ sub new {
     $args{dispatch_family},
     $args{child_block_name},
     $args{abstract_child_blocks} || {},
-    $args{arg_defs} || {},
     $args{args_mode} || 'NONE',
     $args{args_payload},
     $args{has_args} ? 1 : 0,
@@ -62,6 +62,8 @@ sub new {
     $args{native_slot_index},
     $args{native_child_block_index},
     $args{native_abstract_child_block_indexes} || {},
+    $args{args_payload_index},
+    $args{directives_payload_index},
   ], $class;
 }
 
@@ -77,7 +79,6 @@ sub return_type_name { return $_[0][RETURN_TYPE_NAME_SLOT] }
 sub dispatch_family { return $_[0][DISPATCH_FAMILY_SLOT] }
 sub child_block_name { return $_[0][CHILD_BLOCK_NAME_SLOT] }
 sub abstract_child_blocks { return $_[0][ABSTRACT_CHILD_BLOCKS_SLOT] }
-sub arg_defs { return $_[0][ARG_DEFS_SLOT] }
 sub args_mode { return $_[0][ARGS_MODE_SLOT] }
 sub args_payload { return $_[0][ARGS_PAYLOAD_SLOT] }
 sub has_args { return $_[0][HAS_ARGS_SLOT] }
@@ -90,6 +91,8 @@ sub bound_abstract_child_blocks { return $_[0][BOUND_ABSTRACT_CHILD_BLOCKS_SLOT]
 sub native_slot_index { return $_[0][NATIVE_SLOT_INDEX_SLOT] }
 sub native_child_block_index { return $_[0][NATIVE_CHILD_BLOCK_INDEX_SLOT] }
 sub native_abstract_child_block_indexes { return $_[0][NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT] }
+sub args_payload_index { return $_[0][ARGS_PAYLOAD_INDEX_SLOT] }
+sub directives_payload_index { return $_[0][DIRECTIVES_PAYLOAD_INDEX_SLOT] }
 
 sub set_field_name { $_[0][FIELD_NAME_SLOT] = $_[1]; return $_[1] }
 sub set_result_name { $_[0][RESULT_NAME_SLOT] = $_[1]; return $_[1] }
@@ -99,6 +102,8 @@ sub set_bound_abstract_child_blocks { $_[0][BOUND_ABSTRACT_CHILD_BLOCKS_SLOT] = 
 sub set_native_slot_index { $_[0][NATIVE_SLOT_INDEX_SLOT] = $_[1]; return $_[1] }
 sub set_native_child_block_index { $_[0][NATIVE_CHILD_BLOCK_INDEX_SLOT] = $_[1]; return $_[1] }
 sub set_native_abstract_child_block_indexes { $_[0][NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT] = $_[1] || {}; return $_[0][NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT] }
+sub set_args_payload_index { $_[0][ARGS_PAYLOAD_INDEX_SLOT] = $_[1]; return $_[1] }
+sub set_directives_payload_index { $_[0][DIRECTIVES_PAYLOAD_INDEX_SLOT] = $_[1]; return $_[1] }
 sub set_has_args { $_[0][HAS_ARGS_SLOT] = $_[1] ? 1 : 0; return $_[0][HAS_ARGS_SLOT] }
 sub set_args_mode { $_[0][ARGS_MODE_SLOT] = $_[1] || 'NONE'; return $_[0][ARGS_MODE_SLOT] }
 sub set_args_payload { $_[0][ARGS_PAYLOAD_SLOT] = $_[1]; return $_[1] }
@@ -121,22 +126,27 @@ sub to_struct {
     dispatch_family => $self->dispatch_family,
     child_block_name => $self->child_block_name,
     abstract_child_blocks => { %{ $self->abstract_child_blocks || {} } },
-    arg_defs => { %{ $self->arg_defs || {} } },
     args_mode => $self->args_mode,
     args_payload => _clone_value($self->args_payload),
+    args_payload_index => $self->args_payload_index,
     has_args => $self->has_args,
     directives_mode => $self->directives_mode,
     directives_payload => _clone_value($self->directives_payload),
+    directives_payload_index => $self->directives_payload_index,
     has_directives => $self->has_directives,
   };
 }
 
 sub to_native_struct {
-  my ($self, $block_index, $slot_index) = @_;
+  my ($self, $block_index, $slot_index, $payload_catalog) = @_;
   my $slot = $self->bound_slot;
   my $slot_id = $slot
     ? join("\x1E", refaddr($slot), ($self->result_name // q()))
     : undef;
+  my $args_payload_index =
+    $payload_catalog ? $payload_catalog->intern_args_payload($self->args_payload) : undef;
+  my $directives_payload_index =
+    $payload_catalog ? $payload_catalog->intern_directives_payload($self->directives_payload) : undef;
   return {
     opcode_code => $self->opcode_code,
     resolve_code => $self->resolve_code,
@@ -147,12 +157,14 @@ sub to_native_struct {
       ? $slot_index->{$slot_id}
       : undef,
     args_mode_code => _args_mode_code($self->args_mode),
-    args_payload => _clone_value($self->args_payload),
+    args_payload_index => $args_payload_index,
+    args_payload => defined $args_payload_index ? undef : _clone_value($self->args_payload),
     args_mode => $self->args_mode,
     has_args => $self->has_args,
     directives_mode => $self->directives_mode,
     directives_mode_code => _directives_mode_code($self->directives_mode),
-    directives_payload => _clone_value($self->directives_payload),
+    directives_payload_index => $directives_payload_index,
+    directives_payload => defined $directives_payload_index ? undef : _clone_value($self->directives_payload),
     has_directives => $self->has_directives,
     child_block_index => defined $self->child_block_name && exists $block_index->{ $self->child_block_name }
       ? $block_index->{ $self->child_block_name }
@@ -167,8 +179,8 @@ sub to_native_struct {
 }
 
 sub to_native_compact_struct {
-  my ($self, $block_index, $slot_index) = @_;
-  my $struct = $self->to_native_struct($block_index, $slot_index);
+  my ($self, $block_index, $slot_index, $payload_catalog) = @_;
+  my $struct = $self->to_native_struct($block_index, $slot_index, $payload_catalog);
   return [
     $struct->{opcode_code},
     $struct->{resolve_code},
@@ -178,9 +190,11 @@ sub to_native_compact_struct {
     $struct->{child_block_index},
     $struct->{abstract_child_block_indexes},
     $struct->{args_mode_code},
+    $struct->{args_payload_index},
     $struct->{args_payload},
     $struct->{has_args},
     $struct->{directives_mode_code},
+    $struct->{directives_payload_index},
     $struct->{directives_payload},
     $struct->{has_directives},
     $self->field_name,

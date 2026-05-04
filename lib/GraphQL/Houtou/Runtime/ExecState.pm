@@ -52,7 +52,6 @@ sub build_for_program {
     ),
     root_value => $opts{root_value},
     promise_code => $promise_code,
-    empty_args => {},
   );
 }
 

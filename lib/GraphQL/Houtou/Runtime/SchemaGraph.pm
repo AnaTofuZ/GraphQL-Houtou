@@ -117,11 +117,16 @@ sub inflate_program {
 
 sub execute_program {
   my ($self, $program, %opts) = @_;
+  return $self->_native_runtime->execute_program($program, %opts);
+}
+
+sub _native_runtime {
+  my ($self) = @_;
+  return $self->{_compiled_native_runtime} if $self->{_compiled_native_runtime};
   require GraphQL::Houtou::Runtime::NativeRuntime;
-  my $native_runtime = GraphQL::Houtou::Runtime::NativeRuntime->new(
+  return $self->{_compiled_native_runtime} = GraphQL::Houtou::Runtime::NativeRuntime->new(
     runtime_schema => $self,
   );
-  return $native_runtime->execute_program($program, %opts);
 }
 
 sub _compile_native_program_descriptor {

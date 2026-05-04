@@ -202,13 +202,7 @@ sub execute_program {
     $native_program,
     $opts{variables} || {},
   );
-  GraphQL::Houtou::_bootstrap_xs();
-  my $candidate = GraphQL::Houtou::XS::VM::specialize_native_program_xs(
-    $self->_native_runtime_handle,
-    $native_program,
-    $prepared_variables,
-  );
-  return $self->execute_compact_program($candidate, %opts, variables => $prepared_variables);
+  return $self->execute_compact_program($native_program, %opts, variables => $prepared_variables);
 }
 
 sub execute_compact_program {

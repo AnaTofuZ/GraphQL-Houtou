@@ -22,68 +22,55 @@ our @EXPORT_OK = qw(
   execute_native_program_handle
 );
 
-sub _ensure_vm_xs_loaded {
+BEGIN {
   GraphQL::Houtou::_bootstrap_xs();
-  return 1;
 }
 
 sub native_codes {
-  _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::native_codes_xs(@_);
 }
 
 sub load_native_bundle {
-  _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::load_native_bundle_xs(@_);
 }
 
 sub load_native_bundle_from_handles {
-  _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::load_native_bundle_from_handles_xs(@_);
 }
 
 sub load_native_program {
-  _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::load_native_program_xs(@_);
 }
 
 sub native_program_descriptor {
-  _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::native_program_descriptor_xs(@_);
 }
 
 sub load_native_runtime {
-  _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::load_native_runtime_xs(@_);
 }
 
 sub native_bundle_summary {
-  _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::native_bundle_summary_xs(@_);
 }
 
 sub native_program_summary {
-  _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::native_program_summary_xs(@_);
 }
 
 sub native_runtime_summary {
-  _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::native_runtime_summary_xs(@_);
 }
 
 sub execute_native_bundle {
-  _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::execute_native_bundle_xs(@_);
 }
 
 sub execute_native_program {
-  _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::execute_native_program_xs(@_);
 }
 
 sub execute_native_program_handle {
-  _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::execute_native_program_handle_xs(@_);
 }
 

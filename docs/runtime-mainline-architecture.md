@@ -122,7 +122,7 @@
 
 責務:
 
-- request-time specialization の owner
+- 固定 specialization / native artifact 構築の owner
 - native runtime handle / native bundle handle の owner
 - Perl VM artifact から native compact descriptor への変換境界
 - XS 実行呼び出しの集中管理
@@ -130,7 +130,7 @@
 現在の状態:
 
 - `Runtime::ProgramSpecializer` は削除済み
-- request-time specialization は `NativeRuntime` に統合済み
+- request-local variable preparation は `NativeRuntime` と `InputCoercion` に統合済み
 - variable / argument coercion と runtime guard evaluation は `InputCoercion` に集約し、
   `ExecState` と `NativeRuntime` の重複実装を持たない
 - `Runtime::NativeBundle` の Perl wrapper は削除済み
@@ -141,10 +141,10 @@
   compact runtime struct と compact program struct を part-based API で XS に渡す
 - compact program 実行では Perl 側で一時 native bundle handle を作らず、
   `execute_native_program_xs(...)` に直接渡す
-- `VMProgram` は compact native struct を memoize し、
-  specialization 後の同一 program 再実行では descriptor 再構築を避ける
-- `NativeRuntime->execute_program(...)` も `compile_bundle -> execute_bundle` を通らず、
-  `specialize -> execute_compact_program` の経路へ寄せてある
+- `NativeProgram` は variable-invariant artifact として保持し、
+  sync path では request ごとに prepared variables を渡して fast lane を実行する
+- `NativeRuntime->execute_program(...)` は `compile_bundle -> execute_bundle` を通らず、
+  request-local state を持った `execute_compact_program` へ流す
 
 ## 内部通貨
 

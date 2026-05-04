@@ -581,6 +581,60 @@ perl -Ilib t/19_vm_execute.t
   - したがって、今後も「generic runtime をそのまま磨く」より
     「fast lane を明示的に specialized に保つ」方が筋が良い
 
+- global singleton / direct wrapper / variable-invariant fast lane
+  - `Native.pm` は module load 時に一度だけ XS bootstrap し、
+    hot path で `_ensure_vm_xs_loaded()` を毎回呼ばないようにした
+  - sync fast lane の
+    - empty args
+    - empty errors
+    は global singleton を使い、per-call の空 hashref / arrayref allocation を削った
+  - `NativeProgram` は request-local variables を焼き込まない variable-invariant artifact として扱い、
+    `execute_native_program_handle_xs(...)` は runtime ごとの cached bundle を再利用する
+  - cached bundle 作成時には
+    - static args の coercion/default 適用
+    - static directive guard の prune
+    だけを一度だけ済ませ、program 本体は mutate しない
+  - `SchemaGraph->execute_program(...)` も毎回 `NativeRuntime->new(...)` し直さず、
+    cached native runtime を再利用する
+  - sync `execute_program(...)` は request ごとに program clone/specialize を行わず、
+    prepared variables を request-local state として fast lane へ流す
+  - `./Build test` / `minil test` は通過
+
+- latest median:
+  - `nested_variable_object`
+    - `houtou_runtime_program`: `192200/s`
+    - `houtou_runtime_native_bundle`: `621166/s`
+  - `list_of_objects`
+    - `houtou_runtime_program`: `319894/s`
+    - `houtou_runtime_native_bundle`: `517177/s`
+  - `abstract_with_fragment`
+    - `houtou_runtime_program`: `348646/s`
+    - `houtou_runtime_native_bundle`: `583519/s`
+
+- 解釈:
+  - `f6c9a24` 比では
+    - `runtime_program`
+      - `nested_variable_object`: 約 `+5890%`
+      - `list_of_objects`: 約 `+9760%`
+      - `abstract_with_fragment`: 約 `+10669%`
+    - `native_bundle`
+      - `nested_variable_object`: 約 `+7.3%`
+      - `list_of_objects`: 約 `+5.5%`
+      - `abstract_with_fragment`: 約 `+5.4%`
+  - `937edb0` (`restore-native-bundle-high-watermark`) 比では
+    - `runtime_program` は大幅に速くなり、もはや別物の水準に入った
+    - `native_bundle`
+      - `nested_variable_object`: 約 `+6.2%`
+      - `list_of_objects`: 約 `+4.5%`
+      - `abstract_with_fragment`: 約 `+5.4%`
+  - つまり、
+    - `native_bundle` は high-watermark を明確に超えた
+    - `runtime_program` は sync path がようやく fast lane に統一された
+  - ここでの設計判断として重要なのは、
+    variable-bearing query の本命は「variables ごとに artifact を焼き直すこと」ではなく
+    **variable-invariant NativeProgram + request-local prepared variables**
+    に切ることだった
+
 - 次に詰めるべきこと:
   1. nested の残差を詰めるため、args / variable coercion の固定コストをさらに落とす
   2. explicit generic callback で `info` を要求しない case を見分けられるなら、ABI をもう一段 specialized にできるか検討する

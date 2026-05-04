@@ -49,7 +49,7 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 - schema を boot-time compile 可能な immutable graph に lower する
 - field / abstract dispatch / slot metadata を固定する
 - native runtime / native bundle との境界を持つ
-- request-time specialization と native bundle descriptor 組み立てを `NativeRuntime` が所有する
+- 固定 specialization と native bundle descriptor 組み立てを `NativeRuntime` が所有する
 - native bundle descriptor の inflate/execute も `SchemaGraph` 経由の wrapper ではなく `NativeRuntime` が所有する
 - public の `compile_program` / `inflate_program` は `NativeProgram` handle を返す
 - `VMProgram` / `VMBlock` / `VMOp` は internal inflate/debug 用の artifact に後退している
@@ -62,8 +62,9 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
   `execute_native_program_xs(...)` へ直接流す
 - `VMProgram` は compact native struct を memoize し、同一 program の繰り返し実行で
   block/op 配列の Perl 再構築を避ける
-- `NativeRuntime->execute_program(...)` も `compile_bundle -> execute_bundle` を通らず、
-  `specialize -> execute_compact_program` の mainline を使う
+- `NativeRuntime->execute_program(...)` は sync path では request ごとに program を clone/specialize せず、
+  prepared variables を request-local state として持ったまま
+  `execute_compact_program` の fast lane へ流す
 
 ### 3. Schema Graph
 

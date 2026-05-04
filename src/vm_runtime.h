@@ -207,6 +207,8 @@ typedef struct {
   gql_runtime_vm_native_block_t *blocks;
   gql_runtime_vm_native_args_payload_t **args_payloads;
   gql_runtime_vm_native_directives_payload_t **directives_payloads;
+  gql_runtime_vm_native_runtime_t *cached_bundle_runtime;
+  gql_runtime_vm_native_bundle_t *cached_bundle;
 } gql_runtime_vm_native_program_t;
 
 typedef struct gql_runtime_vm_path_frame gql_runtime_vm_path_frame_t;
@@ -493,6 +495,13 @@ static void gql_runtime_vm_native_directives_payload_destroy(
 static int gql_runtime_vm_evaluate_runtime_guards_native(
   pTHX_ const gql_runtime_vm_native_directives_payload_t *payload,
   HV *variables
+);
+static gql_runtime_vm_native_args_payload_t *gql_runtime_vm_specialize_arg_payload_native(
+  pTHX_
+  const gql_runtime_vm_native_runtime_t *runtime,
+  const gql_runtime_vm_native_slot_t *slot,
+  const gql_runtime_vm_native_op_t *op,
+  HV *variables_hv
 );
 static IV gql_runtime_vm_infer_callback_abi_code(IV resolver_shape_code, IV resolver_mode_code);
 static const gql_runtime_vm_native_slot_t *gql_runtime_vm_effective_slot(
@@ -2404,13 +2413,14 @@ gql_runtime_vm_consume_outcome_native_object(
 static SV *
 gql_runtime_vm_writer_materialize_errors_sv(pTHX_ const gql_runtime_vm_writer_t *writer)
 {
-  AV *errors_av = newAV();
+  AV *errors_av;
   IV i;
 
-  if (!writer) {
-    return newRV_noinc((SV *)errors_av);
+  if (!writer || writer->error_record_count == 0) {
+    return gql_runtime_vm_empty_errors_sv(aTHX);
   }
 
+  errors_av = newAV();
   for (i = 0; i < writer->error_record_count; i++) {
     av_push(errors_av, gql_runtime_vm_error_record_to_error_sv(aTHX_ writer->error_records[i]));
   }
@@ -2987,6 +2997,7 @@ gql_runtime_vm_native_program_destroy(gql_runtime_vm_native_program_t *program)
       gql_runtime_vm_native_directives_payload_destroy(aTHX_ program->directives_payloads[i]);
     }
   }
+  gql_runtime_vm_native_bundle_destroy(program->cached_bundle);
   Safefree(program->args_payloads);
   Safefree(program->directives_payloads);
   Safefree(program->blocks);
@@ -4159,6 +4170,113 @@ gql_runtime_vm_native_bundle_from_runtime_and_program_handles(
     }
   }
   return bundle;
+}
+
+static void
+gql_runtime_vm_prepare_cached_bundle_in_place(
+  pTHX_
+  gql_runtime_vm_native_runtime_t *runtime,
+  gql_runtime_vm_native_bundle_t *bundle
+)
+{
+  IV i;
+
+  if (!runtime || !bundle || !bundle->blocks) {
+    return;
+  }
+
+  for (i = 0; i < bundle->block_count; i++) {
+    gql_runtime_vm_native_block_t *block = &bundle->blocks[i];
+    IV read_index;
+    IV write_index = 0;
+
+    for (read_index = 0; read_index < block->op_count; read_index++) {
+      gql_runtime_vm_native_op_t *op = &block->ops[read_index];
+      const gql_runtime_vm_native_slot_t *slot = NULL;
+      int keep = 1;
+
+      if (op->slot_index >= 0 && op->slot_index < block->slot_count) {
+        slot = &block->slots[op->slot_index];
+      }
+
+      if (op->has_directives && op->directives_mode_code == GQL_VM_ARGS_STATIC) {
+        if (!gql_runtime_vm_evaluate_runtime_guards_native(
+              aTHX_
+              op->directives_payload_native,
+              NULL
+            )) {
+          keep = 0;
+        } else {
+          op->has_directives = 0;
+          op->directives_mode_code = GQL_VM_ARGS_NONE;
+          gql_runtime_vm_native_directives_payload_destroy(aTHX_ op->directives_payload_native);
+          op->directives_payload_native = NULL;
+        }
+      }
+
+      if (keep
+          && slot
+          && op->args_mode_code == GQL_VM_ARGS_STATIC
+          && (slot->arg_def_count > 0 || op->has_args)) {
+        gql_runtime_vm_native_args_payload_t *specialized_payload =
+          gql_runtime_vm_specialize_arg_payload_native(aTHX_ runtime, slot, op, NULL);
+        gql_runtime_vm_native_args_payload_destroy(aTHX_ op->args_payload_native);
+        op->args_payload_native = NULL;
+        if (specialized_payload) {
+          op->args_payload_native = specialized_payload;
+          op->args_mode_code = GQL_VM_ARGS_STATIC;
+          op->has_args = 1;
+        } else {
+          op->args_mode_code = GQL_VM_ARGS_NONE;
+          op->has_args = 0;
+        }
+      }
+
+      if (!keep) {
+        gql_runtime_vm_native_args_payload_destroy(aTHX_ op->args_payload_native);
+        op->args_payload_native = NULL;
+        gql_runtime_vm_native_directives_payload_destroy(aTHX_ op->directives_payload_native);
+        op->directives_payload_native = NULL;
+        continue;
+      }
+
+      if (write_index != read_index) {
+        block->ops[write_index] = *op;
+        Zero(op, 1, gql_runtime_vm_native_op_t);
+      }
+      write_index++;
+    }
+
+    block->op_count = write_index;
+  }
+}
+
+static gql_runtime_vm_native_bundle_t *
+gql_runtime_vm_native_program_cached_bundle(
+  pTHX_
+  gql_runtime_vm_native_runtime_t *runtime,
+  gql_runtime_vm_native_program_t *program
+)
+{
+  if (!runtime || !program) {
+    croak("native runtime and native program handles are required");
+  }
+
+  if (program->cached_bundle && program->cached_bundle_runtime == runtime) {
+    return program->cached_bundle;
+  }
+
+  if (program->cached_bundle) {
+    gql_runtime_vm_native_bundle_destroy(program->cached_bundle);
+    program->cached_bundle = NULL;
+    program->cached_bundle_runtime = NULL;
+  }
+
+  program->cached_bundle =
+    gql_runtime_vm_native_bundle_from_runtime_and_program_handles(runtime, program);
+  gql_runtime_vm_prepare_cached_bundle_in_place(aTHX_ runtime, program->cached_bundle);
+  program->cached_bundle_runtime = runtime;
+  return program->cached_bundle;
 }
 
 static gql_runtime_vm_native_bundle_t *

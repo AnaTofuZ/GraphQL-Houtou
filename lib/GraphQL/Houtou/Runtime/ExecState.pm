@@ -5,7 +5,7 @@ use strict;
 use warnings;
 use GraphQL::Houtou ();
 
-use GraphQL::Houtou::Promise::Adapter qw(is_promise_value normalize_promise_code then_promise);
+use GraphQL::Houtou::Promise::Adapter qw(normalize_promise_code);
 use GraphQL::Houtou::Runtime::InputCoercion ();
 
 sub new {
@@ -69,18 +69,7 @@ sub run_program {
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::exec_state_run_program_xs($state, $opts{root_value})
     if !$promise_code;
-
-  my $data = GraphQL::Houtou::XS::VM::exec_state_execute_block_async_xs(
-    $state,
-    _root_block_index($native_program),
-    $opts{root_value},
-    undef,
-  );
-  return then_promise($promise_code, $data, sub {
-    return GraphQL::Houtou::XS::VM::exec_state_materialize_response_xs($state, $_[0]);
-  }) if is_promise_value($promise_code, $data);
-
-  return GraphQL::Houtou::XS::VM::exec_state_materialize_response_xs($state, $data);
+  return GraphQL::Houtou::XS::VM::exec_state_run_program_async_xs($state, $opts{root_value});
 }
 
 sub _require_native_program {

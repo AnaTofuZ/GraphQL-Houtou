@@ -297,6 +297,9 @@ typedef struct {
   SV *variables;
   SV *root_value;
   SV *promise_code;
+  SV *promise_then_cb;
+  SV *promise_all_cb;
+  SV *promise_is_promise_cb;
   SV *empty_args;
 } gql_runtime_vm_exec_state_handle_t;
 

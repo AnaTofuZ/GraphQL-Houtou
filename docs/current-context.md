@@ -398,18 +398,51 @@ perl -Ilib t/19_vm_execute.t
     - `abstract_with_fragment`: `289557/s`
   - `937edb0` (`restore-native-bundle-high-watermark`) 比ではまだ大きく遅い
 
+- `native_bundle` callback ABI の再特化
+  - sync `native_bundle` fast lane で、`resolver_mode => 'native'` の slot に限り
+    resolver / abstract callback を `info` 付きの generic ABI から外した
+  - field resolver は
+    - `($source, $args, $context, $return_type)`
+    の軽い ABI へ戻した
+  - abstract callback は
+    - `tag_resolver($value, $context, $abstract_type, undef)`
+    - `resolve_type($value, $context, undef, $abstract_type)`
+    - `is_type_of($value, $context, undef, $type)`
+    の high-watermark 系 ABI に戻した
+  - generic path / promise path / `resolver_mode => 'native'` でない callback は
+    既存の `info` 付き ABI を維持した
+  - `./Build test` / `minil test` は通過
+
+- latest median:
+  - `nested_variable_object`: `522198/s`
+  - `list_of_objects`: `431448/s`
+  - `abstract_with_fragment`: `483953/s`
+
+- 解釈:
+  - `06b1d64` 比では
+    - `nested_variable_object`: 約 `+41.5%`
+    - `list_of_objects`: 約 `+32.5%`
+    - `abstract_with_fragment`: 約 `+67.1%`
+  - `937edb0` (`restore-native-bundle-high-watermark`) 比でもかなり近づいた
+    - `nested_variable_object`: 約 `10.7%` 低い
+    - `list_of_objects`: 約 `12.8%` 低い
+    - `abstract_with_fragment`: 約 `12.6%` 低い
+  - ここで分かったことは明確で、現行 branch の主な重みは
+    `LazyInfo` 自体より **callback ABI に `info` と generic lookup を持ち込んだこと**
+    にあった
+  - つまり現行 branch でも、specialized fast lane を切れば
+    high-watermark にかなり近い水準まで戻せる見通しがある
+
 - 現時点の判断:
   - `direct-SV` 1 パス自体は keep
-  - `LazyInfo` の opaque handle 化と metadata cache は correctness と
-    internal ownership の整理としては妥当だが、速度面ではまだ決定打ではない
-  - high-watermark (`937edb0`) を見ると、当時の native fast lane は
-    resolver/abstract callback に `info` hash を渡していなかった
-  - つまり現在の主な残コストは object materialization そのものより、
-    **callback ABI が `info` を含む generic 形になったこと** にある
+  - `LazyInfo` の opaque handle 化と metadata cache は correctness / ownership
+    の整理として妥当
+  - ただし速さに効いた本命は、`resolver_mode => 'native'` を足掛かりに
+    **sync native_bundle path を再び specialized ABI に戻したこと**
+  - したがって、今後も「generic runtime をそのまま磨く」より
+    「fast lane を明示的に specialized に保つ」方が筋が良い
 
 - 次に詰めるべきこと:
-  1. abstract dispatch callback の fast ABI を検討する
-  2. resolver / abstract callback で `info` を必要としない case を
-     native fast lane へ分岐できるようにする
-  3. それが難しい場合は、high-watermark branch と現行 branch の
-     keep/revert 判定を benchmark ベースで行う
+  1. sync `native_bundle` fast lane でまだ generic ABI に残っている callback family を棚卸しする
+  2. abstract dispatch の child block 決定と type lookup をさらに直参照化する
+  3. args/directives materialization を specialized fast lane でもう一段減らす

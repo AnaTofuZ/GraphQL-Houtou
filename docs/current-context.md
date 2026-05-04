@@ -418,15 +418,30 @@ perl -Ilib t/19_vm_execute.t
   - `list_of_objects`: `431448/s`
   - `abstract_with_fragment`: `483953/s`
 
+- native leaf field の `path_frame` 遅延化
+  - `resolver_mode => 'native'` かつ `complete_generic` の slot では、
+    success path で `path_frame` を先に作らないようにした
+  - error が出たときだけ field path を組み立てて error outcome を作る
+  - object/list/abstract completion は親子 path を持つため eager path のまま据え置いた
+
+- latest median:
+  - `nested_variable_object`: `531431/s`
+  - `list_of_objects`: `449661/s`
+  - `abstract_with_fragment`: `510630/s`
+
 - 解釈:
+  - `6b980d7` 比では
+    - `nested_variable_object`: 約 `+1.8%`
+    - `list_of_objects`: 約 `+4.2%`
+    - `abstract_with_fragment`: 約 `+5.5%`
   - `06b1d64` 比では
-    - `nested_variable_object`: 約 `+41.5%`
-    - `list_of_objects`: 約 `+32.5%`
-    - `abstract_with_fragment`: 約 `+67.1%`
+    - `nested_variable_object`: 約 `+43.9%`
+    - `list_of_objects`: 約 `+38.1%`
+    - `abstract_with_fragment`: 約 `+76.3%`
   - `937edb0` (`restore-native-bundle-high-watermark`) 比でもかなり近づいた
-    - `nested_variable_object`: 約 `10.7%` 低い
-    - `list_of_objects`: 約 `12.8%` 低い
-    - `abstract_with_fragment`: 約 `12.6%` 低い
+    - `nested_variable_object`: 約 `9.1%` 低い
+    - `list_of_objects`: 約 `9.1%` 低い
+    - `abstract_with_fragment`: 約 `7.7%` 低い
   - ここで分かったことは明確で、現行 branch の主な重みは
     `LazyInfo` 自体より **callback ABI に `info` と generic lookup を持ち込んだこと**
     にあった
@@ -443,6 +458,6 @@ perl -Ilib t/19_vm_execute.t
     「fast lane を明示的に specialized に保つ」方が筋が良い
 
 - 次に詰めるべきこと:
-  1. sync `native_bundle` fast lane でまだ generic ABI に残っている callback family を棚卸しする
+  1. object/list/abstract completion でも success path の `path_frame` をさらに遅延化できるか切り分ける
   2. abstract dispatch の child block 決定と type lookup をさらに直参照化する
   3. args/directives materialization を specialized fast lane でもう一段減らす

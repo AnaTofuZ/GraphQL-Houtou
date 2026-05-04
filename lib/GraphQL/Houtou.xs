@@ -4305,7 +4305,7 @@ gql_runtime_vm_execute_current_op_fast_sv(
   pTHX_
   gql_runtime_vm_exec_state_t *state,
   SV *source,
-  gql_runtime_vm_outcome_t **error_outcome
+  SV **error_sv_out
 )
 {
   SV *resolved = NULL;
@@ -4427,8 +4427,9 @@ DISPATCH_DONE:
     if (completed) {
       SvREFCNT_dec(completed);
     }
-    if (error_outcome) {
-      *error_outcome = gql_runtime_vm_new_error_outcome_struct_for_path(aTHX_ error_sv, state->path_frame);
+    if (error_sv_out) {
+      *error_sv_out = error_sv;
+      error_sv = NULL;
     }
     SvREFCNT_dec(error_sv);
     return NULL;
@@ -4446,8 +4447,9 @@ DISPATCH_ERROR:
     completed = NULL;
   }
   if (error_sv) {
-    if (error_outcome) {
-      *error_outcome = gql_runtime_vm_new_error_outcome_struct_for_path(aTHX_ error_sv, state->path_frame);
+    if (error_sv_out) {
+      *error_sv_out = error_sv;
+      error_sv = NULL;
     }
     SvREFCNT_dec(error_sv);
   }
@@ -4481,8 +4483,10 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
     gql_runtime_vm_native_op_t *op = &block->ops[i];
     gql_runtime_vm_native_slot_t *slot;
     SV *completed;
+    SV *error_sv = NULL;
     gql_runtime_vm_outcome_t *error_outcome = NULL;
-    gql_runtime_vm_path_frame_t *field_path;
+    gql_runtime_vm_path_frame_t *field_path = NULL;
+    int eager_path_frame;
 
     if (op->slot_index < 0 || op->slot_index >= block->slot_count) {
       croak("native VM op slot_index %ld is invalid in block %ld", (long)op->slot_index, (long)block_index);
@@ -4491,17 +4495,54 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
     state->op = op;
     state->slot = slot;
     state->op_index = i;
-    if (slot->result_name) {
-      SV *result_name_sv = newSVpv(slot->result_name, 0);
-      field_path = gql_runtime_vm_new_path_frame_struct(aTHX_ saved_path_frame, result_name_sv);
-      SvREFCNT_dec(result_name_sv);
+
+    eager_path_frame = !gql_runtime_vm_slot_uses_native_fast_abi(slot)
+      || op->complete_code != GQL_VM_COMPLETE_GENERIC;
+
+    if (eager_path_frame) {
+      if (slot->result_name) {
+        field_path = gql_runtime_vm_new_path_frame_struct_pvn(
+          aTHX_
+          saved_path_frame,
+          slot->result_name,
+          strlen(slot->result_name)
+        );
+      } else {
+        field_path = gql_runtime_vm_new_path_frame_struct(aTHX_ saved_path_frame, &PL_sv_undef);
+      }
+      state->path_frame = field_path;
     } else {
-      field_path = gql_runtime_vm_new_path_frame_struct(aTHX_ saved_path_frame, &PL_sv_undef);
+      state->path_frame = saved_path_frame;
     }
-    state->path_frame = field_path;
-    completed = gql_runtime_vm_execute_current_op_fast_sv(aTHX_ state, source, &error_outcome);
+
+    completed = gql_runtime_vm_execute_current_op_fast_sv(aTHX_ state, source, &error_sv);
     state->path_frame = saved_path_frame;
-    gql_runtime_vm_path_frame_decref(field_path);
+
+    if (!eager_path_frame && error_sv) {
+      if (slot->result_name) {
+        field_path = gql_runtime_vm_new_path_frame_struct_pvn(
+          aTHX_
+          saved_path_frame,
+          slot->result_name,
+          strlen(slot->result_name)
+        );
+      } else {
+        field_path = gql_runtime_vm_new_path_frame_struct(aTHX_ saved_path_frame, &PL_sv_undef);
+      }
+      error_outcome = gql_runtime_vm_new_error_outcome_struct_for_path(aTHX_ error_sv, field_path);
+      SvREFCNT_dec(error_sv);
+      error_sv = NULL;
+    } else if (error_sv) {
+      error_outcome = gql_runtime_vm_new_error_outcome_struct_for_path(aTHX_ error_sv, field_path);
+      SvREFCNT_dec(error_sv);
+      error_sv = NULL;
+    }
+
+    if (field_path) {
+      gql_runtime_vm_path_frame_decref(field_path);
+      field_path = NULL;
+    }
+
     if (error_outcome) {
       if (state->writer) {
         IV j;

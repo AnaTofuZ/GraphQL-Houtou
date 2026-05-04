@@ -3536,6 +3536,9 @@ gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
   }
   if (slot && (slot->arg_def_count > 0 || op->has_args)) {
     if (op->args_mode_code == GQL_VM_ARGS_STATIC && op->args_payload_native) {
+      if (gql_runtime_vm_slot_uses_native_fast_abi(slot)) {
+        return gql_runtime_vm_native_args_payload_materialize_cached_sv(aTHX_ op->args_payload_native);
+      }
       return gql_runtime_vm_native_args_payload_materialize_sv(aTHX_ op->args_payload_native);
     }
     specialized_sv = gql_runtime_vm_specialize_arg_payload_sv(aTHX_ runtime, slot, op, variables_hv);
@@ -3549,6 +3552,9 @@ gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
     return newRV_noinc((SV *)newHV());
   }
   if (op->args_mode_code == GQL_VM_ARGS_STATIC && op->args_payload_native) {
+    if (gql_runtime_vm_slot_uses_native_fast_abi(slot)) {
+      return gql_runtime_vm_native_args_payload_materialize_cached_sv(aTHX_ op->args_payload_native);
+    }
     return gql_runtime_vm_native_args_payload_materialize_sv(aTHX_ op->args_payload_native);
   }
   if (state && state->empty_args_sv) {

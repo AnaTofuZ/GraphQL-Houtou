@@ -90,6 +90,7 @@ typedef struct {
   IV count;
   char **names;
   gql_runtime_vm_native_dynamic_value_t **values;
+  SV *static_args_sv;
 } gql_runtime_vm_native_args_payload_t;
 
 typedef struct {
@@ -475,6 +476,9 @@ static gql_runtime_vm_native_args_payload_t *gql_runtime_vm_native_args_payload_
 static void gql_runtime_vm_native_args_payload_destroy(pTHX_ gql_runtime_vm_native_args_payload_t *payload);
 static SV *gql_runtime_vm_native_args_payload_materialize_sv(
   pTHX_ const gql_runtime_vm_native_args_payload_t *payload
+);
+static SV *gql_runtime_vm_native_args_payload_materialize_cached_sv(
+  pTHX_ gql_runtime_vm_native_args_payload_t *payload
 );
 static gql_runtime_vm_native_directives_payload_t *gql_runtime_vm_native_directives_payload_from_sv(
   pTHX_ SV *guards_sv
@@ -1311,6 +1315,9 @@ gql_runtime_vm_native_args_payload_destroy(pTHX_ gql_runtime_vm_native_args_payl
     Safefree(payload->names ? payload->names[i] : NULL);
     gql_runtime_vm_native_dynamic_value_destroy(payload->values ? payload->values[i] : NULL);
   }
+  if (payload->static_args_sv) {
+    SvREFCNT_dec(payload->static_args_sv);
+  }
   Safefree(payload->names);
   Safefree(payload->values);
   Safefree(payload);
@@ -1343,6 +1350,40 @@ gql_runtime_vm_native_args_payload_materialize_sv(
   }
 
   return newRV_noinc((SV *)hv);
+}
+
+static SV *
+gql_runtime_vm_native_args_payload_materialize_cached_sv(
+  pTHX_ gql_runtime_vm_native_args_payload_t *payload
+)
+{
+  HV *hv;
+  IV i;
+
+  if (!payload) {
+    return newRV_noinc((SV *)newHV());
+  }
+
+  if (payload->static_args_sv) {
+    return SvREFCNT_inc_simple_NN(payload->static_args_sv);
+  }
+
+  hv = newHV();
+  for (i = 0; i < payload->count; i++) {
+    if (!payload->names || !payload->names[i]) {
+      continue;
+    }
+    hv_store(
+      hv,
+      payload->names[i],
+      (I32)strlen(payload->names[i]),
+      gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ payload->values ? payload->values[i] : NULL, NULL),
+      0
+    );
+  }
+
+  payload->static_args_sv = newRV_noinc((SV *)hv);
+  return SvREFCNT_inc_simple_NN(payload->static_args_sv);
 }
 
 static SV *

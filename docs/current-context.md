@@ -518,6 +518,37 @@ perl -Ilib t/19_vm_execute.t
     の整理として妥当
   - ただし速さに効いた本命は、`resolver_mode => 'native'` を足掛かりに
     **sync native_bundle path を再び specialized ABI に戻したこと**
+
+- static args materialization cache
+  - `ARGS_STATIC` かつ `EXPLICIT_NATIVE` fast ABI の slot では、
+    native args payload に materialized args hashref を 1 回だけ作って保持し、
+    以降の request では `HV` を再生成しないようにした
+  - generic callback ABI の slot では従来どおり毎回 materialize して、
+    callback 互換性の前提は変えない
+  - `./Build test` / `minil test` は通過
+
+- latest median:
+  - `nested_variable_object`: `566900/s`
+  - `list_of_objects`: `479683/s`
+  - `abstract_with_fragment`: `539309/s`
+
+- 解釈:
+  - `f304ae9` 比では
+    - `nested_variable_object`: 約 `+2.8%`
+    - `list_of_objects`: 約 `-2.8%`
+    - `abstract_with_fragment`: 約 `-3.4%`
+  - `937edb0` (`restore-native-bundle-high-watermark`) 比では
+    - `nested_variable_object`: 約 `3.0%` 低い
+    - `list_of_objects`: 約 `3.0%` 低い
+    - `abstract_with_fragment`: 約 `2.6%` 低い
+  - つまり、`nested` の残差はほぼ `ARGS_STATIC` の毎回 materialize だった
+    という仮説は当たっていた
+  - 一方で list / abstract は今回の変更では本質的に触っていないので、
+    ここで残っている差は
+    - bundle 実行前の type object 準備
+    - per-request writer allocation
+    - abstract/type callback 周辺の固定コスト
+    に寄っていると見てよい
   - したがって、今後も「generic runtime をそのまま磨く」より
     「fast lane を明示的に specialized に保つ」方が筋が良い
 

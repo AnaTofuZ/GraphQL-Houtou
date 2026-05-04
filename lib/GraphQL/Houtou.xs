@@ -3810,6 +3810,30 @@ native_program_descriptor_xs(program_sv)
     RETVAL
 
 SV *
+native_program_variable_defs_xs(program_sv)
+    SV *program_sv
+  CODE:
+    {
+      gql_runtime_vm_native_program_t *program =
+        gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
+      RETVAL = gql_runtime_vm_native_arg_defs_to_hash_sv(aTHX_ program->variable_defs, program->variable_def_count);
+    }
+  OUTPUT:
+    RETVAL
+
+IV
+native_program_root_block_index_xs(program_sv)
+    SV *program_sv
+  CODE:
+    {
+      gql_runtime_vm_native_program_t *program =
+        gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
+      RETVAL = program->root_block_index;
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 specialize_native_program_xs(runtime_sv, program_descriptor, variables = &PL_sv_undef)
     SV *runtime_sv
     SV *program_descriptor

@@ -5,7 +5,6 @@ use strict;
 use warnings;
 
 use GraphQL::Houtou ();
-use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Schema ();
 
 sub prepare_variables {
@@ -26,12 +25,12 @@ sub prepare_variables {
 sub _variable_defs_for_program {
   my ($program) = @_;
   return {} if !$program;
+  if (ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') }) {
+    GraphQL::Houtou::_bootstrap_xs();
+    return GraphQL::Houtou::XS::VM::native_program_variable_defs_xs($program) || {};
+  }
   return $program->variable_defs || {}
     if ref($program) && eval { $program->can('variable_defs') };
-  if (ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') }) {
-    my $descriptor = GraphQL::Houtou::Native::native_program_descriptor($program);
-    return $descriptor->{variable_defs} || {};
-  }
   return {};
 }
 

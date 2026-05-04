@@ -4,7 +4,6 @@ use 5.014;
 use strict;
 use warnings;
 use GraphQL::Houtou ();
-use GraphQL::Houtou::Native ();
 
 use GraphQL::Houtou::Promise::Adapter qw(is_promise_value normalize_promise_code then_promise);
 use GraphQL::Houtou::Runtime::InputCoercion ();
@@ -155,8 +154,9 @@ sub _root_block_index {
   my ($program) = @_;
   my $native_program = _native_program_handle($program);
   if ($native_program && ref($native_program) && eval { $native_program->isa('GraphQL::Houtou::Runtime::NativeProgram') }) {
-    my $summary = GraphQL::Houtou::Native::native_program_summary($native_program);
-    return defined $summary->{root_block_index} ? $summary->{root_block_index} : -1;
+    GraphQL::Houtou::_bootstrap_xs();
+    my $index = GraphQL::Houtou::XS::VM::native_program_root_block_index_xs($native_program);
+    return defined $index ? $index : -1;
   }
   return -1;
 }

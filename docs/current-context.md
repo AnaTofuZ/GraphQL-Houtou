@@ -196,6 +196,7 @@ fresh `./Build build` 済み環境で、
 - type model の `Moo` 依存削減を開始し、`Type`, `Type::List`, `Type::NonNull` は plain Perl object に置き換えた
 - `SchemaGraph` は compile / lower ownership のみを持ち、native eligibility 判定は `NativeRuntime` に委譲する
 - `NativeRuntime` と `ExecState` の promise path も、active 実行では `VMProgram` ではなく `NativeProgram` を一次通貨にする方向へ寄せている
+- `InputCoercion` と `ExecState` は `NativeProgram` から `variable_defs` / `root_block_index` を取るために full descriptor/summary hash を materialize せず、専用 XSUB で必要 metadata だけ引く
 - `ExecState` と `NativeRuntime` が別々に持っていた variable / arg coercion は `InputCoercion` に集約した
 - `InputCoercion` の dynamic arg materialization と runtime guard evaluation は `GraphQL::Houtou::XS::VM` helper に移し、Perl 側での再帰 walk を hot path から外した
 - `Runtime::Outcome` の constructor と `Runtime::Writer` の `consume_outcome(...)` は `GraphQL::Houtou::XS::VM` helper に移し、kind-first outcome の生成と consume を XS 側へ寄せた

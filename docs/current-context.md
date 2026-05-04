@@ -60,11 +60,10 @@
   - milestone branch: `milestone-d-promise-native-completion`
   - promise callback bridge / lazy info / callback info の owner を XS 側へ寄せ、promise loop の active path が native descriptor ベースで通る状態にした
 - Phase 5: Surface Freeze
-  - completion commit: `TBD`
+  - completion commit: `24a6394`
   - milestone branch: `milestone-e-surface-freeze`
   - `ExecState` を `new/build_for_program/run_program` だけの thin facade に縮退し、`InputCoercion` は active path の `prepare_variables(...)` のみを残す
 - Phase 6: Benchmark Gate
-  - completion commit: `TBD`
   - milestone branch: `milestone-f-benchmark-gate`
   - Phase 5 完了後に `./Build build` と benchmark repeat を回し、keep/revert 判断を記録する
 
@@ -206,6 +205,55 @@ fresh `./Build build` 済み環境で、
   - `abstract_with_fragment`
     - `houtou_runtime_program` median `3382/s`
     - `houtou_runtime_native_bundle` median `265429/s`
+
+- Phase 6 benchmark gate
+  - `./Build build` 後に
+    `perl util/execution-benchmark-checkpoint.pl --repeat=3 --count=-3`
+    を実行した中央値:
+  - `nested_variable_object`
+    - `houtou_runtime_program` median `3500/s`
+    - `houtou_runtime_native_bundle` median `352797/s`
+  - `list_of_objects`
+    - `houtou_runtime_program` median `3530/s`
+    - `houtou_runtime_native_bundle` median `289870/s`
+  - `abstract_with_fragment`
+    - `houtou_runtime_program` median `3510/s`
+    - `houtou_runtime_native_bundle` median `268800/s`
+
+解釈:
+
+- Phase 5 の surface freeze 後でも、Milestone B 比では全 case で改善した
+  - `runtime_program`
+    - `nested_variable_object`: 約 `+3.5%`
+    - `list_of_objects`: 約 `+4.1%`
+    - `abstract_with_fragment`: 約 `+3.8%`
+  - `native_bundle`
+    - `nested_variable_object`: 約 `+2.6%`
+    - `list_of_objects`: 約 `+2.0%`
+    - `abstract_with_fragment`: 約 `+1.3%`
+- 一方で、以前の native bundle high-watermark
+  - `nested_variable_object`: `584616/s`
+  - `list_of_objects`: `494673/s`
+  - `abstract_with_fragment`: `553411/s`
+  と比べると、まだ
+  - `nested_variable_object`: 約 `39.7%` 低い
+  - `list_of_objects`: 約 `41.4%` 低い
+  - `abstract_with_fragment`: 約 `51.4%` 低い
+- 旧 `compiled_ir` 最終 mainline (`ba7fbec`) と比べると現行 native bundle は依然として速い
+  - `nested_variable_object`: 約 `6.2x`
+  - `list_of_objects`: 約 `5.0x`
+  - `abstract_with_fragment`: 約 `6.9x`
+
+判断:
+
+- Phase 3-5 の batch は revert しない
+- 理由は
+  - correctness を維持したまま `NativeProgram` 主経路 / promise native loop / surface freeze を完了している
+  - Milestone B 比ではすべて改善している
+  - 旧 `compiled_ir` mainline 比でも十分に速い
+- ただし、過去の native bundle high-watermark にはまだ戻っていない
+- 今後さらに詰めるなら、残っている callback/info/materialization の Perl 境界と、
+  native descriptor から response 生成までの固定コストが次の本命
 
 ## 直近の方針
 

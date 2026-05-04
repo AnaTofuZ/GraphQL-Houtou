@@ -105,6 +105,7 @@ sub block { return $_[0][BLOCK_SLOT] }
 
 sub set_field_name { $_[0][FIELD_NAME_SLOT] = $_[1]; return $_[1] }
 sub set_result_name { $_[0][RESULT_NAME_SLOT] = $_[1]; return $_[1] }
+sub set_child_block_name { $_[0][CHILD_BLOCK_NAME_SLOT] = $_[1]; return $_[1] }
 sub set_bound_slot { $_[0][BOUND_SLOT_SLOT] = $_[1]; return $_[1] }
 sub set_bound_child_block { $_[0][BOUND_CHILD_BLOCK_SLOT] = $_[1]; return $_[1] }
 sub set_bound_abstract_child_blocks { $_[0][BOUND_ABSTRACT_CHILD_BLOCKS_SLOT] = $_[1] || {}; return $_[0][BOUND_ABSTRACT_CHILD_BLOCKS_SLOT] }
@@ -163,10 +164,12 @@ sub to_native_struct {
     : undef;
   my $native_abstract_child_block_indexes = $self->native_abstract_child_block_indexes || {};
   my $abstract_child_blocks = $self->abstract_child_blocks || {};
-  my $args_payload_index =
-    $payload_catalog ? $payload_catalog->intern_args_payload($self->args_payload) : undef;
-  my $directives_payload_index =
-    $payload_catalog ? $payload_catalog->intern_directives_payload($self->directives_payload) : undef;
+  my $args_payload_index = defined $self->args_payload_index
+    ? $self->args_payload_index
+    : ($payload_catalog ? $payload_catalog->intern_args_payload($self->args_payload) : undef);
+  my $directives_payload_index = defined $self->directives_payload_index
+    ? $self->directives_payload_index
+    : ($payload_catalog ? $payload_catalog->intern_directives_payload($self->directives_payload) : undef);
   return {
     opcode_code => $self->opcode_code,
     resolve_code => $self->resolve_code,

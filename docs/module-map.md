@@ -30,11 +30,13 @@
 - `GraphQL::Houtou::Runtime::SchemaGraph`
   - boot-time compiled schema graph
   - root block / slot catalog / dispatch index の owner
-  - program compile と public `execute_program` entrypoint の owner
+  - program compile / descriptor emit / public `execute_program` entrypoint の owner
+  - public `inflate_program` は `NativeProgram` handle を返す
 - `GraphQL::Houtou::Runtime::OperationCompiler`
   - document から `VMProgram` を lower する
 - `GraphQL::Houtou::Runtime::VMCompiler`
   - lowered `VMProgram` の lower / inflate
+  - public mainline ではなく internal inflate/debug 用
   - native compact struct 自体の owner ではない
 - `GraphQL::Houtou::Runtime::NativeRuntime`
   - native specialization と native execute の owner

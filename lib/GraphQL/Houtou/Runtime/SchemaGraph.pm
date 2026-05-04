@@ -4,6 +4,8 @@ use 5.014;
 use strict;
 use warnings;
 
+use GraphQL::Houtou ();
+use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Runtime::SchemaBlock ();
 use GraphQL::Houtou::Runtime::Slot ();
 
@@ -97,14 +99,20 @@ sub block_by_type_name {
 
 sub compile_program {
   my ($self, $document, %opts) = @_;
-  require GraphQL::Houtou::Runtime::OperationCompiler;
-  return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation($self, $document, %opts);
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::load_native_program_xs(
+    $self->_compile_native_program_descriptor($document, %opts),
+  );
+}
+
+sub compile_program_descriptor {
+  my ($self, $document, %opts) = @_;
+  return $self->_compile_native_program_descriptor($document, %opts);
 }
 
 sub inflate_program {
   my ($self, $descriptor) = @_;
-  require GraphQL::Houtou::Runtime::VMCompiler;
-  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program($self, $descriptor);
+  return GraphQL::Houtou::Native::load_native_program($descriptor);
 }
 
 sub execute_program {
@@ -114,6 +122,16 @@ sub execute_program {
     runtime_schema => $self,
   );
   return $native_runtime->execute_program($program, %opts);
+}
+
+sub _compile_native_program_descriptor {
+  my ($self, $document, %opts) = @_;
+  require GraphQL::Houtou::Runtime::OperationCompiler;
+  return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation_native_compact(
+    $self,
+    $document,
+    %opts,
+  );
 }
 
 sub to_struct {

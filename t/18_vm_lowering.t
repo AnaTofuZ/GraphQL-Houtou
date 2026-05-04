@@ -14,6 +14,7 @@ use GraphQL::Houtou::Native qw(
   native_runtime_summary
 );
 use GraphQL::Houtou::Schema;
+use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Scalar qw($String);
@@ -54,8 +55,19 @@ my $schema = GraphQL::Houtou::Schema->new(
   types => [ $User, $Node ],
 );
 
+sub lower_vm_program {
+  my ($schema, $document) = @_;
+  my $runtime = $schema->build_runtime;
+  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program(
+    $runtime,
+    $runtime->compile_program_descriptor($document),
+  );
+}
+
 subtest 'schema can lower operation into VM program' => sub {
-  my $vm = $schema->compile_program('{ viewer { id } node { id } }');
+  my $native_program = $schema->compile_program('{ viewer { id } node { id } }');
+  my $vm = lower_vm_program($schema, '{ viewer { id } node { id } }');
+  isa_ok $native_program, 'GraphQL::Houtou::Runtime::NativeProgram';
   isa_ok $vm, 'GraphQL::Houtou::Runtime::VMProgram';
   isa_ok $vm->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
   is $vm->operation_type, 'query', 'vm program keeps operation type';
@@ -77,10 +89,12 @@ subtest 'schema can lower operation into VM program' => sub {
 subtest 'VM program descriptor can round-trip through schema helpers' => sub {
   my $descriptor = $schema->compile_program_descriptor('{ viewer { id } }');
   my $vm = $schema->inflate_program($descriptor);
-  isa_ok $vm, 'GraphQL::Houtou::Runtime::VMProgram';
-  isa_ok $vm->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
-  is $vm->root_block->ops->[0]->field_name, 'viewer', 'inflated VM program keeps field op';
-  ok $vm->root_block->ops->[0]->opcode_code, 'inflated VM op keeps numeric opcode code';
+  isa_ok $vm, 'GraphQL::Houtou::Runtime::NativeProgram';
+  my $summary = native_program_summary($vm);
+  is $summary->{root_block_index}, $descriptor->{root_block_index},
+    'inflated native program keeps root block index';
+  is $summary->{block_count}, scalar(@{ $descriptor->{blocks_compact} || [] }),
+    'inflated native program keeps block count';
 };
 
 subtest 'schema can emit XS-friendly native VM descriptor' => sub {

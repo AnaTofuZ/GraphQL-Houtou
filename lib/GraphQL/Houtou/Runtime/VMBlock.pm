@@ -60,7 +60,7 @@ sub to_native_struct {
     my $id = join("\x1E", refaddr($slot), ($op->result_name // q()));
     next if exists $slot_index{$id};
     $slot_index{$id} = scalar @slot_table;
-    my $native_slot = $slot->to_native_struct(include_arg_defs => 0);
+    my $native_slot = $slot->to_native_struct(include_arg_defs => 1);
     $native_slot->{result_name} = $op->result_name;
     push @slot_table, $native_slot;
   }
@@ -83,7 +83,7 @@ sub to_native_compact_struct {
     my $id = join("\x1E", refaddr($slot), ($op->result_name // q()));
     next if exists $slot_index{$id};
     $slot_index{$id} = scalar @slot_table;
-    my $native_slot = $slot->to_native_compact_struct(include_arg_defs => 0);
+    my $native_slot = $slot->to_native_compact_struct(include_arg_defs => 1);
     $native_slot->[1] = ($op->result_name // $native_slot->[1]);
     push @slot_table, $native_slot;
   }

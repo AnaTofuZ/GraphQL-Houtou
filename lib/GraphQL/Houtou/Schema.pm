@@ -9,9 +9,7 @@ use JSON::PP ();
 
 use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Directive ();
-use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::SchemaGraph ();
-use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Type::Scalar qw($Int $Float $String $Boolean $ID);
 use GraphQL::Houtou::Introspection qw($SCHEMA_META_TYPE);
 
@@ -138,7 +136,8 @@ sub compile_program {
 
 sub compile_program_descriptor {
   my ($self, $document, %opts) = @_;
-  return $self->compile_program($document, %opts)->to_struct;
+  my $runtime = $self->build_runtime;
+  return $runtime->compile_program_descriptor($document, %opts);
 }
 
 sub dump_program_descriptor {
@@ -157,7 +156,7 @@ sub load_program_descriptor {
 sub inflate_program {
   my ($self, $descriptor, %opts) = @_;
   my $runtime = $self->build_runtime;
-  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program($runtime, $descriptor);
+  return $runtime->inflate_program($descriptor, %opts);
 }
 
 sub execute {

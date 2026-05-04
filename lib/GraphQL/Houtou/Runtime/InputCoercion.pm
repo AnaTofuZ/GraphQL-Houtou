@@ -5,11 +5,12 @@ use strict;
 use warnings;
 
 use GraphQL::Houtou ();
+use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Schema ();
 
 sub prepare_variables {
   my ($runtime_schema, $program, $provided) = @_;
-  my $defs = $program && $program->can('variable_defs') ? ($program->variable_defs || {}) : {};
+  my $defs = _variable_defs_for_program($program);
   my %resolved = %{ $provided || {} };
 
   for my $name (keys %{$defs || {}}) {
@@ -20,6 +21,18 @@ sub prepare_variables {
   }
 
   return coerce_variable_values($runtime_schema, $defs, \%resolved);
+}
+
+sub _variable_defs_for_program {
+  my ($program) = @_;
+  return {} if !$program;
+  return $program->variable_defs || {}
+    if ref($program) && eval { $program->can('variable_defs') };
+  if (ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') }) {
+    my $descriptor = GraphQL::Houtou::Native::native_program_descriptor($program);
+    return $descriptor->{variable_defs} || {};
+  }
+  return {};
 }
 
 sub coerce_variable_values {

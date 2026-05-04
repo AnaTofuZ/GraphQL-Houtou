@@ -44,6 +44,24 @@ sub lower_program {
 
 sub inflate_program {
   my ($class, $runtime_schema, $struct) = @_;
+  if ($struct->{blocks_compact}) {
+    my @blocks = map { _inflate_native_block($_) } @{ $struct->{blocks_compact} || [] };
+    my $root_block = defined $struct->{root_block_index}
+      ? $blocks[ $struct->{root_block_index} ]
+      : undef;
+    my $vm_program = GraphQL::Houtou::Runtime::VMProgram->new(
+      version => $struct->{version} || 1,
+      operation_type => $struct->{operation_type} || _operation_type_from_code($struct->{operation_type_code}),
+      operation_name => $struct->{operation_name},
+      variable_defs => $struct->{variable_defs} || {},
+      blocks => \@blocks,
+      root_block => $root_block,
+      args_payloads => $struct->{args_payloads_compact} || $struct->{args_payloads} || [],
+      directives_payloads => $struct->{directives_payloads_compact} || $struct->{directives_payloads} || [],
+    );
+    _bind_native_vm_ops($runtime_schema, $vm_program, $struct);
+    return $vm_program;
+  }
   my @blocks = map { _inflate_block($_) } @{ $struct->{blocks} || [] };
   my %by_name = map { ($_->name => $_) } @blocks;
   my $root_block = defined $struct->{root_block} ? $by_name{ $struct->{root_block} } : undef;
@@ -71,7 +89,7 @@ sub inflate_native_bundle {
     : undef;
   my $vm_program = GraphQL::Houtou::Runtime::VMProgram->new(
     version => $program_struct->{version} || 1,
-    operation_type => $program_struct->{operation_type} || 'query',
+    operation_type => $program_struct->{operation_type} || _operation_type_from_code($program_struct->{operation_type_code}),
     operation_name => $program_struct->{operation_name},
     variable_defs => $program_struct->{variable_defs} || {},
     blocks => \@blocks,
@@ -192,6 +210,7 @@ sub _inflate_native_op {
       resolve_code => $resolve_code || 0,
       complete_family => $complete_family,
       complete_code => $complete_code || 0,
+      dispatch_family => _dispatch_family_from_code($dispatch_family_code),
       field_name => $field_name,
       result_name => $result_name,
       return_type_name => $return_type_name,
@@ -219,6 +238,7 @@ sub _inflate_native_op {
     resolve_code => $struct->{resolve_code} || 0,
     complete_family => $complete_family,
     complete_code => $struct->{complete_code} || 0,
+    dispatch_family => $struct->{dispatch_family} || _dispatch_family_from_code($struct->{dispatch_family_code}),
     return_type_name => $struct->{return_type_name},
     args_mode => $struct->{args_mode} || 'NONE',
     args_payload => $struct->{args_payload},
@@ -242,6 +262,21 @@ sub _family_from_code {
   return 'LIST' if ($code || 0) == 3;
   return 'ABSTRACT' if ($code || 0) == 4;
   return 'GENERIC';
+}
+
+sub _dispatch_family_from_code {
+  my ($code) = @_;
+  return 'RESOLVE_TYPE' if ($code || 0) == 2;
+  return 'TAG' if ($code || 0) == 3;
+  return 'POSSIBLE_TYPES' if ($code || 0) == 4;
+  return 'DEFAULT';
+}
+
+sub _operation_type_from_code {
+  my ($code) = @_;
+  return 'mutation' if ($code || 0) == 2;
+  return 'subscription' if ($code || 0) == 3;
+  return 'query';
 }
 
 sub _args_mode_from_code {
@@ -292,31 +327,53 @@ sub _bind_vm_ops {
 
 sub _bind_native_vm_ops {
   my ($runtime_schema, $program, $program_struct) = @_;
-  my @block_structs = @{ $program_struct->{blocks} || [] };
+  my @block_structs = @{ $program_struct->{blocks_compact} || $program_struct->{blocks} || [] };
   my @blocks = @{ $program->blocks || [] };
   my @runtime_slots = @{ $runtime_schema->slot_catalog || [] };
 
   for my $block_index (0 .. $#blocks) {
     my $block = $blocks[$block_index] or next;
     my $block_struct = $block_structs[$block_index] || {};
-    my @native_slots = @{ $block_struct->{slots} || [] };
+    my @native_slots = ref($block_struct) eq 'ARRAY'
+      ? @{ $block_struct->[3] || [] }
+      : @{ $block_struct->{slots} || [] };
 
     for my $op (@{ $block->ops || [] }) {
       my $slot_struct = defined $op->native_slot_index
         ? $native_slots[ $op->native_slot_index ]
         : undef;
-      my $runtime_slot = $slot_struct && defined $slot_struct->{schema_slot_index}
-        ? $runtime_slots[ $slot_struct->{schema_slot_index} ]
+      my $schema_slot_index = ref($slot_struct) eq 'ARRAY'
+        ? $slot_struct->[3]
+        : ($slot_struct ? $slot_struct->{schema_slot_index} : undef);
+      my $field_name = ref($slot_struct) eq 'ARRAY'
+        ? $slot_struct->[0]
+        : ($slot_struct ? $slot_struct->{field_name} : undef);
+      my $result_name = ref($slot_struct) eq 'ARRAY'
+        ? $slot_struct->[1]
+        : ($slot_struct ? $slot_struct->{result_name} : undef);
+      my $runtime_slot = defined $schema_slot_index
+        ? $runtime_slots[ $schema_slot_index ]
         : undef;
 
       $op->set_bound_slot($runtime_slot) if $runtime_slot;
-      $op->set_field_name($slot_struct->{field_name}) if $slot_struct && defined $slot_struct->{field_name};
-      $op->set_result_name($slot_struct->{result_name}) if $slot_struct && defined $slot_struct->{result_name};
+      $op->set_field_name($field_name) if defined $field_name;
+      $op->set_result_name($result_name) if defined $result_name;
       $op->set_bound_slot($op->bound_slot || _bind_typename_slot($runtime_schema, $block, $op, $slot_struct));
 
-      $op->set_bound_child_block(defined $op->native_child_block_index
-        ? $blocks[ $op->native_child_block_index ]
-        : undef);
+      if (defined $op->native_child_block_index) {
+        my $child_block = $blocks[ $op->native_child_block_index ];
+        $op->set_bound_child_block($child_block);
+        $op->set_child_block_name($child_block ? $child_block->name : undef);
+      } else {
+        $op->set_bound_child_block(undef);
+        $op->set_child_block_name(undef);
+      }
+
+      my %abstract_children = map {
+        my $idx = $op->native_abstract_child_block_indexes->{$_};
+        ($_ => (defined $idx && $blocks[$idx] ? $blocks[$idx]->name : undef))
+      } keys %{ $op->native_abstract_child_block_indexes || {} };
+      $op->set_abstract_child_blocks(\%abstract_children);
       $op->set_bound_abstract_child_blocks({
         map {
           my $idx = $op->native_abstract_child_block_indexes->{$_};
@@ -332,13 +389,19 @@ sub _bind_native_vm_ops {
 sub _bind_typename_slot {
   my ($runtime_schema, $block, $op, $slot_struct) = @_;
   return undef if ($op->field_name || q()) ne '__typename';
+  my $return_type_name = ref($slot_struct) eq 'ARRAY'
+    ? $slot_struct->[2]
+    : ($slot_struct && $slot_struct->{return_type_name});
+  my $return_type_kind_code = ref($slot_struct) eq 'ARRAY'
+    ? $slot_struct->[7]
+    : ($slot_struct && $slot_struct->{return_type_kind_code});
 
   return GraphQL::Houtou::Runtime::Slot->new(
     schema_slot_key => join(q(.), ($block->type_name || q()), '__typename'),
     field_name => '__typename',
     result_name => ($op->result_name || '__typename'),
-    return_type_name => (($slot_struct && $slot_struct->{return_type_name}) || 'String'),
-    return_type_kind_code => (($slot_struct && $slot_struct->{return_type_kind_code}) || 1),
+    return_type_name => ($return_type_name || 'String'),
+    return_type_kind_code => (defined $return_type_kind_code ? $return_type_kind_code : 1),
     resolver_shape => 'DEFAULT',
     resolver_mode => 'DEFAULT',
     completion_family => 'GENERIC',

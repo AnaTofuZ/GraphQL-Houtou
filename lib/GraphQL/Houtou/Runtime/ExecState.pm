@@ -4,6 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 use GraphQL::Houtou ();
+use GraphQL::Houtou::Native ();
 
 use GraphQL::Houtou::Promise::Adapter qw(is_promise_value normalize_promise_code then_promise);
 use GraphQL::Houtou::Runtime::InputCoercion ();
@@ -28,14 +29,16 @@ sub new {
 sub build_for_program {
   my ($class, $runtime_schema, $program, %opts) = @_;
   my $promise_code = normalize_promise_code($opts{promise_code});
+  my $native_program = _native_program_handle($program);
+  my $root_block_index = _root_block_index($native_program);
   return $class->new(
     runtime_schema => $runtime_schema,
-    program => $program,
+    program => $native_program,
     cursor => GraphQL::Houtou::XS::VM::cursor_new_xs(
       'GraphQL::Houtou::Runtime::Cursor',
       undef,
-      $program->to_native_program_handle,
-      (defined $program->root_block_index ? $program->root_block_index : -1),
+      $native_program,
+      $root_block_index,
       0,
       0,
       undef,
@@ -45,7 +48,7 @@ sub build_for_program {
     context => $opts{context},
     variables => GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
       $runtime_schema,
-      $program,
+      $native_program,
       $opts{variables} || {},
     ),
     root_value => $opts{root_value},
@@ -56,12 +59,13 @@ sub build_for_program {
 
 sub run_program {
   my ($class, $runtime_schema, $program, %opts) = @_;
-  my $state = $class->build_for_program($runtime_schema, $program, %opts);
+  my $native_program = _native_program_handle($program);
+  my $state = $class->build_for_program($runtime_schema, $native_program, %opts);
   if (!$state->promise_code) {
     GraphQL::Houtou::_bootstrap_xs();
     return GraphQL::Houtou::XS::VM::exec_state_run_program_xs($state, $opts{root_value});
   }
-  my $data = $state->execute_block($program->root_block_index, $opts{root_value});
+  my $data = $state->execute_block(_root_block_index($native_program), $opts{root_value});
   return $state->finalize_response($data);
 }
 
@@ -135,6 +139,26 @@ return {
   data => $data,
   errors => GraphQL::Houtou::XS::VM::writer_materialize_errors_xs($self->writer),
 };
+}
+
+sub _native_program_handle {
+  my ($program) = @_;
+  return undef if !$program;
+  return $program
+    if ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') };
+  return $program->to_native_program_handle
+    if ref($program) && eval { $program->can('to_native_program_handle') };
+  return $program;
+}
+
+sub _root_block_index {
+  my ($program) = @_;
+  my $native_program = _native_program_handle($program);
+  if ($native_program && ref($native_program) && eval { $native_program->isa('GraphQL::Houtou::Runtime::NativeProgram') }) {
+    my $summary = GraphQL::Houtou::Native::native_program_summary($native_program);
+    return defined $summary->{root_block_index} ? $summary->{root_block_index} : -1;
+  }
+  return -1;
 }
 
 1;

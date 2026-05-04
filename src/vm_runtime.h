@@ -182,11 +182,15 @@ typedef struct {
 } gql_runtime_vm_native_bundle_t;
 
 typedef struct {
+  IV version;
+  char *operation_name;
   IV operation_type_code;
   IV root_block_index;
+  IV variable_def_count;
   IV block_count;
   IV args_payload_count;
   IV directives_payload_count;
+  gql_runtime_vm_native_arg_def_t *variable_defs;
   gql_runtime_vm_native_block_t *blocks;
   gql_runtime_vm_native_args_payload_t **args_payloads;
   gql_runtime_vm_native_directives_payload_t **directives_payloads;
@@ -1327,19 +1331,91 @@ gql_runtime_vm_native_block_to_compact_sv(
 }
 
 static SV *
+gql_runtime_vm_native_arg_defs_to_hash_sv(
+  pTHX_ const gql_runtime_vm_native_arg_def_t *arg_defs,
+  IV arg_def_count
+)
+{
+  HV *hv = newHV();
+  IV i;
+
+  for (i = 0; i < arg_def_count; i++) {
+    const gql_runtime_vm_native_arg_def_t *arg_def = &arg_defs[i];
+    HV *arg_def_hv = newHV();
+
+    if (!arg_def->name) {
+      continue;
+    }
+
+    hv_store(arg_def_hv, "type", 4, arg_def->type_def_sv ? newSVsv(arg_def->type_def_sv) : newSV(0), 0);
+    hv_store(arg_def_hv, "has_default", 11, newSViv(arg_def->has_default ? 1 : 0), 0);
+    if (arg_def->has_default) {
+      SV *default_sv = arg_def->default_native_value
+        ? gql_runtime_vm_native_value_materialize_sv(aTHX_ arg_def->default_native_value)
+        : (arg_def->default_value_sv ? newSVsv(arg_def->default_value_sv) : newSV(0));
+      hv_store(arg_def_hv, "default_value", 13, default_sv, 0);
+    }
+
+    hv_store(
+      hv,
+      arg_def->name,
+      (I32)strlen(arg_def->name),
+      newRV_noinc((SV *)arg_def_hv),
+      0
+    );
+  }
+
+  return newRV_noinc((SV *)hv);
+}
+
+static SV *
 gql_runtime_vm_native_program_to_compact_sv(
   pTHX_ const gql_runtime_vm_native_program_t *program
 )
 {
   HV *hv = newHV();
   AV *blocks_av = newAV();
+  AV *args_payloads_av = newAV();
+  AV *directives_payloads_av = newAV();
   IV i;
 
+  hv_store(hv, "version", 7, newSViv(program->version > 0 ? program->version : 1), 0);
   hv_store(hv, "operation_type_code", 19, newSViv(program->operation_type_code), 0);
+  hv_store(
+    hv,
+    "operation_name",
+    14,
+    program->operation_name ? newSVpv(program->operation_name, 0) : newSV(0),
+    0
+  );
   hv_store(hv, "root_block_index", 16, newSViv(program->root_block_index), 0);
-  hv_store(hv, "variable_defs", 13, newRV_noinc((SV *)newHV()), 0);
-  hv_store(hv, "args_payloads_compact", 21, newRV_noinc((SV *)newAV()), 0);
-  hv_store(hv, "directives_payloads_compact", 27, newRV_noinc((SV *)newAV()), 0);
+  hv_store(
+    hv,
+    "variable_defs",
+    13,
+    gql_runtime_vm_native_arg_defs_to_hash_sv(aTHX_ program->variable_defs, program->variable_def_count),
+    0
+  );
+
+  for (i = 0; i < program->args_payload_count; i++) {
+    av_push(
+      args_payloads_av,
+      program->args_payloads && program->args_payloads[i]
+        ? gql_runtime_vm_native_args_payload_materialize_sv(aTHX_ program->args_payloads[i])
+        : newSV(0)
+    );
+  }
+  hv_store(hv, "args_payloads_compact", 21, newRV_noinc((SV *)args_payloads_av), 0);
+
+  for (i = 0; i < program->directives_payload_count; i++) {
+    av_push(
+      directives_payloads_av,
+      program->directives_payloads && program->directives_payloads[i]
+        ? gql_runtime_vm_native_directives_payload_materialize_sv(aTHX_ program->directives_payloads[i])
+        : newSV(0)
+    );
+  }
+  hv_store(hv, "directives_payloads_compact", 27, newRV_noinc((SV *)directives_payloads_av), 0);
 
   for (i = 0; i < program->block_count; i++) {
     av_push(blocks_av, gql_runtime_vm_native_block_to_compact_sv(aTHX_ &program->blocks[i]));
@@ -2616,6 +2692,8 @@ gql_runtime_vm_native_program_destroy(gql_runtime_vm_native_program_t *program)
   if (!program) {
     return;
   }
+  Safefree(program->operation_name);
+  gql_runtime_vm_free_native_arg_defs(aTHX_ program->variable_defs, program->variable_def_count);
   if (program->blocks) {
     for (i = 0; i < program->block_count; i++) {
       Safefree(program->blocks[i].type_name);
@@ -3693,6 +3771,16 @@ gql_runtime_vm_native_program_from_sv(pTHX_ SV *sv)
   }
 
   Newxz(program, 1, gql_runtime_vm_native_program_t);
+  svp = hv_fetch(program_hv, "version", 7, 0);
+  program->version = (svp && SvOK(*svp)) ? SvIV(*svp) : 1;
+  svp = hv_fetch(program_hv, "operation_name", 14, 0);
+  if (svp && SvOK(*svp)) {
+    STRLEN len;
+    const char *pv = SvPV(*svp, len);
+    Newxz(program->operation_name, len + 1, char);
+    Copy(pv, program->operation_name, len, char);
+    program->operation_name[len] = '\0';
+  }
   if (!gql_runtime_vm_fetch_hv_iv(aTHX_ program_hv, "operation_type_code", 19, &program->operation_type_code)) {
     gql_runtime_vm_native_program_destroy(program);
     croak("native VM program descriptor is missing operation_type_code");
@@ -3701,6 +3789,8 @@ gql_runtime_vm_native_program_from_sv(pTHX_ SV *sv)
     gql_runtime_vm_native_program_destroy(program);
     croak("native VM program descriptor is missing root_block_index");
   }
+  svp = hv_fetch(program_hv, "variable_defs", 13, 0);
+  gql_runtime_vm_parse_native_arg_defs(aTHX_ (svp ? *svp : NULL), &program->variable_defs, &program->variable_def_count);
 
   gql_runtime_vm_parse_native_program_payload_catalogs(aTHX_ program_hv, program);
 
@@ -3920,9 +4010,61 @@ gql_runtime_vm_clone_native_program(pTHX_ gql_runtime_vm_native_program_t *src)
     return NULL;
   }
   Newxz(dst, 1, gql_runtime_vm_native_program_t);
+  dst->version = src->version;
   dst->operation_type_code = src->operation_type_code;
   dst->root_block_index = src->root_block_index;
+  dst->variable_def_count = src->variable_def_count;
   dst->block_count = src->block_count;
+  dst->args_payload_count = src->args_payload_count;
+  dst->directives_payload_count = src->directives_payload_count;
+  if (src->operation_name) {
+    STRLEN len = strlen(src->operation_name);
+    Newxz(dst->operation_name, len + 1, char);
+    Copy(src->operation_name, dst->operation_name, len, char);
+    dst->operation_name[len] = '\0';
+  }
+  if (src->variable_def_count > 0 && src->variable_defs) {
+    Newxz(dst->variable_defs, src->variable_def_count, gql_runtime_vm_native_arg_def_t);
+    for (i = 0; i < src->variable_def_count; i++) {
+      gql_runtime_vm_native_arg_def_t *src_def = &src->variable_defs[i];
+      gql_runtime_vm_native_arg_def_t *dst_def = &dst->variable_defs[i];
+      dst_def->has_default = src_def->has_default;
+      if (src_def->name) {
+        STRLEN len = strlen(src_def->name);
+        Newxz(dst_def->name, len + 1, char);
+        Copy(src_def->name, dst_def->name, len, char);
+        dst_def->name[len] = '\0';
+      }
+      if (src_def->type_def_sv) {
+        dst_def->type_def_sv = newSVsv(src_def->type_def_sv);
+      }
+      if (src_def->input_type_sv) {
+        dst_def->input_type_sv = newSVsv(src_def->input_type_sv);
+      }
+      if (src_def->default_value_sv) {
+        dst_def->default_value_sv = newSVsv(src_def->default_value_sv);
+      }
+      if (src_def->default_native_value) {
+        dst_def->default_native_value = gql_runtime_vm_native_value_clone(aTHX_ src_def->default_native_value);
+      }
+    }
+  }
+  if (src->args_payload_count > 0 && src->args_payloads) {
+    Newxz(dst->args_payloads, src->args_payload_count, gql_runtime_vm_native_args_payload_t *);
+    for (i = 0; i < src->args_payload_count; i++) {
+      if (src->args_payloads[i]) {
+        dst->args_payloads[i] = gql_runtime_vm_native_args_payload_clone(aTHX_ src->args_payloads[i]);
+      }
+    }
+  }
+  if (src->directives_payload_count > 0 && src->directives_payloads) {
+    Newxz(dst->directives_payloads, src->directives_payload_count, gql_runtime_vm_native_directives_payload_t *);
+    for (i = 0; i < src->directives_payload_count; i++) {
+      if (src->directives_payloads[i]) {
+        dst->directives_payloads[i] = gql_runtime_vm_native_directives_payload_clone(aTHX_ src->directives_payloads[i]);
+      }
+    }
+  }
   if (src->block_count > 0) {
     Newxz(dst->blocks, src->block_count, gql_runtime_vm_native_block_t);
     for (i = 0; i < src->block_count; i++) {

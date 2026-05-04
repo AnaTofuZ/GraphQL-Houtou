@@ -51,6 +51,8 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 - native runtime / native bundle との境界を持つ
 - request-time specialization と native bundle descriptor 組み立てを `NativeRuntime` が所有する
 - native bundle descriptor の inflate/execute も `SchemaGraph` 経由の wrapper ではなく `NativeRuntime` が所有する
+- public の `compile_program` / `inflate_program` は `NativeProgram` handle を返す
+- `VMProgram` / `VMBlock` / `VMOp` は internal inflate/debug 用の artifact に後退している
 - `Runtime::execute_vm(...)` からの compact program 実行も `NativeRuntime` が所有する
 - variable / argument coercion と runtime guard evaluation の shared logic は `InputCoercion` に集約する
 - hot path では `runtime + program` の Perl descriptor hash を組み立てず、
@@ -98,6 +100,7 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 - lowered program を VM block / op に変換する
 - hot path で使う dispatch family を bind する
 - string opcode の再解釈や動的 helper lookup を避ける
+- public mainline ではなく internal inflate/debug の owner として残す
 
 ### 6. VM Execution
 

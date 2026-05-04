@@ -80,8 +80,8 @@ subtest 'schema runtime descriptor helpers prefer program/native names' => sub {
   my $program_descriptor = $schema->dump_program_descriptor('{ hello }', $program_path);
   my $program = $schema->load_program_descriptor($program_path);
 
-  isa_ok $program, 'GraphQL::Houtou::Runtime::VMProgram';
-  ok $program_descriptor->{blocks}, 'program descriptor payload is written to disk';
+  isa_ok $program, 'GraphQL::Houtou::Runtime::NativeProgram';
+  ok $program_descriptor->{blocks_compact}, 'program descriptor payload is written to disk';
   is_deeply $schema->build_runtime->execute_program($program), {
     data => { hello => 'world' },
     errors => [],

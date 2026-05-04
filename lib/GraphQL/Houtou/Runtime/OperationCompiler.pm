@@ -79,6 +79,10 @@ sub compile_operation_native_compact {
     runtime_schema => $runtime_schema,
     block_index => 0,
     blocks_compact => [],
+    args_payloads_compact => [],
+    directives_payloads_compact => [],
+    args_payload_index => {},
+    directives_payload_index => {},
     fragments => \%fragments,
   );
 
@@ -95,6 +99,8 @@ sub compile_operation_native_compact {
     operation_type_code => _operation_type_code($operation_type),
     operation_name => $operation->{name},
     variable_defs => _lower_variable_defs($operation->{variables}),
+    args_payloads_compact => $state{args_payloads_compact},
+    directives_payloads_compact => $state{directives_payloads_compact},
     root_block_index => $root_block_index,
     blocks_compact => $state{blocks_compact},
   };
@@ -208,6 +214,11 @@ sub _lower_selection_block_compact {
 
     if (($field_name || q()) eq '__typename') {
       my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
+      my $directives_payload_index = _intern_compact_payload(
+        $state->{directives_payloads_compact},
+        $state->{directives_payload_index},
+        $directives_payload,
+      );
       my $result_name = ($selection->{alias} || '__typename');
       my $slot = _lookup_typename_slot($state->{runtime_schema}, $type_name, $result_name, $directives_mode);
       my $slot_compact_index = _intern_slot_compact(\@slot_table, \%slot_index, $slot, $result_name);
@@ -220,8 +231,12 @@ sub _lower_selection_block_compact {
         dispatch_family => 'DEFAULT',
         slot_index => $slot_compact_index,
         args_mode => 'NONE',
+        args_payload_index => undef,
         args_payload => undef,
         has_args => 0,
+        directives_mode => $directives_mode,
+        directives_payload_index => $directives_payload_index,
+        directives_payload => defined $directives_payload_index ? undef : $directives_payload,
         has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
         child_block_index => undef,
         abstract_child_block_indexes => {},
@@ -234,6 +249,16 @@ sub _lower_selection_block_compact {
     my $abstract_child_block_indexes = {};
     my ($args_mode, $args_payload) = _lower_arguments($selection->{arguments});
     my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
+    my $args_payload_index = _intern_compact_payload(
+      $state->{args_payloads_compact},
+      $state->{args_payload_index},
+      $args_payload,
+    );
+    my $directives_payload_index = _intern_compact_payload(
+      $state->{directives_payloads_compact},
+      $state->{directives_payload_index},
+      $directives_payload,
+    );
 
     if ($selection->{selections} && @{ $selection->{selections} }) {
       my $child_type_name = $slot->return_type_name;
@@ -270,8 +295,12 @@ sub _lower_selection_block_compact {
       dispatch_family => $slot->dispatch_family,
       slot_index => $slot_compact_index,
       args_mode => $args_mode,
-      args_payload => $args_payload,
+      args_payload_index => $args_payload_index,
+      args_payload => defined $args_payload_index ? undef : $args_payload,
       has_args => $slot->has_args,
+      directives_mode => $directives_mode,
+      directives_payload_index => $directives_payload_index,
+      directives_payload => defined $directives_payload_index ? undef : $directives_payload,
       has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
       child_block_index => $child_block_index,
       abstract_child_block_indexes => $abstract_child_block_indexes,
@@ -439,9 +468,11 @@ sub _build_compact_op {
     $args{child_block_index},
     $args{abstract_child_block_indexes} || {},
     _args_mode_code($args{args_mode}),
+    $args{args_payload_index},
     $args{args_payload},
     $args{has_args} ? 1 : 0,
     _directives_mode_code($args{directives_mode}),
+    $args{directives_payload_index},
     $args{directives_payload},
     $args{has_directives} ? 1 : 0,
     $args{field_name},
@@ -692,6 +723,38 @@ sub _clone_argument_value {
   return [ map { _clone_argument_value($_) } @$value ] if $ref eq 'ARRAY';
   return { map { $_ => _clone_argument_value($value->{$_}) } keys %$value } if $ref eq 'HASH';
   return $value;
+}
+
+sub _intern_compact_payload {
+  my ($payloads, $index, $payload) = @_;
+  return undef if !_payload_present($payload);
+  my $key = _compact_payload_key($payload);
+  return $index->{$key} if exists $index->{$key};
+  my $slot = @$payloads;
+  push @$payloads, _clone_argument_value($payload);
+  $index->{$key} = $slot;
+  return $slot;
+}
+
+sub _payload_present {
+  my ($value) = @_;
+  return 0 if !defined $value;
+  my $ref = ref($value);
+  return 1 if !$ref;
+  return scalar(@$value) ? 1 : 0 if $ref eq 'ARRAY';
+  return scalar(keys %$value) ? 1 : 0 if $ref eq 'HASH';
+  return 1;
+}
+
+sub _compact_payload_key {
+  my ($value) = @_;
+  my $ref = ref($value);
+  return '!undef' if !defined $value;
+  return "S:$value" if !$ref;
+  return "R:${$value}" if $ref eq 'REF' || $ref eq 'SCALAR';
+  return 'A:[' . join(',', map { _compact_payload_key($_) } @$value) . ']' if $ref eq 'ARRAY';
+  return 'H:{' . join(',', map { $_ . '=>' . _compact_payload_key($value->{$_}) } sort keys %$value) . '}' if $ref eq 'HASH';
+  return "$ref:$value";
 }
 
 sub _complete_op_for_slot {

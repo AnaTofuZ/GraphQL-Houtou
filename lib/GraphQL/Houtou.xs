@@ -3189,6 +3189,64 @@ gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slo
 }
 
 static SV *
+gql_runtime_vm_slot_resolver_sv(
+  const gql_runtime_vm_native_runtime_t *runtime,
+  const gql_runtime_vm_native_slot_t *slot
+)
+{
+  if (!runtime || !slot) {
+    return NULL;
+  }
+  if (slot->schema_slot_index < 0 || slot->schema_slot_index >= runtime->runtime_slot_count) {
+    return NULL;
+  }
+  if (!runtime->callback_catalog || !runtime->callback_catalog->slot_resolvers) {
+    return NULL;
+  }
+  return runtime->callback_catalog->slot_resolvers[slot->schema_slot_index];
+}
+
+static gql_runtime_vm_path_frame_t *
+gql_runtime_vm_new_result_path_frame(
+  pTHX_
+  gql_runtime_vm_path_frame_t *parent,
+  const gql_runtime_vm_native_slot_t *slot
+)
+{
+  if (slot && slot->result_name) {
+    return gql_runtime_vm_new_path_frame_struct_pvn(
+      aTHX_
+      parent,
+      slot->result_name,
+      strlen(slot->result_name)
+    );
+  }
+  return gql_runtime_vm_new_path_frame_struct(aTHX_ parent, &PL_sv_undef);
+}
+
+static int
+gql_runtime_vm_slot_can_delay_field_path(
+  const gql_runtime_vm_native_runtime_t *runtime,
+  const gql_runtime_vm_native_slot_t *slot,
+  const gql_runtime_vm_native_op_t *op
+)
+{
+  if (!slot || !op) {
+    return 0;
+  }
+  if (gql_runtime_vm_slot_uses_native_fast_abi(slot)) {
+    return 1;
+  }
+  if (op->complete_code == GQL_VM_COMPLETE_ABSTRACT) {
+    return 0;
+  }
+  if (slot->resolver_shape_code != GQL_VM_RESOLVE_DEFAULT) {
+    return 0;
+  }
+  return gql_runtime_vm_slot_resolver_sv(runtime, slot) ? 0 : 1;
+}
+
+static SV *
 gql_runtime_vm_lookup_type_object_by_name_sv(pTHX_ SV *runtime_schema, const char *type_name)
 {
   HV *runtime_cache_hv;
@@ -3352,6 +3410,14 @@ gql_runtime_vm_find_abstract_child_block_index(const gql_runtime_vm_native_op_t 
 {
   IV i;
   if (!op || !type_name) {
+    return -1;
+  }
+  if (op->abstract_child_count == 1) {
+    if (op->abstract_child_names
+        && op->abstract_child_names[0]
+        && strEQ(op->abstract_child_names[0], type_name)) {
+      return op->abstract_child_indexes ? op->abstract_child_indexes[0] : -1;
+    }
     return -1;
   }
   for (i = 0; i < op->abstract_child_count; i++) {
@@ -4093,6 +4159,39 @@ gql_runtime_vm_execute_block_value(pTHX_ gql_runtime_vm_exec_state_t *state, IV 
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
 
 static SV *
+gql_runtime_vm_execute_child_block_fast_sv(
+  pTHX_
+  gql_runtime_vm_exec_state_t *state,
+  IV block_index,
+  SV *source
+)
+{
+  gql_runtime_vm_path_frame_t *saved_path_frame = state ? state->path_frame : NULL;
+  int saved_path_is_current_field = state ? state->path_frame_is_current_field : 0;
+  gql_runtime_vm_path_frame_t *field_path;
+  SV *ret;
+
+  if (!state) {
+    return newSVsv(&PL_sv_undef);
+  }
+
+  if (state->path_frame_is_current_field) {
+    field_path = NULL;
+  } else {
+    field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
+    state->path_frame = field_path;
+    state->path_frame_is_current_field = 1;
+  }
+  ret = gql_runtime_vm_execute_block_fast_sv(aTHX_ state, block_index, source);
+  state->path_frame = saved_path_frame;
+  state->path_frame_is_current_field = saved_path_is_current_field;
+  if (field_path) {
+    gql_runtime_vm_path_frame_decref(field_path);
+  }
+  return ret;
+}
+
+static SV *
 gql_runtime_vm_complete_current_abstract_fast_sv(
   pTHX_
   gql_runtime_vm_exec_state_t *state,
@@ -4245,14 +4344,22 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
       return NULL;
     }
     if (entry) {
-      child_block_index = gql_runtime_vm_find_abstract_child_block_index(op, entry->type_name);
+      if (op->abstract_child_count == 1
+          && op->abstract_child_names
+          && op->abstract_child_names[0]
+          && entry->type_name
+          && strEQ(op->abstract_child_names[0], entry->type_name)) {
+        child_block_index = op->abstract_child_indexes ? op->abstract_child_indexes[0] : -1;
+      } else {
+        child_block_index = gql_runtime_vm_find_abstract_child_block_index(op, entry->type_name);
+      }
     }
   }
 
   if (child_block_index < 0) {
     return newSVsv(&PL_sv_undef);
   }
-  return gql_runtime_vm_execute_block_fast_sv(aTHX_ state, child_block_index, value);
+  return gql_runtime_vm_execute_child_block_fast_sv(aTHX_ state, child_block_index, value);
 }
 
 static SV *
@@ -4267,7 +4374,7 @@ gql_runtime_vm_complete_current_object_fast_sv(pTHX_ gql_runtime_vm_exec_state_t
 {
   const gql_runtime_vm_native_op_t *op = state->op;
   if (op->complete_code == GQL_VM_COMPLETE_OBJECT && op->child_block_index >= 0) {
-    return gql_runtime_vm_execute_block_fast_sv(aTHX_ state, op->child_block_index, value);
+    return gql_runtime_vm_execute_child_block_fast_sv(aTHX_ state, op->child_block_index, value);
   }
   return gql_runtime_vm_clone_value_sv(aTHX_ value);
 }
@@ -4280,6 +4387,9 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
     AV *in_av;
     AV *out_av;
     IV i;
+    gql_runtime_vm_path_frame_t *saved_path_frame = state ? state->path_frame : NULL;
+    gql_runtime_vm_path_frame_t *field_path = NULL;
+    int has_child_block = op->child_block_index >= 0;
 
     if (!value || !SvOK(value)) {
       return newSVsv(&PL_sv_undef);
@@ -4287,13 +4397,21 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
     in_av = gql_runtime_vm_expect_arrayref(aTHX_ value, "list value");
     out_av = newAV();
     av_extend(out_av, av_count(in_av) > 0 ? av_count(in_av) - 1 : 0);
+    if (has_child_block) {
+      field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
+      state->path_frame = field_path;
+    }
     for (i = 0; i < av_count(in_av); i++) {
       SV **item_svp = av_fetch(in_av, i, 0);
       SV *item = (item_svp && SvOK(*item_svp)) ? *item_svp : &PL_sv_undef;
-      SV *completed = (op->child_block_index >= 0)
+      SV *completed = has_child_block
         ? gql_runtime_vm_execute_block_fast_sv(aTHX_ state, op->child_block_index, item)
         : gql_runtime_vm_clone_value_sv(aTHX_ item);
       av_store(out_av, i, completed);
+    }
+    if (field_path) {
+      state->path_frame = saved_path_frame;
+      gql_runtime_vm_path_frame_decref(field_path);
     }
     return newRV_noinc((SV *)out_av);
   }
@@ -4467,6 +4585,7 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
   const gql_runtime_vm_native_op_t *saved_op = state->op;
   const gql_runtime_vm_native_slot_t *saved_slot = state->slot;
   gql_runtime_vm_path_frame_t *saved_path_frame = state->path_frame;
+  int saved_path_is_current_field = state->path_frame_is_current_field;
   IV saved_block_index = state->block_index;
   IV saved_op_index = state->op_index;
 
@@ -4496,39 +4615,23 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
     state->slot = slot;
     state->op_index = i;
 
-    eager_path_frame = !gql_runtime_vm_slot_uses_native_fast_abi(slot)
-      || op->complete_code != GQL_VM_COMPLETE_GENERIC;
+    eager_path_frame = !gql_runtime_vm_slot_can_delay_field_path(state->runtime, slot, op);
 
     if (eager_path_frame) {
-      if (slot->result_name) {
-        field_path = gql_runtime_vm_new_path_frame_struct_pvn(
-          aTHX_
-          saved_path_frame,
-          slot->result_name,
-          strlen(slot->result_name)
-        );
-      } else {
-        field_path = gql_runtime_vm_new_path_frame_struct(aTHX_ saved_path_frame, &PL_sv_undef);
-      }
+      field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, slot);
       state->path_frame = field_path;
+      state->path_frame_is_current_field = 1;
     } else {
       state->path_frame = saved_path_frame;
+      state->path_frame_is_current_field = 0;
     }
 
     completed = gql_runtime_vm_execute_current_op_fast_sv(aTHX_ state, source, &error_sv);
     state->path_frame = saved_path_frame;
+    state->path_frame_is_current_field = saved_path_is_current_field;
 
     if (!eager_path_frame && error_sv) {
-      if (slot->result_name) {
-        field_path = gql_runtime_vm_new_path_frame_struct_pvn(
-          aTHX_
-          saved_path_frame,
-          slot->result_name,
-          strlen(slot->result_name)
-        );
-      } else {
-        field_path = gql_runtime_vm_new_path_frame_struct(aTHX_ saved_path_frame, &PL_sv_undef);
-      }
+      field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, slot);
       error_outcome = gql_runtime_vm_new_error_outcome_struct_for_path(aTHX_ error_sv, field_path);
       SvREFCNT_dec(error_sv);
       error_sv = NULL;
@@ -4560,6 +4663,7 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
   state->op = saved_op;
   state->slot = saved_slot;
   state->path_frame = saved_path_frame;
+  state->path_frame_is_current_field = saved_path_is_current_field;
   state->block_index = saved_block_index;
   state->op_index = saved_op_index;
 

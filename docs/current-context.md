@@ -429,6 +429,27 @@ perl -Ilib t/19_vm_execute.t
   - `list_of_objects`: `449661/s`
   - `abstract_with_fragment`: `510630/s`
 
+- object/list/abstract completion と args/directives specialization の fast-lane 最適化
+  - child block 実行時に current field の path が既に eager に積まれているなら、
+    子側で同じ field path を二重生成しないように修正した
+  - abstract dispatch は
+    - `abstract_child_count == 1`
+    - `possible_type` が 1 つに決まる
+    場合の direct fast path を足し、child block 決定の名前比較を減らした
+  - list completion も child block 実行時の field path 生成を整理し、
+    success path の allocation を減らした
+  - `gql_runtime_vm_evaluate_runtime_guards_native(...)` は
+    directive の `if` を `SV*` materialize せず native dynamic value の truthiness だけで評価する
+  - `gql_runtime_vm_specialize_arg_payload_native(...)` は
+    `native payload -> SV/HV -> native payload` の往復をやめ、
+    native payload から直接 specialized native payload を組み立てる
+  - `./Build test` / `minil test` は通過
+
+- latest median:
+  - `nested_variable_object`: `544514/s`
+  - `list_of_objects`: `473653/s`
+  - `abstract_with_fragment`: `528011/s`
+
 - 解釈:
   - `6b980d7` 比では
     - `nested_variable_object`: 約 `+1.8%`
@@ -442,6 +463,15 @@ perl -Ilib t/19_vm_execute.t
     - `nested_variable_object`: 約 `9.1%` 低い
     - `list_of_objects`: 約 `9.1%` 低い
     - `abstract_with_fragment`: 約 `7.7%` 低い
+  - 今回の 3 点を入れた最新 batch ではさらに差が縮み、
+    `937edb0` 比で
+    - `nested_variable_object`: 約 `6.9%` 低い
+    - `list_of_objects`: 約 `4.3%` 低い
+    - `abstract_with_fragment`: 約 `4.6%` 低い
+  - `5fe128b` 比では
+    - `nested_variable_object`: 約 `+2.5%`
+    - `list_of_objects`: 約 `+5.3%`
+    - `abstract_with_fragment`: 約 `+3.4%`
   - ここで分かったことは明確で、現行 branch の主な重みは
     `LazyInfo` 自体より **callback ABI に `info` と generic lookup を持ち込んだこと**
     にあった
@@ -458,6 +488,6 @@ perl -Ilib t/19_vm_execute.t
     「fast lane を明示的に specialized に保つ」方が筋が良い
 
 - 次に詰めるべきこと:
-  1. object/list/abstract completion でも success path の `path_frame` をさらに遅延化できるか切り分ける
-  2. abstract dispatch の child block 決定と type lookup をさらに直参照化する
-  3. args/directives materialization を specialized fast lane でもう一段減らす
+  1. abstract dispatch の type lookup / callback catalog 直参照をさらに詰める
+  2. `resolver_mode => native` 以外を specialized fast lane に含める価値があるか切り分ける
+  3. promise/DataLoader 主経路へ今回の fast-lane 判断をどこまで逆輸入するか決める

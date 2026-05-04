@@ -221,6 +221,7 @@ typedef struct {
   gql_runtime_vm_native_bundle_t *bundle;
   gql_runtime_vm_callback_context_t *callback_ctx;
   gql_runtime_vm_path_frame_t *path_frame;
+  int path_frame_is_current_field;
   gql_runtime_vm_writer_t *writer;
   const gql_runtime_vm_native_block_t *block;
   const gql_runtime_vm_native_op_t *op;
@@ -435,6 +436,9 @@ static SV *gql_runtime_vm_native_value_materialize_sv(pTHX_ gql_runtime_vm_nativ
 static gql_runtime_vm_native_value_t *gql_runtime_vm_native_value_from_sv(pTHX_ SV *value);
 static gql_runtime_vm_native_value_t *gql_runtime_vm_native_value_clone(pTHX_ const gql_runtime_vm_native_value_t *value);
 static gql_runtime_vm_native_dynamic_value_t *gql_runtime_vm_native_dynamic_value_from_sv(pTHX_ SV *value);
+static gql_runtime_vm_native_dynamic_value_t *gql_runtime_vm_native_dynamic_value_from_native_value(
+  pTHX_ const gql_runtime_vm_native_value_t *value
+);
 static gql_runtime_vm_native_dynamic_value_t *gql_runtime_vm_native_dynamic_value_clone(
   pTHX_ const gql_runtime_vm_native_dynamic_value_t *value
 );
@@ -444,6 +448,15 @@ static void gql_runtime_vm_native_dynamic_value_destroy(
 static SV *gql_runtime_vm_native_dynamic_value_materialize_sv(
   pTHX_ const gql_runtime_vm_native_dynamic_value_t *value,
   HV *variables
+);
+static int gql_runtime_vm_native_dynamic_value_truthy(
+  pTHX_ const gql_runtime_vm_native_dynamic_value_t *value,
+  HV *variables
+);
+static const gql_runtime_vm_native_dynamic_value_t *gql_runtime_vm_native_args_payload_lookup_value(
+  const gql_runtime_vm_native_args_payload_t *payload,
+  const char *arg_name,
+  IV hint_index
 );
 static gql_runtime_vm_native_args_payload_t *gql_runtime_vm_native_args_payload_from_hv(pTHX_ HV *hv);
 static gql_runtime_vm_native_args_payload_t *gql_runtime_vm_native_args_payload_clone(
@@ -951,6 +964,68 @@ gql_runtime_vm_native_dynamic_value_from_sv(pTHX_ SV *value)
 }
 
 static gql_runtime_vm_native_dynamic_value_t *
+gql_runtime_vm_native_dynamic_value_from_native_value(
+  pTHX_ const gql_runtime_vm_native_value_t *value
+)
+{
+  gql_runtime_vm_native_dynamic_value_t *ret;
+  IV i;
+
+  Newxz(ret, 1, gql_runtime_vm_native_dynamic_value_t);
+  ret->kind_code = GQL_VM_DYNAMIC_UNDEF;
+  ret->scalar_kind_code = GQL_VM_NATIVE_SCALAR_UNDEF;
+
+  if (!value || value->kind_code == GQL_VM_NATIVE_VALUE_UNDEF) {
+    return ret;
+  }
+
+  switch (value->kind_code) {
+    case GQL_VM_NATIVE_VALUE_OBJECT:
+      ret->kind_code = GQL_VM_DYNAMIC_OBJECT;
+      ret->object_count = value->object.count;
+      if (ret->object_count > 0) {
+        Newxz(ret->object_names, ret->object_count, char *);
+        Newxz(ret->object_values, ret->object_count, gql_runtime_vm_native_dynamic_value_t *);
+        for (i = 0; i < ret->object_count; i++) {
+          if (value->object.names && value->object.names[i]) {
+            ret->object_names[i] = savepv(value->object.names[i]);
+          }
+          ret->object_values[i] = gql_runtime_vm_native_dynamic_value_from_native_value(
+            aTHX_ value->object.values ? value->object.values[i] : NULL
+          );
+        }
+      }
+      return ret;
+    case GQL_VM_NATIVE_VALUE_LIST:
+      ret->kind_code = GQL_VM_DYNAMIC_LIST;
+      ret->list_count = value->list.count;
+      if (ret->list_count > 0) {
+        Newxz(ret->list_values, ret->list_count, gql_runtime_vm_native_dynamic_value_t *);
+        for (i = 0; i < ret->list_count; i++) {
+          ret->list_values[i] = gql_runtime_vm_native_dynamic_value_from_native_value(
+            aTHX_ value->list.items ? value->list.items[i] : NULL
+          );
+        }
+      }
+      return ret;
+    case GQL_VM_NATIVE_VALUE_SCALAR:
+    default:
+      ret->kind_code = GQL_VM_DYNAMIC_SCALAR;
+      ret->scalar_kind_code = value->scalar_kind_code;
+      ret->scalar_iv = value->scalar_iv;
+      ret->scalar_nv = value->scalar_nv;
+      if (value->scalar_kind_code == GQL_VM_NATIVE_SCALAR_PV && value->scalar_pv) {
+        ret->scalar_pv = savepvn(value->scalar_pv, value->scalar_pv_len);
+        ret->scalar_pv_len = value->scalar_pv_len;
+      } else if (value->scalar_kind_code == GQL_VM_NATIVE_SCALAR_FALLBACK_SV && value->scalar_fallback_sv) {
+        gql_runtime_vm_native_dynamic_value_destroy(aTHX_ ret);
+        return gql_runtime_vm_native_dynamic_value_from_sv(aTHX_ value->scalar_fallback_sv);
+      }
+      return ret;
+  }
+}
+
+static gql_runtime_vm_native_dynamic_value_t *
 gql_runtime_vm_native_dynamic_value_clone(
   pTHX_ const gql_runtime_vm_native_dynamic_value_t *value
 )
@@ -1077,6 +1152,78 @@ gql_runtime_vm_native_dynamic_value_materialize_sv(
           return newSV(0);
       }
   }
+}
+
+static int
+gql_runtime_vm_native_dynamic_value_truthy(
+  pTHX_ const gql_runtime_vm_native_dynamic_value_t *value,
+  HV *variables
+)
+{
+  if (!value || value->kind_code == GQL_VM_DYNAMIC_UNDEF) {
+    return 0;
+  }
+
+  switch (value->kind_code) {
+    case GQL_VM_DYNAMIC_VARIABLE: {
+      SV **svp = (variables && value->variable_name)
+        ? hv_fetch(variables, value->variable_name, (I32)strlen(value->variable_name), 0)
+        : NULL;
+      return (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
+    }
+    case GQL_VM_DYNAMIC_LIST:
+    case GQL_VM_DYNAMIC_OBJECT:
+      return 1;
+    case GQL_VM_DYNAMIC_SCALAR:
+    default:
+      switch (value->scalar_kind_code) {
+        case GQL_VM_NATIVE_SCALAR_IV:
+          return value->scalar_iv ? 1 : 0;
+        case GQL_VM_NATIVE_SCALAR_NV:
+          return value->scalar_nv != 0.0 ? 1 : 0;
+        case GQL_VM_NATIVE_SCALAR_PV:
+          if (!value->scalar_pv || value->scalar_pv_len == 0) {
+            return 0;
+          }
+          if (value->scalar_pv_len == 1 && value->scalar_pv[0] == '0') {
+            return 0;
+          }
+          return 1;
+        case GQL_VM_NATIVE_SCALAR_UNDEF:
+        default:
+          return 0;
+      }
+  }
+}
+
+static const gql_runtime_vm_native_dynamic_value_t *
+gql_runtime_vm_native_args_payload_lookup_value(
+  const gql_runtime_vm_native_args_payload_t *payload,
+  const char *arg_name,
+  IV hint_index
+)
+{
+  IV j;
+
+  if (!payload || !arg_name) {
+    return NULL;
+  }
+
+  if (hint_index >= 0
+      && hint_index < payload->count
+      && payload->names
+      && payload->names[hint_index]
+      && strEQ(payload->names[hint_index], arg_name)) {
+    return payload->values ? payload->values[hint_index] : NULL;
+  }
+
+  for (j = 0; j < payload->count; j++) {
+    if (payload->names && payload->names[j] && strEQ(payload->names[j], arg_name)) {
+      return payload->values ? payload->values[j] : NULL;
+    }
+  }
+
+  return NULL;
 }
 
 static gql_runtime_vm_native_args_payload_t *
@@ -1557,9 +1704,7 @@ gql_runtime_vm_evaluate_runtime_guards_native(
   }
   for (i = 0; i < payload->count; i++) {
     const gql_runtime_vm_native_guard_t *guard = &payload->guards[i];
-    SV *if_value_sv = gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ guard->if_expr, variables);
-    int bool_value = SvTRUE(if_value_sv) ? 1 : 0;
-    SvREFCNT_dec(if_value_sv);
+    int bool_value = gql_runtime_vm_native_dynamic_value_truthy(aTHX_ guard->if_expr, variables);
     if (guard->kind_code == GQL_VM_GUARD_SKIP && bool_value) {
       return 0;
     }
@@ -4340,17 +4485,9 @@ gql_runtime_vm_specialize_arg_payload_sv(
     const gql_runtime_vm_native_arg_def_t *arg_def = &effective_slot->arg_defs[i];
     SV *raw_sv = NULL;
     SV *coerced_sv = NULL;
-    gql_runtime_vm_native_dynamic_value_t *raw_value = NULL;
-    IV j;
+    const gql_runtime_vm_native_dynamic_value_t *raw_value = NULL;
 
-    if (payload) {
-      for (j = 0; j < payload->count; j++) {
-        if (payload->names && payload->names[j] && strEQ(payload->names[j], arg_def->name)) {
-          raw_value = payload->values ? payload->values[j] : NULL;
-          break;
-        }
-      }
-    }
+    raw_value = gql_runtime_vm_native_args_payload_lookup_value(payload, arg_def->name, i);
 
     if (raw_value) {
       if (op->args_mode_code == GQL_VM_ARGS_DYNAMIC) {
@@ -4389,15 +4526,62 @@ gql_runtime_vm_specialize_arg_payload_native(
   HV *variables_hv
 )
 {
-  SV *specialized_sv = gql_runtime_vm_specialize_arg_payload_sv(aTHX_ runtime, slot, op, variables_hv);
-  gql_runtime_vm_native_args_payload_t *payload = NULL;
-  if (specialized_sv && SvOK(specialized_sv) && SvROK(specialized_sv) && SvTYPE(SvRV(specialized_sv)) == SVt_PVHV) {
-    payload = gql_runtime_vm_native_args_payload_from_hv(aTHX_ (HV *)SvRV(specialized_sv));
+  const gql_runtime_vm_native_args_payload_t *payload = op ? op->args_payload_native : NULL;
+  const gql_runtime_vm_native_slot_t *effective_slot = gql_runtime_vm_effective_slot(runtime, slot);
+  gql_runtime_vm_native_args_payload_t *ret;
+  IV i;
+
+  if (!effective_slot || effective_slot->arg_def_count <= 0) {
+    return NULL;
   }
-  if (specialized_sv) {
-    SvREFCNT_dec(specialized_sv);
+
+  Newxz(ret, 1, gql_runtime_vm_native_args_payload_t);
+  Newxz(ret->names, effective_slot->arg_def_count, char *);
+  Newxz(ret->values, effective_slot->arg_def_count, gql_runtime_vm_native_dynamic_value_t *);
+
+  for (i = 0; i < effective_slot->arg_def_count; i++) {
+    const gql_runtime_vm_native_arg_def_t *arg_def = &effective_slot->arg_defs[i];
+    const gql_runtime_vm_native_dynamic_value_t *raw_value =
+      gql_runtime_vm_native_args_payload_lookup_value(payload, arg_def->name, i);
+    gql_runtime_vm_native_dynamic_value_t *coerced_value = NULL;
+
+    if (raw_value) {
+      SV *raw_sv = NULL;
+      SV *coerced_sv;
+      if (op && op->args_mode_code == GQL_VM_ARGS_DYNAMIC) {
+        raw_sv = gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, variables_hv);
+      } else {
+        raw_sv = gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, NULL);
+      }
+      coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv);
+      SvREFCNT_dec(raw_sv);
+      coerced_value = gql_runtime_vm_native_dynamic_value_from_sv(aTHX_ coerced_sv);
+      SvREFCNT_dec(coerced_sv);
+    } else if (arg_def->has_default && arg_def->default_native_value) {
+      coerced_value = gql_runtime_vm_native_dynamic_value_from_native_value(
+        aTHX_ arg_def->default_native_value
+      );
+    } else if (arg_def->has_default && arg_def->default_value_sv) {
+      SV *raw_sv = newSVsv(arg_def->default_value_sv);
+      SV *coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv);
+      SvREFCNT_dec(raw_sv);
+      coerced_value = gql_runtime_vm_native_dynamic_value_from_sv(aTHX_ coerced_sv);
+      SvREFCNT_dec(coerced_sv);
+    } else {
+      continue;
+    }
+
+    ret->names[ret->count] = savepv(arg_def->name);
+    ret->values[ret->count] = coerced_value;
+    ret->count++;
   }
-  return payload;
+
+  if (ret->count == 0) {
+    gql_runtime_vm_native_args_payload_destroy(aTHX_ ret);
+    return NULL;
+  }
+
+  return ret;
 }
 
 static void

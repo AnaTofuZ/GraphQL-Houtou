@@ -1599,16 +1599,16 @@ gql_runtime_vm_copy_cstr(const char *src)
 static SV *
 gql_runtime_vm_new_lazy_info_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *path_frame)
 {
-  dSP;
-  SV *instruction_sv = &PL_sv_undef;
-  SV *block_sv = &PL_sv_undef;
-  SV *field_name_sv = s ? gql_runtime_vm_state_current_field_name_sv(aTHX_ s) : &PL_sv_undef;
-  SV *parent_type_sv = s ? gql_runtime_vm_state_current_parent_type_sv(aTHX_ s) : &PL_sv_undef;
-  SV *return_type_sv = s ? gql_runtime_vm_state_current_return_type_sv(aTHX_ s, NULL, NULL) : &PL_sv_undef;
-  SV *path_sv = NULL;
+  HV *info_hv = newHV();
+  SV *field_name_sv = s ? gql_runtime_vm_state_current_field_name_sv(aTHX_ s) : NULL;
+  SV *parent_type_sv = s ? gql_runtime_vm_state_current_parent_type_sv(aTHX_ s) : NULL;
+  SV *return_type_sv = s ? gql_runtime_vm_state_current_return_type_sv(aTHX_ s, NULL, NULL) : NULL;
   SV *path_value_sv = NULL;
+  SV *runtime_schema_sv = s ? s->runtime_schema : NULL;
+  HV *runtime_schema_hv = NULL;
+  SV *schema_sv = NULL;
+  SV *runtime_cache_sv = NULL;
   gql_runtime_vm_path_frame_t *path_ptr = NULL;
-  SV *ret = NULL;
 
   if (path_frame && SvOK(path_frame) && SvROK(path_frame) && SvIOK(SvRV(path_frame)) && SvUV(SvRV(path_frame)) != 0) {
     path_ptr = INT2PTR(gql_runtime_vm_path_frame_t *, SvUV(SvRV(path_frame)));
@@ -1616,61 +1616,30 @@ gql_runtime_vm_new_lazy_info_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_ha
     path_ptr = s->field_frame->path_frame;
   }
   if (path_ptr) {
-    path_ptr->refcount++;
-    path_sv = gql_runtime_vm_new_handle_sv(aTHX_ "GraphQL::Houtou::Runtime::PathFrame", path_ptr);
     path_value_sv = gql_runtime_vm_path_frame_to_path_sv(aTHX_ path_ptr);
   } else {
-    path_sv = newSVsv(&PL_sv_undef);
     path_value_sv = newSVsv(&PL_sv_undef);
   }
 
-  ENTER;
-  SAVETMPS;
-  PUSHMARK(SP);
-  XPUSHs(sv_2mortal(newSVpv("GraphQL::Houtou::Runtime::LazyInfo", 0)));
-  XPUSHs(sv_2mortal(newSVpv("state", 0)));
-  XPUSHs(sv_2mortal(newSVsv(state_sv ? state_sv : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVpv("runtime_schema", 0)));
-  XPUSHs(sv_2mortal(newSVsv(s && s->runtime_schema ? s->runtime_schema : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVpv("block", 0)));
-  XPUSHs(sv_2mortal(newSVsv(block_sv ? block_sv : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVpv("instruction", 0)));
-  XPUSHs(sv_2mortal(newSVsv(instruction_sv ? instruction_sv : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVpv("path_frame", 0)));
-  XPUSHs(sv_2mortal(newSVsv(path_sv)));
-  XPUSHs(sv_2mortal(newSVpv("field_name", 0)));
-  XPUSHs(sv_2mortal(newSVsv(field_name_sv ? field_name_sv : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVpv("parent_type", 0)));
-  XPUSHs(sv_2mortal(newSVsv(parent_type_sv ? parent_type_sv : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVpv("return_type", 0)));
-  XPUSHs(sv_2mortal(newSVsv(return_type_sv ? return_type_sv : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVpv("path", 0)));
-  XPUSHs(sv_2mortal(newSVsv(path_value_sv ? path_value_sv : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVpv("context_value", 0)));
-  XPUSHs(sv_2mortal(newSVsv(s && s->context ? s->context : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVpv("root_value", 0)));
-  XPUSHs(sv_2mortal(newSVsv(s && s->root_value ? s->root_value : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVpv("variable_values", 0)));
-  XPUSHs(sv_2mortal(newSVsv(s && s->variables ? s->variables : &PL_sv_undef)));
-  XPUSHs(sv_2mortal(newSVpv("operation", 0)));
-  XPUSHs(sv_2mortal(newSVsv(s && s->program ? s->program : &PL_sv_undef)));
-  PUTBACK;
-  if (call_method("new", G_SCALAR | G_EVAL) > 0) {
-    SPAGAIN;
-    ret = (SP > PL_stack_base) ? POPs : NULL;
-    ret = ret ? newSVsv(ret) : newSVsv(&PL_sv_undef);
-    PUTBACK;
+  if (runtime_schema_sv && SvOK(runtime_schema_sv) && SvROK(runtime_schema_sv) && SvTYPE(SvRV(runtime_schema_sv)) == SVt_PVHV) {
+    runtime_schema_hv = (HV *)SvRV(runtime_schema_sv);
+    schema_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_schema_hv, "schema", 6);
+    runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_schema_hv, "runtime_cache", 13);
   }
-  if (SvTRUE(ERRSV)) {
-    sv_setsv(ERRSV, &PL_sv_undef);
-    ret = newSVsv(&PL_sv_undef);
-  }
-  FREETMPS;
-  LEAVE;
-  SvREFCNT_dec(path_sv);
-  SvREFCNT_dec(path_value_sv);
 
-  return ret ? ret : newSVsv(&PL_sv_undef);
+  hv_store(info_hv, "field_name", 10, field_name_sv ? field_name_sv : newSVsv(&PL_sv_undef), 0);
+  hv_store(info_hv, "parent_type", 11, parent_type_sv ? newSVsv(parent_type_sv) : newSVsv(&PL_sv_undef), 0);
+  hv_store(info_hv, "return_type", 11, return_type_sv ? newSVsv(return_type_sv) : newSVsv(&PL_sv_undef), 0);
+  hv_store(info_hv, "path", 4, path_value_sv ? path_value_sv : newSVsv(&PL_sv_undef), 0);
+  hv_store(info_hv, "context_value", 13, newSVsv(s && s->context ? s->context : &PL_sv_undef), 0);
+  hv_store(info_hv, "root_value", 10, newSVsv(s && s->root_value ? s->root_value : &PL_sv_undef), 0);
+  hv_store(info_hv, "variable_values", 15, newSVsv(s && s->variables ? s->variables : &PL_sv_undef), 0);
+  hv_store(info_hv, "operation", 9, newSVsv(s && s->program ? s->program : &PL_sv_undef), 0);
+  hv_store(info_hv, "schema", 6, schema_sv ? newSVsv(schema_sv) : newSVsv(&PL_sv_undef), 0);
+  hv_store(info_hv, "runtime_cache", 13, runtime_cache_sv ? newSVsv(runtime_cache_sv) : newSVsv(&PL_sv_undef), 0);
+  hv_store(info_hv, "field_nodes", 11, newSVsv(&PL_sv_undef), 0);
+
+  return newRV_noinc((SV *)info_hv);
 }
 
 static SV *
@@ -4738,17 +4707,6 @@ exec_state_new_xs(class, runtime_schema, program, cursor, writer, context = &PL_
     RETVAL
 
 SV *
-exec_state_program_xs(state)
-    SV *state
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      RETVAL = newSVsv(s->program ? s->program : &PL_sv_undef);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
 exec_state_writer_xs(state)
     SV *state
   CODE:
@@ -4788,62 +4746,6 @@ exec_state_root_value_xs(state)
     {
       gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
       RETVAL = newSVsv(s->root_value ? s->root_value : &PL_sv_undef);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
-exec_state_current_field_name_xs(state)
-    SV *state
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      SV *value = gql_runtime_vm_state_current_field_name_sv(aTHX_ s);
-      RETVAL = newSVsv(value ? value : &PL_sv_undef);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
-exec_state_current_return_type_xs(state)
-    SV *state
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      SV *value = gql_runtime_vm_state_current_return_type_sv(aTHX_ s, NULL, NULL);
-      RETVAL = newSVsv(value ? value : &PL_sv_undef);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
-exec_state_current_parent_type_xs(state)
-    SV *state
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      SV *value = gql_runtime_vm_state_current_parent_type_sv(aTHX_ s);
-      RETVAL = newSVsv(value ? value : &PL_sv_undef);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
-exec_state_current_path_xs(state, path_frame = &PL_sv_undef)
-    SV *state
-    SV *path_frame
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      gql_runtime_vm_path_frame_t *path_ptr = NULL;
-      if (path_frame && SvOK(path_frame) && SvROK(path_frame) && SvIOK(SvRV(path_frame)) && SvUV(SvRV(path_frame)) != 0) {
-        path_ptr = INT2PTR(gql_runtime_vm_path_frame_t *, SvUV(SvRV(path_frame)));
-      } else if (s->field_frame) {
-        path_ptr = s->field_frame->path_frame;
-      }
-      RETVAL = path_ptr
-        ? gql_runtime_vm_path_frame_to_path_sv(aTHX_ path_ptr)
-        : newSVsv(&PL_sv_undef);
     }
   OUTPUT:
     RETVAL

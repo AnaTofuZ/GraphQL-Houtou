@@ -65,31 +65,6 @@ sub run_program {
   return $state->finalize_response($data);
 }
 
-sub program {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_program_xs($_[0]);
-}
-
-sub current_field_name {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_current_field_name_xs($_[0]);
-}
-
-sub current_return_type {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_current_return_type_xs($_[0]);
-}
-
-sub current_parent_type {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_current_parent_type_xs($_[0]);
-}
-
-sub current_path {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_current_path_xs($_[0], $_[1]);
-}
-
 sub writer {
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::exec_state_writer_xs($_[0]);

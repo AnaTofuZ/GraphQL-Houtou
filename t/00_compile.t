@@ -32,7 +32,6 @@ use_ok $_ for qw(
     GraphQL::Houtou::Runtime::SchemaGraph
     GraphQL::Houtou::Runtime::SchemaBlock
     GraphQL::Houtou::Runtime::Slot
-    GraphQL::Houtou::Runtime::LazyInfo
     GraphQL::Houtou::Runtime::ExecState
     GraphQL::Houtou::Runtime::VMCompiler
     GraphQL::Houtou::Runtime::VMProgram

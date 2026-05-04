@@ -7,6 +7,7 @@ use warnings;
 use Exporter 'import';
 use JSON::PP ();
 
+use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Directive ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::SchemaGraph ();
@@ -180,8 +181,7 @@ sub compile_native_program_descriptor {
 
 sub compile_native_program {
   my ($self, $document, %opts) = @_;
-  require GraphQL::Houtou::Runtime::NativeProgram;
-  return GraphQL::Houtou::Runtime::NativeProgram->from_descriptor(
+  return GraphQL::Houtou::Native::load_native_program(
     $self->compile_native_program_descriptor($document, %opts),
   );
 }

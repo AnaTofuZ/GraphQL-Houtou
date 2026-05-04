@@ -6,7 +6,6 @@ use warnings;
 
 use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Runtime::InputCoercion ();
-use GraphQL::Houtou::Runtime::NativeProgram ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Schema ();
 use JSON::PP ();
@@ -148,7 +147,7 @@ sub _load_bundle_parts {
 sub _native_program {
   my ($self, $program) = @_;
   return $program if ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') };
-  return GraphQL::Houtou::Runtime::NativeProgram->from_vm_program($program);
+  return $program->to_native_program_handle;
 }
 
 sub load_bundle_descriptor {

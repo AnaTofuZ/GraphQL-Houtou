@@ -57,8 +57,7 @@ sub compile_bundle_for_document {
 
 sub specialize_program {
   my ($self, $program, %opts) = @_;
-  my $candidate = __PACKAGE__->specialize_program_for_native(
-    $self->runtime_schema,
+  my $candidate = $self->specialize_program_for_native(
     $program,
     %opts,
   );
@@ -68,31 +67,23 @@ sub specialize_program {
 }
 
 sub specialize_program_for_native {
-  my ($class, $runtime_schema, $program, %opts) = @_;
+  my ($self, $program, %opts) = @_;
   return $program if !$program;
 
   my $variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
-    $runtime_schema,
+    $self->runtime_schema,
     $program,
     $opts{variables} || {},
   );
-  my $clone = GraphQL::Houtou::Runtime::VMCompiler->inflate_program(
-    $runtime_schema,
-    $program->to_struct,
+  GraphQL::Houtou::_bootstrap_xs();
+  my $native_program = ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') }
+    ? $program
+    : $program->to_native_program_handle;
+  return GraphQL::Houtou::XS::VM::specialize_native_program_xs(
+    $self->_native_runtime_handle,
+    $native_program,
+    $variables,
   );
-
-  for my $block (@{ $clone->blocks || [] }) {
-    my @ops;
-    for my $op (@{ $block->ops || [] }) {
-      next if !_specialize_directives($op, $variables);
-      _specialize_args($runtime_schema, $op, $variables);
-      push @ops, $op;
-    }
-    $block->set_ops(\@ops);
-  }
-
-  $clone->set_variable_defs({});
-  return $clone;
 }
 
 sub preferred_engine_for_program {
@@ -124,14 +115,14 @@ sub compile_bundle_descriptor {
   my $candidate = $self->specialize_program($program, %opts);
   return {
     runtime => $self->_native_runtime_compact_struct,
-    program => $candidate->to_native_compact_struct,
+    program => GraphQL::Houtou::Native::native_program_descriptor($candidate),
   };
 }
 
 sub compile_program_descriptor {
   my ($self, $program, %opts) = @_;
   my $candidate = $self->specialize_program($program, %opts);
-  return $candidate->to_native_compact_struct;
+  return GraphQL::Houtou::Native::native_program_descriptor($candidate);
 }
 
 sub compile_program_descriptor_for_document {
@@ -144,14 +135,6 @@ sub compile_bundle_descriptor_for_document {
   my ($self, $document, %opts) = @_;
   my $program = $self->compile_program($document, %opts);
   return $self->compile_bundle_descriptor($program, %opts);
-}
-
-sub _compact_bundle_descriptor {
-  my ($self, $program) = @_;
-  return {
-    runtime => $self->_native_runtime_compact_struct,
-    program => $program->to_native_compact_struct,
-  };
 }
 
 sub _load_bundle_parts {
@@ -281,43 +264,6 @@ sub execute_bundle {
     $opts{context},
     $opts{variables},
   );
-}
-
-sub _specialize_directives {
-  my ($op, $variables) = @_;
-  my $mode = $op->directives_mode || 'NONE';
-  return 1 if $mode eq 'NONE';
-
-  my $guards = $op->directives_payload || [];
-  return 0 if !GraphQL::Houtou::Runtime::InputCoercion::evaluate_runtime_guards($guards, $variables);
-
-  $op->set_has_directives(0);
-  $op->set_directives_mode('NONE');
-  $op->set_directives_payload(undef);
-  return 1;
-}
-
-sub _specialize_args {
-  my ($runtime_schema, $op, $variables) = @_;
-  my $slot = $op->bound_slot;
-  my $arg_defs = $slot ? ($slot->arg_defs || {}) : {};
-  if (!keys %$arg_defs) {
-    $op->set_has_args(0);
-    $op->set_args_mode('NONE');
-    $op->set_args_payload(undef);
-    return;
-  }
-
-  my $mode = $op->args_mode || 'NONE';
-  my $payload = $op->args_payload || {};
-  my $coerced = $mode eq 'DYNAMIC'
-    ? GraphQL::Houtou::Runtime::InputCoercion::coerce_dynamic_args($runtime_schema, $arg_defs, $payload, $variables)
-    : GraphQL::Houtou::Runtime::InputCoercion::coerce_static_args($runtime_schema, $arg_defs, $payload);
-
-  my $has_args = keys %$coerced ? 1 : 0;
-  $op->set_has_args($has_args);
-  $op->set_args_mode($has_args ? 'STATIC' : 'NONE');
-  $op->set_args_payload($has_args ? $coerced : undef);
 }
 
 1;

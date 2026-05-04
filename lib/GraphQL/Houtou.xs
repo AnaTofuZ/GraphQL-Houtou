@@ -1683,7 +1683,9 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
   HV *schema_hv;
   SV *exec_struct_sv;
   SV *catalog_sv;
+  SV *resolver_catalog_sv;
   AV *catalog_av;
+  AV *resolver_catalog_av;
   SV *runtime_cache_sv;
   IV i;
 
@@ -1702,6 +1704,10 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
     croak("runtime schema is missing slot_catalog");
   }
   catalog_av = gql_runtime_vm_expect_arrayref(aTHX_ catalog_sv, "runtime schema slot_catalog");
+  resolver_catalog_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ schema_hv, "slot_resolvers", 14);
+  resolver_catalog_av = (resolver_catalog_sv && SvOK(resolver_catalog_sv))
+    ? gql_runtime_vm_expect_arrayref(aTHX_ resolver_catalog_sv, "runtime schema slot_resolvers")
+    : NULL;
 
   Newxz(runtime, 1, gql_runtime_vm_native_runtime_t);
   Newxz(runtime->callback_catalog, 1, gql_runtime_vm_native_callback_catalog_t);
@@ -1736,7 +1742,16 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
         croak("runtime schema slot_catalog entry %ld is invalid", (long)i);
       }
       slot_hv = gql_runtime_vm_expect_hashref(aTHX_ *slot_svp, "runtime slot");
-      resolver_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ slot_hv, "resolve", 7);
+      resolver_sv = NULL;
+      if (resolver_catalog_av && i <= av_count(resolver_catalog_av)) {
+        SV **resolver_svp = av_fetch(resolver_catalog_av, i, 0);
+        if (resolver_svp && SvOK(*resolver_svp)) {
+          resolver_sv = *resolver_svp;
+        }
+      }
+      if (!resolver_sv) {
+        resolver_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ slot_hv, "resolve", 7);
+      }
       if (resolver_sv) {
         runtime->callback_catalog->slot_resolvers[i] = newSVsv(resolver_sv);
       }
@@ -2913,6 +2928,18 @@ load_native_program_xs(program_descriptor)
       SV *inner = newSVuv(PTR2UV(program));
       RETVAL = newRV_noinc(inner);
       sv_bless(RETVAL, gv_stashpv("GraphQL::Houtou::Runtime::NativeProgram", GV_ADD));
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+native_program_descriptor_xs(program_sv)
+    SV *program_sv
+  CODE:
+    {
+      gql_runtime_vm_native_program_t *program =
+        gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
+      RETVAL = gql_runtime_vm_native_program_to_compact_sv(aTHX_ program);
     }
   OUTPUT:
     RETVAL

@@ -6,7 +6,6 @@ use warnings;
 
 use GraphQL::Houtou::Runtime::SchemaBlock ();
 use GraphQL::Houtou::Runtime::Slot ();
-use GraphQL::Houtou::Type::Scalar qw($String);
 
 sub compile_schema {
   my ($class, $schema, %opts) = @_;
@@ -36,7 +35,6 @@ sub inflate_schema {
   my ($blocks, $root_blocks) = _inflate_blocks($struct);
   my $slot_catalog = [ map { _inflate_slot($_) } @{ $struct->{slot_catalog} || [] } ];
   _apply_slot_catalog_to_blocks($blocks, $slot_catalog) if @$slot_catalog;
-  _rebind_blocks_runtime_metadata($runtime_cache, $blocks);
 
   return $class->new(
     version => $struct->{version} || 1,
@@ -146,7 +144,7 @@ sub to_native_struct {
         my $entry = $self->{type_index}{$_} || {};
         ($_ => {
           %$entry,
-          kind_code => _type_kind_code($entry->{kind}),
+          kind_code => _type_kind_name_code($entry->{kind}),
           completion_family_code => _family_code($entry->{completion_family}),
         });
       } keys %{ $self->{type_index} || {} }
@@ -174,7 +172,7 @@ sub to_native_compact_struct {
         my $entry = $self->{type_index}{$_} || {};
         ($_ => {
           %$entry,
-          kind_code => _type_kind_code($entry->{kind}),
+          kind_code => _type_kind_name_code($entry->{kind}),
           completion_family_code => _family_code($entry->{completion_family}),
         });
       } keys %{ $self->{type_index} || {} }
@@ -196,11 +194,32 @@ sub to_native_exec_struct {
   my ($self) = @_;
   my $struct = $self->to_native_compact_struct;
   $struct->{slot_catalog_exec} = [ map { $_->to_native_exec_struct } @{ $self->{slot_catalog} || [] } ];
+  $struct->{slot_resolvers} = [ map { _slot_resolver($self, $_) } @{ $self->{slot_catalog} || [] } ];
   $struct->{runtime_cache} = $self->{runtime_cache};
   return $struct;
 }
 
-sub _type_kind_code {
+sub _slot_resolver {
+  my ($self, $slot) = @_;
+  return undef if !$slot;
+  return undef if ($slot->resolver_shape || q()) ne 'EXPLICIT';
+
+  my $key = $slot->schema_slot_key;
+  return undef if !defined $key || $key eq q();
+
+  my ($type_name, $field_name) = $key =~ /\A(.+)\.([^.]+)\z/;
+  return undef if !defined $type_name || !defined $field_name;
+
+  my $type = ($self->{runtime_cache}{name2type} || {})->{$type_name};
+  return undef if !$type || !$type->can('fields');
+
+  my $field = ($type->fields || {})->{$field_name};
+  return undef if ref($field) ne 'HASH';
+
+  return $field->{resolve};
+}
+
+sub _type_kind_name_code {
   my ($kind) = @_;
   return 1 if ($kind || q()) eq 'SCALAR';
   return 2 if ($kind || q()) eq 'OBJECT';
@@ -328,7 +347,12 @@ sub _inflate_slot {
     resolver_mode => $struct->{resolver_mode},
     completion_family => $struct->{completion_family},
     dispatch_family => $struct->{dispatch_family},
-    arg_defs => $struct->{arg_defs} || {},
+    arg_defs_compact => (
+      exists $struct->{arg_defs_compact}
+      ? $struct->{arg_defs_compact}
+      : ($struct->{arg_defs} || [])
+    ),
+    return_type_kind_code => $struct->{return_type_kind_code} || 0,
     has_args => $struct->{has_args},
     has_directives => $struct->{has_directives},
   );
@@ -347,10 +371,10 @@ sub _build_slots_for_object {
       resolver_mode => 'DEFAULT',
       completion_family => 'GENERIC',
       dispatch_family => 'GENERIC',
-      arg_defs => {},
+      arg_defs_compact => [],
+      return_type_kind_code => 1,
       has_args => 0,
       has_directives => 0,
-      return_type => $String,
     ),
   );
 
@@ -366,11 +390,10 @@ sub _build_slots_for_object {
       resolver_mode => (($field->{resolver_mode} || q()) eq 'native' ? 'NATIVE' : 'DEFAULT'),
       completion_family => _completion_family_for_type($return_type),
       dispatch_family => _dispatch_family_for_type($return_type),
-      arg_defs => _build_input_defs($field->{args} || {}),
+      arg_defs_compact => _build_input_defs_compact($field->{args} || {}),
+      return_type_kind_code => _type_kind_code($return_type),
       has_args => ($field->{args} && keys %{ $field->{args} }) ? 1 : 0,
       has_directives => ($field->{directives} && @{ $field->{directives} }) ? 1 : 0,
-      resolve => $field->{resolve},
-      return_type => $return_type,
     );
   }
 
@@ -417,38 +440,32 @@ sub _apply_slot_catalog_to_blocks {
   return $blocks;
 }
 
-sub _rebind_blocks_runtime_metadata {
-  my ($runtime_cache, $blocks) = @_;
-  my $name2type = $runtime_cache->{name2type} || {};
-
-  for my $block (@{ $blocks || [] }) {
-    for my $slot (@{ $block->slots || [] }) {
-      my $return_type_name = $slot->return_type_name;
-      $slot->{return_type} = $name2type->{$return_type_name} if defined $return_type_name && exists $name2type->{$return_type_name};
-      my $root_type_name = $block->root_type_name || q();
-      my $field_name = $slot->field_name || q();
-      my $root_type = $name2type->{$root_type_name};
-      next if !$root_type || !$root_type->can('fields');
-      my $field = ($root_type->fields || {})->{$field_name} || {};
-      $slot->{resolve} = $field->{resolve} if exists $field->{resolve};
-    }
-  }
-
-  return $blocks;
-}
-
-sub _build_input_defs {
+sub _build_input_defs_compact {
   my ($defs) = @_;
-  my %built;
+  my @built;
   for my $name (sort keys %{$defs || {}}) {
     my $def = $defs->{$name} || {};
-    $built{$name} = {
-      type => _typedef_for_type($def->{type}),
-      has_default => exists $def->{default_value} ? 1 : 0,
-      default_value => $def->{default_value},
-    };
+    push @built, [
+      $name,
+      _typedef_for_type($def->{type}),
+      exists $def->{default_value} ? 1 : 0,
+      $def->{default_value},
+    ];
   }
-  return \%built;
+  return \@built;
+}
+
+sub _type_kind_code {
+  my ($type) = @_;
+  return 0 if !$type;
+  return 8 if $type->isa('GraphQL::Houtou::Type::NonNull');
+  return 3 if $type->isa('GraphQL::Houtou::Type::List');
+  return 2 if $type->isa('GraphQL::Houtou::Type::Object');
+  return 4 if $type->isa('GraphQL::Houtou::Type::Interface');
+  return 5 if $type->isa('GraphQL::Houtou::Type::Union');
+  return 6 if $type->isa('GraphQL::Houtou::Type::Enum');
+  return 7 if $type->isa('GraphQL::Houtou::Type::InputObject');
+  return 1;
 }
 
 sub _type_kind {

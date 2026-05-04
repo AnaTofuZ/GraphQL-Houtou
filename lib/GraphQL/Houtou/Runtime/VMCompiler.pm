@@ -120,6 +120,7 @@ sub _lower_instruction {
     dispatch_family => $instruction->dispatch_family,
     child_block_name => $instruction->child_block_name,
     abstract_child_blocks => $instruction->abstract_child_blocks,
+    abstract_child_blocks_index => undef,
     args_mode => $instruction->args_mode,
     args_payload => $instruction->args_payload,
     args_payload_index => undef,
@@ -147,6 +148,7 @@ sub _inflate_op {
     dispatch_family => $struct->{dispatch_family},
     child_block_name => $struct->{child_block_name},
     abstract_child_blocks => $struct->{abstract_child_blocks} || {},
+    abstract_child_blocks_index => $struct->{abstract_child_blocks_index},
     args_mode => $struct->{args_mode} || 'NONE',
     args_payload => $struct->{args_payload},
     args_payload_index => $struct->{args_payload_index},
@@ -193,6 +195,7 @@ sub _inflate_native_op {
       field_name => $field_name,
       result_name => $result_name,
       return_type_name => $return_type_name,
+      abstract_child_blocks_index => undef,
       args_mode => _args_mode_from_code($args_mode_code),
       args_payload => $args_payload,
       args_payload_index => $args_payload_index,
@@ -225,6 +228,7 @@ sub _inflate_native_op {
     directives_payload => $struct->{directives_payload},
     directives_payload_index => $struct->{directives_payload_index},
     has_directives => $struct->{has_directives},
+    abstract_child_blocks_index => $struct->{abstract_child_blocks_index},
   );
   $op->set_native_slot_index($struct->{slot_index});
   $op->set_native_child_block_index($struct->{child_block_index});
@@ -329,19 +333,18 @@ sub _bind_typename_slot {
   my ($runtime_schema, $block, $op, $slot_struct) = @_;
   return undef if ($op->field_name || q()) ne '__typename';
 
-  my $string_type = $runtime_schema->runtime_cache->{name2type}{String};
   return GraphQL::Houtou::Runtime::Slot->new(
     schema_slot_key => join(q(.), ($block->type_name || q()), '__typename'),
     field_name => '__typename',
     result_name => ($op->result_name || '__typename'),
     return_type_name => (($slot_struct && $slot_struct->{return_type_name}) || 'String'),
+    return_type_kind_code => (($slot_struct && $slot_struct->{return_type_kind_code}) || 1),
     resolver_shape => 'DEFAULT',
     resolver_mode => 'DEFAULT',
     completion_family => 'GENERIC',
     dispatch_family => 'GENERIC',
     has_args => 0,
     has_directives => (($op->has_directives || 0) ? 1 : 0),
-    return_type => $string_type,
   );
 }
 

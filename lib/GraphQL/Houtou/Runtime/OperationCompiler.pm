@@ -179,6 +179,7 @@ sub _lower_selection_block {
       directives_payload => $directives_payload,
       child_block_name => $child_block ? $child_block->name : undef,
       abstract_child_blocks => $abstract_child_blocks,
+      abstract_child_blocks_index => undef,
       bound_slot => $slot,
     );
   }
@@ -328,6 +329,7 @@ sub _inflate_instruction {
     directives_payload => _clone_argument_value($struct->{directives_payload}),
     child_block_name => $struct->{child_block_name},
     abstract_child_blocks => _clone_argument_value($struct->{abstract_child_blocks} || {}),
+    abstract_child_blocks_index => $struct->{abstract_child_blocks_index},
   );
 }
 
@@ -556,31 +558,28 @@ sub _lookup_typename_slot {
         field_name => '__typename',
         result_name => $result_name,
         return_type_name => $slot->return_type_name,
+        return_type_kind_code => $slot->return_type_kind_code,
         resolver_shape => $slot->resolver_shape,
         resolver_mode => $slot->resolver_mode,
         completion_family => $slot->completion_family,
         dispatch_family => $slot->dispatch_family,
         has_args => 0,
         has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
-        resolve => $slot->resolve,
-        return_type => $slot->return_type,
       );
     }
   }
-
-  my $string_type = $runtime_schema->runtime_cache->{name2type}{String};
   return GraphQL::Houtou::Runtime::Slot->new(
     schema_slot_key => join(q(.), ($type_name || q()), '__typename'),
     field_name => '__typename',
     result_name => $result_name,
     return_type_name => 'String',
+    return_type_kind_code => 1,
     resolver_shape => 'DEFAULT',
     resolver_mode => 'DEFAULT',
     completion_family => 'GENERIC',
     dispatch_family => 'GENERIC',
     has_args => 0,
     has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
-    return_type => $string_type,
   );
 }
 

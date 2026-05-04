@@ -12,6 +12,7 @@ our @EXPORT_OK = qw(
   load_native_bundle
   load_native_bundle_from_handles
   load_native_program
+  native_program_descriptor
   load_native_runtime
   native_bundle_summary
   native_program_summary
@@ -44,6 +45,11 @@ sub load_native_bundle_from_handles {
 sub load_native_program {
   _ensure_vm_xs_loaded();
   return GraphQL::Houtou::XS::VM::load_native_program_xs(@_);
+}
+
+sub native_program_descriptor {
+  _ensure_vm_xs_loaded();
+  return GraphQL::Houtou::XS::VM::native_program_descriptor_xs(@_);
 }
 
 sub load_native_runtime {

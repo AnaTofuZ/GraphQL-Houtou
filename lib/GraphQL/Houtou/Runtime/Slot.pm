@@ -6,21 +6,24 @@ use warnings;
 
 sub new {
   my ($class, %args) = @_;
+  my $arg_defs_compact = _normalize_arg_defs(
+    $args{arg_defs_compact},
+    $args{arg_defs},
+  );
   return bless {
     schema_slot_key => $args{schema_slot_key},
     schema_slot_index => $args{schema_slot_index},
     field_name => $args{field_name},
     result_name => $args{result_name},
     return_type_name => $args{return_type_name},
+    return_type_kind_code => defined $args{return_type_kind_code} ? $args{return_type_kind_code} : 0,
     resolver_shape => $args{resolver_shape} || 'DEFAULT',
     resolver_mode => $args{resolver_mode} || 'DEFAULT',
     completion_family => $args{completion_family} || 'GENERIC',
     dispatch_family => $args{dispatch_family} || 'GENERIC',
-    arg_defs => $args{arg_defs} || {},
+    arg_defs_compact => $arg_defs_compact,
     has_args => $args{has_args} ? 1 : 0,
     has_directives => $args{has_directives} ? 1 : 0,
-    resolve => $args{resolve},
-    return_type => $args{return_type},
   }, $class;
 }
 
@@ -29,15 +32,15 @@ sub schema_slot_index { return $_[0]{schema_slot_index} }
 sub field_name { return $_[0]{field_name} }
 sub result_name { return $_[0]{result_name} }
 sub return_type_name { return $_[0]{return_type_name} }
+sub return_type_kind_code { return $_[0]{return_type_kind_code} }
 sub resolver_shape { return $_[0]{resolver_shape} }
 sub resolver_mode { return $_[0]{resolver_mode} }
 sub completion_family { return $_[0]{completion_family} }
 sub dispatch_family { return $_[0]{dispatch_family} }
-sub arg_defs { return $_[0]{arg_defs} }
+sub arg_defs { return _arg_defs_from_compact($_[0]{arg_defs_compact}) }
+sub arg_defs_compact { return $_[0]{arg_defs_compact} }
 sub has_args { return $_[0]{has_args} }
 sub has_directives { return $_[0]{has_directives} }
-sub resolve { return $_[0]{resolve} }
-sub return_type { return $_[0]{return_type} }
 
 sub to_struct {
   my ($self) = @_;
@@ -51,7 +54,9 @@ sub to_struct {
     resolver_mode => $self->{resolver_mode},
     completion_family => $self->{completion_family},
     dispatch_family => $self->{dispatch_family},
-    arg_defs => _clone_value($self->{arg_defs}),
+    return_type_kind_code => $self->{return_type_kind_code},
+    arg_defs_compact => _clone_compact($self->{arg_defs_compact}),
+    arg_defs => _arg_defs_from_compact($self->{arg_defs_compact}),
     has_args => $self->{has_args},
     has_directives => $self->{has_directives},
   };
@@ -66,7 +71,7 @@ sub to_native_struct {
     field_name => $self->{field_name},
     result_name => $self->{result_name},
     return_type_name => $self->{return_type_name},
-    return_type_kind_code => _type_kind_code($self->{return_type}),
+    return_type_kind_code => $self->{return_type_kind_code},
     resolver_shape => $self->{resolver_shape},
     resolver_shape_code => _resolver_shape_code($self->{resolver_shape}),
     resolver_mode => $self->{resolver_mode},
@@ -74,8 +79,8 @@ sub to_native_struct {
     completion_family => $self->{completion_family},
     completion_family_code => _family_code($self->{completion_family}),
     dispatch_family => $self->{dispatch_family},
-    dispatch_family_code => _family_code($self->{dispatch_family}),
-    ($include_arg_defs ? (arg_defs => _clone_value($self->{arg_defs})) : ()),
+    dispatch_family_code => _dispatch_family_code($self->{dispatch_family}),
+    ($include_arg_defs ? (arg_defs => _clone_compact($self->{arg_defs_compact})) : ()),
     has_args => $self->{has_args},
     has_directives => $self->{has_directives},
   };
@@ -97,16 +102,13 @@ sub to_native_compact_struct {
     $native->{has_args},
     $native->{has_directives},
     $native->{resolver_mode_code},
-    ($include_arg_defs ? _arg_defs_to_compact($self->{arg_defs}) : undef),
+    ($include_arg_defs ? _clone_compact($self->{arg_defs_compact}) : undef),
   ];
 }
 
 sub to_native_exec_struct {
-  my ($self) = @_;
-  my $struct = $self->to_native_struct;
-  $struct->{resolve} = $self->{resolve} if exists $self->{resolve};
-  $struct->{return_type} = $self->{return_type} if exists $self->{return_type};
-  return $struct;
+  my ($self, %opts) = @_;
+  return $self->to_native_struct(%opts);
 }
 
 sub _resolver_shape_code {
@@ -129,16 +131,11 @@ sub _family_code {
   return 1;
 }
 
-sub _type_kind_code {
-  my ($type) = @_;
-  return 0 if !$type;
-  return 8 if eval { $type->isa('GraphQL::Houtou::Type::NonNull') };
-  return 3 if eval { $type->isa('GraphQL::Houtou::Type::List') };
-  return 2 if eval { $type->isa('GraphQL::Houtou::Type::Object') };
-  return 4 if eval { $type->isa('GraphQL::Houtou::Type::Interface') };
-  return 5 if eval { $type->isa('GraphQL::Houtou::Type::Union') };
-  return 6 if eval { $type->isa('GraphQL::Houtou::Type::Enum') };
-  return 7 if eval { $type->isa('GraphQL::Houtou::Type::InputObject') };
+sub _dispatch_family_code {
+  my ($family) = @_;
+  return 2 if ($family || q()) eq 'RESOLVE_TYPE';
+  return 3 if ($family || q()) eq 'TAG';
+  return 4 if ($family || q()) eq 'POSSIBLE_TYPES';
   return 1;
 }
 
@@ -149,6 +146,21 @@ sub _clone_value {
   return [ map { _clone_value($_) } @$value ] if $ref eq 'ARRAY';
   return { map { $_ => _clone_value($value->{$_}) } keys %$value } if $ref eq 'HASH';
   return $value;
+}
+
+sub _clone_compact {
+  my ($value) = @_;
+  return undef if !defined $value;
+  return _clone_value($value);
+}
+
+sub _normalize_arg_defs {
+  my ($compact, $hash) = @_;
+  if (defined $compact) {
+    return _arg_defs_to_compact($compact) if ref($compact) eq 'HASH';
+    return _clone_compact($compact);
+  }
+  return _arg_defs_to_compact($hash);
 }
 
 sub _arg_defs_to_compact {
@@ -164,6 +176,23 @@ sub _arg_defs_to_compact {
     ];
   }
   return \@entries;
+}
+
+sub _arg_defs_from_compact {
+  my ($entries) = @_;
+  return _clone_value($entries) if ref($entries) eq 'HASH';
+  my %arg_defs;
+  for my $entry (@{ $entries || [] }) {
+    next if ref($entry) ne 'ARRAY';
+    my ($name, $type, $has_default, $default_value) = @$entry;
+    next if !defined $name;
+    $arg_defs{$name} = {
+      type => _clone_value($type),
+      has_default => $has_default ? 1 : 0,
+      default_value => _clone_value($default_value),
+    };
+  }
+  return \%arg_defs;
 }
 
 1;

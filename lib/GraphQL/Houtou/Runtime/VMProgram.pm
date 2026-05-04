@@ -21,6 +21,7 @@ use constant {
   ROOT_BLOCK_INDEX_SLOT => 10,
   ARGS_PAYLOADS_SLOT => 11,
   DIRECTIVES_PAYLOADS_SLOT => 12,
+  ABSTRACT_CHILD_MAPS_SLOT => 13,
 };
 
 {
@@ -114,6 +115,7 @@ sub new {
     undef,
     $args{args_payloads} || [],
     $args{directives_payloads} || [],
+    [],
   ], $class;
   for my $block (@blocks, ($root_block || ())) {
     next if !$block;
@@ -142,6 +144,7 @@ sub root_block_index {
 sub dispatch_bound { return $_[0][DISPATCH_BOUND_SLOT] }
 sub args_payloads { return $_[0][ARGS_PAYLOADS_SLOT] }
 sub directives_payloads { return $_[0][DIRECTIVES_PAYLOADS_SLOT] }
+sub abstract_child_maps { return $_[0][ABSTRACT_CHILD_MAPS_SLOT] }
 sub set_variable_defs {
   $_[0][VARIABLE_DEFS_SLOT] = $_[1] || {};
   $_[0][NATIVE_COMPACT_STRUCT_SLOT] = undef;
@@ -270,6 +273,7 @@ sub _canonicalize_catalog_backed_payloads {
   }
   $self->[ARGS_PAYLOADS_SLOT] = $catalog->args_payloads;
   $self->[DIRECTIVES_PAYLOADS_SLOT] = $catalog->directives_payloads;
+  $self->[ABSTRACT_CHILD_MAPS_SLOT] = [];
   $self->[NATIVE_COMPACT_STRUCT_SLOT] = undef;
   $self->[NATIVE_PROGRAM_HANDLE_SLOT] = undef;
 }

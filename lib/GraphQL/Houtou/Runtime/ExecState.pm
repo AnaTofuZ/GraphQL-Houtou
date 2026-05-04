@@ -234,67 +234,6 @@ sub finalize_current_block {
   return GraphQL::Houtou::XS::VM::exec_state_finalize_current_block_xs($self, $snapshot);
 }
 
-sub run_current_field_via {
-  my ($self, $resolve_cb, $complete_cb) = @_;
-  my $field = $self->current_field_frame;
-  my $source = GraphQL::Houtou::XS::VM::field_frame_source_xs($field);
-  my $path_frame = GraphQL::Houtou::XS::VM::field_frame_path_frame_xs($field);
-  my ($ok, $value) = $self->_capture_eval(sub {
-    return $resolve_cb->($self, $source, $path_frame);
-  });
-  return $self->_error_outcome($value, $path_frame) if !$ok;
-  GraphQL::Houtou::XS::VM::field_frame_set_resolved_value_xs($field, $value);
-
-  if ($self->promise_code && is_promise_value($self->promise_code, $value)) {
-    return GraphQL::Houtou::Promise::Adapter::then_promise($self->promise_code, $value, sub {
-      my ($resolved_value) = @_;
-      my ($complete_ok, $outcome) = $self->_capture_eval(sub {
-        return $complete_cb->($self, $resolved_value, $path_frame);
-      });
-      return $complete_ok ? $outcome : $self->_error_outcome($outcome, $path_frame);
-    }, sub {
-      return $self->_error_outcome($_[0], $path_frame);
-    });
-  }
-
-  my ($complete_ok, $outcome) = $self->_capture_eval(sub {
-    return $complete_cb->($self, $value, $path_frame);
-  });
-  return $complete_ok ? $outcome : $self->_error_outcome($outcome, $path_frame);
-}
-
-sub execute_current_op {
-  my ($self) = @_;
-  if (!$self->promise_code) {
-    GraphQL::Houtou::_bootstrap_xs();
-    return GraphQL::Houtou::XS::VM::exec_state_execute_current_op_xs($self);
-  }
-  return $self->run_current_field_via(
-    sub {
-      my ($state, $source, $path_frame) = @_;
-      return $state->_resolve_via_code($source, $path_frame);
-    },
-    sub {
-      my ($state, $value, $path_frame) = @_;
-      return $state->_complete_via_code($value, $path_frame);
-    },
-  );
-}
-
-sub run_default_generic { return $_[0]->run_current_field_via(\&resolve_default,  \&complete_generic) }
-sub run_default_object  { return $_[0]->run_current_field_via(\&resolve_default,  \&complete_object) }
-sub run_default_list    { return $_[0]->run_current_field_via(\&resolve_default,  \&complete_list) }
-sub run_default_abstract { return $_[0]->run_current_field_via(\&resolve_default,  \&complete_abstract) }
-sub run_explicit_generic { return $_[0]->run_current_field_via(\&resolve_explicit, \&complete_generic) }
-sub run_explicit_object { return $_[0]->run_current_field_via(\&resolve_explicit, \&complete_object) }
-sub run_explicit_list   { return $_[0]->run_current_field_via(\&resolve_explicit, \&complete_list) }
-sub run_explicit_abstract { return $_[0]->run_current_field_via(\&resolve_explicit, \&complete_abstract) }
-
-sub resolve_field_value {
-  my ($self, $source, $path_frame) = @_;
-  return $self->_resolve_via_code($source, $path_frame);
-}
-
 sub resolve_default {
   my ($self, $source, $path_frame) = @_;
   my $field_name = $self->current_field_name;
@@ -320,11 +259,6 @@ sub resolve_default {
 sub resolve_explicit {
   my ($self, $source, $path_frame) = @_;
   return $self->resolve_default($source, $path_frame);
-}
-
-sub complete_resolved_value {
-  my ($self, $value, $path_frame) = @_;
-  return $self->_complete_via_code($value, $path_frame);
 }
 
 sub complete_generic {
@@ -524,29 +458,44 @@ sub resolve_runtime_type_for_current_field {
 
 sub execute_block {
   my ($self, $block_index, $source, $base_path) = @_;
-  if (!$self->promise_code) {
-    GraphQL::Houtou::_bootstrap_xs();
-    return GraphQL::Houtou::XS::VM::exec_state_execute_block_index_xs(
-      $self,
-      $block_index,
-      $source,
-      $base_path,
-    );
-  }
-  return $self->_execute_block_perl($block_index, $source, $base_path);
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_execute_block_async_xs(
+    $self,
+    $block_index,
+    $source,
+    $base_path,
+  ) if $self->promise_code;
+  return GraphQL::Houtou::XS::VM::exec_state_execute_block_index_xs(
+    $self,
+    $block_index,
+    $source,
+    $base_path,
+  );
 }
 
-sub _execute_block_perl {
-  my ($self, $block_index, $source, $base_path) = @_;
-  my ($snapshot) = $self->enter_block($block_index);
-  while (1) {
-    last if !$self->advance_current_op;
-    next if !$self->should_execute_current_op;
-    $self->enter_current_field($source, $base_path);
-    my $outcome = $self->_run_via_code;
-    $self->consume_current_field_outcome($outcome);
-  }
-  return $self->finalize_current_block($snapshot);
+sub _xs_complete_callback {
+  my ($self, $path_frame, $block_index, $slot_index, $op_index) = @_;
+  return sub {
+    my $resolved = @_ == 1 ? $_[0] : [@_];
+    return GraphQL::Houtou::XS::VM::exec_state_complete_async_xs(
+      $self,
+      $path_frame,
+      $block_index,
+      $slot_index,
+      $op_index,
+      $resolved,
+    );
+  };
+}
+
+sub _xs_error_callback {
+  my ($self, $path_frame) = @_;
+  return sub {
+    return GraphQL::Houtou::XS::VM::exec_state_error_outcome_xs(
+      $path_frame,
+      $_[0],
+    );
+  };
 }
 
 sub _resolve_via_code {
@@ -574,23 +523,6 @@ sub _complete_via_code {
   return $self->complete_abstract($value, $path_frame)
     if $code == COMPLETE_ABSTRACT_CODE;
   return $self->complete_generic($value, $path_frame);
-}
-
-sub _run_via_code {
-  my ($self) = @_;
-  GraphQL::Houtou::_bootstrap_xs();
-  my $opcode = GraphQL::Houtou::XS::VM::exec_state_current_opcode_code_xs($self);
-
-  return $self->run_default_generic if $opcode == ((RESOLVE_DEFAULT_CODE * 16) + COMPLETE_GENERIC_CODE);
-  return $self->run_default_object  if $opcode == ((RESOLVE_DEFAULT_CODE * 16) + COMPLETE_OBJECT_CODE);
-  return $self->run_default_list    if $opcode == ((RESOLVE_DEFAULT_CODE * 16) + COMPLETE_LIST_CODE);
-  return $self->run_default_abstract if $opcode == ((RESOLVE_DEFAULT_CODE * 16) + COMPLETE_ABSTRACT_CODE);
-  return $self->run_explicit_generic if $opcode == ((RESOLVE_EXPLICIT_CODE * 16) + COMPLETE_GENERIC_CODE);
-  return $self->run_explicit_object if $opcode == ((RESOLVE_EXPLICIT_CODE * 16) + COMPLETE_OBJECT_CODE);
-  return $self->run_explicit_list   if $opcode == ((RESOLVE_EXPLICIT_CODE * 16) + COMPLETE_LIST_CODE);
-  return $self->run_explicit_abstract if $opcode == ((RESOLVE_EXPLICIT_CODE * 16) + COMPLETE_ABSTRACT_CODE);
-
-  return $self->execute_current_op;
 }
 
 sub finalize_response {

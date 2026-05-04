@@ -281,3 +281,13 @@ perl -Ilib t/19_vm_execute.t
 - `./Build test` / `minil test` はこの状態で通過
 - `BlockFrame` の pending inspection / aggregate 用 Perl surface は未使用だったため削除し、
   promise finalize の public 面は `finalize` と XS callback bridge だけに縮小した
+- promise path の active block loop は `_run_via_code` へ戻らず、
+  resolver 実行と promise 判定を XS 側で処理するように変更した
+- その際に親/子 block 間で `field_frame` を先に free していた所有権バグを修正し、
+  `t/16_runtime_promise.t` の `Signal: TRAP` は解消済み
+- `ExecState` から未使用になった
+  - `run_current_field_via`
+  - `run_default_*`
+  - `run_explicit_*`
+  - `_run_via_code`
+  などの Perl dispatch surface を削った

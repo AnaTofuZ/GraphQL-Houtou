@@ -37,7 +37,6 @@ sub resolver_shape { return $_[0]{resolver_shape} }
 sub resolver_mode { return $_[0]{resolver_mode} }
 sub completion_family { return $_[0]{completion_family} }
 sub dispatch_family { return $_[0]{dispatch_family} }
-sub arg_defs { return _arg_defs_from_compact($_[0]{arg_defs_compact}) }
 sub arg_defs_compact { return $_[0]{arg_defs_compact} }
 sub has_args { return $_[0]{has_args} }
 sub has_directives { return $_[0]{has_directives} }
@@ -56,7 +55,6 @@ sub to_struct {
     dispatch_family => $self->{dispatch_family},
     return_type_kind_code => $self->{return_type_kind_code},
     arg_defs_compact => _clone_compact($self->{arg_defs_compact}),
-    arg_defs => _arg_defs_from_compact($self->{arg_defs_compact}),
     has_args => $self->{has_args},
     has_directives => $self->{has_directives},
   };
@@ -176,23 +174,6 @@ sub _arg_defs_to_compact {
     ];
   }
   return \@entries;
-}
-
-sub _arg_defs_from_compact {
-  my ($entries) = @_;
-  return _clone_value($entries) if ref($entries) eq 'HASH';
-  my %arg_defs;
-  for my $entry (@{ $entries || [] }) {
-    next if ref($entry) ne 'ARRAY';
-    my ($name, $type, $has_default, $default_value) = @$entry;
-    next if !defined $name;
-    $arg_defs{$name} = {
-      type => _clone_value($type),
-      has_default => $has_default ? 1 : 0,
-      default_value => _clone_value($default_value),
-    };
-  }
-  return \%arg_defs;
 }
 
 1;

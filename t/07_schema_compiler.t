@@ -187,9 +187,13 @@ subtest 'root blocks and slots are compiled' => sub {
   ok $search_slot, 'search slot is present';
   is $search_slot->completion_family, 'LIST', 'search slot is list family';
   is $search_slot->dispatch_family, 'LIST', 'search slot dispatch stays list';
-  is_deeply $search_slot->arg_defs->{ids}{type}, {
-    type => ['list', { type => ['non_null', { type => 'String' }] }],
-  }, 'argument lowering preserves list/non-null shape';
+  my ($ids_arg) = grep { $_->[0] eq 'ids' } @{ $search_slot->arg_defs_compact || [] };
+  is_deeply $ids_arg, [
+    'ids',
+    { type => ['list', { type => ['non_null', { type => 'String' }] }] },
+    0,
+    undef,
+  ], 'argument lowering preserves compact arg defs';
 };
 
 subtest 'type and dispatch indexes are compiled' => sub {

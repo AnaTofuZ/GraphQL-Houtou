@@ -59,6 +59,12 @@ enum {
 };
 
 enum {
+  GQL_VM_CALLBACK_ABI_DEFAULT = 1,
+  GQL_VM_CALLBACK_ABI_EXPLICIT_GENERIC = 2,
+  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE = 3
+};
+
+enum {
   GQL_VM_DYNAMIC_UNDEF = 0,
   GQL_VM_DYNAMIC_SCALAR = 1,
   GQL_VM_DYNAMIC_VARIABLE = 2,
@@ -98,11 +104,14 @@ typedef struct {
 
 typedef struct {
   char *field_name;
+  STRLEN field_name_len;
   char *result_name;
+  STRLEN result_name_len;
   char *return_type_name;
   IV schema_slot_index;
   IV resolver_shape_code;
   IV resolver_mode_code;
+  IV callback_abi_code;
   IV completion_family_code;
   IV dispatch_family_code;
   IV return_type_kind_code;
@@ -222,6 +231,7 @@ typedef struct {
   gql_runtime_vm_callback_context_t *callback_ctx;
   gql_runtime_vm_path_frame_t *path_frame;
   int path_frame_is_current_field;
+  SV *empty_args_sv;
   gql_runtime_vm_writer_t *writer;
   const gql_runtime_vm_native_block_t *block;
   const gql_runtime_vm_native_op_t *op;
@@ -479,6 +489,7 @@ static int gql_runtime_vm_evaluate_runtime_guards_native(
   pTHX_ const gql_runtime_vm_native_directives_payload_t *payload,
   HV *variables
 );
+static IV gql_runtime_vm_infer_callback_abi_code(IV resolver_shape_code, IV resolver_mode_code);
 static const gql_runtime_vm_native_slot_t *gql_runtime_vm_effective_slot(
   const gql_runtime_vm_native_runtime_t *runtime,
   const gql_runtime_vm_native_slot_t *slot
@@ -1414,6 +1425,7 @@ gql_runtime_vm_native_slot_to_compact_sv(
     av_push(arg_defs_av, newRV_noinc((SV *)arg_def_av));
   }
   av_push(av, newRV_noinc((SV *)arg_defs_av));
+  av_push(av, newSViv(slot->callback_abi_code));
 
   return newRV_noinc((SV *)av);
 }
@@ -1713,6 +1725,18 @@ gql_runtime_vm_evaluate_runtime_guards_native(
     }
   }
   return 1;
+}
+
+static IV
+gql_runtime_vm_infer_callback_abi_code(IV resolver_shape_code, IV resolver_mode_code)
+{
+  if (resolver_mode_code == 2) {
+    return GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE;
+  }
+  if (resolver_shape_code == GQL_VM_RESOLVE_EXPLICIT) {
+    return GQL_VM_CALLBACK_ABI_EXPLICIT_GENERIC;
+  }
+  return GQL_VM_CALLBACK_ABI_DEFAULT;
 }
 
 static const gql_runtime_vm_native_slot_t *
@@ -3168,6 +3192,7 @@ gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out
       Newxz(out->field_name, len + 1, char);
       Copy(pv, out->field_name, len, char);
       out->field_name[len] = '\0';
+      out->field_name_len = len;
     }
     svp = av_fetch(av, 1, 0);
     if (!svp || !SvOK(*svp)) croak("native VM slot entry is missing result_name");
@@ -3177,6 +3202,7 @@ gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out
       Newxz(out->result_name, len + 1, char);
       Copy(pv, out->result_name, len, char);
       out->result_name[len] = '\0';
+      out->result_name_len = len;
     }
     svp = av_fetch(av, 2, 0);
     if (!svp || !SvOK(*svp)) croak("native VM slot entry is missing return_type_name");
@@ -3205,6 +3231,10 @@ gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out
     out->resolver_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
     svp = av_fetch(av, 11, 0);
     gql_runtime_vm_parse_native_arg_defs(aTHX_ (svp ? *svp : NULL), &out->arg_defs, &out->arg_def_count);
+    svp = av_fetch(av, 12, 0);
+    out->callback_abi_code = (svp && SvOK(*svp))
+      ? SvIV(*svp)
+      : gql_runtime_vm_infer_callback_abi_code(out->resolver_shape_code, out->resolver_mode_code);
     return 1;
   }
   if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &hv)) {
@@ -3213,9 +3243,11 @@ gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out
   if (!gql_runtime_vm_fetch_hv_string(aTHX_ hv, "field_name", 10, &out->field_name)) {
     croak("native VM slot entry is missing field_name");
   }
+  out->field_name_len = out->field_name ? strlen(out->field_name) : 0;
   if (!gql_runtime_vm_fetch_hv_string(aTHX_ hv, "result_name", 11, &out->result_name)) {
     croak("native VM slot entry is missing result_name");
   }
+  out->result_name_len = out->result_name ? strlen(out->result_name) : 0;
   if (!gql_runtime_vm_fetch_hv_string(aTHX_ hv, "return_type_name", 16, &out->return_type_name)) {
     croak("native VM slot entry is missing return_type_name");
   }
@@ -3243,6 +3275,12 @@ gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out
   if (!gql_runtime_vm_fetch_hv_bool(aTHX_ hv, "has_directives", 14, &out->has_directives)) {
     croak("native VM slot entry is missing has_directives");
   }
+  if (!gql_runtime_vm_fetch_hv_iv(aTHX_ hv, "callback_abi_code", 17, &out->callback_abi_code)) {
+    out->callback_abi_code = gql_runtime_vm_infer_callback_abi_code(
+      out->resolver_shape_code,
+      out->resolver_mode_code
+    );
+  }
   svp = hv_fetch(hv, "arg_defs", 8, 0);
   gql_runtime_vm_parse_native_arg_defs(aTHX_ (svp ? *svp : NULL), &out->arg_defs, &out->arg_def_count);
   return 1;
@@ -3259,6 +3297,7 @@ gql_runtime_vm_clone_native_slot(
   dst->schema_slot_index = src->schema_slot_index;
   dst->resolver_shape_code = src->resolver_shape_code;
   dst->resolver_mode_code = src->resolver_mode_code;
+  dst->callback_abi_code = src->callback_abi_code;
   dst->completion_family_code = src->completion_family_code;
   dst->dispatch_family_code = src->dispatch_family_code;
   dst->return_type_kind_code = src->return_type_kind_code;
@@ -3266,16 +3305,18 @@ gql_runtime_vm_clone_native_slot(
   dst->has_args = src->has_args;
   dst->has_directives = src->has_directives;
   if (src->field_name) {
-    STRLEN len = strlen(src->field_name);
+    STRLEN len = src->field_name_len ? src->field_name_len : strlen(src->field_name);
     Newxz(dst->field_name, len + 1, char);
     Copy(src->field_name, dst->field_name, len, char);
     dst->field_name[len] = '\0';
+    dst->field_name_len = len;
   }
   if (src->result_name) {
-    STRLEN len = strlen(src->result_name);
+    STRLEN len = src->result_name_len ? src->result_name_len : strlen(src->result_name);
     Newxz(dst->result_name, len + 1, char);
     Copy(src->result_name, dst->result_name, len, char);
     dst->result_name[len] = '\0';
+    dst->result_name_len = len;
   }
   if (src->return_type_name) {
     STRLEN len = strlen(src->return_type_name);
@@ -4133,6 +4174,7 @@ gql_runtime_vm_program_is_native_eligible_sv(pTHX_ SV *program_sv, int has_promi
       AV *slot_av;
       IV resolver_shape_code;
       IV resolver_mode_code;
+      IV callback_abi_code;
       if (!slot_svp || !gql_runtime_vm_sv_to_av(aTHX_ *slot_svp, &slot_av)) {
         return 0;
       }
@@ -4140,8 +4182,14 @@ gql_runtime_vm_program_is_native_eligible_sv(pTHX_ SV *program_sv, int has_promi
       resolver_shape_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
       svp = av_fetch(slot_av, 10, 0);
       resolver_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : 0;
+      svp = av_fetch(slot_av, 12, 0);
+      callback_abi_code = (svp && SvOK(*svp))
+        ? SvIV(*svp)
+        : gql_runtime_vm_infer_callback_abi_code(resolver_shape_code, resolver_mode_code);
       if (resolver_shape_code != GQL_VM_RESOLVE_DEFAULT) {
-        if (resolver_shape_code != GQL_VM_RESOLVE_EXPLICIT || resolver_mode_code != 2) {
+        if (resolver_shape_code != GQL_VM_RESOLVE_EXPLICIT
+            || (callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_GENERIC
+                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE)) {
           return 0;
         }
       }

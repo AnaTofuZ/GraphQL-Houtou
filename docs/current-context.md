@@ -450,6 +450,31 @@ perl -Ilib t/19_vm_execute.t
   - `list_of_objects`: `473653/s`
   - `abstract_with_fragment`: `528011/s`
 
+- callback ABI code / empty args / slot metadata cache
+  - slot に `callback_abi_code` を追加し、
+    - default
+    - explicit generic
+    - explicit native
+    を runtime native struct 上で明示的に分けた
+  - explicit generic callback は 5-arg ABI を維持したまま、
+    slot type object を direct 参照する fast path に寄せた
+  - explicit native callback だけ 4-arg fast ABI を使うように整理し、
+    `resolver_mode_code == 2` への過剰依存を外した
+  - sync `native_bundle` fast lane の `ExecState` に empty args singleton を持たせ、
+    no-args field で毎回空 hashref を作らないようにした
+  - native slot に
+    - `result_name_len`
+    - `field_name_len`
+    を持たせて、inner loop の `strlen(...)` を削った
+  - runtime 初期化時に、explicit callback slot の `slot_type_object` が
+    direct 参照で埋まっていることを検証するようにした
+  - `./Build test` / `minil test` は通過
+
+- latest median:
+  - `nested_variable_object`: `551441/s`
+  - `list_of_objects`: `493746/s`
+  - `abstract_with_fragment`: `558484/s`
+
 - 解釈:
   - `6b980d7` 比では
     - `nested_variable_object`: 約 `+1.8%`
@@ -475,6 +500,15 @@ perl -Ilib t/19_vm_execute.t
   - ここで分かったことは明確で、現行 branch の主な重みは
     `LazyInfo` 自体より **callback ABI に `info` と generic lookup を持ち込んだこと**
     にあった
+  - callback ABI / empty args / slot metadata cache を入れた最新 batch では
+    `937edb0` 比で
+    - `nested_variable_object`: 約 `5.7%` 低い
+    - `list_of_objects`: 約 `0.2%` 低い
+    - `abstract_with_fragment`: 約 `0.9%` 速い
+  - つまり、high-watermark との差はもう
+    - nested の args / variable 系固定コスト
+    - generic info callback が残る case
+    にほぼ局所化できている
   - つまり現行 branch でも、specialized fast lane を切れば
     high-watermark にかなり近い水準まで戻せる見通しがある
 
@@ -488,6 +522,6 @@ perl -Ilib t/19_vm_execute.t
     「fast lane を明示的に specialized に保つ」方が筋が良い
 
 - 次に詰めるべきこと:
-  1. abstract dispatch の type lookup / callback catalog 直参照をさらに詰める
-  2. `resolver_mode => native` 以外を specialized fast lane に含める価値があるか切り分ける
-  3. promise/DataLoader 主経路へ今回の fast-lane 判断をどこまで逆輸入するか決める
+  1. nested の残差を詰めるため、args / variable coercion の固定コストをさらに落とす
+  2. explicit generic callback で `info` を要求しない case を見分けられるなら、ABI をもう一段 specialized にできるか検討する
+  3. promise/DataLoader 主経路へ今回の callback ABI / metadata cache の判断をどこまで逆輸入するか決める

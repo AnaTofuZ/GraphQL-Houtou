@@ -37,6 +37,7 @@ sub resolver_shape { return $_[0]{resolver_shape} }
 sub resolver_mode { return $_[0]{resolver_mode} }
 sub completion_family { return $_[0]{completion_family} }
 sub dispatch_family { return $_[0]{dispatch_family} }
+sub callback_abi_code { return _callback_abi_code($_[0]{resolver_shape}, $_[0]{resolver_mode}) }
 sub arg_defs_compact { return $_[0]{arg_defs_compact} }
 sub has_args { return $_[0]{has_args} }
 sub has_directives { return $_[0]{has_directives} }
@@ -74,6 +75,7 @@ sub to_native_struct {
     resolver_shape_code => _resolver_shape_code($self->{resolver_shape}),
     resolver_mode => $self->{resolver_mode},
     resolver_mode_code => _resolver_mode_code($self->{resolver_mode}),
+    callback_abi_code => _callback_abi_code($self->{resolver_shape}, $self->{resolver_mode}),
     completion_family => $self->{completion_family},
     completion_family_code => _family_code($self->{completion_family}),
     dispatch_family => $self->{dispatch_family},
@@ -101,6 +103,7 @@ sub to_native_compact_struct {
     $native->{has_directives},
     $native->{resolver_mode_code},
     ($include_arg_defs ? _clone_compact($self->{arg_defs_compact}) : undef),
+    $native->{callback_abi_code},
   ];
 }
 
@@ -118,6 +121,13 @@ sub _resolver_shape_code {
 sub _resolver_mode_code {
   my ($mode) = @_;
   return 2 if ($mode || q()) eq 'NATIVE';
+  return 1;
+}
+
+sub _callback_abi_code {
+  my ($shape, $mode) = @_;
+  return 3 if ($mode || q()) eq 'NATIVE';
+  return 2 if ($shape || q()) eq 'EXPLICIT';
   return 1;
 }
 

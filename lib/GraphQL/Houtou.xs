@@ -3070,6 +3070,19 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
           }
         }
 finalize_arg_defs:
+        if (slot->callback_abi_code != GQL_VM_CALLBACK_ABI_DEFAULT
+            && (!runtime->callback_catalog->slot_type_objects[i]
+                || !SvOK(runtime->callback_catalog->slot_type_objects[i]))) {
+          if (exec_struct_sv) {
+            SvREFCNT_dec(exec_struct_sv);
+          }
+          gql_runtime_vm_native_runtime_destroy(runtime);
+          croak(
+            "runtime schema slot_catalog entry %ld is missing direct slot_type_object for callback ABI %ld",
+            (long)i,
+            (long)slot->callback_abi_code
+          );
+        }
         for (arg_index = 0; arg_index < slot->arg_def_count; arg_index++) {
           gql_runtime_vm_finalize_native_arg_def(aTHX_ runtime_schema, &slot->arg_defs[arg_index]);
         }
@@ -3185,7 +3198,13 @@ gql_runtime_vm_call_cb5_nonfatal(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV 
 static int
 gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slot)
 {
-  return slot && slot->resolver_mode_code == 2;
+  return slot && slot->callback_abi_code == GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE;
+}
+
+static int
+gql_runtime_vm_slot_uses_explicit_generic_fast_abi(const gql_runtime_vm_native_slot_t *slot)
+{
+  return slot && slot->callback_abi_code == GQL_VM_CALLBACK_ABI_EXPLICIT_GENERIC;
 }
 
 static SV *
@@ -3218,7 +3237,7 @@ gql_runtime_vm_new_result_path_frame(
       aTHX_
       parent,
       slot->result_name,
-      strlen(slot->result_name)
+      slot->result_name_len
     );
   }
   return gql_runtime_vm_new_path_frame_struct(aTHX_ parent, &PL_sv_undef);
@@ -3496,6 +3515,17 @@ gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
   HV *variables_hv = NULL;
   SV *specialized_sv;
   if (!op) {
+    if (state && state->empty_args_sv) {
+      SvREFCNT_inc(state->empty_args_sv);
+      return state->empty_args_sv;
+    }
+    return newRV_noinc((SV *)newHV());
+  }
+  if (!op->has_args && (!slot || slot->arg_def_count == 0)) {
+    if (state && state->empty_args_sv) {
+      SvREFCNT_inc(state->empty_args_sv);
+      return state->empty_args_sv;
+    }
     return newRV_noinc((SV *)newHV());
   }
   if (callback_ctx
@@ -3512,10 +3542,18 @@ gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
     if (specialized_sv) {
       return specialized_sv;
     }
+    if (state && state->empty_args_sv) {
+      SvREFCNT_inc(state->empty_args_sv);
+      return state->empty_args_sv;
+    }
     return newRV_noinc((SV *)newHV());
   }
   if (op->args_mode_code == GQL_VM_ARGS_STATIC && op->args_payload_native) {
     return gql_runtime_vm_native_args_payload_materialize_sv(aTHX_ op->args_payload_native);
+  }
+  if (state && state->empty_args_sv) {
+    SvREFCNT_inc(state->empty_args_sv);
+    return state->empty_args_sv;
   }
   return newRV_noinc((SV *)newHV());
 }
@@ -3536,10 +3574,13 @@ gql_runtime_vm_resolve_current_field_default(pTHX_ gql_runtime_vm_exec_state_t *
     ? runtime->callback_catalog->slot_resolvers[slot->schema_slot_index]
     : NULL;
   return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
-  if (!return_type_sv) {
+  if (!return_type_sv && !gql_runtime_vm_slot_uses_explicit_generic_fast_abi(slot)) {
     return_type_sv = gql_runtime_vm_lookup_slot_type_object_sv(
       aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
     );
+  }
+  if (!return_type_sv && gql_runtime_vm_slot_uses_explicit_generic_fast_abi(slot)) {
+    croak("native VM slot type object is missing for explicit generic callback");
   }
 
   if (resolver_sv && SvOK(resolver_sv)) {
@@ -3557,13 +3598,15 @@ gql_runtime_vm_resolve_current_field_default(pTHX_ gql_runtime_vm_exec_state_t *
     );
   }
 
-  if (slot->field_name && strEQ(slot->field_name, "__typename")) {
+  if (slot->field_name
+      && slot->field_name_len == (STRLEN)sizeof("__typename") - 1
+      && memEQ(slot->field_name, "__typename", sizeof("__typename") - 1)) {
     return newSVpv((state->block && state->block->type_name) ? state->block->type_name : "", 0);
   }
 
   if (source && SvROK(source) && SvTYPE(SvRV(source)) == SVt_PVHV) {
     HV *source_hv = (HV *)SvRV(source);
-    SV **value_svp = hv_fetch(source_hv, slot->field_name, (I32)strlen(slot->field_name), 0);
+    SV **value_svp = hv_fetch(source_hv, slot->field_name, (I32)slot->field_name_len, 0);
     return gql_runtime_vm_clone_value_sv(aTHX_ (value_svp && SvOK(*value_svp)) ? *value_svp : &PL_sv_undef);
   }
 
@@ -3607,12 +3650,15 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
     }
 
     return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
-    if (!return_type_sv) {
+    if (!return_type_sv && !gql_runtime_vm_slot_uses_explicit_generic_fast_abi(slot)) {
       return_type_sv = gql_runtime_vm_lookup_slot_type_object_sv(
         aTHX_ runtime,
         state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef,
         slot
       );
+    }
+    if (!return_type_sv && gql_runtime_vm_slot_uses_explicit_generic_fast_abi(slot)) {
+      croak("native VM slot type object is missing for explicit generic callback");
     }
 
     return gql_runtime_vm_call_cb5_nonfatal(
@@ -3627,13 +3673,15 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
     );
   }
 
-  if (slot->field_name && strEQ(slot->field_name, "__typename")) {
+  if (slot->field_name
+      && slot->field_name_len == (STRLEN)sizeof("__typename") - 1
+      && memEQ(slot->field_name, "__typename", sizeof("__typename") - 1)) {
     return newSVpv((state->block && state->block->type_name) ? state->block->type_name : "", 0);
   }
 
   if (source && SvROK(source) && SvTYPE(SvRV(source)) == SVt_PVHV) {
     HV *source_hv = (HV *)SvRV(source);
-    SV **value_svp = hv_fetch(source_hv, slot->field_name, (I32)strlen(slot->field_name), 0);
+    SV **value_svp = hv_fetch(source_hv, slot->field_name, (I32)slot->field_name_len, 0);
     return gql_runtime_vm_clone_value_sv(aTHX_ (value_svp && SvOK(*value_svp)) ? *value_svp : &PL_sv_undef);
   }
 
@@ -4656,7 +4704,7 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
       gql_runtime_vm_outcome_decref(aTHX_ error_outcome);
       completed = newSVsv(&PL_sv_undef);
     }
-    hv_store(data_hv, slot->result_name, (I32)strlen(slot->result_name), completed, 0);
+    hv_store(data_hv, slot->result_name, (I32)slot->result_name_len, completed, 0);
   }
 
   state->block = saved_block;
@@ -5987,6 +6035,7 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
       writer = gql_runtime_vm_new_writer_struct(aTHX);
       state.writer = writer;
       state.path_frame = NULL;
+      state.empty_args_sv = newRV_noinc((SV *)newHV());
 
       data_sv = gql_runtime_vm_execute_block_fast_sv(
         aTHX_
@@ -6002,6 +6051,7 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
       RETVAL = newRV_noinc((SV *)hv);
 
       gql_runtime_vm_writer_decref(aTHX_ writer);
+      SvREFCNT_dec(state.empty_args_sv);
       if (owns_runtime) {
         gql_runtime_vm_native_runtime_destroy(runtime);
       }
@@ -6063,6 +6113,7 @@ execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor
       writer = gql_runtime_vm_new_writer_struct(aTHX);
       state.writer = writer;
       state.path_frame = NULL;
+      state.empty_args_sv = newRV_noinc((SV *)newHV());
 
       data_sv = gql_runtime_vm_execute_block_fast_sv(
         aTHX_
@@ -6078,6 +6129,7 @@ execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor
       RETVAL = newRV_noinc((SV *)hv);
 
       gql_runtime_vm_writer_decref(aTHX_ writer);
+      SvREFCNT_dec(state.empty_args_sv);
       gql_runtime_vm_native_bundle_destroy(bundle);
       if (owns_runtime) {
         gql_runtime_vm_native_runtime_destroy(runtime);
@@ -6132,6 +6184,7 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
       writer = gql_runtime_vm_new_writer_struct(aTHX);
       state.writer = writer;
       state.path_frame = NULL;
+      state.empty_args_sv = newRV_noinc((SV *)newHV());
 
       data_sv = gql_runtime_vm_execute_block_fast_sv(
         aTHX_
@@ -6147,6 +6200,7 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
       RETVAL = newRV_noinc((SV *)hv);
 
       gql_runtime_vm_writer_decref(aTHX_ writer);
+      SvREFCNT_dec(state.empty_args_sv);
       gql_runtime_vm_native_bundle_destroy(bundle);
     }
   OUTPUT:

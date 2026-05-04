@@ -6,7 +6,6 @@ use warnings;
 use GraphQL::Houtou ();
 
 use GraphQL::Houtou::Promise::Adapter qw(is_promise_value normalize_promise_code then_promise);
-use GraphQL::Houtou::Runtime::BlockFrame ();
 use GraphQL::Houtou::Runtime::InputCoercion ();
 
 sub new {
@@ -136,31 +135,6 @@ sub execute_block {
     $source,
     $base_path,
   );
-}
-
-sub _xs_complete_callback {
-  my ($self, $path_frame, $block_index, $slot_index, $op_index) = @_;
-  return sub {
-    my $resolved = @_ == 1 ? $_[0] : [@_];
-    return GraphQL::Houtou::XS::VM::exec_state_complete_async_xs(
-      $self,
-      $path_frame,
-      $block_index,
-      $slot_index,
-      $op_index,
-      $resolved,
-    );
-  };
-}
-
-sub _xs_error_callback {
-  my ($self, $path_frame) = @_;
-  return sub {
-    return GraphQL::Houtou::XS::VM::exec_state_error_outcome_xs(
-      $path_frame,
-      $_[0],
-    );
-  };
 }
 
 sub finalize_response {

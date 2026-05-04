@@ -34,6 +34,24 @@ gql_runtime_vm_new_handle_sv(pTHX_ const char *pkg, void *ptr)
   return sv_bless(rv, gv_stashpv(pkg, GV_ADD));
 }
 
+static SV *
+gql_runtime_vm_exec_state_materialize_response_sv(
+  pTHX_ gql_runtime_vm_exec_state_handle_t *s,
+  SV *data_sv
+)
+{
+  HV *response_hv = newHV();
+  hv_store(response_hv, "data", 4, data_sv ? newSVsv(data_sv) : newSV(0), 0);
+  hv_store(
+    response_hv,
+    "errors",
+    6,
+    gql_runtime_vm_writer_materialize_errors_sv(aTHX_ s ? s->writer : NULL),
+    0
+  );
+  return newRV_noinc((SV *)response_hv);
+}
+
 typedef struct {
   UV refcount;
   gql_runtime_vm_block_frame_t *frame;
@@ -3952,36 +3970,6 @@ native_runtime_summary_xs(runtime_sv)
   OUTPUT:
     RETVAL
 
-SV *
-materialize_dynamic_value_xs(value, variables)
-    SV *value
-    SV *variables
-  CODE:
-    {
-      HV *variables_hv = NULL;
-      if (variables && SvOK(variables) && SvROK(variables) && SvTYPE(SvRV(variables)) == SVt_PVHV) {
-        variables_hv = (HV *)SvRV(variables);
-      }
-      RETVAL = gql_runtime_vm_materialize_dynamic_value_sv(aTHX_ value, variables_hv);
-    }
-  OUTPUT:
-    RETVAL
-
-int
-evaluate_runtime_guards_xs(guards, variables)
-    SV *guards
-    SV *variables
-  CODE:
-    {
-      HV *variables_hv = NULL;
-      if (variables && SvOK(variables) && SvROK(variables) && SvTYPE(SvRV(variables)) == SVt_PVHV) {
-        variables_hv = (HV *)SvRV(variables);
-      }
-      RETVAL = gql_runtime_vm_evaluate_runtime_guards_hv(aTHX_ guards, variables_hv);
-    }
-  OUTPUT:
-    RETVAL
-
 int
 program_native_eligible_xs(program, has_promise = 0)
     SV *program
@@ -4199,17 +4187,6 @@ writer_error_records_xs(writer)
         av_push(ret, gql_runtime_vm_new_handle_sv(aTHX_ "GraphQL::Houtou::Runtime::ErrorRecord", state->error_records[i]));
       }
       RETVAL = newRV_noinc((SV *)ret);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
-writer_materialize_errors_xs(writer)
-    SV *writer
-  CODE:
-    {
-      gql_runtime_vm_writer_t *state = gql_runtime_vm_expect_writer(aTHX_ writer);
-      RETVAL = gql_runtime_vm_writer_materialize_errors_sv(aTHX_ state);
     }
   OUTPUT:
     RETVAL
@@ -4726,86 +4703,6 @@ exec_state_new_xs(class, runtime_schema, program, cursor, writer, context = &PL_
     RETVAL
 
 SV *
-exec_state_writer_xs(state)
-    SV *state
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      RETVAL = gql_runtime_vm_wrap_writer_sv(aTHX_ s->writer);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
-exec_state_context_xs(state)
-    SV *state
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      RETVAL = newSVsv(s->context ? s->context : &PL_sv_undef);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
-exec_state_variables_xs(state)
-    SV *state
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      RETVAL = newSVsv(s->variables ? s->variables : &PL_sv_undef);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
-exec_state_root_value_xs(state)
-    SV *state
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      RETVAL = newSVsv(s->root_value ? s->root_value : &PL_sv_undef);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
-exec_state_promise_code_xs(state)
-    SV *state
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      RETVAL = newSVsv(s->promise_code ? s->promise_code : &PL_sv_undef);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
-exec_state_empty_args_xs(state)
-    SV *state
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      RETVAL = newSVsv(s->empty_args ? s->empty_args : &PL_sv_undef);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
-exec_state_execute_block_index_xs(state, block_index, source = &PL_sv_undef, base_path = &PL_sv_undef)
-    SV *state
-    IV block_index
-    SV *source
-    SV *base_path
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      RETVAL = gql_runtime_vm_exec_state_execute_block_sync_sv(aTHX_ state, s, &PL_sv_undef, block_index, source, base_path);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
 exec_state_execute_block_async_xs(state, block_index, source = &PL_sv_undef, base_path = &PL_sv_undef)
     SV *state
     IV block_index
@@ -4820,36 +4717,6 @@ exec_state_execute_block_async_xs(state, block_index, source = &PL_sv_undef, bas
     RETVAL
 
 SV *
-exec_state_execute_current_op_xs(state)
-    SV *state
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      RETVAL = gql_runtime_vm_exec_state_execute_current_op_sync_sv(aTHX_ state, s);
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
-exec_state_resolve_current_value_xs(state, source = &PL_sv_undef, path_frame = &PL_sv_undef)
-    SV *state
-    SV *source
-    SV *path_frame
-  CODE:
-    {
-      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
-      SV *error_sv = NULL;
-      RETVAL = gql_runtime_vm_exec_state_resolve_current_value_sv(aTHX_ state, s, source, path_frame, &error_sv);
-      if (error_sv && SvOK(error_sv)) {
-        STRLEN len = 0;
-        const char *pv = SvPV(error_sv, len);
-        croak("%s", pv);
-      }
-    }
-  OUTPUT:
-    RETVAL
-
-SV *
 exec_state_run_program_xs(state, root_value = &PL_sv_undef)
     SV *state
     SV *root_value
@@ -4858,7 +4725,6 @@ exec_state_run_program_xs(state, root_value = &PL_sv_undef)
       gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
       SV *effective_root = root_value;
       SV *data_sv;
-      HV *response_hv;
       IV root_block_index = -1;
       SV *root_block_sv;
 
@@ -4880,17 +4746,19 @@ exec_state_run_program_xs(state, root_value = &PL_sv_undef)
         effective_root,
         &PL_sv_undef
       );
+      RETVAL = gql_runtime_vm_exec_state_materialize_response_sv(aTHX_ s, data_sv);
+    }
+  OUTPUT:
+    RETVAL
 
-      response_hv = newHV();
-      hv_store(response_hv, "data", 4, data_sv ? newSVsv(data_sv) : newSV(0), 0);
-      hv_store(
-        response_hv,
-        "errors",
-        6,
-        gql_runtime_vm_writer_materialize_errors_sv(aTHX_ s->writer),
-        0
-      );
-      RETVAL = newRV_noinc((SV *)response_hv);
+SV *
+exec_state_materialize_response_xs(state, data = &PL_sv_undef)
+    SV *state
+    SV *data
+  CODE:
+    {
+      gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
+      RETVAL = gql_runtime_vm_exec_state_materialize_response_sv(aTHX_ s, data);
     }
   OUTPUT:
     RETVAL

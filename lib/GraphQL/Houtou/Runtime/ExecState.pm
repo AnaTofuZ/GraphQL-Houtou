@@ -58,86 +58,29 @@ sub build_for_program {
 
 sub run_program {
   my ($class, $runtime_schema, $program, %opts) = @_;
+  my $promise_code = normalize_promise_code($opts{promise_code});
   my $native_program = _require_native_program($program);
-  my $state = $class->build_for_program($runtime_schema, $native_program, %opts);
-  if (!$state->promise_code) {
-    GraphQL::Houtou::_bootstrap_xs();
-    return GraphQL::Houtou::XS::VM::exec_state_run_program_xs($state, $opts{root_value});
-  }
-  my $data = $state->execute_block(_root_block_index($native_program), $opts{root_value});
-  return $state->finalize_response($data);
-}
-
-sub writer {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_writer_xs($_[0]);
-}
-
-sub context {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_context_xs($_[0]);
-}
-
-sub variables {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_variables_xs($_[0]);
-}
-
-sub root_value {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_root_value_xs($_[0]);
-}
-
-sub promise_code {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_promise_code_xs($_[0]);
-}
-
-sub empty_args {
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_empty_args_xs($_[0]);
-}
-
-sub execute_block {
-  my ($self, $block_index, $source, $base_path) = @_;
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_execute_block_async_xs(
-    $self,
-    $block_index,
-    $source,
-    $base_path,
-  ) if $self->promise_code;
-  return GraphQL::Houtou::XS::VM::exec_state_execute_block_index_xs(
-    $self,
-    $block_index,
-    $source,
-    $base_path,
+  my $state = $class->build_for_program(
+    $runtime_schema,
+    $native_program,
+    %opts,
+    promise_code => $promise_code,
   );
-}
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::exec_state_run_program_xs($state, $opts{root_value})
+    if !$promise_code;
 
-sub finalize_response {
-  my ($self, $data) = @_;
-  if (!$self->promise_code) {
-    GraphQL::Houtou::_bootstrap_xs();
-    return GraphQL::Houtou::XS::VM::exec_state_run_program_xs($self, $self->root_value)
-      if !defined $data;
-  return {
-    data => $data,
-    errors => GraphQL::Houtou::XS::VM::writer_materialize_errors_xs($self->writer),
-  };
-}
-if ($self->promise_code && is_promise_value($self->promise_code, $data)) {
-  return then_promise($self->promise_code, $data, sub {
-    return {
-      data => $_[0],
-      errors => GraphQL::Houtou::XS::VM::writer_materialize_errors_xs($self->writer),
-    };
-  });
-}
-return {
-  data => $data,
-  errors => GraphQL::Houtou::XS::VM::writer_materialize_errors_xs($self->writer),
-};
+  my $data = GraphQL::Houtou::XS::VM::exec_state_execute_block_async_xs(
+    $state,
+    _root_block_index($native_program),
+    $opts{root_value},
+    undef,
+  );
+  return then_promise($promise_code, $data, sub {
+    return GraphQL::Houtou::XS::VM::exec_state_materialize_response_xs($state, $_[0]);
+  }) if is_promise_value($promise_code, $data);
+
+  return GraphQL::Houtou::XS::VM::exec_state_materialize_response_xs($state, $data);
 }
 
 sub _require_native_program {

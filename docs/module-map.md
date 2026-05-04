@@ -42,11 +42,13 @@
   - native specialization と native execute の owner
   - engine selection と native fast path 実行の owner
 - `GraphQL::Houtou::Runtime::ExecState`
-  - perl VM path の state machine facade
-  - hot lifecycle は段階的に XS owner へ移している
-  - 現在は op advance / enter-leave field / enter-leave block が XSUB owner
+  - promise/runtime path の thin facade
+  - active path は `NativeProgram` 前提
+  - Perl 側に残すのは `new/build_for_program/run_program` の最小 surface
 
 ## Runtime State Objects
+
+以下は Perl module file ではなく、XS が提供する opaque handle package です。
 
 - `Cursor`
   - 現在の block / op / slot
@@ -71,7 +73,8 @@
 - `ErrorRecord`
   - error payload の record
 - `InputCoercion`
-  - variables / args / directive guards の coercion
+  - active path の variable preparation facade
+  - coercion loop 自体は `native_program_prepare_variables_xs(...)` が owner
 
 ## Runtime Artifacts
 
@@ -85,8 +88,11 @@
   - lowered block
 - `VMOp`
   - lowered op
-- `VMDispatch`
-  - in-memory dispatch binder
+
+判断:
+
+- `VMProgram` / `VMBlock` / `VMOp` / `Slot` は internal lowering / inflate / debug 用
+- public / active runtime path は `NativeProgram` を一次通貨に使う
 
 ## Type System
 

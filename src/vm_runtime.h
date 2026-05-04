@@ -1179,25 +1179,25 @@ gql_runtime_vm_native_directives_payload_materialize_sv(
 
   for (i = 0; i < payload->count; i++) {
     HV *hv = newHV();
+    HV *args_hv = newHV();
+    SV *args_sv;
     gql_runtime_vm_native_guard_t *guard = &payload->guards[i];
     const char *name = (guard->kind_code == GQL_VM_GUARD_SKIP) ? "skip" : "include";
 
     hv_store(hv, "name", 4, newSVpv(name, 0), 0);
     hv_store(
+      args_hv,
+      "if",
+      2,
+      gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ guard->if_expr, NULL),
+      0
+    );
+    args_sv = newRV_noinc((SV *)args_hv);
+    hv_store(
       hv,
       "arguments",
       9,
-      ({
-        HV *args_hv = newHV();
-        hv_store(
-          args_hv,
-          "if",
-          2,
-          gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ guard->if_expr, NULL),
-          0
-        );
-        newRV_noinc((SV *)args_hv);
-      }),
+      args_sv,
       0
     );
     av_push(av, newRV_noinc((SV *)hv));

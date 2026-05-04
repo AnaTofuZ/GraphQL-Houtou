@@ -54,7 +54,8 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 - public の `compile_program` / `inflate_program` は `NativeProgram` handle を返す
 - `VMProgram` / `VMBlock` / `VMOp` は internal inflate/debug 用の artifact に後退している
 - `Runtime::execute_vm(...)` からの compact program 実行も `NativeRuntime` が所有する
-- variable / argument coercion と runtime guard evaluation の shared logic は `InputCoercion` に集約する
+- active path の variable preparation は `InputCoercion::prepare_variables(...)` に集約し、
+  coercion loop 自体は `native_program_prepare_variables_xs(...)` が owner
 - hot path では `runtime + program` の Perl descriptor hash を組み立てず、
   compact runtime struct と compact program struct を別引数のまま XS に渡して bundle を inflate する
 - compact program の実行時は、一時的な native bundle handle を Perl 側で組み立てず、
@@ -105,19 +106,21 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 ### 6. VM Execution
 
 - `GraphQL::Houtou::Runtime::ExecState`
-- `GraphQL::Houtou::Runtime::Cursor`
-- `GraphQL::Houtou::Runtime::BlockFrame`
-- `GraphQL::Houtou::Runtime::FieldFrame`
-- `GraphQL::Houtou::Runtime::Writer`
-- `GraphQL::Houtou::Runtime::Outcome`
-- `GraphQL::Houtou::Runtime::LazyInfo`
-- `GraphQL::Houtou::Runtime::PathFrame`
-- `GraphQL::Houtou::Runtime::ErrorRecord`
+- XS-only opaque handles
+  - `GraphQL::Houtou::Runtime::Cursor`
+  - `GraphQL::Houtou::Runtime::BlockFrame`
+  - `GraphQL::Houtou::Runtime::FieldFrame`
+  - `GraphQL::Houtou::Runtime::Writer`
+  - `GraphQL::Houtou::Runtime::Outcome`
+  - `GraphQL::Houtou::Runtime::LazyInfo`
+  - `GraphQL::Houtou::Runtime::PathFrame`
+  - `GraphQL::Houtou::Runtime::ErrorRecord`
 
 役割:
 
 - `program -> block -> op` を state machine として実行する
 - current block / current op / field lifecycle を `ExecState` 配下に集約する
+- Perl module file として残るのは `ExecState` だけで、他は XSUB-only package に縮退している
 - outcome kind を先に決め、payload の Perl object 化を遅らせる
 - writer が最後の response materialization を担当する
 

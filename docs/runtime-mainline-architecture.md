@@ -69,7 +69,8 @@
 - query document を schema-aware な lowered program に変換
 - variables / args / directives / fragments を実行しやすい shape に lower
 - block / op family / child block 参照を固定
-- variable / argument coercion と runtime guard evaluation の shared helper を提供
+- active path の variable preparation facade を提供
+- coercion loop 自体は `native_program_prepare_variables_xs(...)` が owner
 
 ### 4. VM Lowering
 
@@ -92,18 +93,19 @@
 主なモジュール:
 
 - `GraphQL::Houtou::Runtime::ExecState`
-- `GraphQL::Houtou::Runtime::Cursor`
-- `GraphQL::Houtou::Runtime::BlockFrame`
-- `GraphQL::Houtou::Runtime::FieldFrame`
-- `GraphQL::Houtou::Runtime::Outcome`
-- `GraphQL::Houtou::Runtime::Writer`
-- `GraphQL::Houtou::Runtime::LazyInfo`
-- `GraphQL::Houtou::Runtime::PathFrame`
-- `GraphQL::Houtou::Runtime::ErrorRecord`
+- XS-only opaque handle packages
+  - `GraphQL::Houtou::Runtime::Cursor`
+  - `GraphQL::Houtou::Runtime::BlockFrame`
+  - `GraphQL::Houtou::Runtime::FieldFrame`
+  - `GraphQL::Houtou::Runtime::Outcome`
+  - `GraphQL::Houtou::Runtime::Writer`
+  - `GraphQL::Houtou::Runtime::LazyInfo`
+  - `GraphQL::Houtou::Runtime::PathFrame`
+  - `GraphQL::Houtou::Runtime::ErrorRecord`
 
 責務:
 
-- `ExecState` が block / field lifecycle を所有し、Perl 側は state machine facade に縮退していく
+- `ExecState` が block / field lifecycle を所有し、Perl 側は `new/build_for_program/run_program` の thin facade に縮退している
 - `Cursor` が current block / op / slot を指す XS opaque handle
 - `BlockFrame` が block-local values と pending state を保持する XS opaque handle
 - `FieldFrame` が field-local temporary を保持する XS opaque handle

@@ -17,11 +17,10 @@ use constant {
   BLOCK_MAP_SLOT      => 6,
   DISPATCH_BOUND_SLOT => 7,
   NATIVE_COMPACT_STRUCT_SLOT => 8,
-  NATIVE_PROGRAM_HANDLE_SLOT => 9,
-  ROOT_BLOCK_INDEX_SLOT => 10,
-  ARGS_PAYLOADS_SLOT => 11,
-  DIRECTIVES_PAYLOADS_SLOT => 12,
-  ABSTRACT_CHILD_MAPS_SLOT => 13,
+  ROOT_BLOCK_INDEX_SLOT => 9,
+  ARGS_PAYLOADS_SLOT => 10,
+  DIRECTIVES_PAYLOADS_SLOT => 11,
+  ABSTRACT_CHILD_MAPS_SLOT => 12,
 };
 
 {
@@ -112,7 +111,6 @@ sub new {
     0,
     undef,
     undef,
-    undef,
     $args{args_payloads} || [],
     $args{directives_payloads} || [],
     [],
@@ -148,14 +146,12 @@ sub abstract_child_maps { return $_[0][ABSTRACT_CHILD_MAPS_SLOT] }
 sub set_variable_defs {
   $_[0][VARIABLE_DEFS_SLOT] = $_[1] || {};
   $_[0][NATIVE_COMPACT_STRUCT_SLOT] = undef;
-  $_[0][NATIVE_PROGRAM_HANDLE_SLOT] = undef;
   $_[0][ROOT_BLOCK_INDEX_SLOT] = undef;
   return $_[0][VARIABLE_DEFS_SLOT];
 }
 sub set_dispatch_bound {
   $_[0][DISPATCH_BOUND_SLOT] = $_[1] ? 1 : 0;
   $_[0][NATIVE_COMPACT_STRUCT_SLOT] = undef;
-  $_[0][NATIVE_PROGRAM_HANDLE_SLOT] = undef;
   $_[0][ROOT_BLOCK_INDEX_SLOT] = undef;
   return $_[0][DISPATCH_BOUND_SLOT];
 }
@@ -222,14 +218,6 @@ sub to_native_compact_struct {
   };
 }
 
-sub to_native_program_handle {
-  my ($self) = @_;
-  return $self->[NATIVE_PROGRAM_HANDLE_SLOT] if $self->[NATIVE_PROGRAM_HANDLE_SLOT];
-  GraphQL::Houtou::_bootstrap_xs();
-  return $self->[NATIVE_PROGRAM_HANDLE_SLOT] =
-    GraphQL::Houtou::XS::VM::load_native_program_xs($self->to_native_compact_struct);
-}
-
 sub _operation_type_code {
   my ($type) = @_;
   return 2 if ($type || q()) eq 'mutation';
@@ -275,7 +263,6 @@ sub _canonicalize_catalog_backed_payloads {
   $self->[DIRECTIVES_PAYLOADS_SLOT] = $catalog->directives_payloads;
   $self->[ABSTRACT_CHILD_MAPS_SLOT] = [];
   $self->[NATIVE_COMPACT_STRUCT_SLOT] = undef;
-  $self->[NATIVE_PROGRAM_HANDLE_SLOT] = undef;
 }
 
 1;

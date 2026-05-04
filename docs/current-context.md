@@ -173,16 +173,16 @@ fresh `./Build build` 済み環境で、
   - `abstract_with_fragment`: 約 `14.2x`
 - current cached-perl runtime は旧 `compiled_ir` より遅い
 - したがって mainline の本命は Perl VM ではなく native bundle / XS VM 側
-- 最近の XS 化 checkpoint 後の中央値:
+- Milestone B (`NativeProgram` mainline / promise native loop) 到達時の中央値:
   - `nested_variable_object`
-    - `houtou_runtime_cached_perl` median `18095/s`
-    - `houtou_runtime_native_bundle` median `585426/s`
+    - `houtou_runtime_program` median `3381/s`
+    - `houtou_runtime_native_bundle` median `343901/s`
   - `list_of_objects`
-    - `houtou_runtime_cached_perl` median `13527/s`
-    - `houtou_runtime_native_bundle` median `497824/s`
+    - `houtou_runtime_program` median `3391/s`
+    - `houtou_runtime_native_bundle` median `284212/s`
   - `abstract_with_fragment`
-    - `houtou_runtime_cached_perl` median `15887/s`
-    - `houtou_runtime_native_bundle` median `549703/s`
+    - `houtou_runtime_program` median `3382/s`
+    - `houtou_runtime_native_bundle` median `265429/s`
 
 ## 直近の方針
 
@@ -195,8 +195,9 @@ fresh `./Build build` 済み環境で、
 - parser public surface は canonical parser AST の 1 dialect に整理した
 - type model の `Moo` 依存削減を開始し、`Type`, `Type::List`, `Type::NonNull` は plain Perl object に置き換えた
 - `SchemaGraph` は compile / lower ownership のみを持ち、native eligibility 判定は `NativeRuntime` に委譲する
-- `NativeRuntime` と `ExecState` の promise path も、active 実行では `VMProgram` ではなく `NativeProgram` を一次通貨にする方向へ寄せている
-- `InputCoercion` と `ExecState` は `NativeProgram` から `variable_defs` / `root_block_index` を取るために full descriptor/summary hash を materialize せず、専用 XSUB で必要 metadata だけ引く
+- `NativeRuntime` と `ExecState` の active path は `NativeProgram` を一次通貨に固定し、`VMProgram -> to_native_program_handle` bridge は public runtime path から外した
+- `InputCoercion` は `NativeProgram` の variable defs を Perl hash に戻してから歩かず、`native_program_prepare_variables_xs(...)` で default 解決と coercion をまとめて行う
+- `ExecState` は `NativeProgram` の `root_block_index` を専用 XSUB で引き、full descriptor/summary hash を materialize しない
 - `ExecState` と `NativeRuntime` が別々に持っていた variable / arg coercion は `InputCoercion` に集約した
 - `InputCoercion` の dynamic arg materialization と runtime guard evaluation は `GraphQL::Houtou::XS::VM` helper に移し、Perl 側での再帰 walk を hot path から外した
 - `Runtime::Outcome` の constructor と `Runtime::Writer` の `consume_outcome(...)` は `GraphQL::Houtou::XS::VM` helper に移し、kind-first outcome の生成と consume を XS 側へ寄せた

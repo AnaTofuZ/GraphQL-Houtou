@@ -28,7 +28,7 @@ sub new {
 sub build_for_program {
   my ($class, $runtime_schema, $program, %opts) = @_;
   my $promise_code = normalize_promise_code($opts{promise_code});
-  my $native_program = _native_program_handle($program);
+  my $native_program = _require_native_program($program);
   my $root_block_index = _root_block_index($native_program);
   return $class->new(
     runtime_schema => $runtime_schema,
@@ -58,7 +58,7 @@ sub build_for_program {
 
 sub run_program {
   my ($class, $runtime_schema, $program, %opts) = @_;
-  my $native_program = _native_program_handle($program);
+  my $native_program = _require_native_program($program);
   my $state = $class->build_for_program($runtime_schema, $native_program, %opts);
   if (!$state->promise_code) {
     GraphQL::Houtou::_bootstrap_xs();
@@ -140,25 +140,19 @@ return {
 };
 }
 
-sub _native_program_handle {
+sub _require_native_program {
   my ($program) = @_;
-  return undef if !$program;
   return $program
     if ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') };
-  return $program->to_native_program_handle
-    if ref($program) && eval { $program->can('to_native_program_handle') };
-  return $program;
+  die "Active runtime paths expect a GraphQL::Houtou::Runtime::NativeProgram.\n";
 }
 
 sub _root_block_index {
   my ($program) = @_;
-  my $native_program = _native_program_handle($program);
-  if ($native_program && ref($native_program) && eval { $native_program->isa('GraphQL::Houtou::Runtime::NativeProgram') }) {
-    GraphQL::Houtou::_bootstrap_xs();
-    my $index = GraphQL::Houtou::XS::VM::native_program_root_block_index_xs($native_program);
-    return defined $index ? $index : -1;
-  }
-  return -1;
+  my $native_program = _require_native_program($program);
+  GraphQL::Houtou::_bootstrap_xs();
+  my $index = GraphQL::Houtou::XS::VM::native_program_root_block_index_xs($native_program);
+  return defined $index ? $index : -1;
 }
 
 1;

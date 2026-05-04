@@ -69,7 +69,7 @@ sub specialize_program_for_native {
   my ($self, $program, %opts) = @_;
   return $program if !$program;
 
-  my $native_program = $self->_native_program($program);
+  my $native_program = _require_native_program($program);
   my $variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
     $self->runtime_schema,
     $native_program,
@@ -86,14 +86,7 @@ sub specialize_program_for_native {
 sub preferred_engine_for_program {
   my ($class, $program, %opts) = @_;
   return 'perl' if !$program;
-  my $struct = $program;
-  if (ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') }) {
-    $struct = $program;
-  } elsif ($program->can('to_native_program_handle')) {
-    $struct = $program->to_native_program_handle;
-  } elsif ($program->can('to_native_compact_struct')) {
-    $struct = $program->to_native_compact_struct;
-  }
+  my $struct = _require_native_program($program);
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::program_native_eligible_xs(
     $struct,
@@ -104,7 +97,7 @@ sub preferred_engine_for_program {
 sub compile_bundle {
   my ($self, $program, %opts) = @_;
   my $candidate = $self->specialize_program($program, %opts);
-  return $self->_load_bundle_parts($self->_native_program($candidate));
+  return $self->_load_bundle_parts(_require_native_program($candidate));
 }
 
 sub compile_bundle_descriptor {
@@ -142,10 +135,11 @@ sub _load_bundle_parts {
   );
 }
 
-sub _native_program {
-  my ($self, $program) = @_;
-  return $program if ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') };
-  return $program->to_native_program_handle;
+sub _require_native_program {
+  my ($program) = @_;
+  return $program
+    if ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') };
+  die "Active runtime paths expect a GraphQL::Houtou::Runtime::NativeProgram.\n";
 }
 
 sub load_bundle_descriptor {
@@ -191,33 +185,7 @@ sub load_bundle_descriptor_file {
 
 sub execute_program {
   my ($self, $program, %opts) = @_;
-  require GraphQL::Houtou::Runtime::VMCompiler;
-
-  if (ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') }) {
-    if ($opts{promise_code}) {
-      require GraphQL::Houtou::Runtime::ExecState;
-      return GraphQL::Houtou::Runtime::ExecState->run_program($self->runtime_schema, $program, %opts);
-    }
-    die "engine => 'perl' is no longer supported for native program handles.\n"
-      if defined $opts{engine} && $opts{engine} eq 'perl';
-    my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
-      $self->runtime_schema,
-      $program,
-      $opts{variables} || {},
-    );
-    GraphQL::Houtou::_bootstrap_xs();
-    my $candidate = GraphQL::Houtou::XS::VM::specialize_native_program_xs(
-      $self->_native_runtime_handle,
-      $program,
-      $prepared_variables,
-    );
-    return $self->execute_compact_program($candidate, %opts, variables => $prepared_variables);
-  }
-
-  my $vm_program = $program->isa('GraphQL::Houtou::Runtime::VMProgram')
-    ? $program
-    : GraphQL::Houtou::Runtime::VMCompiler->lower_program($self->runtime_schema, $program);
-  my $native_program = $vm_program->to_native_program_handle;
+  my $native_program = _require_native_program($program);
 
   if ($opts{promise_code}) {
     require GraphQL::Houtou::Runtime::ExecState;
@@ -245,7 +213,7 @@ sub execute_program {
 
 sub execute_compact_program {
   my ($self, $program, %opts) = @_;
-  my $native_program = $self->_native_program($program);
+  my $native_program = _require_native_program($program);
   return GraphQL::Houtou::Native::execute_native_program_handle(
     $self->_native_runtime_handle,
     $native_program,

@@ -9,6 +9,15 @@ use GraphQL::Houtou::Schema ();
 
 sub prepare_variables {
   my ($runtime_schema, $program, $provided) = @_;
+  if (ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') }) {
+    GraphQL::Houtou::_bootstrap_xs();
+    return GraphQL::Houtou::XS::VM::native_program_prepare_variables_xs(
+      $runtime_schema,
+      $program,
+      ($provided || {}),
+    );
+  }
+
   my $defs = _variable_defs_for_program($program);
   my %resolved = %{ $provided || {} };
 
@@ -25,10 +34,6 @@ sub prepare_variables {
 sub _variable_defs_for_program {
   my ($program) = @_;
   return {} if !$program;
-  if (ref($program) && eval { $program->isa('GraphQL::Houtou::Runtime::NativeProgram') }) {
-    GraphQL::Houtou::_bootstrap_xs();
-    return GraphQL::Houtou::XS::VM::native_program_variable_defs_xs($program) || {};
-  }
   return $program->variable_defs || {}
     if ref($program) && eval { $program->can('variable_defs') };
   return {};

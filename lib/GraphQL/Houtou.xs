@@ -2734,22 +2734,7 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
         }
 finalize_arg_defs:
         for (arg_index = 0; arg_index < slot->arg_def_count; arg_index++) {
-          gql_runtime_vm_native_arg_def_t *arg_def = &slot->arg_defs[arg_index];
-          if (arg_def->type_def_sv && !arg_def->input_type_sv) {
-            arg_def->input_type_sv = gql_runtime_vm_lookup_input_type_by_typedef_sv(
-              aTHX_ runtime_schema, arg_def->type_def_sv
-            );
-          }
-          if (arg_def->has_default
-              && arg_def->default_value_sv
-              && arg_def->input_type_sv
-              && !arg_def->default_native_value) {
-            SV *raw_sv = newSVsv(arg_def->default_value_sv);
-            SV *coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv);
-            SvREFCNT_dec(raw_sv);
-            arg_def->default_native_value = gql_runtime_vm_native_value_from_sv(aTHX_ coerced_sv);
-            SvREFCNT_dec(coerced_sv);
-          }
+          gql_runtime_vm_finalize_native_arg_def(aTHX_ runtime_schema, &slot->arg_defs[arg_index]);
         }
       }
     }
@@ -3810,13 +3795,23 @@ native_program_descriptor_xs(program_sv)
     RETVAL
 
 SV *
-native_program_variable_defs_xs(program_sv)
+native_program_prepare_variables_xs(runtime_schema, program_sv, provided = &PL_sv_undef)
+    SV *runtime_schema
     SV *program_sv
+    SV *provided
   CODE:
     {
       gql_runtime_vm_native_program_t *program =
         gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
-      RETVAL = gql_runtime_vm_native_arg_defs_to_hash_sv(aTHX_ program->variable_defs, program->variable_def_count);
+      HV *provided_hv = NULL;
+      if (provided && SvOK(provided) && SvROK(provided) && SvTYPE(SvRV(provided)) == SVt_PVHV) {
+        provided_hv = (HV *)SvRV(provided);
+      }
+      RETVAL = gql_runtime_vm_prepare_program_variables_sv(
+        aTHX_ runtime_schema,
+        program,
+        provided_hv
+      );
     }
   OUTPUT:
     RETVAL

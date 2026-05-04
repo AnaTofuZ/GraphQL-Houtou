@@ -4191,6 +4191,107 @@ gql_runtime_vm_coerce_input_value_sv(pTHX_ SV *type_sv, SV *value_sv)
   return result;
 }
 
+static void
+gql_runtime_vm_finalize_native_arg_def(
+  pTHX_
+  SV *runtime_schema,
+  gql_runtime_vm_native_arg_def_t *arg_def
+)
+{
+  if (!arg_def) {
+    return;
+  }
+
+  if (arg_def->type_def_sv && !arg_def->input_type_sv) {
+    arg_def->input_type_sv = gql_runtime_vm_lookup_input_type_by_typedef_sv(
+      aTHX_ runtime_schema, arg_def->type_def_sv
+    );
+  }
+  if (arg_def->has_default
+      && arg_def->default_value_sv
+      && arg_def->input_type_sv
+      && !arg_def->default_native_value) {
+    SV *default_raw_sv = newSVsv(arg_def->default_value_sv);
+    SV *default_coerced_sv = gql_runtime_vm_coerce_input_value_sv(
+      aTHX_ arg_def->input_type_sv, default_raw_sv
+    );
+    SvREFCNT_dec(default_raw_sv);
+    arg_def->default_native_value = gql_runtime_vm_native_value_from_sv(aTHX_ default_coerced_sv);
+    SvREFCNT_dec(default_coerced_sv);
+  }
+}
+
+static SV *
+gql_runtime_vm_prepare_program_variables_sv(
+  pTHX_
+  SV *runtime_schema,
+  gql_runtime_vm_native_program_t *program,
+  HV *provided_hv
+)
+{
+  HV *coerced_hv;
+  IV i;
+
+  coerced_hv = newHV();
+
+  for (i = 0; program && i < program->variable_def_count; i++) {
+    gql_runtime_vm_native_arg_def_t *arg_def = &program->variable_defs[i];
+    STRLEN name_len = 0;
+    SV *raw_sv = NULL;
+    SV *coerced_sv = NULL;
+    U8 has_value = 0;
+
+    if (!arg_def->name) {
+      continue;
+    }
+
+    name_len = strlen(arg_def->name);
+    gql_runtime_vm_finalize_native_arg_def(aTHX_ runtime_schema, arg_def);
+
+    if (provided_hv && hv_exists(provided_hv, arg_def->name, (I32)name_len)) {
+      SV **provided_svp = hv_fetch(provided_hv, arg_def->name, (I32)name_len, 0);
+      raw_sv = provided_svp ? newSVsv(*provided_svp) : newSV(0);
+      has_value = 1;
+    } else if (arg_def->has_default && arg_def->default_native_value) {
+      coerced_sv = gql_runtime_vm_native_value_materialize_sv(aTHX_ arg_def->default_native_value);
+    } else if (arg_def->has_default && arg_def->default_value_sv) {
+      raw_sv = newSVsv(arg_def->default_value_sv);
+    }
+
+    if (!has_value && !raw_sv && !coerced_sv) {
+      continue;
+    }
+
+    if (!coerced_sv) {
+      coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv);
+      SvREFCNT_dec(raw_sv);
+    }
+    hv_store(coerced_hv, arg_def->name, (I32)name_len, coerced_sv, 0);
+  }
+
+  if (provided_hv) {
+    HE *he;
+    hv_iterinit(provided_hv);
+    while ((he = hv_iternext(provided_hv))) {
+      SV *key_sv = hv_iterkeysv(he);
+      SV *value_sv = hv_iterval(provided_hv, he);
+      STRLEN key_len = 0;
+      const char *key_pv;
+
+      if (!key_sv || !SvOK(key_sv)) {
+        continue;
+      }
+      key_pv = SvPV(key_sv, key_len);
+      if (hv_exists(coerced_hv, key_pv, (I32)key_len)) {
+        continue;
+      }
+      hv_store(coerced_hv, key_pv, (I32)key_len, newSVsv(value_sv), 0);
+    }
+  }
+
+  return newRV_noinc((SV *)coerced_hv);
+}
+
 static SV *
 gql_runtime_vm_specialize_arg_payload_sv(
   pTHX_

@@ -66,6 +66,7 @@ subtest 'top-level compile_runtime returns schema runtime' => sub {
   my $runtime = compile_runtime($schema);
   isa_ok $runtime, 'GraphQL::Houtou::Runtime::SchemaGraph';
   my $program = $runtime->compile_program('{ hello }');
+  isa_ok $program, 'GraphQL::Houtou::Runtime::NativeProgram';
   my $result = $runtime->execute_program($program);
   is_deeply $result, {
     data => { hello => 'world' },
@@ -123,6 +124,7 @@ subtest 'top-level build_native_runtime returns cached native runtime wrapper' =
   my $program = $native->compile_program(
     'query Q($name: String = "bob") { greet(name: $name) }',
   );
+  isa_ok $program, 'GraphQL::Houtou::Runtime::NativeProgram';
   my $result = $native->execute_program($program, variables => { name => 'cached' });
 
   is_deeply $result, {

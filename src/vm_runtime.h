@@ -189,6 +189,7 @@ typedef struct {
   IV block_count;
   U8 owns_runtime_slots;
   U8 owns_blocks;
+  SV *prepared_runtime_schema;
   gql_runtime_vm_native_slot_t *runtime_slots;
   gql_runtime_vm_native_block_t *blocks;
 } gql_runtime_vm_native_bundle_t;
@@ -2322,6 +2323,29 @@ gql_runtime_vm_new_writer_struct(pTHX_)
 }
 
 static void
+gql_runtime_vm_init_writer_struct(gql_runtime_vm_writer_t *writer)
+{
+  if (!writer) {
+    return;
+  }
+  Zero(writer, 1, gql_runtime_vm_writer_t);
+  writer->refcount = 1;
+}
+
+static void
+gql_runtime_vm_clear_writer_struct(pTHX_ gql_runtime_vm_writer_t *writer)
+{
+  if (!writer) {
+    return;
+  }
+  while (writer->error_record_count > 0) {
+    gql_runtime_vm_error_record_decref(aTHX_ writer->error_records[--writer->error_record_count]);
+  }
+  Safefree(writer->error_records);
+  Zero(writer, 1, gql_runtime_vm_writer_t);
+}
+
+static void
 gql_runtime_vm_consume_outcome_struct(pTHX_ HV *data_hv, SV *result_name_sv, const gql_runtime_vm_outcome_t *outcome, gql_runtime_vm_writer_t *writer)
 {
   IV i;
@@ -2915,6 +2939,7 @@ gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
     }
   }
   Safefree(bundle->blocks);
+  SvREFCNT_dec(bundle->prepared_runtime_schema);
   Safefree(bundle);
 }
 

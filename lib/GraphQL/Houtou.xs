@@ -3302,6 +3302,22 @@ gql_runtime_vm_prepare_bundle_block_type_objects(
     return;
   }
 
+  if (bundle->prepared_runtime_schema == runtime_schema) {
+    return;
+  }
+
+  if (bundle->prepared_runtime_schema && bundle->prepared_runtime_schema != runtime_schema) {
+    for (i = 0; i < bundle->block_count; i++) {
+      gql_runtime_vm_native_block_t *block = &bundle->blocks[i];
+      if (block->type_object_sv) {
+        SvREFCNT_dec(block->type_object_sv);
+        block->type_object_sv = NULL;
+      }
+    }
+    SvREFCNT_dec(bundle->prepared_runtime_schema);
+    bundle->prepared_runtime_schema = NULL;
+  }
+
   for (i = 0; i < bundle->block_count; i++) {
     gql_runtime_vm_native_block_t *block = &bundle->blocks[i];
     SV *type_sv;
@@ -3314,6 +3330,8 @@ gql_runtime_vm_prepare_bundle_block_type_objects(
       block->type_object_sv = SvREFCNT_inc_simple_NN(type_sv);
     }
   }
+
+  bundle->prepared_runtime_schema = SvREFCNT_inc_simple_NN(runtime_schema);
 }
 
 static SV *
@@ -6002,7 +6020,8 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
       HV *hv;
       SV *data_sv;
       SV *errors_sv;
-      gql_runtime_vm_writer_t *writer;
+      gql_runtime_vm_writer_t writer_storage;
+      gql_runtime_vm_writer_t *writer = &writer_storage;
 
       if (!bundle_sv || !SvROK(bundle_sv) || !sv_derived_from(bundle_sv, "GraphQL::Houtou::Runtime::NativeBundle")) {
         croak("expected a GraphQL::Houtou::Runtime::NativeBundle");
@@ -6038,7 +6057,7 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
       callback_ctx.context = context_value;
       callback_ctx.variables = variables;
       state.callback_ctx = &callback_ctx;
-      writer = gql_runtime_vm_new_writer_struct(aTHX);
+      gql_runtime_vm_init_writer_struct(writer);
       state.writer = writer;
       state.path_frame = NULL;
       state.empty_args_sv = newRV_noinc((SV *)newHV());
@@ -6056,7 +6075,7 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
       hv_store(hv, "errors", 6, errors_sv, 0);
       RETVAL = newRV_noinc((SV *)hv);
 
-      gql_runtime_vm_writer_decref(aTHX_ writer);
+      gql_runtime_vm_clear_writer_struct(aTHX_ writer);
       SvREFCNT_dec(state.empty_args_sv);
       if (owns_runtime) {
         gql_runtime_vm_native_runtime_destroy(runtime);
@@ -6083,7 +6102,8 @@ execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor
       HV *hv;
       SV *data_sv;
       SV *errors_sv;
-      gql_runtime_vm_writer_t *writer;
+      gql_runtime_vm_writer_t writer_storage;
+      gql_runtime_vm_writer_t *writer = &writer_storage;
 
       bundle = gql_runtime_vm_native_bundle_from_runtime_and_program_sv(
         aTHX_ runtime_descriptor, program_descriptor
@@ -6116,7 +6136,7 @@ execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor
       callback_ctx.context = context_value;
       callback_ctx.variables = variables;
       state.callback_ctx = &callback_ctx;
-      writer = gql_runtime_vm_new_writer_struct(aTHX);
+      gql_runtime_vm_init_writer_struct(writer);
       state.writer = writer;
       state.path_frame = NULL;
       state.empty_args_sv = newRV_noinc((SV *)newHV());
@@ -6134,7 +6154,7 @@ execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor
       hv_store(hv, "errors", 6, errors_sv, 0);
       RETVAL = newRV_noinc((SV *)hv);
 
-      gql_runtime_vm_writer_decref(aTHX_ writer);
+      gql_runtime_vm_clear_writer_struct(aTHX_ writer);
       SvREFCNT_dec(state.empty_args_sv);
       gql_runtime_vm_native_bundle_destroy(bundle);
       if (owns_runtime) {
@@ -6161,7 +6181,8 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
       HV *hv;
       SV *data_sv;
       SV *errors_sv;
-      gql_runtime_vm_writer_t *writer;
+      gql_runtime_vm_writer_t writer_storage;
+      gql_runtime_vm_writer_t *writer = &writer_storage;
 
       if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
         croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
@@ -6187,7 +6208,7 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
       callback_ctx.context = context_value;
       callback_ctx.variables = variables;
       state.callback_ctx = &callback_ctx;
-      writer = gql_runtime_vm_new_writer_struct(aTHX);
+      gql_runtime_vm_init_writer_struct(writer);
       state.writer = writer;
       state.path_frame = NULL;
       state.empty_args_sv = newRV_noinc((SV *)newHV());
@@ -6205,7 +6226,7 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
       hv_store(hv, "errors", 6, errors_sv, 0);
       RETVAL = newRV_noinc((SV *)hv);
 
-      gql_runtime_vm_writer_decref(aTHX_ writer);
+      gql_runtime_vm_clear_writer_struct(aTHX_ writer);
       SvREFCNT_dec(state.empty_args_sv);
       gql_runtime_vm_native_bundle_destroy(bundle);
     }

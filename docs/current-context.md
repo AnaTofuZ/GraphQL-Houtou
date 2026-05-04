@@ -549,6 +549,35 @@ perl -Ilib t/19_vm_execute.t
     - per-request writer allocation
     - abstract/type callback 周辺の固定コスト
     に寄っていると見てよい
+
+- bundle block type-object warmup skip / stack writer
+  - native bundle に `prepared_runtime_schema` を持たせ、
+    同じ runtime schema での再実行では block type object 準備を丸ごとスキップするようにした
+  - runtime schema が変わった場合だけ、既存の block type object を捨てて再解決する
+  - sync fast lane の writer は heap alloc をやめ、stack storage を初期化/破棄する形に切り替えた
+  - `./Build test` / `minil test` は通過
+
+- latest median:
+  - `nested_variable_object`: `579118/s`
+  - `list_of_objects`: `490021/s`
+  - `abstract_with_fragment`: `553731/s`
+
+- 解釈:
+  - `21a301d` 比では
+    - `nested_variable_object`: 約 `+2.2%`
+    - `list_of_objects`: 約 `+2.2%`
+    - `abstract_with_fragment`: 約 `+2.7%`
+  - `937edb0` (`restore-native-bundle-high-watermark`) 比では
+    - `nested_variable_object`: 約 `0.9%` 低い
+    - `list_of_objects`: 約 `0.9%` 低い
+    - `abstract_with_fragment`: 約 `0.1%` 速い
+  - つまり、現行 branch の specialized fast lane でも
+    high-watermark と実質同水準まで戻せた
+  - 残差は benchmark ばらつきで吸収される範囲にかなり近く、
+    次に差が出るとすれば
+    - abstract callback/type lookup の残りの generic fallback
+    - sync fast lane 以外の program path 固定コスト
+    の方が支配的と見てよい
   - したがって、今後も「generic runtime をそのまま磨く」より
     「fast lane を明示的に specialized に保つ」方が筋が良い
 

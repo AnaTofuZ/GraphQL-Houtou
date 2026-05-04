@@ -125,6 +125,7 @@ typedef struct {
 
 typedef struct {
   SV *runtime_schema;
+  SV **slot_field_names;
   SV **slot_resolvers;
   SV **slot_type_objects;
   SV **slot_tag_resolvers;
@@ -158,6 +159,7 @@ typedef struct {
 typedef struct {
   IV family_code;
   char *type_name;
+  SV *type_object_sv;
   IV slot_count;
   IV op_count;
   gql_runtime_vm_native_slot_t *slots;
@@ -204,6 +206,7 @@ typedef struct gql_runtime_vm_block_frame_t gql_runtime_vm_block_frame_t;
 typedef struct gql_runtime_vm_writer_t gql_runtime_vm_writer_t;
 typedef struct gql_runtime_vm_pending_entry_t gql_runtime_vm_pending_entry_t;
 typedef struct gql_runtime_vm_callback_context gql_runtime_vm_callback_context_t;
+typedef struct gql_runtime_vm_lazy_info gql_runtime_vm_lazy_info_t;
 
 struct gql_runtime_vm_callback_context {
   SV *runtime_schema;
@@ -369,6 +372,23 @@ struct gql_runtime_vm_writer_t {
   IV error_record_count;
   IV error_record_capacity;
   gql_runtime_vm_error_record_t **error_records;
+};
+
+struct gql_runtime_vm_lazy_info {
+  UV refcount;
+  SV *field_name_sv;
+  char *field_name_pv;
+  SV *parent_type_sv;
+  char *parent_type_name_pv;
+  char *return_type_name_pv;
+  SV *return_type_sv;
+  gql_runtime_vm_path_frame_t *path_frame;
+  SV *context_value;
+  SV *root_value;
+  SV *variable_values;
+  SV *operation;
+  SV *runtime_schema;
+  SV *materialized_sv;
 };
 
 static AV *gql_runtime_vm_expect_op_array(pTHX_ SV *op_sv);
@@ -2663,6 +2683,7 @@ gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
   if (bundle->blocks && bundle->owns_blocks) {
     for (i = 0; i < bundle->block_count; i++) {
       Safefree(bundle->blocks[i].type_name);
+      SvREFCNT_dec(bundle->blocks[i].type_object_sv);
       if (bundle->blocks[i].slots) {
         for (j = 0; j < bundle->blocks[i].slot_count; j++) {
           Safefree(bundle->blocks[i].slots[j].field_name);
@@ -2700,6 +2721,7 @@ gql_runtime_vm_native_program_destroy(gql_runtime_vm_native_program_t *program)
   if (program->blocks) {
     for (i = 0; i < program->block_count; i++) {
       Safefree(program->blocks[i].type_name);
+      SvREFCNT_dec(program->blocks[i].type_object_sv);
       if (program->blocks[i].slots) {
         for (j = 0; j < program->blocks[i].slot_count; j++) {
           Safefree(program->blocks[i].slots[j].field_name);
@@ -2755,6 +2777,9 @@ gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
   if (runtime->callback_catalog && runtime->callback_catalog->slot_resolvers) {
     gql_runtime_vm_native_callback_catalog_t *catalog = runtime->callback_catalog;
     for (i = 0; i < runtime->runtime_slot_count; i++) {
+      if (catalog->slot_field_names && catalog->slot_field_names[i]) {
+        SvREFCNT_dec(catalog->slot_field_names[i]);
+      }
       if (catalog->slot_resolvers[i]) {
         SvREFCNT_dec(catalog->slot_resolvers[i]);
       }
@@ -2785,6 +2810,7 @@ gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
         Safefree(catalog->slot_possible_type_entries[i]);
       }
     }
+    Safefree(catalog->slot_field_names);
     Safefree(catalog->slot_resolvers);
     Safefree(catalog->slot_type_objects);
     Safefree(catalog->slot_tag_resolvers);

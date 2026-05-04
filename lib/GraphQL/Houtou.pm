@@ -10,6 +10,7 @@ use GraphQL::Houtou::Promise::Adapter qw(
   get_default_promise_code
   clear_default_promise_code
 );
+use GraphQL::Houtou::Runtime::LazyInfo ();
 
 our $VERSION = '0.01';
 our $XS_BUNDLE_LOADED = 0;

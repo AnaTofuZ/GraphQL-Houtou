@@ -88,6 +88,8 @@ static SV *gql_runtime_vm_exec_state_resolve_current_value_sv(pTHX_ SV *state_sv
 static SV *gql_runtime_vm_exec_state_complete_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *path_frame_sv, IV block_index, IV slot_index, IV op_index, SV *resolved_sv);
 static SV *gql_runtime_vm_exec_state_execute_current_op_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s);
 static SV *gql_runtime_vm_new_lazy_info_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *path_frame);
+static SV *gql_runtime_vm_lookup_type_object_by_name_sv(pTHX_ SV *runtime_schema, const char *type_name);
+static SV *gql_runtime_vm_direct_slot_type_object_sv(const gql_runtime_vm_native_runtime_t *runtime, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_state_current_return_type_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *op_sv, SV *slot_sv);
 static IV gql_runtime_vm_find_abstract_child_block_index(const gql_runtime_vm_native_op_t *op, const char *type_name);
 static const char *gql_runtime_vm_type_name_from_sv(pTHX_ SV *type_sv);
@@ -1790,49 +1792,206 @@ gql_runtime_vm_copy_cstr(const char *src)
 }
 
 static SV *
+gql_runtime_vm_lazy_info_materialize_hash_sv(pTHX_ gql_runtime_vm_lazy_info_t *info)
+{
+  HV *info_hv;
+  SV *runtime_cache_sv = &PL_sv_undef;
+  SV *schema_sv = &PL_sv_undef;
+  SV *parent_type_sv = NULL;
+  SV *return_type_sv = NULL;
+  SV *path_sv = &PL_sv_undef;
+
+  if (!info) {
+    return newRV_noinc((SV *)newHV());
+  }
+  if (info->materialized_sv) {
+    return newSVsv(info->materialized_sv);
+  }
+
+  info_hv = newHV();
+
+  if (info->field_name_sv && SvOK(info->field_name_sv)) {
+    hv_store(info_hv, "field_name", 10, newSVsv(info->field_name_sv), 0);
+  } else if (info->field_name_pv) {
+    hv_store(info_hv, "field_name", 10, newSVpv(info->field_name_pv, 0), 0);
+  }
+
+  return_type_sv = info->return_type_sv;
+  if (!return_type_sv && info->runtime_schema && info->return_type_name_pv) {
+    return_type_sv = gql_runtime_vm_lookup_type_object_by_name_sv(
+      aTHX_ info->runtime_schema,
+      info->return_type_name_pv
+    );
+  }
+  if (return_type_sv && SvOK(return_type_sv)) {
+    hv_store(info_hv, "return_type", 11, newSVsv(return_type_sv), 0);
+  } else if (info->return_type_name_pv) {
+    hv_store(info_hv, "return_type_name", 16, newSVpv(info->return_type_name_pv, 0), 0);
+  }
+
+  parent_type_sv = info->parent_type_sv;
+  if (!parent_type_sv && info->runtime_schema && info->parent_type_name_pv) {
+    parent_type_sv = gql_runtime_vm_lookup_type_object_by_name_sv(
+      aTHX_ info->runtime_schema,
+      info->parent_type_name_pv
+    );
+  }
+  if (parent_type_sv && SvOK(parent_type_sv)) {
+    hv_store(info_hv, "parent_type", 11, newSVsv(parent_type_sv), 0);
+  } else if (info->parent_type_name_pv) {
+    hv_store(info_hv, "parent_type_name", 16, newSVpv(info->parent_type_name_pv, 0), 0);
+  }
+
+  if (info->path_frame) {
+    path_sv = gql_runtime_vm_path_frame_to_path_sv(aTHX_ info->path_frame);
+  }
+  hv_store(info_hv, "path", 4, path_sv ? path_sv : newSVsv(&PL_sv_undef), 0);
+
+  hv_store(info_hv, "field_nodes", 11, newSVsv(&PL_sv_undef), 0);
+  hv_store(info_hv, "context_value", 13, newSVsv(info->context_value ? info->context_value : &PL_sv_undef), 0);
+  hv_store(info_hv, "root_value", 10, newSVsv(info->root_value ? info->root_value : &PL_sv_undef), 0);
+  hv_store(info_hv, "variable_values", 15, newSVsv(info->variable_values ? info->variable_values : &PL_sv_undef), 0);
+  hv_store(info_hv, "operation", 9, newSVsv(info->operation ? info->operation : &PL_sv_undef), 0);
+  hv_store(info_hv, "runtime_schema", 14, newSVsv(info->runtime_schema ? info->runtime_schema : &PL_sv_undef), 0);
+
+  if (info->runtime_schema
+      && SvROK(info->runtime_schema)
+      && SvTYPE(SvRV(info->runtime_schema)) == SVt_PVHV) {
+    HV *runtime_schema_hv = (HV *)SvRV(info->runtime_schema);
+    SV *sv;
+
+    sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_schema_hv, "runtime_cache", 13);
+    if (sv && SvOK(sv)) {
+      runtime_cache_sv = sv;
+    }
+    sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_schema_hv, "schema", 6);
+    if (sv && SvOK(sv)) {
+      schema_sv = sv;
+    }
+  }
+
+  hv_store(info_hv, "runtime_cache", 13, newSVsv(runtime_cache_sv), 0);
+  hv_store(info_hv, "schema", 6, newSVsv(schema_sv), 0);
+
+  info->materialized_sv = newRV_noinc((SV *)info_hv);
+  return newSVsv(info->materialized_sv);
+}
+
+static void
+gql_runtime_vm_lazy_info_decref(pTHX_ gql_runtime_vm_lazy_info_t *info)
+{
+  if (!info) {
+    return;
+  }
+  if (--info->refcount > 0) {
+    return;
+  }
+
+  SvREFCNT_dec(info->field_name_sv);
+  Safefree(info->field_name_pv);
+  SvREFCNT_dec(info->parent_type_sv);
+  Safefree(info->parent_type_name_pv);
+  Safefree(info->return_type_name_pv);
+  SvREFCNT_dec(info->return_type_sv);
+  gql_runtime_vm_path_frame_decref(info->path_frame);
+  SvREFCNT_dec(info->context_value);
+  SvREFCNT_dec(info->root_value);
+  SvREFCNT_dec(info->variable_values);
+  SvREFCNT_dec(info->operation);
+  SvREFCNT_dec(info->runtime_schema);
+  SvREFCNT_dec(info->materialized_sv);
+  Safefree(info);
+}
+
+static SV *
+gql_runtime_vm_new_lazy_info_handle_sv(
+  pTHX_
+  SV *field_name_sv,
+  const char *field_name_pv,
+  SV *parent_type_sv,
+  const char *parent_type_name_pv,
+  const char *return_type_name_pv,
+  SV *return_type_sv,
+  gql_runtime_vm_path_frame_t *path_frame,
+  SV *context_value,
+  SV *root_value,
+  SV *variable_values,
+  SV *operation,
+  SV *runtime_schema
+)
+{
+  gql_runtime_vm_lazy_info_t *info;
+
+  Newxz(info, 1, gql_runtime_vm_lazy_info_t);
+  info->refcount = 1;
+  info->field_name_sv = field_name_sv ? SvREFCNT_inc_simple_NN(field_name_sv) : NULL;
+  info->field_name_pv = gql_runtime_vm_copy_cstr(field_name_pv);
+  info->parent_type_sv = parent_type_sv ? SvREFCNT_inc_simple_NN(parent_type_sv) : NULL;
+  info->parent_type_name_pv = gql_runtime_vm_copy_cstr(parent_type_name_pv);
+  info->return_type_name_pv = gql_runtime_vm_copy_cstr(return_type_name_pv);
+  info->return_type_sv = return_type_sv ? SvREFCNT_inc_simple_NN(return_type_sv) : NULL;
+  if (path_frame) {
+    path_frame->refcount++;
+  }
+  info->path_frame = path_frame;
+  info->context_value = context_value ? SvREFCNT_inc_simple_NN(context_value) : NULL;
+  info->root_value = root_value ? SvREFCNT_inc_simple_NN(root_value) : NULL;
+  info->variable_values = variable_values ? SvREFCNT_inc_simple_NN(variable_values) : NULL;
+  info->operation = operation ? SvREFCNT_inc_simple_NN(operation) : NULL;
+  info->runtime_schema = runtime_schema ? SvREFCNT_inc_simple_NN(runtime_schema) : NULL;
+
+  return gql_runtime_vm_new_handle_sv(aTHX_ "GraphQL::Houtou::Runtime::LazyInfo", info);
+}
+
+static SV *
 gql_runtime_vm_new_lazy_info_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *path_frame)
 {
-  HV *info_hv = newHV();
-  SV *field_name_sv = s ? gql_runtime_vm_state_current_field_name_sv(aTHX_ s) : NULL;
-  SV *parent_type_sv = s ? gql_runtime_vm_state_current_parent_type_sv(aTHX_ s) : NULL;
-  SV *return_type_sv = s ? gql_runtime_vm_state_current_return_type_sv(aTHX_ s, NULL, NULL) : NULL;
-  SV *path_value_sv = NULL;
-  SV *runtime_schema_sv = s ? s->runtime_schema : NULL;
-  HV *runtime_schema_hv = NULL;
-  SV *schema_sv = NULL;
-  SV *runtime_cache_sv = NULL;
+  const gql_runtime_vm_native_block_t *block = (s && s->cursor)
+    ? gql_runtime_vm_cursor_current_native_block(s->cursor)
+    : NULL;
+  const gql_runtime_vm_native_slot_t *slot = (s && s->cursor)
+    ? gql_runtime_vm_cursor_current_native_slot(s->cursor)
+    : NULL;
+  const gql_runtime_vm_native_runtime_t *runtime = s
+    ? gql_runtime_vm_exec_state_native_runtime(aTHX_ s)
+    : NULL;
+  gql_runtime_vm_native_callback_catalog_t *catalog = runtime ? runtime->callback_catalog : NULL;
   gql_runtime_vm_path_frame_t *path_ptr = NULL;
+  SV *return_type_sv = NULL;
+  SV *field_name_sv = NULL;
 
+  PERL_UNUSED_ARG(state_sv);
   if (path_frame && SvOK(path_frame) && SvROK(path_frame) && SvIOK(SvRV(path_frame)) && SvUV(SvRV(path_frame)) != 0) {
     path_ptr = INT2PTR(gql_runtime_vm_path_frame_t *, SvUV(SvRV(path_frame)));
   } else if (s && s->field_frame) {
     path_ptr = s->field_frame->path_frame;
   }
-  if (path_ptr) {
-    path_value_sv = gql_runtime_vm_path_frame_to_path_sv(aTHX_ path_ptr);
-  } else {
-    path_value_sv = newSVsv(&PL_sv_undef);
+  if (runtime && slot) {
+    return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
+  }
+  if (catalog
+      && catalog->slot_field_names
+      && slot
+      && slot->schema_slot_index >= 0
+      && slot->schema_slot_index < runtime->runtime_slot_count) {
+    field_name_sv = catalog->slot_field_names[slot->schema_slot_index];
   }
 
-  if (runtime_schema_sv && SvOK(runtime_schema_sv) && SvROK(runtime_schema_sv) && SvTYPE(SvRV(runtime_schema_sv)) == SVt_PVHV) {
-    runtime_schema_hv = (HV *)SvRV(runtime_schema_sv);
-    schema_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_schema_hv, "schema", 6);
-    runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_schema_hv, "runtime_cache", 13);
-  }
-
-  hv_store(info_hv, "field_name", 10, field_name_sv ? field_name_sv : newSVsv(&PL_sv_undef), 0);
-  hv_store(info_hv, "parent_type", 11, parent_type_sv ? newSVsv(parent_type_sv) : newSVsv(&PL_sv_undef), 0);
-  hv_store(info_hv, "return_type", 11, return_type_sv ? newSVsv(return_type_sv) : newSVsv(&PL_sv_undef), 0);
-  hv_store(info_hv, "path", 4, path_value_sv ? path_value_sv : newSVsv(&PL_sv_undef), 0);
-  hv_store(info_hv, "context_value", 13, newSVsv(s && s->context ? s->context : &PL_sv_undef), 0);
-  hv_store(info_hv, "root_value", 10, newSVsv(s && s->root_value ? s->root_value : &PL_sv_undef), 0);
-  hv_store(info_hv, "variable_values", 15, newSVsv(s && s->variables ? s->variables : &PL_sv_undef), 0);
-  hv_store(info_hv, "operation", 9, newSVsv(s && s->program ? s->program : &PL_sv_undef), 0);
-  hv_store(info_hv, "schema", 6, schema_sv ? newSVsv(schema_sv) : newSVsv(&PL_sv_undef), 0);
-  hv_store(info_hv, "runtime_cache", 13, runtime_cache_sv ? newSVsv(runtime_cache_sv) : newSVsv(&PL_sv_undef), 0);
-  hv_store(info_hv, "field_nodes", 11, newSVsv(&PL_sv_undef), 0);
-
-  return newRV_noinc((SV *)info_hv);
+  return gql_runtime_vm_new_lazy_info_handle_sv(
+    aTHX_
+    field_name_sv,
+    slot ? slot->field_name : NULL,
+    block ? block->type_object_sv : NULL,
+    block ? block->type_name : NULL,
+    slot ? slot->return_type_name : NULL,
+    return_type_sv,
+    path_ptr,
+    s ? s->context : &PL_sv_undef,
+    s ? s->root_value : &PL_sv_undef,
+    s ? s->variables : &PL_sv_undef,
+    s ? s->program : &PL_sv_undef,
+    s ? s->runtime_schema : &PL_sv_undef
+  );
 }
 
 static SV *
@@ -2754,6 +2913,7 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
   runtime->runtime_slot_count = av_count(catalog_av);
   if (runtime->runtime_slot_count > 0) {
     Newxz(runtime->runtime_slots, runtime->runtime_slot_count, gql_runtime_vm_native_slot_t);
+    Newxz(runtime->callback_catalog->slot_field_names, runtime->runtime_slot_count, SV *);
     Newxz(runtime->callback_catalog->slot_resolvers, runtime->runtime_slot_count, SV *);
     Newxz(runtime->callback_catalog->slot_type_objects, runtime->runtime_slot_count, SV *);
     Newxz(runtime->callback_catalog->slot_tag_resolvers, runtime->runtime_slot_count, SV *);
@@ -2793,6 +2953,9 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
       }
       if (resolver_sv) {
         runtime->callback_catalog->slot_resolvers[i] = newSVsv(resolver_sv);
+      }
+      if (runtime->runtime_slots[i].field_name && *runtime->runtime_slots[i].field_name) {
+        runtime->callback_catalog->slot_field_names[i] = newSVpv(runtime->runtime_slots[i].field_name, 0);
       }
     }
   }
@@ -3043,6 +3206,33 @@ gql_runtime_vm_lookup_type_object_by_name_sv(pTHX_ SV *runtime_schema, const cha
   return (svp && SvOK(*svp)) ? *svp : NULL;
 }
 
+static void
+gql_runtime_vm_prepare_bundle_block_type_objects(
+  pTHX_
+  SV *runtime_schema,
+  gql_runtime_vm_native_bundle_t *bundle
+)
+{
+  IV i;
+
+  if (!runtime_schema || !SvOK(runtime_schema) || !bundle || !bundle->blocks) {
+    return;
+  }
+
+  for (i = 0; i < bundle->block_count; i++) {
+    gql_runtime_vm_native_block_t *block = &bundle->blocks[i];
+    SV *type_sv;
+
+    if (block->type_object_sv || !block->type_name || !*block->type_name) {
+      continue;
+    }
+    type_sv = gql_runtime_vm_lookup_type_object_by_name_sv(aTHX_ runtime_schema, block->type_name);
+    if (type_sv && SvOK(type_sv)) {
+      block->type_object_sv = SvREFCNT_inc_simple_NN(type_sv);
+    }
+  }
+}
+
 static SV *
 gql_runtime_vm_lookup_slot_type_object_sv(
   pTHX_
@@ -3078,56 +3268,77 @@ gql_runtime_vm_lookup_slot_type_object_sv(
 }
 
 static SV *
+gql_runtime_vm_direct_slot_type_object_sv(
+  const gql_runtime_vm_native_runtime_t *runtime,
+  const gql_runtime_vm_native_slot_t *slot
+)
+{
+  IV slot_index;
+
+  if (!runtime || !slot) {
+    return NULL;
+  }
+  slot_index = slot->schema_slot_index;
+  if (slot_index < 0 || slot_index >= runtime->runtime_slot_count) {
+    return NULL;
+  }
+  if (!runtime->callback_catalog || !runtime->callback_catalog->slot_type_objects) {
+    return NULL;
+  }
+  if (!runtime->callback_catalog->slot_type_objects[slot_index]
+      || !SvOK(runtime->callback_catalog->slot_type_objects[slot_index])) {
+    return NULL;
+  }
+  return runtime->callback_catalog->slot_type_objects[slot_index];
+}
+
+static SV *
 gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_state_t *state)
 {
-  HV *info_hv;
-  SV *field_name_sv;
-  SV *return_type_lookup;
   SV *return_type_sv;
-  SV *parent_type_sv;
-  SV *path_sv;
   const gql_runtime_vm_callback_context_t *ctx = state ? state->callback_ctx : NULL;
+  const gql_runtime_vm_native_slot_t *slot = state ? state->slot : NULL;
+  const gql_runtime_vm_native_block_t *block = state ? state->block : NULL;
+  gql_runtime_vm_native_callback_catalog_t *catalog =
+    (state && state->runtime) ? state->runtime->callback_catalog : NULL;
+  SV *field_name_sv = NULL;
 
   if (!state) {
     return newRV_noinc((SV *)newHV());
   }
 
-  info_hv = newHV();
-  field_name_sv = (state->slot && state->slot->field_name)
-    ? newSVpv(state->slot->field_name, 0)
-    : newSVsv(&PL_sv_undef);
-  return_type_lookup = gql_runtime_vm_lookup_slot_type_object_sv(
-    aTHX_
-    state->runtime,
-    ctx ? ctx->runtime_schema : &PL_sv_undef,
-    state->slot
-  );
-  return_type_sv = newSVsv(return_type_lookup ? return_type_lookup : &PL_sv_undef);
-  if (state->block && state->block->type_name) {
-    SV *parent_type_lookup = gql_runtime_vm_lookup_type_object_by_name_sv(
-      aTHX_ ctx ? ctx->runtime_schema : &PL_sv_undef,
-      state->block->type_name
+  return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(state->runtime, slot);
+  if (!return_type_sv) {
+    return_type_sv = gql_runtime_vm_lookup_slot_type_object_sv(
+      aTHX_
+      state->runtime,
+      ctx ? ctx->runtime_schema : &PL_sv_undef,
+      slot
     );
-    parent_type_sv = newSVsv(parent_type_lookup ? parent_type_lookup : &PL_sv_undef);
-  } else {
-    parent_type_sv = newSVsv(&PL_sv_undef);
   }
-  path_sv = state->path_frame
-    ? gql_runtime_vm_path_frame_to_path_sv(aTHX_ state->path_frame)
-    : newSVsv(&PL_sv_undef);
+  if (catalog
+      && catalog->slot_field_names
+      && slot
+      && slot->schema_slot_index >= 0
+      && slot->schema_slot_index < state->runtime->runtime_slot_count) {
+    field_name_sv = catalog->slot_field_names[slot->schema_slot_index];
+  }
 
-  hv_store(info_hv, "field_name", 10, field_name_sv, 0);
-  hv_store(info_hv, "field_nodes", 11, newSVsv(&PL_sv_undef), 0);
-  hv_store(info_hv, "return_type", 11, return_type_sv, 0);
-  hv_store(info_hv, "parent_type", 11, parent_type_sv, 0);
-  hv_store(info_hv, "path", 4, path_sv, 0);
-  hv_store(info_hv, "context_value", 13, newSVsv((ctx && ctx->context) ? ctx->context : &PL_sv_undef), 0);
-  hv_store(info_hv, "root_value", 10, newSVsv((ctx && ctx->root_value) ? ctx->root_value : &PL_sv_undef), 0);
-  hv_store(info_hv, "variable_values", 15, newSVsv((ctx && ctx->variables) ? ctx->variables : &PL_sv_undef), 0);
-  hv_store(info_hv, "operation", 9, newSVsv((ctx && ctx->program) ? ctx->program : &PL_sv_undef), 0);
-  hv_store(info_hv, "runtime_schema", 14, newSVsv((ctx && ctx->runtime_schema) ? ctx->runtime_schema : &PL_sv_undef), 0);
-
-  return newRV_noinc((SV *)info_hv);
+  return gql_runtime_vm_new_lazy_info_handle_sv(
+    aTHX_
+    field_name_sv,
+    slot ? slot->field_name : NULL,
+    block ? block->type_object_sv : NULL,
+    block ? block->type_name : NULL,
+    slot ? slot->return_type_name : NULL,
+    return_type_sv,
+    state->path_frame,
+    (ctx && ctx->context) ? ctx->context : &PL_sv_undef,
+    (ctx && ctx->root_value) ? ctx->root_value : &PL_sv_undef,
+    (ctx && ctx->variables) ? ctx->variables : &PL_sv_undef,
+    (ctx && ctx->program) ? ctx->program : &PL_sv_undef,
+    (ctx && ctx->runtime_schema) ? ctx->runtime_schema : &PL_sv_undef
+  );
 }
 
 static IV
@@ -3252,9 +3463,12 @@ gql_runtime_vm_resolve_current_field_default(pTHX_ gql_runtime_vm_exec_state_t *
   resolver_sv = (runtime->callback_catalog && runtime->callback_catalog->slot_resolvers)
     ? runtime->callback_catalog->slot_resolvers[slot->schema_slot_index]
     : NULL;
-  return_type_sv = gql_runtime_vm_lookup_slot_type_object_sv(
-    aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
-  );
+  return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
+  if (!return_type_sv) {
+    return_type_sv = gql_runtime_vm_lookup_slot_type_object_sv(
+      aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
+    );
+  }
 
   if (resolver_sv && SvOK(resolver_sv)) {
     SV *args = sv_2mortal(gql_runtime_vm_build_current_args_sv(aTHX_ state));
@@ -3293,7 +3507,10 @@ gql_runtime_vm_complete_current_abstract(pTHX_ gql_runtime_vm_exec_state_t *stat
   gql_runtime_vm_native_runtime_t *runtime = state->runtime;
   const gql_runtime_vm_native_slot_t *slot = state->slot;
   const gql_runtime_vm_native_op_t *op = state->op;
+  gql_runtime_vm_native_callback_catalog_t *catalog = runtime ? runtime->callback_catalog : NULL;
   IV slot_index;
+  SV *info_sv = NULL;
+  SV *abstract_type = NULL;
 
   if (!runtime) {
     return gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);
@@ -3303,20 +3520,23 @@ gql_runtime_vm_complete_current_abstract(pTHX_ gql_runtime_vm_exec_state_t *stat
     return gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);
   }
   if (op->dispatch_family_code == GQL_VM_DISPATCH_TAG) {
-    SV *tag_resolver = (runtime->callback_catalog && runtime->callback_catalog->slot_tag_resolvers)
-      ? runtime->callback_catalog->slot_tag_resolvers[slot_index]
+    SV *tag_resolver = (catalog && catalog->slot_tag_resolvers)
+      ? catalog->slot_tag_resolvers[slot_index]
       : NULL;
-    SV *abstract_type = gql_runtime_vm_lookup_slot_type_object_sv(
-      aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
-    );
-    SV *info_sv;
     SV *tag_sv;
     const char *type_name = NULL;
-    if (tag_resolver
-        && runtime->callback_catalog
-        && runtime->callback_catalog->slot_tag_entries
-        && runtime->callback_catalog->slot_tag_entry_counts[slot_index] > 0) {
-      info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+    if (tag_resolver && catalog && catalog->slot_tag_entries && catalog->slot_tag_entry_counts[slot_index] > 0) {
+      if (!abstract_type) {
+        abstract_type = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
+        if (!abstract_type) {
+          abstract_type = gql_runtime_vm_lookup_slot_type_object_sv(
+            aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
+          );
+        }
+      }
+      if (!info_sv) {
+        info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+      }
       tag_sv = gql_runtime_vm_call_cb4_nonfatal(
         aTHX_
         tag_resolver,
@@ -3338,19 +3558,25 @@ gql_runtime_vm_complete_current_abstract(pTHX_ gql_runtime_vm_exec_state_t *stat
   if (child_block_index < 0
       && (op->dispatch_family_code == GQL_VM_DISPATCH_RESOLVE_TYPE
           || op->dispatch_family_code == GQL_VM_DISPATCH_TAG)) {
-    SV *resolve_type = (runtime->callback_catalog && runtime->callback_catalog->slot_resolve_types)
-      ? runtime->callback_catalog->slot_resolve_types[slot_index]
+    SV *resolve_type = (catalog && catalog->slot_resolve_types)
+      ? catalog->slot_resolve_types[slot_index]
       : NULL;
-    SV *abstract_type = gql_runtime_vm_lookup_slot_type_object_sv(
-      aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
-    );
-    SV *info_sv;
     SV *type_sv;
     const char *type_name = NULL;
     if (!resolve_type) {
       return gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);
     }
-    info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+    if (!abstract_type) {
+      abstract_type = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
+      if (!abstract_type) {
+        abstract_type = gql_runtime_vm_lookup_slot_type_object_sv(
+          aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
+        );
+      }
+    }
+    if (!info_sv) {
+      info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+    }
     type_sv = gql_runtime_vm_call_cb4_nonfatal(
       aTHX_
       resolve_type,
@@ -3369,7 +3595,9 @@ gql_runtime_vm_complete_current_abstract(pTHX_ gql_runtime_vm_exec_state_t *stat
   }
 
   if (child_block_index < 0) {
-    SV *info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+    if (!info_sv) {
+      info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+    }
     gql_runtime_vm_native_possible_type_entry_t *entry =
       gql_runtime_vm_find_matching_possible_type(
         aTHX_
@@ -3468,9 +3696,12 @@ gql_runtime_vm_resolve_current_field_explicit(pTHX_ gql_runtime_vm_exec_state_t 
   resolver_sv = (runtime->callback_catalog && runtime->callback_catalog->slot_resolvers)
     ? runtime->callback_catalog->slot_resolvers[slot->schema_slot_index]
     : NULL;
-  return_type_sv = gql_runtime_vm_lookup_slot_type_object_sv(
-    aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
-  );
+  return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
+  if (!return_type_sv) {
+    return_type_sv = gql_runtime_vm_lookup_slot_type_object_sv(
+      aTHX_ runtime, state->callback_ctx ? state->callback_ctx->runtime_schema : &PL_sv_undef, slot
+    );
+  }
 
   if (!resolver_sv || !SvOK(resolver_sv)) {
     return gql_runtime_vm_clone_value_sv(aTHX_ &PL_sv_undef);
@@ -3737,6 +3968,8 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
   const gql_runtime_vm_native_op_t *op = state->op;
   gql_runtime_vm_native_callback_catalog_t *catalog = runtime ? runtime->callback_catalog : NULL;
   IV slot_index;
+  SV *info_sv = NULL;
+  SV *abstract_type = NULL;
 
   if (!runtime) {
     return newSVsv(&PL_sv_undef);
@@ -3750,10 +3983,6 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
     SV *tag_resolver = (catalog && catalog->slot_tag_resolvers)
       ? catalog->slot_tag_resolvers[slot_index]
       : NULL;
-    SV *abstract_type = (catalog && catalog->slot_type_objects)
-      ? catalog->slot_type_objects[slot_index]
-      : NULL;
-    SV *info_sv;
     SV *tag_sv;
     const char *type_name = NULL;
 
@@ -3762,7 +3991,8 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
         && catalog->slot_tag_entries
         && catalog->slot_tag_entry_counts
         && catalog->slot_tag_entry_counts[slot_index] > 0) {
-      if (!abstract_type || !SvOK(abstract_type)) {
+      abstract_type = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
+      if (!abstract_type) {
         abstract_type = gql_runtime_vm_lookup_slot_type_object_sv(
           aTHX_
           runtime,
@@ -3770,7 +4000,9 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
           slot
         );
       }
-      info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+      if (!info_sv) {
+        info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+      }
       tag_sv = gql_runtime_vm_call_cb4_nonfatal(
         aTHX_
         tag_resolver,
@@ -3795,17 +4027,16 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
     SV *resolve_type = (catalog && catalog->slot_resolve_types)
       ? catalog->slot_resolve_types[slot_index]
       : NULL;
-    SV *abstract_type = (catalog && catalog->slot_type_objects)
-      ? catalog->slot_type_objects[slot_index]
-      : NULL;
-    SV *info_sv;
     SV *type_sv;
     const char *type_name = NULL;
 
     if (!resolve_type) {
       return newSVsv(&PL_sv_undef);
     }
-    if (!abstract_type || !SvOK(abstract_type)) {
+    if (!abstract_type) {
+      abstract_type = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
+    }
+    if (!abstract_type) {
       abstract_type = gql_runtime_vm_lookup_slot_type_object_sv(
         aTHX_
         runtime,
@@ -3813,7 +4044,9 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
         slot
       );
     }
-    info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+    if (!info_sv) {
+      info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+    }
     type_sv = gql_runtime_vm_call_cb4_nonfatal(
       aTHX_
       resolve_type,
@@ -3832,7 +4065,9 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
   }
 
   if (child_block_index < 0) {
-    SV *info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+    if (!info_sv) {
+      info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+    }
     gql_runtime_vm_native_possible_type_entry_t *entry =
       gql_runtime_vm_find_matching_possible_type(
         aTHX_
@@ -5066,6 +5301,25 @@ path_frame_key_xs(path_frame)
     RETVAL
 
 SV *
+lazy_info_hashref_xs(info_sv)
+    SV *info_sv
+  CODE:
+    {
+      gql_runtime_vm_lazy_info_t *info;
+
+      if (!info_sv || !SvROK(info_sv) || !sv_derived_from(info_sv, "GraphQL::Houtou::Runtime::LazyInfo")) {
+        croak("expected a GraphQL::Houtou::Runtime::LazyInfo");
+      }
+      info = INT2PTR(gql_runtime_vm_lazy_info_t *, SvUV(SvRV(info_sv)));
+      if (!info) {
+        croak("lazy info handle is no longer valid");
+      }
+      RETVAL = gql_runtime_vm_lazy_info_materialize_hash_sv(aTHX_ info);
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 block_frame_new_xs(class, values = &PL_sv_undef, pending_names = &PL_sv_undef, pending_outcomes = &PL_sv_undef)
     SV *class
     SV *values
@@ -5413,6 +5667,11 @@ execute_native_bundle_xs(runtime_schema, bundle_sv, root_value = &PL_sv_undef, c
       callback_ctx.runtime_schema = (runtime_schema && !sv_derived_from(runtime_schema, "GraphQL::Houtou::Runtime::NativeRuntime"))
         ? runtime_schema
         : (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema ? runtime->callback_catalog->runtime_schema : &PL_sv_undef);
+      gql_runtime_vm_prepare_bundle_block_type_objects(
+        aTHX_
+        callback_ctx.runtime_schema,
+        bundle
+      );
       callback_ctx.root_value = root_value;
       callback_ctx.context = context_value;
       callback_ctx.variables = variables;
@@ -5484,6 +5743,11 @@ execute_native_program_xs(runtime_schema, runtime_descriptor, program_descriptor
       callback_ctx.runtime_schema = (runtime_schema && !sv_derived_from(runtime_schema, "GraphQL::Houtou::Runtime::NativeRuntime"))
         ? runtime_schema
         : (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema ? runtime->callback_catalog->runtime_schema : &PL_sv_undef);
+      gql_runtime_vm_prepare_bundle_block_type_objects(
+        aTHX_
+        callback_ctx.runtime_schema,
+        bundle
+      );
       callback_ctx.root_value = root_value;
       callback_ctx.context = context_value;
       callback_ctx.variables = variables;
@@ -5548,6 +5812,11 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
       state.runtime = runtime;
       state.bundle = bundle;
       callback_ctx.runtime_schema = (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema) ? runtime->callback_catalog->runtime_schema : &PL_sv_undef;
+      gql_runtime_vm_prepare_bundle_block_type_objects(
+        aTHX_
+        callback_ctx.runtime_schema,
+        bundle
+      );
       callback_ctx.root_value = root_value;
       callback_ctx.context = context_value;
       callback_ctx.variables = variables;
@@ -5602,6 +5871,21 @@ DESTROY(self)
         gql_runtime_vm_field_frame_t *frame = INT2PTR(gql_runtime_vm_field_frame_t *, SvUV(inner_sv));
         sv_setuv(inner_sv, 0);
         gql_runtime_vm_free_field_frame(aTHX_ frame);
+      }
+    }
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::Runtime::LazyInfo
+
+void
+DESTROY(self)
+    SV *self
+  CODE:
+    if (self && SvROK(self)) {
+      SV *inner_sv = SvRV(self);
+      if (SvIOK(inner_sv) && SvUV(inner_sv) != 0) {
+        gql_runtime_vm_lazy_info_t *info = INT2PTR(gql_runtime_vm_lazy_info_t *, SvUV(inner_sv));
+        sv_setuv(inner_sv, 0);
+        gql_runtime_vm_lazy_info_decref(aTHX_ info);
       }
     }
 

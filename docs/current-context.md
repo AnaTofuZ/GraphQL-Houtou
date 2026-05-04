@@ -369,3 +369,47 @@ perl -Ilib t/19_vm_execute.t
   - `run_explicit_*`
   - `_run_via_code`
   などの Perl dispatch surface を削った
+
+## 2026-05-04 native_bundle fast lane 再特化
+
+- `fe9a58a` `native_bundle sync pathをdirect-SV fast laneへ戻す`
+  - `execute_native_bundle_xs(...)` / `execute_native_program_xs(...)` /
+    `execute_native_program_handle_xs(...)` を
+    `native_value` tree + materialize の 2 パスから、`SV*` を直接組み立てる
+    1 パス fast lane に戻した
+  - benchmark median:
+    - `nested_variable_object`: `393480/s`
+    - `list_of_objects`: `340616/s`
+    - `abstract_with_fragment`: `304552/s`
+
+- `native_bundle` callback info / abstract fast path の再整理
+  - `GraphQL::Houtou::Runtime::LazyInfo` を XS-owned opaque handle に変え、
+    `%{}` のときだけ hash を materialize する形にした
+  - sync fast lane / promise path の両方で同じ lazy info を使うように揃えた
+  - runtime callback catalog に `slot_field_names` cache を追加し、
+    field callback で毎回 field 名文字列を作らないようにした
+  - `bundle->blocks[*].type_object_sv` を使って block parent type を直参照できるようにした
+  - `./Build test` / `minil test` は通過
+
+- ただし benchmark は `fe9a58a` を上回らなかった
+  - latest median:
+    - `nested_variable_object`: `369154/s`
+    - `list_of_objects`: `325661/s`
+    - `abstract_with_fragment`: `289557/s`
+  - `937edb0` (`restore-native-bundle-high-watermark`) 比ではまだ大きく遅い
+
+- 現時点の判断:
+  - `direct-SV` 1 パス自体は keep
+  - `LazyInfo` の opaque handle 化と metadata cache は correctness と
+    internal ownership の整理としては妥当だが、速度面ではまだ決定打ではない
+  - high-watermark (`937edb0`) を見ると、当時の native fast lane は
+    resolver/abstract callback に `info` hash を渡していなかった
+  - つまり現在の主な残コストは object materialization そのものより、
+    **callback ABI が `info` を含む generic 形になったこと** にある
+
+- 次に詰めるべきこと:
+  1. abstract dispatch callback の fast ABI を検討する
+  2. resolver / abstract callback で `info` を必要としない case を
+     native fast lane へ分岐できるようにする
+  3. それが難しい場合は、high-watermark branch と現行 branch の
+     keep/revert 判定を benchmark ベースで行う

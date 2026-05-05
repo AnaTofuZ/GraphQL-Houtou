@@ -688,3 +688,27 @@ perl -Ilib t/19_vm_execute.t
     - async promise queue / pending merge 自体の専用 fast lane 化
     - `source` ownership を表現したうえでの default leaf `newSVsv` 削減
     の 2 点
+
+- promise queue / callback lookup の軽量化
+  - promise block finalize で pending をいったん `AV` に積み直すのをやめ、
+    `promise_all_cb` へ stack へ直接 `XPUSHs(...)` する形に変更した
+  - pending が `Outcome` の場合だけ、その場で mortal handle を作って push し、
+    promise 自体は clone せず borrowed `SV*` をそのまま流す
+  - `wrap_object_outcome_callback_xs` / `wrap_list_outcome_callback_xs` は
+    BOOT 時に global coderef cache を初期化し、promise path では
+    毎回 `get_cv(...)` + `newRV_inc(...)` しないようにした
+  - `./Build test` / `minil test t/16_runtime_promise.t t/17_runtime_errors.t t/20_public_runtime_api.t`
+    は通過
+
+- 解釈:
+  - ここは promise/DataLoader 主経路の固定コスト削減で、現行 benchmark script の
+    sync-only case には直接は現れない
+  - 今回の変更で減っているのは
+    - block finalize の中間 `AV` alloc
+    - promise 値の `newSVsv(...)`
+    - outcome wrapper callback の coderef lookup
+    の 3 点
+  - 次の D の本命は引き続き
+    - pending merge の outcome handle churn 削減
+    - promise callback 後の response materialization 専用 fast lane
+    になる

@@ -6,6 +6,7 @@ use warnings;
 
 use GraphQL::Houtou ();
 use GraphQL::Houtou::Native ();
+use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::SchemaBlock ();
 use GraphQL::Houtou::Runtime::Slot ();
 
@@ -131,7 +132,6 @@ sub _native_runtime {
 
 sub _compile_native_program_descriptor {
   my ($self, $document, %opts) = @_;
-  require GraphQL::Houtou::Runtime::OperationCompiler;
   return GraphQL::Houtou::Runtime::OperationCompiler->compile_operation_native_compact(
     $self,
     $document,

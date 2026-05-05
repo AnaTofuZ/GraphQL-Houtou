@@ -7,6 +7,8 @@ use warnings;
 use parent 'GraphQL::Houtou::Type';
 use Role::Tiny::With;
 use GraphQL::Houtou::Internal::TypeSupport qw(description_doc_lines named_from_ast);
+use GraphQL::Houtou::Type::List ();
+use GraphQL::Houtou::Type::NonNull ();
 
 with qw(
   GraphQL::Houtou::Role::Input
@@ -15,12 +17,10 @@ with qw(
 );
 
 sub list {
-  require GraphQL::Houtou::Type::List;
   $_[0]->{_houtou_list} ||= GraphQL::Houtou::Type::List->new(of => $_[0]);
 }
 
 sub non_null {
-  require GraphQL::Houtou::Type::NonNull;
   $_[0]->{_houtou_non_null} ||= GraphQL::Houtou::Type::NonNull->new(of => $_[0]);
 }
 

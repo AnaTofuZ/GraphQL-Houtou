@@ -10,6 +10,8 @@ use JSON::MaybeXS qw(JSON is_bool);
 use Role::Tiny::With;
 use Scalar::Util qw(looks_like_number);
 use GraphQL::Houtou::Internal::TypeSupport qw(named_from_ast);
+use GraphQL::Houtou::Type::List ();
+use GraphQL::Houtou::Type::NonNull ();
 
 with qw(
   GraphQL::Houtou::Role::Input
@@ -21,12 +23,10 @@ our @EXPORT_OK = qw($Int $Float $String $Boolean $ID);
 use constant DEBUG => $ENV{GRAPHQL_DEBUG};
 
 sub list {
-  require GraphQL::Houtou::Type::List;
   $_[0]->{_houtou_list} ||= GraphQL::Houtou::Type::List->new(of => $_[0]);
 }
 
 sub non_null {
-  require GraphQL::Houtou::Type::NonNull;
   $_[0]->{_houtou_non_null} ||= GraphQL::Houtou::Type::NonNull->new(of => $_[0]);
 }
 

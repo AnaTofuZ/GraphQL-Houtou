@@ -343,6 +343,8 @@ struct gql_runtime_vm_path_frame {
   IV key_kind;
   IV key_iv;
   char *key_pv;
+  STRLEN key_pv_len;
+  U8 key_pv_borrowed;
 };
 
 typedef struct {
@@ -2123,7 +2125,11 @@ gql_runtime_vm_expect_error_records_av(pTHX_ SV *error_records)
 }
 
 static gql_runtime_vm_error_record_t *
-gql_runtime_vm_new_error_record_struct(pTHX_ SV *message, SV *path_frame)
+gql_runtime_vm_new_error_record_struct_for_path(
+  pTHX_
+  SV *message,
+  gql_runtime_vm_path_frame_t *path_frame
+)
 {
   gql_runtime_vm_error_record_t *record;
   STRLEN len = 0;
@@ -2137,13 +2143,25 @@ gql_runtime_vm_new_error_record_struct(pTHX_ SV *message, SV *path_frame)
     Copy(pv, record->message_pv, len, char);
     record->message_pv[len] = '\0';
   }
-  if (path_frame && SvOK(path_frame) && SvROK(path_frame) && SvIOK(SvRV(path_frame)) && SvUV(SvRV(path_frame)) != 0) {
-    record->path_frame = INT2PTR(gql_runtime_vm_path_frame_t *, SvUV(SvRV(path_frame)));
+  if (path_frame) {
+    record->path_frame = path_frame;
     record->path_frame->refcount++;
   } else {
     record->path_frame = NULL;
   }
   return record;
+}
+
+static gql_runtime_vm_error_record_t *
+gql_runtime_vm_new_error_record_struct(pTHX_ SV *message, SV *path_frame)
+{
+  gql_runtime_vm_path_frame_t *path_ptr = NULL;
+
+  if (path_frame && SvOK(path_frame) && SvROK(path_frame) && SvIOK(SvRV(path_frame)) && SvUV(SvRV(path_frame)) != 0) {
+    path_ptr = INT2PTR(gql_runtime_vm_path_frame_t *, SvUV(SvRV(path_frame)));
+  }
+
+  return gql_runtime_vm_new_error_record_struct_for_path(aTHX_ message, path_ptr);
 }
 
 static SV *
@@ -2156,7 +2174,7 @@ gql_runtime_vm_path_frame_key_sv(pTHX_ const gql_runtime_vm_path_frame_t *frame)
     return newSViv(frame->key_iv);
   }
   if (frame->key_pv) {
-    return newSVpv(frame->key_pv, 0);
+    return newSVpvn(frame->key_pv, frame->key_pv_len);
   }
   return newSV(0);
 }
@@ -2172,7 +2190,9 @@ gql_runtime_vm_path_frame_decref(gql_runtime_vm_path_frame_t *frame)
   }
   if (frame->refcount == 0) {
     gql_runtime_vm_path_frame_t *parent = frame->parent;
-    Safefree(frame->key_pv);
+    if (frame->key_pv && !frame->key_pv_borrowed) {
+      Safefree(frame->key_pv);
+    }
     Safefree(frame);
     gql_runtime_vm_path_frame_decref(parent);
   }

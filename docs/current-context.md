@@ -639,3 +639,52 @@ perl -Ilib t/19_vm_execute.t
   1. nested の残差を詰めるため、args / variable coercion の固定コストをさらに落とす
   2. explicit generic callback で `info` を要求しない case を見分けられるなら、ABI をもう一段 specialized にできるか検討する
   3. promise/DataLoader 主経路へ今回の callback ABI / metadata cache の判断をどこまで逆輸入するか決める
+
+- path frame borrowed key / async raw path frame
+  - `gql_runtime_vm_path_frame_t` に
+    - `key_pv_len`
+    - `key_pv_borrowed`
+    を追加し、result name 由来の path key は `slot->result_name` を borrow するようにした
+  - `gql_runtime_vm_new_result_path_frame(...)` と sync fast lane / sync `execute_program(...)` の field path 構築は
+    `newSVpv(...) + memcpy` ではなく borrowed path frame を使う
+  - promise path では内部 async 実行が `PathFrame` handle を毎回 wrap/unwrap せず、
+    raw `gql_runtime_vm_path_frame_t *` を
+    - resolver bridge
+    - complete callback
+    - error callback
+    - nested object/list/abstract completion
+    まで流す形に変更した
+  - error outcome / lazy info も内部 path は raw pointer で受け取り、
+    handle 化は public 境界だけに寄せた
+  - `./Build test` / `minil test` は通過
+
+- latest median:
+  - `nested_variable_object`
+    - `houtou_runtime_program`: `205906/s`
+    - `houtou_runtime_native_bundle`: `650345/s`
+  - `list_of_objects`
+    - `houtou_runtime_program`: `338460/s`
+    - `houtou_runtime_native_bundle`: `548036/s`
+  - `abstract_with_fragment`
+    - `houtou_runtime_program`: `364181/s`
+    - `houtou_runtime_native_bundle`: `611211/s`
+
+- 解釈:
+  - `74d7324` 比では
+    - `runtime_program`
+      - `nested_variable_object`: 約 `+7.1%`
+      - `list_of_objects`: 約 `+5.8%`
+      - `abstract_with_fragment`: 約 `+4.5%`
+    - `native_bundle`
+      - `nested_variable_object`: 約 `+4.7%`
+      - `list_of_objects`: 約 `+6.0%`
+      - `abstract_with_fragment`: 約 `+4.7%`
+  - borrowed path key だけでなく、async 内部の `PathFrame` handle 往復を消したことが
+    sync / async 共通の固定コスト削減として効いている
+  - 現時点では
+    - sync fast lane は引き続き high-watermark を上回っている
+    - `runtime_program` も fast lane 統一後の改善が継続している
+  - 次の本命は
+    - async promise queue / pending merge 自体の専用 fast lane 化
+    - `source` ownership を表現したうえでの default leaf `newSVsv` 削減
+    の 2 点

@@ -204,7 +204,9 @@ gql_runtime_vm_free_field_frame(pTHX_ gql_runtime_vm_field_frame_t *frame)
   }
   SvREFCNT_dec(frame->source);
   gql_runtime_vm_path_frame_decref(frame->path_frame);
-  SvREFCNT_dec(frame->resolved_value);
+  if (frame->resolved_value) {
+    SvREFCNT_dec(frame->resolved_value);
+  }
   gql_runtime_vm_outcome_decref(aTHX_ frame->outcome);
   Safefree(frame);
 }
@@ -668,7 +670,7 @@ gql_runtime_vm_new_field_frame_struct(pTHX_ SV *source, gql_runtime_vm_path_fram
     frame->path_frame = path_frame;
     frame->path_frame->refcount++;
   }
-  frame->resolved_value = newSVsv(&PL_sv_undef);
+  frame->resolved_value = NULL;
   frame->outcome = NULL;
   return frame;
 }
@@ -1054,42 +1056,23 @@ static SV *
 gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *state, SV *resolved)
 {
   AV *resolved_av = gql_runtime_vm_expect_arrayref(aTHX_ resolved, "resolved outcomes");
-  HV *merged_hv = newHV();
   SSize_t i;
-  SV *base_sv = gql_runtime_vm_native_value_materialize_sv(aTHX_ state->frame->values_value);
-  HV *base_hv = (base_sv && SvROK(base_sv) && SvTYPE(SvRV(base_sv)) == SVt_PVHV) ? (HV *)SvRV(base_sv) : NULL;
-  HE *he;
-
-  if (base_hv) {
-    hv_iterinit(base_hv);
-    while ((he = hv_iternext(base_hv))) {
-      SV *key_sv = hv_iterkeysv(he);
-      SV *val_sv = hv_iterval(base_hv, he);
-      hv_store_ent(merged_hv, key_sv, val_sv ? newSVsv(val_sv) : newSV(0), 0);
-    }
-  }
-  SvREFCNT_dec(base_sv);
 
   for (i = 0; i <= av_len(resolved_av) && i < state->frame->pending_count; i++) {
     SV **outcome_svp = av_fetch(resolved_av, i, 0);
     if (outcome_svp && *outcome_svp) {
-      SV *result_name_sv = newSVpvn(
-        state->frame->pending_entries[i].result_name_pv,
-        state->frame->pending_entries[i].result_name_len
-      );
-      gql_runtime_vm_consume_outcome_struct(
+      gql_runtime_vm_consume_outcome_native_object(
         aTHX_
-        merged_hv,
-        result_name_sv,
+        state->frame->values_value,
+        state->frame->pending_entries[i].result_name_pv,
         gql_runtime_vm_expect_outcome(aTHX_ *outcome_svp),
         state->writer
       );
-      SvREFCNT_dec(result_name_sv);
     }
   }
 
   gql_runtime_vm_block_frame_clear_pending(aTHX_ state->frame);
-  return newRV_noinc((SV *)merged_hv);
+  return gql_runtime_vm_native_value_materialize_sv(aTHX_ state->frame->values_value);
 }
 
 static XS(gql_runtime_vm_xs_complete_callback)
@@ -2591,11 +2574,6 @@ gql_runtime_vm_exec_state_execute_current_op_sync_now(pTHX_ SV *state_sv, gql_ru
     return outcome;
   }
 
-  if (s->field_frame) {
-    SvREFCNT_dec(s->field_frame->resolved_value);
-    s->field_frame->resolved_value = newSVsv(resolved_sv ? resolved_sv : &PL_sv_undef);
-  }
-
   switch (complete_code) {
     case GQL_VM_COMPLETE_OBJECT:
     {
@@ -2830,8 +2808,6 @@ gql_runtime_vm_exec_state_complete_async_sv(
   s->cursor->op_index = op_index;
 
   field_frame = gql_runtime_vm_new_field_frame_struct(aTHX_ &PL_sv_undef, path_ptr);
-  SvREFCNT_dec(field_frame->resolved_value);
-  field_frame->resolved_value = newSVsv(resolved_sv ? resolved_sv : &PL_sv_undef);
   if (s->field_frame && s->field_frame != saved_field_frame) {
     gql_runtime_vm_free_field_frame(aTHX_ s->field_frame);
   }
@@ -2925,9 +2901,6 @@ gql_runtime_vm_exec_state_execute_current_op_async_sv(pTHX_ SV *state_sv, gql_ru
     SvREFCNT_dec(error_sv);
     goto done_async_current_op;
   }
-
-  SvREFCNT_dec(s->field_frame->resolved_value);
-  s->field_frame->resolved_value = newSVsv(resolved_sv ? resolved_sv : &PL_sv_undef);
 
   if (s->promise_is_promise_cb && SvOK(s->promise_is_promise_cb) && gql_runtime_vm_is_promise_value_sv(aTHX_ s->promise_is_promise_cb, resolved_sv)) {
     result_sv = gql_runtime_vm_then_complete_current_sv(
@@ -5754,7 +5727,6 @@ field_frame_new_xs(class, source = &PL_sv_undef, path_frame = &PL_sv_undef, reso
           ? INT2PTR(gql_runtime_vm_path_frame_t *, SvUV(SvRV(path_frame)))
           : NULL
       );
-      SvREFCNT_dec(frame->resolved_value);
       frame->resolved_value = newSVsv(resolved_value ? resolved_value : &PL_sv_undef);
       if (outcome && SvOK(outcome)) {
         frame->outcome = gql_runtime_vm_expect_outcome(aTHX_ outcome);
@@ -5772,7 +5744,9 @@ field_frame_set_resolved_value_xs(frame, value)
   CODE:
     {
       gql_runtime_vm_field_frame_t *state = gql_runtime_vm_expect_field_frame(aTHX_ frame);
-      SvREFCNT_dec(state->resolved_value);
+      if (state->resolved_value) {
+        SvREFCNT_dec(state->resolved_value);
+      }
       state->resolved_value = newSVsv(value ? value : &PL_sv_undef);
     }
 
@@ -6033,40 +6007,22 @@ block_frame_merge_pending_xs(frame, writer, resolved)
       gql_runtime_vm_block_frame_t *state = gql_runtime_vm_expect_block_frame(aTHX_ frame);
       gql_runtime_vm_writer_t *writer_state = gql_runtime_vm_expect_writer(aTHX_ writer);
       AV *resolved_av = gql_runtime_vm_expect_arrayref(aTHX_ resolved, "resolved outcomes");
-      HV *merged_hv = newHV();
       SSize_t i;
-      SV *base_sv = gql_runtime_vm_native_value_materialize_sv(aTHX_ state->values_value);
-      HV *base_hv = (base_sv && SvROK(base_sv) && SvTYPE(SvRV(base_sv)) == SVt_PVHV) ? (HV *)SvRV(base_sv) : NULL;
-      HE *he;
-      if (base_hv) {
-        hv_iterinit(base_hv);
-        while ((he = hv_iternext(base_hv))) {
-          SV *key_sv = hv_iterkeysv(he);
-          SV *val_sv = hv_iterval(base_hv, he);
-          hv_store_ent(merged_hv, key_sv, val_sv ? newSVsv(val_sv) : newSV(0), 0);
-        }
-      }
-      SvREFCNT_dec(base_sv);
 
       for (i = 0; i <= av_len(resolved_av) && i < state->pending_count; i++) {
         SV **outcome_svp = av_fetch(resolved_av, i, 0);
         if (outcome_svp && *outcome_svp) {
-          SV *result_name_sv = newSVpvn(
-            state->pending_entries[i].result_name_pv,
-            state->pending_entries[i].result_name_len
-          );
-          gql_runtime_vm_consume_outcome_struct(
+          gql_runtime_vm_consume_outcome_native_object(
             aTHX_
-            merged_hv,
-            result_name_sv,
+            state->values_value,
+            state->pending_entries[i].result_name_pv,
             gql_runtime_vm_expect_outcome(aTHX_ *outcome_svp),
             writer_state
           );
-          SvREFCNT_dec(result_name_sv);
         }
       }
 
-      RETVAL = newRV_noinc((SV *)merged_hv);
+      RETVAL = gql_runtime_vm_native_value_materialize_sv(aTHX_ state->values_value);
     }
   OUTPUT:
     RETVAL

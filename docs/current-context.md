@@ -712,3 +712,38 @@ perl -Ilib t/19_vm_execute.t
     - pending merge の outcome handle churn 削減
     - promise callback 後の response materialization 専用 fast lane
     になる
+
+- pending merge の native-first 化と field frame resolved value の削減
+  - `pending_merge_resolve` は base object をいったん Perl hash に materialize して clone するのをやめ、
+    `frame->values_value` へ `consume_outcome_native_object(...)` で直接 merge してから
+    最後に 1 回だけ materialize する形に変更した
+  - `block_frame_merge_pending_xs(...)` も同じ native-first merge に揃えた
+  - active path の `FieldFrame->resolved_value` は実行中に参照していなかったため、
+    sync/async hot loop での `newSVsv(...)` 更新をやめ、field frame の初期値も `NULL` にした
+  - `./Build test` / `minil test` は通過
+
+- latest median:
+  - `nested_variable_object`
+    - `houtou_runtime_program`: `191565/s`
+    - `houtou_runtime_native_bundle`: `605390/s`
+  - `list_of_objects`
+    - `houtou_runtime_program`: `318515/s`
+    - `houtou_runtime_native_bundle`: `516388/s`
+  - `abstract_with_fragment`
+    - `houtou_runtime_program`: `346092/s`
+    - `houtou_runtime_native_bundle`: `582772/s`
+
+- 解釈:
+  - この batch 自体は promise/DataLoader 主経路向けで、現行 benchmark script の sync-only case では
+    効果を直接測れていない
+  - sync median は `0a4d66d` 時点の局所 peak より少し低いが、
+    `937edb0` (`restore-native-bundle-high-watermark`) 比では
+    - `nested_variable_object`: 約 `+3.6%`
+    - `list_of_objects`: 約 `+4.4%`
+    - `abstract_with_fragment`: 約 `+5.3%`
+    を維持している
+  - promise 主経路で残る大きいコストは、現行 promise adapter ABI のもとでは
+    - per-promise callback CV/closure 生成
+    - callback 境界での owned `SV*` 化
+    にほぼ収束している
+  - つまり、D は「現行 ABI を変えずに取れる async hot path のコスト削減」は一通り入った状態とみなせる

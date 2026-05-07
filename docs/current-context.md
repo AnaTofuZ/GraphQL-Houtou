@@ -66,6 +66,17 @@
 - Phase 6: Benchmark Gate
   - milestone branch: `milestone-f-benchmark-gate`
   - Phase 5 完了後に `./Build build` と benchmark repeat を回し、keep/revert 判断を記録する
+- Promise::XS fast path branch
+  - branch: `promise-xs-fast-path`
+  - `Promise::XS` を runtime dependency に追加した
+  - `GraphQL::Houtou::Promise::PromiseXS` を追加し、
+    - `Promise::XS::all(...)` の row-array 返却を Houtou 向けに正規化
+    - no-event-loop 環境で callback が即時に走る場合だけ `then(...)` を short-circuit
+    する helper を導入した
+  - Promise::XS の public `Promise` object には resolved/pending/result inspection がないため、
+    いまの branch では XS-level `try_resolve_sync` ではなく adapter-level short-circuit で扱っている
+  - `t/16_runtime_promise.t` に Promise::XS-backed case を追加
+  - async benchmark harness は `--include-async --promise-backend promise_xs` で Houtou 単独計測できる
 
 ## 現在のアーキテクチャ
 
@@ -218,6 +229,18 @@ fresh `./Build build` 済み環境で、
     - `houtou_runtime_native_bundle` median `289870/s`
   - `abstract_with_fragment`
     - `houtou_runtime_program` median `3510/s`
+
+- Promise::XS async benchmark on `promise-xs-fast-path`
+  - `perl util/execution-benchmark-checkpoint.pl --repeat=3 --count=-1 --include-async --promise-backend promise_xs`
+    の中央値:
+  - `async_scalar`
+    - `houtou_runtime_program` median `3140/s`
+  - `async_list`
+    - `houtou_runtime_program` median `3026/s`
+  - `async_object`
+    - `houtou_runtime_program` median `3082/s`
+  - `async_abstract`
+    - `houtou_runtime_program` median `3082/s`
     - `houtou_runtime_native_bundle` median `268800/s`
 
 解釈:

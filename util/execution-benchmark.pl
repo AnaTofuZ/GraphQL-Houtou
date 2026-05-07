@@ -12,6 +12,8 @@ BEGIN {
   my $upstream = File::Spec->catdir($root, '..', 'graphql-perl');
 
   unshift @INC,
+    File::Spec->catdir($root, 'local', 'lib', 'perl5'),
+    File::Spec->catdir($root, 'local', 'lib', 'perl5', 'darwin-2level'),
     File::Spec->catdir($root, 'lib'),
     File::Spec->catdir($root, 'blib', 'lib'),
     File::Spec->catdir($root, 'blib', 'arch'),
@@ -28,6 +30,10 @@ use GraphQL::Type::Scalar ();
 use GraphQL::Type::Union;
 
 use GraphQL::Houtou::Schema;
+use GraphQL::Houtou::Promise::PromiseXS qw(
+  maybe_get_promise_xs
+  promise_xs_code
+);
 use GraphQL::Houtou::Type::Interface ();
 use GraphQL::Houtou::Type::Object ();
 use GraphQL::Houtou::Type::Scalar ();
@@ -36,11 +42,13 @@ use GraphQL::Houtou::Type::Union ();
 my $count = -3;
 my @only;
 my $include_async = 1;
+my $promise_backend = 'local';
 
 GetOptions(
   'count=s' => \$count,
   'case=s@' => \@only,
   'include-async!' => \$include_async,
+  'promise-backend=s' => \$promise_backend,
 ) or die "Usage: $0 [--count Benchmark-count] [--case name] [--include-async|--no-include-async]\n";
 
 my %only = map { $_ => 1 } @only;
@@ -125,6 +133,30 @@ sub promise_code {
   };
 }
 
+sub promise_backend {
+  my ($backend_name) = @_;
+  $backend_name ||= 'local';
+
+  return {
+    name => 'local',
+    code => promise_code(),
+    resolve => sub { Local::ImmediatePromise->resolve(@_) },
+    maybe_get => sub { maybe_get(@_) },
+  } if $backend_name eq 'local';
+
+  return {
+    name => 'promise_xs',
+    code => promise_xs_code(),
+    resolve => sub {
+      require Promise::XS;
+      return Promise::XS::resolved(@_);
+    },
+    maybe_get => sub { maybe_get_promise_xs(@_) },
+  } if $backend_name eq 'promise_xs';
+
+  die "Unknown promise backend '$backend_name'\n";
+}
+
 sub maybe_get {
   my ($value) = @_;
   return (ref($value) && eval { $value->isa('Local::ImmediatePromise') })
@@ -133,7 +165,7 @@ sub maybe_get {
 }
 
 sub build_upstream_schema {
-  my ($include_async_case) = @_;
+  my ($include_async_case, $promise) = @_;
 
   my $User = GraphQL::Type::Object->new(
     name => 'User',
@@ -209,16 +241,34 @@ sub build_upstream_schema {
     $fields{asyncHello} = {
       type => $GraphQL::Type::Scalar::String->non_null,
       resolve => sub {
-        return Local::ImmediatePromise->resolve('async-world');
+        return $promise->{resolve}->('async-world');
       },
     };
     $fields{asyncList} = {
       type => $GraphQL::Type::Scalar::String->non_null->list->non_null,
       resolve => sub {
         return [
-          Local::ImmediatePromise->resolve('alpha'),
-          Local::ImmediatePromise->resolve('beta'),
+          $promise->{resolve}->('alpha'),
+          $promise->{resolve}->('beta'),
         ];
+      },
+    };
+    $fields{asyncUser} = {
+      type => $User,
+      resolve => sub {
+        return $promise->{resolve}->({
+          id => '41',
+          name => 'async:41',
+        });
+      },
+    };
+    $fields{asyncSearchResult} = {
+      type => $SearchResult,
+      resolve => sub {
+        return $promise->{resolve}->({
+          id => '42',
+          name => 'async:42',
+        });
       },
     };
   }
@@ -235,7 +285,7 @@ sub build_upstream_schema {
 }
 
 sub build_houtou_schema {
-  my ($include_async_case) = @_;
+  my ($include_async_case, $promise) = @_;
 
   my $User = GraphQL::Houtou::Type::Object->new(
     name => 'User',
@@ -317,7 +367,7 @@ sub build_houtou_schema {
       type => $GraphQL::Houtou::Type::Scalar::String->non_null,
       resolver_mode => 'native',
       resolve => sub {
-        return Local::ImmediatePromise->resolve('async-world');
+        return $promise->{resolve}->('async-world');
       },
     };
     $fields{asyncList} = {
@@ -325,9 +375,29 @@ sub build_houtou_schema {
       resolver_mode => 'native',
       resolve => sub {
         return [
-          Local::ImmediatePromise->resolve('alpha'),
-          Local::ImmediatePromise->resolve('beta'),
+          $promise->{resolve}->('alpha'),
+          $promise->{resolve}->('beta'),
         ];
+      },
+    };
+    $fields{asyncUser} = {
+      type => $User,
+      resolver_mode => 'native',
+      resolve => sub {
+        return $promise->{resolve}->({
+          id => '41',
+          name => 'async:41',
+        });
+      },
+    };
+    $fields{asyncSearchResult} = {
+      type => $SearchResult,
+      resolver_mode => 'native',
+      resolve => sub {
+        return $promise->{resolve}->({
+          id => '42',
+          name => 'async:42',
+        });
       },
     };
   }
@@ -350,7 +420,8 @@ sub benchmark_case {
   my $query = $spec->{query};
   my $vars = $spec->{vars};
   my $op = $spec->{op};
-  my $promise_code = $spec->{promise} ? promise_code() : undef;
+  my $promise = $spec->{promise} ? promise_backend($promise_backend) : undef;
+  my $promise_code = $promise ? $promise->{code} : undef;
   my $up_ast = parse($query);
   my $runtime = $houtou_schema->build_runtime;
   my $program = $runtime->compile_program($query);
@@ -362,36 +433,54 @@ sub benchmark_case {
       )
     : undef;
 
-  my $expected = _normalize_result(maybe_get(
-    execute(
-      $up_schema,
-      $up_ast,
-      undef,
-      undef,
-      $vars,
-      $op,
-      undef,
-      $promise_code,
-    )
-  ));
+  my $expected;
+  if ($promise && $promise->{name} eq 'promise_xs') {
+    $expected = _normalize_result($promise->{maybe_get}->(
+      $runtime->execute_program(
+        $program,
+        (defined($vars) ? (variables => $vars) : ()),
+        promise_code => $promise_code,
+      )
+    ));
+  } else {
+    $expected = _normalize_result(($promise ? $promise->{maybe_get} : \&maybe_get)->(
+      execute(
+        $up_schema,
+        $up_ast,
+        undef,
+        undef,
+        $vars,
+        $op,
+        undef,
+        $promise_code,
+      )
+    ));
+  }
 
-  my @checks = (
-    [ 'upstream_ast', sub {
-      return maybe_get(execute($up_schema, $up_ast, undef, undef, $vars, $op, undef, $promise_code));
-    } ],
-    [ 'upstream_string', sub {
-      return maybe_get(execute($up_schema, $query, undef, undef, $vars, $op, undef, $promise_code));
-    } ],
-    [ 'houtou_runtime_program', sub {
-      return maybe_get(
-        $runtime->execute_program(
-          $program,
-          (defined($vars) ? (variables => $vars) : ()),
-          ($promise_code ? (promise_code => $promise_code) : ()),
-        )
-      );
-    } ],
-  );
+  my @checks;
+  if (!$promise || $promise->{name} ne 'promise_xs') {
+    push @checks,
+      [ 'upstream_ast', sub {
+        return ($promise ? $promise->{maybe_get} : \&maybe_get)->(
+          execute($up_schema, $up_ast, undef, undef, $vars, $op, undef, $promise_code)
+        );
+      } ],
+      [ 'upstream_string', sub {
+        return ($promise ? $promise->{maybe_get} : \&maybe_get)->(
+          execute($up_schema, $query, undef, undef, $vars, $op, undef, $promise_code)
+        );
+      } ];
+  }
+
+  push @checks, [ 'houtou_runtime_program', sub {
+    return ($promise ? $promise->{maybe_get} : \&maybe_get)->(
+      $runtime->execute_program(
+        $program,
+        (defined($vars) ? (variables => $vars) : ()),
+        ($promise_code ? (promise_code => $promise_code) : ()),
+      )
+    );
+  } ];
 
   if ($native_bundle) {
     push @checks, [ 'houtou_runtime_native_bundle', sub {
@@ -412,7 +501,7 @@ sub benchmark_case {
 
   print "\n=== $name ===\n";
   print "Query: $query\n";
-  print "Mode: " . ($spec->{promise} ? "promise-backed execute\n" : "sync execute\n");
+  print "Mode: " . ($spec->{promise} ? "promise-backed execute ($promise_backend)\n" : "sync execute\n");
   cmpthese($count, { map { $_->[0] => $_->[1] } @checks });
 }
 
@@ -430,8 +519,9 @@ sub _normalize_result {
   return \%copy;
 }
 
-my $up_schema = build_upstream_schema($include_async);
-my $houtou_schema = build_houtou_schema($include_async);
+my $promise = promise_backend($promise_backend);
+my $up_schema = build_upstream_schema($include_async, $promise);
+my $houtou_schema = build_houtou_schema($include_async, $promise);
 
 my @cases = (
   {
@@ -463,6 +553,18 @@ push @cases, {
 push @cases, {
   name => 'async_list',
   query => '{ asyncList }',
+  promise => 1,
+} if $include_async;
+
+push @cases, {
+  name => 'async_object',
+  query => '{ asyncUser { id name } }',
+  promise => 1,
+} if $include_async;
+
+push @cases, {
+  name => 'async_abstract',
+  query => '{ asyncSearchResult { __typename ... on User { id name } } }',
   promise => 1,
 } if $include_async;
 

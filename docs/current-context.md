@@ -68,15 +68,22 @@
   - Phase 5 完了後に `./Build build` と benchmark repeat を回し、keep/revert 判断を記録する
 - Promise::XS fast path branch
   - branch: `promise-xs-fast-path`
-  - `Promise::XS` を runtime dependency に追加した
+  - `cpanfile` では `Promise::XS` を `https://github.com/AnaTofuZ/p5-Promise-XS.git` の `master` 参照にした
+  - ローカル検証は upstream checkout を submodule ごとに展開して `local/` へ manual install する運用に切り替えた
   - `GraphQL::Houtou::Promise::PromiseXS` を追加し、
     - `Promise::XS::all(...)` の row-array 返却を Houtou 向けに正規化
     - no-event-loop 環境で callback が即時に走る場合だけ `then(...)` を short-circuit
     する helper を導入した
-  - Promise::XS の public `Promise` object には resolved/pending/result inspection がないため、
-    いまの branch では XS-level `try_resolve_sync` ではなく adapter-level short-circuit で扱っている
   - `t/16_runtime_promise.t` に Promise::XS-backed case を追加
   - async benchmark harness は `--include-async --promise-backend promise_xs` で Houtou 単独計測できる
+  - Promise::XS marker (`_houtou_promise_backend => 'promise_xs'`) を XS state に通し、
+    async path では
+    - `is_promise` を direct class check
+    - `Promise::XS::all(...)` を direct call
+    - flatten callback を global XSUB callback
+    - fulfilled 済み promise は `Promise::XS::Promise::AWAIT_IS_READY` / `AWAIT_GET` で short-circuit
+    - pending / rejected は通常の `then(...)` 経路へフォールバック
+    で扱えるようにした
 
 ## 現在のアーキテクチャ
 
@@ -234,14 +241,30 @@ fresh `./Build build` 済み環境で、
   - `perl util/execution-benchmark-checkpoint.pl --repeat=3 --count=-1 --include-async --promise-backend promise_xs`
     の中央値:
   - `async_scalar`
-    - `houtou_runtime_program` median `3140/s`
+    - initial adapter/helper path: `3140/s`
+    - direct Promise::XS fast path: `3111/s`
+    - `AWAIT_IS_READY/AWAIT_GET` short-circuit 後: `3229/s`
   - `async_list`
-    - `houtou_runtime_program` median `3026/s`
+    - initial adapter/helper path: `3026/s`
+    - direct Promise::XS fast path: `3082/s`
+    - `AWAIT_IS_READY/AWAIT_GET` short-circuit 後: `3170/s`
   - `async_object`
-    - `houtou_runtime_program` median `3082/s`
+    - initial adapter/helper path: `3082/s`
+    - direct Promise::XS fast path: `3054/s`
+    - `AWAIT_IS_READY/AWAIT_GET` short-circuit 後: `3169/s`
   - `async_abstract`
-    - `houtou_runtime_program` median `3082/s`
-    - `houtou_runtime_native_bundle` median `268800/s`
+    - initial adapter/helper path: `3082/s`
+    - direct Promise::XS fast path: `3054/s`
+    - `AWAIT_IS_READY/AWAIT_GET` short-circuit 後: `3169/s`
+  - 解釈:
+    - Promise::XS master の `AWAIT_IS_READY/AWAIT_GET` を使う fulfilled-promise short-circuit は有効
+    - direct Promise::XS fast path 比で
+      - `async_scalar`: 約 `+3.8%`
+      - `async_list`: 約 `+2.9%`
+      - `async_object`: 約 `+3.8%`
+      - `async_abstract`: 約 `+3.8%`
+      改善した
+    - 一方で promise callback / outcome object 生成はまだ支配的で、次の本命は callback ABI と pending queue の更なる専用化
 
 解釈:
 

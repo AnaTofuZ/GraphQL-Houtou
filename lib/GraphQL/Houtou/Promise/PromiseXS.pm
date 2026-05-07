@@ -28,6 +28,7 @@ sub is_promise_xs_value {
 sub promise_xs_code {
   _load_promise_xs();
   return $PROMISE_XS_CODE ||= normalize_promise_code({
+    _houtou_promise_backend => 'promise_xs',
     resolve => sub { Promise::XS::resolved(@_) },
     reject  => sub { Promise::XS::rejected(@_) },
     all     => \&_all_promise_xs,

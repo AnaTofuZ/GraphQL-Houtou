@@ -844,3 +844,14 @@ perl -Ilib t/19_vm_execute.t
   - ここから先の本命は
     - Promise::XS continuation / batch continuation の further specialization
     - auto-detect mainline と sync fast lane の benchmark surface の再整理
+
+- Perl 5.14 CI workaround for Promise::XS direct-await shortcut
+  - `t/16_runtime_promise.t` が Perl 5.14 の GitHub Actions で SEGV したため、
+    Promise::XS direct `AWAIT_IS_READY` / `AWAIT_GET` shortcut を old perl では無効化した
+  - 対象は [`gql_runtime_vm_promise_xs_is_ready_now(...)`] と
+    [`gql_runtime_vm_promise_xs_try_get_sync_values_av(...)`]
+  - `PERL_VERSION < 5.16` では最適化を使わず、通常の `then(...)` path へフォールバックする
+  - 5.42 では `minil test t/16_runtime_promise.t` / `minil test` ともに通過
+  - 原因の見立て:
+    - Promise::XS direct await helper 自体、または old perl の callback / await lifetime 周辺が怪しい
+    - shortcut は最適化であって必須ではないので、old perl では安全側に倒した

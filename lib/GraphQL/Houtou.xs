@@ -1077,6 +1077,17 @@ gql_runtime_vm_is_promise_value_for_state_sv(
 static int
 gql_runtime_vm_promise_xs_is_ready_now(pTHX_ SV *promise_sv, int *ready_out)
 {
+#if !PERL_VERSION_GE(5, 16, 0)
+  PERL_UNUSED_CONTEXT;
+  PERL_UNUSED_ARG(promise_sv);
+  if (ready_out) {
+    *ready_out = 0;
+  }
+  /* Promise::XS direct await helpers are a pure optimization. On old perls,
+   * fall back to the ordinary then(...) path instead of risking callback /
+   * await lifetime issues in the fast shortcut. */
+  return 0;
+#else
   dSP;
   SV *callback_sv = gql_runtime_vm_promise_xs_await_is_ready_callback_sv(aTHX);
   int have_ready = 0;
@@ -1115,11 +1126,20 @@ gql_runtime_vm_promise_xs_is_ready_now(pTHX_ SV *promise_sv, int *ready_out)
   SvREFCNT_dec(callback_sv);
 
   return have_ready;
+#endif
 }
 
 static int
 gql_runtime_vm_promise_xs_try_get_sync_values_av(pTHX_ SV *promise_sv, AV **values_av_out)
 {
+#if !PERL_VERSION_GE(5, 16, 0)
+  PERL_UNUSED_CONTEXT;
+  PERL_UNUSED_ARG(promise_sv);
+  if (values_av_out) {
+    *values_av_out = NULL;
+  }
+  return 0;
+#else
   dSP;
   SV *callback_sv = gql_runtime_vm_promise_xs_await_get_callback_sv(aTHX);
   int ok = 0;
@@ -1176,6 +1196,7 @@ gql_runtime_vm_promise_xs_try_get_sync_values_av(pTHX_ SV *promise_sv, AV **valu
   }
 
   return ok;
+#endif
 }
 
 static SV *

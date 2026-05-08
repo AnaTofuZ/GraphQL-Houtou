@@ -25,7 +25,7 @@ jobs:
           ]
     name: Perl ${{ matrix.perl }}
     container:
-      image: perldocker/perl-tester:${{ matrix.perl-version }}
+      image: perldocker/perl-tester:${{ matrix.perl }}
     steps:
       - uses: actions/checkout@v3
       - name: Install dependencies

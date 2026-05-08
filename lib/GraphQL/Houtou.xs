@@ -19,7 +19,7 @@ static SV *gql_runtime_vm_global_promise_xs_flatten_all_callback_sv = NULL;
 static SV *gql_runtime_vm_global_promise_xs_await_is_ready_callback_sv = NULL;
 static SV *gql_runtime_vm_global_promise_xs_await_get_callback_sv = NULL;
 
-#define GQL_VM_PROMISE_BACKEND_GENERIC 0
+#define GQL_VM_PROMISE_BACKEND_NONE 0
 #define GQL_VM_PROMISE_BACKEND_PROMISE_XS 1
 
 static SV *
@@ -218,8 +218,6 @@ static SV *gql_runtime_vm_new_complete_callback_sv(pTHX_ SV *state_sv, gql_runti
 static SV *gql_runtime_vm_new_error_callback_sv(pTHX_ gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_new_finalize_callback_sv(pTHX_ gql_runtime_vm_pending_merge_t *merge);
 static SV *gql_runtime_vm_new_materialize_response_callback_sv(pTHX_ SV *state_sv);
-static SV *gql_runtime_vm_call_then_promise_sv(pTHX_ SV *promise_then_cb, SV *promise_sv, SV *callback_sv, SV *error_callback_sv, gql_runtime_vm_path_frame_t *path_frame);
-static SV *gql_runtime_vm_call_all_promise_sv(pTHX_ SV *promise_all_cb, AV *values_av, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_then_promise_xs_sv(pTHX_ SV *promise_sv, SV *callback_sv, SV *error_callback_sv, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_all_promise_xs_sv(pTHX_ AV *values_av, gql_runtime_vm_path_frame_t *path_frame);
 static int gql_runtime_vm_promise_xs_is_ready_now(pTHX_ SV *promise_sv, int *ready_out);
@@ -923,7 +921,7 @@ gql_runtime_vm_consume_current_result_now(pTHX_ gql_runtime_vm_exec_state_handle
 }
 
 static SV *
-gql_runtime_vm_block_frame_finalize_sv(pTHX_ gql_runtime_vm_block_frame_t *frame, U8 promise_backend_code, SV *promise_all_cb, SV *promise_then_cb, gql_runtime_vm_writer_t *writer);
+gql_runtime_vm_block_frame_finalize_sv(pTHX_ gql_runtime_vm_block_frame_t *frame, U8 promise_backend_code, gql_runtime_vm_writer_t *writer);
 
 static SV *
 gql_runtime_vm_finalize_current_block_now(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *snapshot)
@@ -938,13 +936,11 @@ gql_runtime_vm_finalize_current_block_now(pTHX_ gql_runtime_vm_exec_state_handle
 
   frame = s->frame;
   completed_frame = frame;
-  if (s->promise_code && SvOK(s->promise_code)) {
+  if (s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
     result = gql_runtime_vm_block_frame_finalize_sv(
       aTHX_
       frame,
       s->promise_backend_code,
-      s->promise_all_cb,
-      s->promise_then_cb,
       s->writer
     );
   } else {
@@ -970,8 +966,6 @@ gql_runtime_vm_block_frame_finalize_sv(
   pTHX_
   gql_runtime_vm_block_frame_t *frame,
   U8 promise_backend_code,
-  SV *promise_all_cb,
-  SV *promise_then_cb,
   gql_runtime_vm_writer_t *writer
 )
 {
@@ -985,11 +979,8 @@ gql_runtime_vm_block_frame_finalize_sv(
   if (frame->pending_count == 0) {
     return gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
   }
-  if (
-    promise_backend_code != GQL_VM_PROMISE_BACKEND_PROMISE_XS &&
-    (!promise_all_cb || !SvOK(promise_all_cb) || !promise_then_cb || !SvOK(promise_then_cb))
-  ) {
-    croak("pending async runtime blocks require promise all/then callbacks");
+  if (promise_backend_code != GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
+    croak("pending async runtime blocks require Promise::XS");
   }
 
   pending_av = newAV();
@@ -1018,9 +1009,7 @@ gql_runtime_vm_block_frame_finalize_sv(
       av_push(pending_av, newSVsv(&PL_sv_undef));
     }
   }
-  aggregate = (promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS)
-    ? gql_runtime_vm_call_all_promise_xs_sv(aTHX_ pending_av, NULL)
-    : gql_runtime_vm_call_all_promise_sv(aTHX_ promise_all_cb, pending_av, NULL);
+  aggregate = gql_runtime_vm_call_all_promise_xs_sv(aTHX_ pending_av, NULL);
   SvREFCNT_dec((SV *)pending_av);
 
   if (aggregate && sv_derived_from(aggregate, "GraphQL::Houtou::Runtime::Outcome")) {
@@ -1041,9 +1030,7 @@ gql_runtime_vm_block_frame_finalize_sv(
     callback_sv = gql_runtime_vm_new_finalize_callback_sv(aTHX_ merge);
     gql_runtime_vm_pending_merge_decref(aTHX_ merge);
 
-    retval = (promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS)
-      ? gql_runtime_vm_call_then_promise_xs_sv(aTHX_ aggregate, callback_sv, NULL, NULL)
-      : gql_runtime_vm_call_then_promise_sv(aTHX_ promise_then_cb, aggregate, callback_sv, NULL, NULL);
+    retval = gql_runtime_vm_call_then_promise_xs_sv(aTHX_ aggregate, callback_sv, NULL, NULL);
 
     SvREFCNT_dec(aggregate);
     SvREFCNT_dec(callback_sv);
@@ -1058,15 +1045,6 @@ gql_runtime_vm_fetch_hash_entry_sv(pTHX_ HV *hv, const char *key, I32 keylen)
   return (svp && SvOK(*svp)) ? *svp : NULL;
 }
 
-static SV *
-gql_runtime_vm_promise_callback_from_code_sv(pTHX_ SV *promise_code, const char *key, I32 keylen)
-{
-  if (!promise_code || !SvOK(promise_code) || !SvROK(promise_code) || SvTYPE(SvRV(promise_code)) != SVt_PVHV) {
-    return NULL;
-  }
-  return gql_runtime_vm_fetch_hash_entry_sv(aTHX_ (HV *)SvRV(promise_code), key, keylen);
-}
-
 static const char *
 gql_runtime_vm_fetch_hash_entry_pv(pTHX_ HV *hv, const char *key, I32 keylen)
 {
@@ -1074,66 +1052,10 @@ gql_runtime_vm_fetch_hash_entry_pv(pTHX_ HV *hv, const char *key, I32 keylen)
   return sv ? SvPV_nolen(sv) : NULL;
 }
 
-static U8
-gql_runtime_vm_promise_backend_code_from_code_sv(pTHX_ SV *promise_code)
-{
-  HV *hv;
-  SV *backend_sv;
-  STRLEN backend_len = 0;
-  const char *backend_pv;
-
-  if (!promise_code || !SvOK(promise_code) || !SvROK(promise_code) || SvTYPE(SvRV(promise_code)) != SVt_PVHV) {
-    return GQL_VM_PROMISE_BACKEND_GENERIC;
-  }
-
-  hv = (HV *)SvRV(promise_code);
-  backend_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ hv, "_houtou_promise_backend", 23);
-  if (!backend_sv || !SvOK(backend_sv)) {
-    return GQL_VM_PROMISE_BACKEND_GENERIC;
-  }
-
-  backend_pv = SvPV(backend_sv, backend_len);
-  return (backend_len == 10 && memEQ(backend_pv, "promise_xs", 10))
-    ? GQL_VM_PROMISE_BACKEND_PROMISE_XS
-    : GQL_VM_PROMISE_BACKEND_GENERIC;
-}
-
 static int
 gql_runtime_vm_is_promise_xs_value_sv(SV *value)
 {
   return value && SvOK(value) && SvROK(value) && sv_derived_from(value, "Promise::XS::Promise");
-}
-
-static int
-gql_runtime_vm_is_promise_value_sv(pTHX_ SV *is_promise_cb, SV *value)
-{
-  dSP;
-  int is_promise = 0;
-
-  if (!is_promise_cb || !SvOK(is_promise_cb)) {
-    return 0;
-  }
-
-  ENTER;
-  SAVETMPS;
-  PUSHMARK(SP);
-  XPUSHs(value ? value : &PL_sv_undef);
-  PUTBACK;
-  call_sv(is_promise_cb, G_SCALAR | G_EVAL);
-  SPAGAIN;
-  if (!SvTRUE(ERRSV) && SP > PL_stack_base) {
-    is_promise = SvTRUE(POPs) ? 1 : 0;
-  } else if (SP > PL_stack_base) {
-    (void)POPs;
-  }
-  if (SvTRUE(ERRSV)) {
-    sv_setsv(ERRSV, &PL_sv_undef);
-  }
-  PUTBACK;
-  FREETMPS;
-  LEAVE;
-
-  return is_promise;
 }
 
 static int
@@ -1149,9 +1071,7 @@ gql_runtime_vm_is_promise_value_for_state_sv(
   if (s && s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
     return gql_runtime_vm_is_promise_xs_value_sv(value);
   }
-  return s && s->promise_is_promise_cb && SvOK(s->promise_is_promise_cb)
-    ? gql_runtime_vm_is_promise_value_sv(aTHX_ s->promise_is_promise_cb, value)
-    : 0;
+  return 0;
 }
 
 static int
@@ -1622,102 +1542,6 @@ gql_runtime_vm_new_outcome_handle_sv(pTHX_ U8 kind_code, SV *value, SV *error_re
 }
 
 static SV *
-gql_runtime_vm_call_then_promise_sv(
-  pTHX_
-  SV *promise_then_cb,
-  SV *promise_sv,
-  SV *callback_sv,
-  SV *error_callback_sv,
-  gql_runtime_vm_path_frame_t *path_frame
-)
-{
-  dSP;
-  SV *ret = NULL;
-
-  if (!promise_then_cb || !SvOK(promise_then_cb)) {
-    croak("missing promise then callback");
-  }
-
-  ENTER;
-  SAVETMPS;
-  PUSHMARK(SP);
-  XPUSHs(promise_sv ? promise_sv : &PL_sv_undef);
-  XPUSHs(callback_sv ? callback_sv : &PL_sv_undef);
-  if (error_callback_sv) {
-    XPUSHs(error_callback_sv);
-  }
-  PUTBACK;
-  call_sv(promise_then_cb, G_SCALAR | G_EVAL);
-  SPAGAIN;
-  if (!SvTRUE(ERRSV) && SP > PL_stack_base) {
-    ret = POPs;
-    ret = ret ? newSVsv(ret) : newSVsv(&PL_sv_undef);
-  } else if (SP > PL_stack_base) {
-    (void)POPs;
-  }
-  if (SvTRUE(ERRSV)) {
-    ret = gql_runtime_vm_new_error_outcome_for_path_sv(
-      aTHX_
-      ERRSV,
-      path_frame
-    );
-    sv_setsv(ERRSV, &PL_sv_undef);
-  }
-  PUTBACK;
-  FREETMPS;
-  LEAVE;
-
-  return ret ? ret : newSVsv(&PL_sv_undef);
-}
-
-static SV *
-gql_runtime_vm_call_all_promise_sv(
-  pTHX_
-  SV *promise_all_cb,
-  AV *values_av,
-  gql_runtime_vm_path_frame_t *path_frame
-)
-{
-  dSP;
-  SV *ret = NULL;
-  SSize_t i;
-
-  if (!promise_all_cb || !SvOK(promise_all_cb)) {
-    croak("missing promise all callback");
-  }
-
-  ENTER;
-  SAVETMPS;
-  PUSHMARK(SP);
-  for (i = 0; values_av && i <= av_len(values_av); i++) {
-    SV **svp = av_fetch(values_av, i, 0);
-    XPUSHs((svp && *svp) ? *svp : &PL_sv_undef);
-  }
-  PUTBACK;
-  call_sv(promise_all_cb, G_SCALAR | G_EVAL);
-  SPAGAIN;
-  if (!SvTRUE(ERRSV) && SP > PL_stack_base) {
-    ret = POPs;
-    ret = ret ? newSVsv(ret) : newSVsv(&PL_sv_undef);
-  } else if (SP > PL_stack_base) {
-    (void)POPs;
-  }
-  if (SvTRUE(ERRSV)) {
-    ret = gql_runtime_vm_new_error_outcome_for_path_sv(
-      aTHX_
-      ERRSV,
-      path_frame
-    );
-    sv_setsv(ERRSV, &PL_sv_undef);
-  }
-  PUTBACK;
-  FREETMPS;
-  LEAVE;
-
-  return ret ? ret : newSVsv(&PL_sv_undef);
-}
-
-static SV *
 gql_runtime_vm_call_then_promise_xs_sv(
   pTHX_
   SV *promise_sv,
@@ -1873,15 +1697,7 @@ gql_runtime_vm_call_then_promise_for_state_sv(
       path_frame
     );
   }
-
-  return gql_runtime_vm_call_then_promise_sv(
-    aTHX_
-    s ? s->promise_then_cb : NULL,
-    promise_sv,
-    callback_sv,
-    error_callback_sv,
-    path_frame
-  );
+  croak("async runtime requires Promise::XS");
 }
 
 static SV *
@@ -1895,13 +1711,7 @@ gql_runtime_vm_call_all_promise_for_state_sv(
   if (s && s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
     return gql_runtime_vm_call_all_promise_xs_sv(aTHX_ values_av, path_frame);
   }
-
-  return gql_runtime_vm_call_all_promise_sv(
-    aTHX_
-    s ? s->promise_all_cb : NULL,
-    values_av,
-    path_frame
-  );
+  croak("async runtime requires Promise::XS");
 }
 
 static SV *
@@ -1916,7 +1726,7 @@ gql_runtime_vm_exec_state_finalize_async_response_sv(
 
   if (
     s &&
-    s->promise_then_cb && SvOK(s->promise_then_cb) &&
+    s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS &&
     gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, data_sv)
   ) {
     SV *callback_sv = gql_runtime_vm_new_materialize_response_callback_sv(aTHX_ state_sv);
@@ -6469,23 +6279,17 @@ block_frame_values_xs(frame)
     RETVAL
 
 SV *
-block_frame_finalize_xs(frame, promise_code, writer)
+block_frame_finalize_xs(frame, writer)
     SV *frame
-    SV *promise_code
     SV *writer
   CODE:
     {
       gql_runtime_vm_block_frame_t *state = gql_runtime_vm_expect_block_frame(aTHX_ frame);
       gql_runtime_vm_writer_t *writer_state = gql_runtime_vm_expect_writer(aTHX_ writer);
-      U8 promise_backend_code = gql_runtime_vm_promise_backend_code_from_code_sv(aTHX_ promise_code);
-      SV *promise_all_cb = gql_runtime_vm_promise_callback_from_code_sv(aTHX_ promise_code, "all", 3);
-      SV *promise_then_cb = gql_runtime_vm_promise_callback_from_code_sv(aTHX_ promise_code, "then", 4);
       RETVAL = gql_runtime_vm_block_frame_finalize_sv(
         aTHX_
         state,
-        promise_backend_code,
-        promise_all_cb,
-        promise_then_cb,
+        GQL_VM_PROMISE_BACKEND_PROMISE_XS,
         writer_state
       );
     }
@@ -6534,7 +6338,7 @@ block_frame_merge_pending_xs(frame, writer, resolved)
     RETVAL
 
 SV *
-exec_state_new_xs(class, runtime_schema, program, cursor, writer, context = &PL_sv_undef, variables = &PL_sv_undef, root_value = &PL_sv_undef, promise_code = &PL_sv_undef, empty_args = &PL_sv_undef)
+exec_state_new_xs(class, runtime_schema, program, cursor, writer, context = &PL_sv_undef, variables = &PL_sv_undef, root_value = &PL_sv_undef, empty_args = &PL_sv_undef)
     SV *class
     SV *runtime_schema
     SV *program
@@ -6543,14 +6347,10 @@ exec_state_new_xs(class, runtime_schema, program, cursor, writer, context = &PL_
     SV *context
     SV *variables
     SV *root_value
-    SV *promise_code
     SV *empty_args
   CODE:
     {
       gql_runtime_vm_exec_state_handle_t *state;
-      SV *promise_then_cb;
-      SV *promise_all_cb;
-      SV *promise_is_promise_cb;
       const char *pkg = SvPV_nolen(class);
       Newxz(state, 1, gql_runtime_vm_exec_state_handle_t);
       state->runtime_schema = newSVsv(runtime_schema ? runtime_schema : &PL_sv_undef);
@@ -6569,14 +6369,7 @@ exec_state_new_xs(class, runtime_schema, program, cursor, writer, context = &PL_
       state->context = newSVsv(context ? context : &PL_sv_undef);
       state->variables = newSVsv(variables ? variables : &PL_sv_undef);
       state->root_value = newSVsv(root_value ? root_value : &PL_sv_undef);
-      state->promise_code = newSVsv(promise_code ? promise_code : &PL_sv_undef);
-      state->promise_backend_code = gql_runtime_vm_promise_backend_code_from_code_sv(aTHX_ promise_code);
-      promise_then_cb = gql_runtime_vm_promise_callback_from_code_sv(aTHX_ promise_code, "then", 4);
-      promise_all_cb = gql_runtime_vm_promise_callback_from_code_sv(aTHX_ promise_code, "all", 3);
-      promise_is_promise_cb = gql_runtime_vm_promise_callback_from_code_sv(aTHX_ promise_code, "is_promise", 10);
-      state->promise_then_cb = newSVsv(promise_then_cb ? promise_then_cb : &PL_sv_undef);
-      state->promise_all_cb = newSVsv(promise_all_cb ? promise_all_cb : &PL_sv_undef);
-      state->promise_is_promise_cb = newSVsv(promise_is_promise_cb ? promise_is_promise_cb : &PL_sv_undef);
+      state->promise_backend_code = GQL_VM_PROMISE_BACKEND_PROMISE_XS;
       state->empty_args = (empty_args && SvOK(empty_args))
         ? newSVsv(empty_args)
         : gql_runtime_vm_empty_args_sv(aTHX);
@@ -6999,10 +6792,6 @@ DESTROY(self)
         SvREFCNT_dec(state->context);
         SvREFCNT_dec(state->variables);
         SvREFCNT_dec(state->root_value);
-        SvREFCNT_dec(state->promise_code);
-        SvREFCNT_dec(state->promise_then_cb);
-        SvREFCNT_dec(state->promise_all_cb);
-        SvREFCNT_dec(state->promise_is_promise_cb);
         SvREFCNT_dec(state->empty_args);
         Safefree(state);
       }

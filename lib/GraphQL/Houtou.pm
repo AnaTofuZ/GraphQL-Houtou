@@ -5,11 +5,6 @@ use strict;
 use warnings;
 use Exporter 'import';
 use XSLoader ();
-use GraphQL::Houtou::Promise::Adapter qw(
-  set_default_promise_code
-  get_default_promise_code
-  clear_default_promise_code
-);
 use GraphQL::Houtou::Runtime::LazyInfo ();
 
 our $VERSION = '0.01';
@@ -25,9 +20,6 @@ our @EXPORT_OK = qw(
   compile_native_program
   compile_native_bundle
   compile_native_bundle_descriptor
-  set_default_promise_code
-  get_default_promise_code
-  clear_default_promise_code
 );
 
 sub _bootstrap_xs {
@@ -120,7 +112,10 @@ sub execute {
     $opts{variables} = $variables_or_opts;
   }
 
-  if (!$opts{promise_code} && (!defined $opts{engine} || $opts{engine} ne 'perl')) {
+  die "promise_code is no longer supported; Promise::XS is detected automatically.\n"
+    if exists $opts{promise_code};
+
+  if (!defined $opts{engine} || $opts{engine} ne 'perl') {
     my $runtime = $schema->build_native_runtime;
     return $runtime->execute_document($document, %opts);
   }
@@ -148,7 +143,6 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
       compile_runtime
       compile_native_bundle
       execute_native
-      set_default_promise_code
     );
     use GraphQL::Houtou::Schema;
     use GraphQL::Houtou::Type;
@@ -181,14 +175,6 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     my $runtime = compile_runtime($schema);
     my $bundle = compile_native_bundle($schema, '{ hello }');
     my $native = execute_native($schema, '{ hello }');
-
-    set_default_promise_code({
-      resolve => sub { ... },
-      reject  => sub { ... },
-      all     => sub { ... },
-      then    => sub { my ($promise, $ok, $ng) = @_; ... },
-      is_promise => sub { my ($value) = @_; ... },
-    });
 
 =head1 DESCRIPTION
 
@@ -275,58 +261,22 @@ Or execute directly through the cached native runtime:
 
 This runtime-backed API is native-first on the sync path. Programs that stay
 within the current native-safe subset are specialized into the native VM and
-executed there. Promise-backed execution still uses an isolated Perl slow path
-until the promise runtime is moved fully into XS.
+executed there. If a resolver yields a C<Promise::XS::Promise>, execution
+automatically continues on the Promise::XS-backed async path.
 
 The runtime-backed API above is the intended mainline. The public compiler and
 validation facades now require XS. Older implementation tests and snapshots
 live under C<legacy-tests/> and are no longer part of the active suite.
 
-=head2 Promise Hooks
+=head2 Promise Support
 
-Promise support is configured by user-supplied hooks rather than by naming a
-specific promise library. You can set global defaults via:
+Async execution now targets C<Promise::XS> directly and is detected
+automatically. If a resolver returns a C<Promise::XS::Promise>, the runtime
+will continue on the async path and may return a C<Promise::XS::Promise> as
+the top-level result.
 
-    set_default_promise_code({
-      resolve => sub { ... },
-      reject  => sub { ... },
-      all     => sub { ... },
-      then    => sub { my ($promise, $ok, $ng) = @_; ... },    # optional
-      is_promise => sub { my ($value) = @_; ... },             # optional
-    });
-
-The intended contract is:
-
-=over 4
-
-=item *
-
-C<resolve($value)> returns a fulfilled promise
-
-=item *
-
-C<reject($error)> returns a rejected promise
-
-=item *
-
-C<all(@promises)> returns an aggregate promise that fulfills to the resolved
-values
-
-=item *
-
-C<then($promise, $on_fulfilled, $on_rejected)> chains a promise
-
-=item *
-
-C<is_promise($value)> returns true when the value should be treated as a
-promise
-
-=back
-
-Per-request overrides are also supported by the execution layer. The public
-API keeps the hook contract generic so that adapters can be supplied by user
-code for C<Promises>, C<Future>, C<Promise::XS>, C<Promise::ES6>,
-C<Mojo::Promise>, or any other library with a suitable wrapper.
+Generic promise adapters and C<promise_code> injection are no longer part of
+the active runtime path.
 
 =head1 PARSER SURFACE
 

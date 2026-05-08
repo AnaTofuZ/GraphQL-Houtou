@@ -90,7 +90,7 @@ sub preferred_engine_for_program {
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::program_native_eligible_xs(
     $struct,
-    $opts{promise_code} ? 1 : 0,
+    0,
   ) ? 'native' : 'perl';
 }
 
@@ -187,22 +187,29 @@ sub execute_program {
   my ($self, $program, %opts) = @_;
   my $native_program = _require_native_program($program);
 
-  if ($opts{promise_code}) {
-    require GraphQL::Houtou::Runtime::ExecState;
-    return GraphQL::Houtou::Runtime::ExecState->run_program($self->runtime_schema, $native_program, %opts);
-  }
+  die "promise_code is no longer supported; Promise::XS is detected automatically.\n"
+    if exists $opts{promise_code};
 
   die "engine => 'perl' is no longer supported for sync runtime execution.\n"
     if defined $opts{engine} && $opts{engine} eq 'perl';
 
   $opts{engine} = delete $opts{vm_engine}
     if !defined $opts{engine} && exists $opts{vm_engine};
-  my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
+  if (defined $opts{engine} && $opts{engine} eq 'native') {
+    my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
+      $self->runtime_schema,
+      $native_program,
+      $opts{variables} || {},
+    );
+    return $self->execute_compact_program($native_program, %opts, variables => $prepared_variables);
+  }
+
+  require GraphQL::Houtou::Runtime::ExecState;
+  return GraphQL::Houtou::Runtime::ExecState->run_program(
     $self->runtime_schema,
     $native_program,
-    $opts{variables} || {},
+    %opts,
   );
-  return $self->execute_compact_program($native_program, %opts, variables => $prepared_variables);
 }
 
 sub execute_compact_program {

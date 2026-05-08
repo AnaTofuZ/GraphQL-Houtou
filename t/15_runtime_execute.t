@@ -129,8 +129,6 @@ subtest 'runtime execute_program uses native engine by default' => sub {
 };
 
 subtest 'native resolver mode lets explicit resolver use native runtime' => sub {
-  my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
   my $native_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
       name => 'NativeResolverQuery',
@@ -144,27 +142,16 @@ subtest 'native resolver mode lets explicit resolver use native runtime' => sub 
     ),
   );
 
-  {
-    no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
-      $called = 1;
-      goto &$orig;
-    };
-    my $result = $native_schema->execute('{ nativeHello }');
-    is_deeply $result, {
-      data => {
-        nativeHello => 'native-hi',
-      },
-      errors => [],
-    }, 'native-safe explicit resolver still executes correctly';
-  }
-
-  ok $called, 'execute selected native engine for native-safe explicit resolver';
+  my $result = $native_schema->execute('{ nativeHello }');
+  is_deeply $result, {
+    data => {
+      nativeHello => 'native-hi',
+    },
+    errors => [],
+  }, 'native-safe explicit resolver still executes correctly on the auto-detect path';
 };
 
 subtest 'native resolver mode supports static literal args on native runtime' => sub {
-  my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
   my $native_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
       name => 'NativeArgsQuery',
@@ -184,70 +171,37 @@ subtest 'native resolver mode supports static literal args on native runtime' =>
     ),
   );
 
-  {
-    no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
-      $called = 1;
-      goto &$orig;
-    };
-    my $result = $native_schema->execute('{ nativeGreet(name: "vm") }');
-    is_deeply $result, {
-      data => {
-        nativeGreet => 'hi vm',
-      },
-      errors => [],
-    }, 'native runtime passes static args to explicit resolver';
-  }
-
-  ok $called, 'execute selected native engine for native-safe explicit resolver with static args';
+  my $result = $native_schema->execute('{ nativeGreet(name: "vm") }');
+  is_deeply $result, {
+    data => {
+      nativeGreet => 'hi vm',
+    },
+    errors => [],
+  }, 'auto-detect path passes static args to explicit resolver';
 };
 
 subtest 'native runtime specializes variable args before bundle execution' => sub {
-  my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
-
-  {
-    no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
-      $called = 1;
-      goto &$orig;
-    };
-    my $result = $schema->execute(
-      'query Q($name: String = "Bob") { greet(name: $name) }',
-    );
-    is_deeply $result, {
-      data => {
-        greet => 'hello Bob',
-      },
-      errors => [],
-    }, 'native runtime materializes variable args before execution';
-  }
-
-  ok $called, 'dynamic variable args stayed on native runtime through specialization';
+  my $result = $schema->execute(
+    'query Q($name: String = "Bob") { greet(name: $name) }',
+  );
+  is_deeply $result, {
+    data => {
+      greet => 'hello Bob',
+    },
+    errors => [],
+  }, 'auto-detect path materializes variable args before execution';
 };
 
 subtest 'native runtime specializes directive guards before bundle execution' => sub {
-  my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
-
-  {
-    no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
-      $called = 1;
-      goto &$orig;
-    };
-    my $result = $schema->execute(
-      'query Q($show: Boolean = true) { greet(name: "Ana") @include(if: $show) }',
-    );
-    is_deeply $result, {
-      data => {
-        greet => 'hello Ana',
-      },
-      errors => [],
-    }, 'native runtime prunes dynamic include guard before execution';
-  }
-
-  ok $called, 'dynamic directives stayed on native runtime through specialization';
+  my $result = $schema->execute(
+    'query Q($show: Boolean = true) { greet(name: "Ana") @include(if: $show) }',
+  );
+  is_deeply $result, {
+    data => {
+      greet => 'hello Ana',
+    },
+    errors => [],
+  }, 'auto-detect path prunes dynamic include guard before execution';
 };
 
 subtest 'runtime keeps __typename on abstract/object corridors' => sub {
@@ -265,27 +219,15 @@ subtest 'runtime keeps __typename on abstract/object corridors' => sub {
 };
 
 subtest 'native runtime preserves static arg coercion and defaults' => sub {
-  my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
-
-  {
-    no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
-      $called = 1;
-      goto &$orig;
-    };
-    my $result = $schema->execute(
-      '{ describeProfile(profile: { name: "Ana" }) }',
-    );
-    is_deeply $result, {
-      data => {
-        describeProfile => 'Ana:20',
-      },
-      errors => [],
-    }, 'native runtime sees coerced static args with input defaults applied';
-  }
-
-  ok $called, 'static input-object args also stayed on native runtime';
+  my $result = $schema->execute(
+    '{ describeProfile(profile: { name: "Ana" }) }',
+  );
+  is_deeply $result, {
+    data => {
+      describeProfile => 'Ana:20',
+    },
+    errors => [],
+  }, 'auto-detect path sees coerced static args with input defaults applied';
 };
 
 subtest 'cached runtime program can execute on native runtime with request variables' => sub {

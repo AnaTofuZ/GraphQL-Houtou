@@ -161,8 +161,10 @@ sub inflate_program {
 
 sub execute {
   my ($self, $document, %opts) = @_;
+  die "promise_code is no longer supported; Promise::XS is detected automatically.\n"
+    if exists $opts{promise_code};
 
-  if (!$opts{promise_code} && (!defined $opts{engine} || $opts{engine} ne 'perl')) {
+  if (!defined $opts{engine} || $opts{engine} ne 'perl') {
     my $runtime = $self->build_native_runtime;
     return $runtime->execute_document($document, %opts);
   }
@@ -235,7 +237,7 @@ sub execute_native_bundle_descriptor {
 sub execute_native {
   my ($self, $document, %opts) = @_;
   my $runtime = $self->build_native_runtime;
-  return $runtime->execute_document($document, %opts);
+  return $runtime->execute_document($document, %opts, engine => 'native');
 }
 
 sub runtime_cache {

@@ -5,7 +5,6 @@ use strict;
 use warnings;
 use GraphQL::Houtou ();
 
-use GraphQL::Houtou::Promise::Adapter qw(normalize_promise_code);
 use GraphQL::Houtou::Runtime::InputCoercion ();
 
 sub new {
@@ -20,14 +19,12 @@ sub new {
     $args{context},
     ($args{variables} || {}),
     $args{root_value},
-    $args{promise_code},
     ($args{empty_args} || {}),
   );
 }
 
 sub build_for_program {
   my ($class, $runtime_schema, $program, %opts) = @_;
-  my $promise_code = normalize_promise_code($opts{promise_code});
   my $native_program = _require_native_program($program);
   my $root_block_index = _root_block_index($native_program);
   return $class->new(
@@ -51,23 +48,18 @@ sub build_for_program {
       $opts{variables} || {},
     ),
     root_value => $opts{root_value},
-    promise_code => $promise_code,
   );
 }
 
 sub run_program {
   my ($class, $runtime_schema, $program, %opts) = @_;
-  my $promise_code = normalize_promise_code($opts{promise_code});
   my $native_program = _require_native_program($program);
   my $state = $class->build_for_program(
     $runtime_schema,
     $native_program,
     %opts,
-    promise_code => $promise_code,
   );
   GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::exec_state_run_program_xs($state, $opts{root_value})
-    if !$promise_code;
   return GraphQL::Houtou::XS::VM::exec_state_run_program_async_xs($state, $opts{root_value});
 }
 

@@ -11,7 +11,7 @@ my $repeat = 5;
 my @cases;
 my @modes = qw(houtou_runtime_program houtou_runtime_native_bundle);
 my $include_async = 0;
-my $promise_backend = 'local';
+my $promise_backend = 'promise_xs';
 
 GetOptions(
   'count=s' => \$count,

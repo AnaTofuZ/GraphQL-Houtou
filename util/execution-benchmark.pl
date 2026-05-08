@@ -32,7 +32,6 @@ use GraphQL::Type::Union;
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Promise::PromiseXS qw(
   maybe_get_promise_xs
-  promise_xs_code
 );
 use GraphQL::Houtou::Type::Interface ();
 use GraphQL::Houtou::Type::Object ();
@@ -42,7 +41,7 @@ use GraphQL::Houtou::Type::Union ();
 my $count = -3;
 my @only;
 my $include_async = 1;
-my $promise_backend = 'local';
+my $promise_backend = 'promise_xs';
 
 GetOptions(
   'count=s' => \$count,
@@ -53,100 +52,41 @@ GetOptions(
 
 my %only = map { $_ => 1 } @only;
 
-{
-  package Local::ImmediatePromise;
-
-  sub new {
-    my ($class, %args) = @_;
-    return bless {
-      status => $args{status},
-      values => $args{values} || [],
-    }, $class;
-  }
-
-  sub resolve {
-    my ($class, @values) = @_;
-    return $class->new(status => 'fulfilled', values => \@values);
-  }
-
-  sub reject {
-    my ($class, @values) = @_;
-    return $class->new(status => 'rejected', values => \@values);
-  }
-
-  sub all {
-    my ($class, @values) = @_;
-    my @rows;
-
-    for my $value (@values) {
-      if (ref($value) && eval { $value->isa(__PACKAGE__) }) {
-        return $class->reject(@{ $value->{values} })
-          if ($value->{status} || '') eq 'rejected';
-        push @rows, [ @{ $value->{values} } ];
-      } else {
-        push @rows, [ $value ];
-      }
-    }
-
-    return $class->resolve(@rows);
-  }
-
-  sub then {
-    my ($self, $on_fulfilled, $on_rejected) = @_;
-    my $callback = ($self->{status} || '') eq 'rejected'
-      ? $on_rejected
-      : $on_fulfilled;
-
-    return __PACKAGE__->new(
-      status => $self->{status},
-      values => [ @{ $self->{values} } ],
-    ) if !$callback;
-
-    my @ret = eval { $callback->(@{ $self->{values} }) };
-    return __PACKAGE__->reject($@) if $@;
-    return $ret[0]
-      if @ret == 1 && ref($ret[0]) && eval { $ret[0]->isa(__PACKAGE__) };
-    return __PACKAGE__->resolve(@ret);
-  }
-
-  sub get {
-    my ($self) = @_;
-    die @{ $self->{values} } if ($self->{status} || '') eq 'rejected';
-    return wantarray ? @{ $self->{values} } : $self->{values}[0];
-  }
-}
-
-sub promise_code {
+sub upstream_promise_xs_code {
+  require Promise::XS;
   return {
-    resolve => sub { Local::ImmediatePromise->resolve(@_) },
-    reject => sub { Local::ImmediatePromise->reject(@_) },
-    all => sub { Local::ImmediatePromise->all(@_) },
-    new => sub { Local::ImmediatePromise->new },
+    resolve => sub { Promise::XS::resolved(@_) },
+    reject => sub { Promise::XS::rejected(@_) },
+    all => sub {
+      my $all_promise = Promise::XS::all(@_);
+      return $all_promise->then(sub {
+        my @rows = @_;
+        my @flattened = map {
+          ref($_) eq 'ARRAY' && @{$_} == 1 ? $_->[0] : $_
+        } @rows;
+        return \@flattened;
+      });
+    },
     then => sub {
       my ($promise, $on_fulfilled, $on_rejected) = @_;
-      return $promise->then($on_fulfilled, $on_rejected);
+      return defined $on_rejected
+        ? $promise->then($on_fulfilled, $on_rejected)
+        : $promise->then($on_fulfilled);
     },
     is_promise => sub {
       my ($value) = @_;
-      return ref($value) eq 'Local::ImmediatePromise';
+      return !!($value && ref($value) && eval { $value->isa('Promise::XS::Promise') });
     },
   };
 }
 
 sub promise_backend {
   my ($backend_name) = @_;
-  $backend_name ||= 'local';
-
-  return {
-    name => 'local',
-    code => promise_code(),
-    resolve => sub { Local::ImmediatePromise->resolve(@_) },
-    maybe_get => sub { maybe_get(@_) },
-  } if $backend_name eq 'local';
+  $backend_name ||= 'promise_xs';
 
   return {
     name => 'promise_xs',
-    code => promise_xs_code(),
+    upstream_code => upstream_promise_xs_code(),
     resolve => sub {
       require Promise::XS;
       return Promise::XS::resolved(@_);
@@ -155,13 +95,6 @@ sub promise_backend {
   } if $backend_name eq 'promise_xs';
 
   die "Unknown promise backend '$backend_name'\n";
-}
-
-sub maybe_get {
-  my ($value) = @_;
-  return (ref($value) && eval { $value->isa('Local::ImmediatePromise') })
-    ? scalar $value->get
-    : $value;
 }
 
 sub build_upstream_schema {
@@ -421,11 +354,11 @@ sub benchmark_case {
   my $vars = $spec->{vars};
   my $op = $spec->{op};
   my $promise = $spec->{promise} ? promise_backend($promise_backend) : undef;
-  my $promise_code = $promise ? $promise->{code} : undef;
+  my $upstream_promise_code = $promise ? $promise->{upstream_code} : undef;
   my $up_ast = parse($query);
   my $runtime = $houtou_schema->build_runtime;
   my $program = $runtime->compile_program($query);
-  my $native_runtime = !$promise_code ? $houtou_schema->build_native_runtime : undef;
+  my $native_runtime = !$promise ? $houtou_schema->build_native_runtime : undef;
   my $native_bundle = $native_runtime
     ? $native_runtime->compile_bundle(
         $program,
@@ -434,17 +367,13 @@ sub benchmark_case {
     : undef;
 
   my $expected;
-  if ($promise && $promise->{name} eq 'promise_xs') {
-    $expected = _normalize_result($promise->{maybe_get}->(
-      $runtime->execute_program(
+  $expected = _normalize_result(($promise ? $promise->{maybe_get} : \&maybe_get_promise_xs)->(
+    $promise
+      ? $runtime->execute_program(
         $program,
         (defined($vars) ? (variables => $vars) : ()),
-        promise_code => $promise_code,
       )
-    ));
-  } else {
-    $expected = _normalize_result(($promise ? $promise->{maybe_get} : \&maybe_get)->(
-      execute(
+      : execute(
         $up_schema,
         $up_ast,
         undef,
@@ -452,39 +381,37 @@ sub benchmark_case {
         $vars,
         $op,
         undef,
-        $promise_code,
+        $upstream_promise_code,
       )
-    ));
-  }
+  ));
 
   my @checks;
-  if (!$promise || $promise->{name} ne 'promise_xs') {
+  if (!$promise) {
     push @checks,
       [ 'upstream_ast', sub {
-        return ($promise ? $promise->{maybe_get} : \&maybe_get)->(
-          execute($up_schema, $up_ast, undef, undef, $vars, $op, undef, $promise_code)
+        return maybe_get_promise_xs(
+          execute($up_schema, $up_ast, undef, undef, $vars, $op, undef, $upstream_promise_code)
         );
       } ],
       [ 'upstream_string', sub {
-        return ($promise ? $promise->{maybe_get} : \&maybe_get)->(
-          execute($up_schema, $query, undef, undef, $vars, $op, undef, $promise_code)
+        return maybe_get_promise_xs(
+          execute($up_schema, $query, undef, undef, $vars, $op, undef, $upstream_promise_code)
         );
       } ];
   }
 
   push @checks, [ 'houtou_runtime_program', sub {
-    return ($promise ? $promise->{maybe_get} : \&maybe_get)->(
+    return ($promise ? $promise->{maybe_get} : \&maybe_get_promise_xs)->(
       $runtime->execute_program(
         $program,
         (defined($vars) ? (variables => $vars) : ()),
-        ($promise_code ? (promise_code => $promise_code) : ()),
       )
     );
   } ];
 
   if ($native_bundle) {
     push @checks, [ 'houtou_runtime_native_bundle', sub {
-      return maybe_get(
+      return maybe_get_promise_xs(
         $native_runtime->execute_bundle($native_bundle)
       );
     } ];

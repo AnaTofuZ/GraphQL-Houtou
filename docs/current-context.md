@@ -793,3 +793,54 @@ perl -Ilib t/19_vm_execute.t
     - callback 境界での owned `SV*` 化
     にほぼ収束している
   - つまり、D は「現行 ABI を変えずに取れる async hot path のコスト削減」は一通り入った状態とみなせる
+
+- Promise::XS auto-detect mainline と generic promise adapter の撤去
+  - `GraphQL::Houtou::Promise::Adapter` を削除し、generic `promise_code` 注入を public API から外した
+  - top-level `execute(...)` / `Schema->execute(...)` / `NativeRuntime->execute_program(...)` は
+    `promise_code` を受け取ると即 error にした
+  - async execution の mainline は Promise::XS 固定に寄せ、
+    resolver が `Promise::XS::Promise` を返したら自動的に async path へ昇格する
+  - `execute_native(...)` は explicit sync/native fast lane として維持し、
+    内部的には `engine => 'native'` を明示して native bundle / native program 実行へ入る
+  - `ExecState` handle / XS runtime から
+    - `promise_code`
+    - `promise_then_cb`
+    - `promise_all_cb`
+    - `promise_is_promise_cb`
+    を外し、Promise::XS direct path に寄せた
+  - `t/16_runtime_promise.t` は generic adapter 互換テストをやめ、
+    `promise_code` rejection と Promise::XS auto-detect を見る構成に変えた
+  - `minil test t/15_runtime_execute.t t/16_runtime_promise.t t/20_public_runtime_api.t` 通過
+  - `minil test` 通過
+
+- latest median (after Promise::XS auto-detect switch)
+  - sync:
+    - `nested_variable_object`
+      - `houtou_runtime_program`: `3197/s`
+      - `houtou_runtime_native_bundle`: `570511/s`
+    - `list_of_objects`
+      - `houtou_runtime_program`: `3269/s`
+      - `houtou_runtime_native_bundle`: `496243/s`
+    - `abstract_with_fragment`
+      - `houtou_runtime_program`: `3207/s`
+      - `houtou_runtime_native_bundle`: `569399/s`
+  - async (`--include-async --promise-backend promise_xs`):
+    - `async_scalar`
+      - `houtou_runtime_program`: `3082/s`
+    - `async_list`
+      - `houtou_runtime_program`: `2983/s`
+    - `async_object`
+      - `houtou_runtime_program`: `3027/s`
+    - `async_abstract`
+      - `houtou_runtime_program`: `3011/s`
+
+- 解釈:
+  - public async interface は `promise_code` 注入なしで Promise::XS auto-detect に一本化できた
+  - `execute_native(...)` の explicit fast lane は維持されているので、
+    sync-first の native benchmark / persisted artifact path は引き続き分離できる
+  - current benchmark script 上では
+    - sync native bundle は依然として high-watermark 級の水準を維持
+    - Promise::XS async path は `3.0k/s` 前後で、generic adapter を抱えたままの構成より単純になった
+  - ここから先の本命は
+    - Promise::XS continuation / batch continuation の further specialization
+    - auto-detect mainline と sync fast lane の benchmark surface の再整理

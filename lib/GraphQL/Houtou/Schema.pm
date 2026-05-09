@@ -7,7 +7,6 @@ use warnings;
 use Exporter 'import';
 use JSON::PP ();
 
-use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Directive ();
 use GraphQL::Houtou::Runtime::SchemaGraph ();
 use GraphQL::Houtou::Type::Scalar qw($Int $Float $String $Boolean $ID);
@@ -182,7 +181,8 @@ sub compile_native_program_descriptor {
 
 sub compile_native_program {
   my ($self, $document, %opts) = @_;
-  return GraphQL::Houtou::Native::load_native_program(
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::load_native_program_xs(
     $self->compile_native_program_descriptor($document, %opts),
   );
 }

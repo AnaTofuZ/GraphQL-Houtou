@@ -3,15 +3,15 @@ use warnings;
 use Test::More;
 
 use lib 'lib';
-use GraphQL::Houtou::Native qw(
-  execute_native_bundle
-  load_native_bundle
-  load_native_runtime
-);
+use GraphQL::Houtou ();
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);
+
+BEGIN {
+  GraphQL::Houtou::_bootstrap_xs();
+}
 
 my $Node = GraphQL::Houtou::Type::Interface->new(
   name => 'VmExecNode',
@@ -148,11 +148,16 @@ subtest 'schema helper can execute native VM runtime through abstract tag dispat
 
 subtest 'XS native bundle handle can execute directly' => sub {
   my $runtime = $schema->build_runtime;
-  my $native_runtime = load_native_runtime($runtime->to_native_exec_struct);
-  my $bundle = load_native_bundle(
+  my $native_runtime = GraphQL::Houtou::XS::VM::load_native_runtime_xs(
+    $runtime->to_native_exec_struct
+  );
+  my $bundle = GraphQL::Houtou::XS::VM::load_native_bundle_xs(
     $schema->compile_native_bundle_descriptor('{ viewer { id name } node { id } }')
   );
-  my $result = execute_native_bundle($native_runtime, $bundle);
+  my $result = GraphQL::Houtou::XS::VM::execute_native_bundle_xs(
+    $native_runtime,
+    $bundle,
+  );
   is_deeply $result, {
     data => {
       viewer => { id => 'u1', name => 'Alice' },

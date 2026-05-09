@@ -5,7 +5,6 @@ use strict;
 use warnings;
 
 use GraphQL::Houtou ();
-use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::SchemaBlock ();
 use GraphQL::Houtou::Runtime::Slot ();
@@ -113,7 +112,8 @@ sub compile_program_descriptor {
 
 sub inflate_program {
   my ($self, $descriptor) = @_;
-  return GraphQL::Houtou::Native::load_native_program($descriptor);
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::load_native_program_xs($descriptor);
 }
 
 sub execute_program {

@@ -4,7 +4,6 @@ use 5.014;
 use strict;
 use warnings;
 
-use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Runtime::InputCoercion ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Schema ();
@@ -37,7 +36,8 @@ sub _native_runtime_compact_struct {
 
 sub _native_runtime_handle {
   my ($self) = @_;
-  $self->{native_runtime_handle} ||= GraphQL::Houtou::Native::load_native_runtime(
+  GraphQL::Houtou::_bootstrap_xs();
+  $self->{native_runtime_handle} ||= GraphQL::Houtou::XS::VM::load_native_runtime_xs(
     $self->_native_runtime_struct,
   );
   return $self->{native_runtime_handle};
@@ -103,16 +103,18 @@ sub compile_bundle {
 sub compile_bundle_descriptor {
   my ($self, $program, %opts) = @_;
   my $candidate = $self->specialize_program($program, %opts);
+  GraphQL::Houtou::_bootstrap_xs();
   return {
     runtime => $self->_native_runtime_compact_struct,
-    program => GraphQL::Houtou::Native::native_program_descriptor($candidate),
+    program => GraphQL::Houtou::XS::VM::native_program_descriptor_xs($candidate),
   };
 }
 
 sub compile_program_descriptor {
   my ($self, $program, %opts) = @_;
   my $candidate = $self->specialize_program($program, %opts);
-  return GraphQL::Houtou::Native::native_program_descriptor($candidate);
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::native_program_descriptor_xs($candidate);
 }
 
 sub compile_program_descriptor_for_document {
@@ -129,7 +131,8 @@ sub compile_bundle_descriptor_for_document {
 
 sub _load_bundle_parts {
   my ($self, $program) = @_;
-  return GraphQL::Houtou::Native::load_native_bundle_from_handles(
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::load_native_bundle_from_handles_xs(
     $self->_native_runtime_handle,
     $program,
   );
@@ -144,7 +147,8 @@ sub _require_native_program {
 
 sub load_bundle_descriptor {
   my ($self, $descriptor) = @_;
-  return GraphQL::Houtou::Native::load_native_bundle($descriptor);
+  GraphQL::Houtou::_bootstrap_xs();
+  return GraphQL::Houtou::XS::VM::load_native_bundle_xs($descriptor);
 }
 
 sub inflate_bundle_descriptor {
@@ -230,7 +234,7 @@ sub execute_program {
 sub execute_compact_program {
   my ($self, $program, %opts) = @_;
   my $native_program = _require_native_program($program);
-  return GraphQL::Houtou::Native::execute_native_program_handle(
+  return GraphQL::Houtou::XS::VM::execute_native_program_handle_xs(
     $self->_native_runtime_handle,
     $native_program,
     $opts{root_value},
@@ -253,7 +257,7 @@ sub execute_document {
 
 sub execute_bundle {
   my ($self, $bundle, %opts) = @_;
-  return GraphQL::Houtou::Native::execute_native_bundle(
+  return GraphQL::Houtou::XS::VM::execute_native_bundle_xs(
     $self->_native_runtime_handle,
     $bundle,
     $opts{root_value},

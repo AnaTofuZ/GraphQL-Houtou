@@ -4,6 +4,7 @@ use Test::More;
 use File::Temp qw(tempfile);
 
 use lib 'lib';
+use GraphQL::Houtou ();
 use GraphQL::Houtou qw(
   execute
   execute_native
@@ -17,6 +18,10 @@ use GraphQL::Houtou qw(
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);
+
+BEGIN {
+  GraphQL::Houtou::_bootstrap_xs();
+}
 
 my $Query = GraphQL::Houtou::Type::Object->new(
   name => 'PublicRuntimeQuery',
@@ -212,11 +217,11 @@ subtest 'top-level compile_native_bundle_descriptor returns compact descriptor' 
 subtest 'schema execute_native reuses cached native runtime handle' => sub {
   $schema->clear_runtime_cache;
   my $load_count = 0;
-  my $orig = \&GraphQL::Houtou::Native::load_native_runtime;
+  my $orig = \&GraphQL::Houtou::XS::VM::load_native_runtime_xs;
 
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::load_native_runtime = sub {
+    local *GraphQL::Houtou::XS::VM::load_native_runtime_xs = sub {
       $load_count++;
       goto &$orig;
     };

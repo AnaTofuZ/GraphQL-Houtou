@@ -31,13 +31,13 @@
 - PP fallback は設計上の主要求ではない
 - 子モジュールが XS を直接 `use` して hot path を組み立てる形は避ける
 - XS bundle のロード責務は `GraphQL::Houtou` だけが持つ
-- low-level native handle API は `GraphQL::Houtou::Native` が public owner
+- low-level native handle API は `GraphQL::Houtou` が XS を bootstrap した後の
+  `GraphQL::Houtou::XS::VM` に直接出す
 - `GraphQL::Houtou::Validation` は `validate` だけを公開する最小 facade として残す
 - native mainline の internal 専用 stitching は `Runtime::NativeRuntime` から XS を直接呼ぶ
 - `SchemaGraph->execute_program(...)` は public entrypoint として残すが、engine 選択と native specialization の ownership は `NativeRuntime` に寄せた
 - public の `compile_program` / `inflate_program` は `NativeProgram` を返す形に揃え、`VMProgram` は internal inflate/debug 用に後退した
 - `VMCompiler` は VM lower / inflate の owner に限定し、native compact struct の ownership は `SchemaGraph` / `VMProgram` / `NativeRuntime` に寄せている
-- `GraphQL::Houtou::Native` は public low-level facade に限定し、internal 専用 API の受け皿にはしない
 - `GraphQL::Houtou::Validation` は `validate` のみの最小 public facade として固定した
 - 旧実装は git history で追えればよく、source tree には残さない
 - promise path の current checkpoint では、`ExecState` の `perl_only` 分岐でも
@@ -874,8 +874,8 @@ perl -Ilib t/19_vm_execute.t
     Promise::XS に返す fulfilled value は `SvREFCNT_inc` ベースの ownership transfer にした
   - `NativeRuntime->execute_program(...)` の auto path は Promise::XS async mainline へ直接入るまま維持しつつ、
     `G_EVAL` helper で stale `$@` を持ち込まないように整理した
-  - `GraphQL::Houtou::Native::execute_native_program_auto(...)` wrapper では
-    `uninitialized` warning を局所抑制し、benchmark と promise test の warning flood を止めた
+  - `execute_native_program_auto_xs(...)` hot path で `sv_derived_from(...)` 前の
+    `SvOK(...)` guard を追加し、`uninitialized` warning の発生源自体を潰した
   - `./Build test` 通過
 
 - latest median (after leaf/generic async callback reduction)

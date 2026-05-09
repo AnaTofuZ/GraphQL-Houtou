@@ -11,9 +11,9 @@
 - hot path の内部通貨は Perl の `{ data => ..., errors => ... }` ではなく専用 runtime object にする
 - schema / operation / VM program を段階的に lower する
 - native 実行は `NativeRuntime` と XS VM の境界に集約する
-- public な low-level native API は `GraphQL::Houtou::Native` に残す
-- `NativeRuntime` の internal 専用 stitching は必要に応じて XS を直接呼び、
-  `GraphQL::Houtou::Native` は public low-level facade に限定する
+- `GraphQL::Houtou` が XS bootstrap の owner となり、low-level native handle API は
+  `GraphQL::Houtou::XS::VM` に直接出す
+- `NativeRuntime` の internal 専用 stitching も同じ XS VM package を直接呼ぶ
 - `GraphQL::Houtou::Runtime` façade 層は削除し、`Schema` / `SchemaGraph` /
   `Compiler` / `NativeRuntime` が直接 mainline を構成する
 - Pure Perl VM は bring-up / fallback / 低速 path として残し、本命は native bundle 実行とする
@@ -117,7 +117,7 @@
 主なモジュール:
 
 - `GraphQL::Houtou::Runtime::NativeRuntime`
-- `GraphQL::Houtou::Native`
+- `GraphQL::Houtou::XS::VM`
 - `src/vm_runtime.h`
 
 責務:
@@ -181,7 +181,7 @@ hot path の一次通貨は以下です。
 2. `NativeRuntime->compile_program`
 3. `NativeRuntime->specialize_program`
 4. `NativeRuntime->compile_bundle` または `execute_program`
-5. `GraphQL::Houtou::Native` 経由で XS VM 実行
+5. bootstrapped `GraphQL::Houtou::XS::VM` 経由で XS VM 実行
 
 ## 現在の性能の読み方
 

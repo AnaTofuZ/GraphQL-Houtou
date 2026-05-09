@@ -4,6 +4,7 @@ use warnings;
 use JSON::PP ();
 use Test::More 0.98;
 
+use GraphQL::Houtou ();
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Runtime::SchemaGraph ();
 use GraphQL::Houtou::Type::Interface;
@@ -11,6 +12,10 @@ use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::InputObject;
 use GraphQL::Houtou::Type::Scalar qw($Int $String);
 use GraphQL::Houtou::Type::Union;
+
+BEGIN {
+  GraphQL::Houtou::_bootstrap_xs();
+}
 
 my $ProfileInput = GraphQL::Houtou::Type::InputObject->new(
   name => 'ProfileInput',
@@ -237,11 +242,11 @@ subtest 'cached runtime program can execute on native runtime with request varia
   );
 
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
+  my $orig = \&GraphQL::Houtou::XS::VM::execute_native_program_handle_xs;
   my $result;
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
+    local *GraphQL::Houtou::XS::VM::execute_native_program_handle_xs = sub {
       $called = 1;
       goto &$orig;
     };
@@ -269,11 +274,11 @@ subtest 'inflated runtime descriptor can still drive native specialization' => s
   );
 
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::Native::execute_native_program_handle;
+  my $orig = \&GraphQL::Houtou::XS::VM::execute_native_program_handle_xs;
   my $result;
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::Native::execute_native_program_handle = sub {
+    local *GraphQL::Houtou::XS::VM::execute_native_program_handle_xs = sub {
       $called = 1;
       goto &$orig;
     };

@@ -4,7 +4,7 @@ use warnings;
 use Test::More 0.98;
 use File::Temp qw(tempfile);
 
-use GraphQL::Houtou::Native qw(native_program_summary);
+use GraphQL::Houtou ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Schema;
@@ -12,6 +12,10 @@ use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);
 use GraphQL::Houtou::Type::Union;
+
+BEGIN {
+  GraphQL::Houtou::_bootstrap_xs();
+}
 
 my $User;
 
@@ -122,7 +126,7 @@ subtest 'execution program descriptor can round-trip back into executable progra
   my $descriptor = $runtime->compile_program_descriptor('{ viewer { id name } }');
   my $program = $runtime->inflate_program($descriptor);
   my $inflated = GraphQL::Houtou::Runtime::VMCompiler->inflate_program($runtime, $descriptor);
-  my $summary = native_program_summary($program);
+  my $summary = GraphQL::Houtou::XS::VM::native_program_summary_xs($program);
 
   isa_ok $program, 'GraphQL::Houtou::Runtime::NativeProgram';
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::VMProgram';
@@ -145,7 +149,7 @@ subtest 'execution program descriptor can round-trip back into executable progra
 subtest 'schema helper can compile and inflate operation descriptors' => sub {
   my $descriptor = $schema->compile_program_descriptor('{ viewer { id } }');
   my $inflated = $schema->inflate_program($descriptor);
-  my $summary = native_program_summary($inflated);
+  my $summary = GraphQL::Houtou::XS::VM::native_program_summary_xs($inflated);
 
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::NativeProgram';
   is $summary->{root_block_index}, $descriptor->{root_block_index},
@@ -167,7 +171,7 @@ subtest 'operation descriptor can round-trip through JSON file helpers' => sub {
   my $loaded = JSON::PP::decode_json(<$in>);
   close $in;
   my $inflated = $schema->inflate_program($loaded);
-  my $summary = native_program_summary($inflated);
+  my $summary = GraphQL::Houtou::XS::VM::native_program_summary_xs($inflated);
 
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::NativeProgram';
   is $summary->{root_block_index}, $descriptor->{root_block_index},

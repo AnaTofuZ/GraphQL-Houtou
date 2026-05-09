@@ -12,7 +12,6 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
       compile_runtime
       compile_native_bundle
       execute_native
-      set_default_promise_code
     );
     use GraphQL::Houtou::Schema;
     use GraphQL::Houtou::Type;
@@ -45,14 +44,6 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
     my $runtime = compile_runtime($schema);
     my $bundle = compile_native_bundle($schema, '{ hello }');
     my $native = execute_native($schema, '{ hello }');
-
-    set_default_promise_code({
-      resolve => sub { ... },
-      reject  => sub { ... },
-      all     => sub { ... },
-      then    => sub { my ($promise, $ok, $ng) = @_; ... },
-      is_promise => sub { my ($value) = @_; ... },
-    });
 
 # DESCRIPTION
 
@@ -118,40 +109,22 @@ Or execute directly through the cached native runtime:
 
 This runtime-backed API is native-first on the sync path. Programs that stay
 within the current native-safe subset are specialized into the native VM and
-executed there. Promise-backed execution still uses an isolated Perl slow path
-until the promise runtime is moved fully into XS.
+executed there. If a resolver yields a `Promise::XS::Promise`, execution
+automatically continues on the Promise::XS-backed async path.
 
 The runtime-backed API above is the intended mainline. The public compiler and
 validation facades now require XS. Older implementation tests and snapshots
 live under `legacy-tests/` and are no longer part of the active suite.
 
-## Promise Hooks
+## Promise Support
 
-Promise support is configured by user-supplied hooks rather than by naming a
-specific promise library. You can set global defaults via:
+Async execution now targets `Promise::XS` directly and is detected
+automatically. If a resolver returns a `Promise::XS::Promise`, the runtime
+will continue on the async path and may return a `Promise::XS::Promise` as
+the top-level result.
 
-    set_default_promise_code({
-      resolve => sub { ... },
-      reject  => sub { ... },
-      all     => sub { ... },
-      then    => sub { my ($promise, $ok, $ng) = @_; ... },    # optional
-      is_promise => sub { my ($value) = @_; ... },             # optional
-    });
-
-The intended contract is:
-
-- `resolve($value)` returns a fulfilled promise
-- `reject($error)` returns a rejected promise
-- `all(@promises)` returns an aggregate promise that fulfills to the resolved
-values
-- `then($promise, $on_fulfilled, $on_rejected)` chains a promise
-- `is_promise($value)` returns true when the value should be treated as a
-promise
-
-Per-request overrides are also supported by the execution layer. The public
-API keeps the hook contract generic so that adapters can be supplied by user
-code for `Promises`, `Future`, `Promise::XS`, `Promise::ES6`,
-`Mojo::Promise`, or any other library with a suitable wrapper.
+Generic promise adapters and `promise_code` injection are no longer part of
+the active runtime path.
 
 # PARSER SURFACE
 
@@ -188,6 +161,33 @@ schema/runtime/program のコンパイル済み実行計画を再利用した時
 
     perl util/execution-benchmark.pl --count=-3
     perl util/execution-benchmark-checkpoint.pl --repeat=5 --count=-3
+
+\`fd72137\` 時点の中央値は次のとおりです。
+
+- sync \`runtime\_program\`
+
+        - `nested_variable_object`: `3266/s`
+        - `list_of_objects`: `3266/s`
+        - `abstract_with_fragment`: `3257/s`
+
+- sync \`native\_bundle\`
+
+        - `nested_variable_object`: `582772/s`
+        - `list_of_objects`: `515525/s`
+        - `abstract_with_fragment`: `576014/s`
+
+- async \`Promise::XS\` auto-detect path
+
+        - `async_scalar`: `3083/s`
+        - `async_list`: `3082/s`
+        - `async_object`: `3082/s`
+        - `async_abstract`: `3054/s`
+
+要点は、現在の最速経路は依然として \`native\_bundle\` の specialized
+sync fast lane であり、public の \`runtime\_program\` / Promise::XS async
+mainline はおおむね \`3.0k/s\` 前後に揃っている、ということです。
+async path は undocumented な \`Promise::XS\` 内部 await hook には依存せず、
+documented な \`then\` / \`all\` と Promise::XS 型判定だけを使います。
 
 詳細な評価軸は `docs/execution-benchmark.md`、現在の実装前提は
 `docs/current-context.md` と `docs/runtime-vm-architecture.md` にあります。

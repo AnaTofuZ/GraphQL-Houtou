@@ -146,51 +146,53 @@ Example:
 
 # BENCHMARK SNAPSHOT
 
-現在の比較対象は旧 executor ではなく、runtime/VM mainline です。
+The current benchmark baseline is the runtime/VM mainline rather than the
+legacy executor.
 
-主な評価軸は次の 2 系統です。
+The primary sync measurements focus on two execution modes:
 
 - cached runtime (Perl VM)
 - cached native bundle (XS VM)
 
-ベンチマークでは resolver の結果をキャッシュするのではなく、
-schema/runtime/program のコンパイル済み実行計画を再利用した時の
-スループットを見ます。
+These benchmarks do not cache resolver return values. They measure throughput
+when the compiled schema/runtime/program artifacts are reused across requests.
 
-典型的なコマンドは次です。
+Typical commands are:
 
     perl util/execution-benchmark.pl --count=-3
     perl util/execution-benchmark-checkpoint.pl --repeat=5 --count=-3
 
-\`fd72137\` 時点の中央値は次のとおりです。
+Median results at `fd72137` were:
 
-- sync \`runtime\_program\`
+- sync `runtime_program`
 
-        - `nested_variable_object`: `3266/s`
-        - `list_of_objects`: `3266/s`
-        - `abstract_with_fragment`: `3257/s`
+        - C<nested_variable_object>: C<3266/s>
+        - C<list_of_objects>: C<3266/s>
+        - C<abstract_with_fragment>: C<3257/s>
 
-- sync \`native\_bundle\`
+- sync `native_bundle`
 
-        - `nested_variable_object`: `582772/s`
-        - `list_of_objects`: `515525/s`
-        - `abstract_with_fragment`: `576014/s`
+        - C<nested_variable_object>: C<582772/s>
+        - C<list_of_objects>: C<515525/s>
+        - C<abstract_with_fragment>: C<576014/s>
 
-- async \`Promise::XS\` auto-detect path
+- async `Promise::XS` auto-detect path
 
-        - `async_scalar`: `3083/s`
-        - `async_list`: `3082/s`
-        - `async_object`: `3082/s`
-        - `async_abstract`: `3054/s`
+        - C<async_scalar>: C<3083/s>
+        - C<async_list>: C<3082/s>
+        - C<async_object>: C<3082/s>
+        - C<async_abstract>: C<3054/s>
 
-要点は、現在の最速経路は依然として \`native\_bundle\` の specialized
-sync fast lane であり、public の \`runtime\_program\` / Promise::XS async
-mainline はおおむね \`3.0k/s\` 前後に揃っている、ということです。
-async path は undocumented な \`Promise::XS\` 内部 await hook には依存せず、
-documented な \`then\` / \`all\` と Promise::XS 型判定だけを使います。
+The key point is that the specialized sync fast lane for `native_bundle`
+remains the fastest path by a wide margin, while the public
+`runtime_program` path and the Promise::XS async mainline currently cluster
+around `3.0k/s`. The async path no longer depends on undocumented
+Promise::XS await hooks and uses only documented `then`, `all`, and
+Promise::XS type detection.
 
-詳細な評価軸は `docs/execution-benchmark.md`、現在の実装前提は
-`docs/current-context.md` と `docs/runtime-vm-architecture.md` にあります。
+For detailed methodology, see `docs/execution-benchmark.md`. For the current
+implementation assumptions, see `docs/current-context.md` and
+`docs/runtime-vm-architecture.md`.
 
 # NAME ORIGIN
 

@@ -323,6 +323,43 @@ schema/runtime/program のコンパイル済み実行計画を再利用した時
     perl util/execution-benchmark.pl --count=-3
     perl util/execution-benchmark-checkpoint.pl --repeat=5 --count=-3
 
+`fd72137` 時点の中央値は次のとおりです。
+
+=over 4
+
+=item *
+
+sync `runtime_program`
+
+  - `nested_variable_object`: `3266/s`
+  - `list_of_objects`: `3266/s`
+  - `abstract_with_fragment`: `3257/s`
+
+=item *
+
+sync `native_bundle`
+
+  - `nested_variable_object`: `582772/s`
+  - `list_of_objects`: `515525/s`
+  - `abstract_with_fragment`: `576014/s`
+
+=item *
+
+async `Promise::XS` auto-detect path
+
+  - `async_scalar`: `3083/s`
+  - `async_list`: `3082/s`
+  - `async_object`: `3082/s`
+  - `async_abstract`: `3054/s`
+
+=back
+
+要点は、現在の最速経路は依然として `native_bundle` の specialized
+sync fast lane であり、public の `runtime_program` / Promise::XS async
+mainline はおおむね `3.0k/s` 前後に揃っている、ということです。
+async path は undocumented な `Promise::XS` 内部 await hook には依存せず、
+documented な `then` / `all` と Promise::XS 型判定だけを使います。
+
 詳細な評価軸は C<docs/execution-benchmark.md>、現在の実装前提は
 C<docs/current-context.md> と C<docs/runtime-vm-architecture.md> にあります。
 

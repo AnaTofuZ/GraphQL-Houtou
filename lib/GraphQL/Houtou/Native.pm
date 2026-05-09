@@ -20,6 +20,7 @@ our @EXPORT_OK = qw(
   execute_native_bundle
   execute_native_program
   execute_native_program_handle
+  execute_native_program_auto
 );
 
 BEGIN {
@@ -72,6 +73,10 @@ sub execute_native_program {
 
 sub execute_native_program_handle {
   return GraphQL::Houtou::XS::VM::execute_native_program_handle_xs(@_);
+}
+
+sub execute_native_program_auto {
+  return GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(@_);
 }
 
 1;

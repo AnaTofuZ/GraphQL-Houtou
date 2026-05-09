@@ -3289,6 +3289,158 @@ gql_runtime_vm_exec_state_native_runtime(pTHX_ gql_runtime_vm_exec_state_handle_
   return s->native_runtime;
 }
 
+static gql_runtime_vm_cursor_t *
+gql_runtime_vm_new_cursor_struct_for_program(
+  pTHX_
+  gql_runtime_vm_native_program_t *program,
+  IV block_index,
+  IV slot_index,
+  IV op_index
+)
+{
+  gql_runtime_vm_cursor_t *cursor;
+
+  Newxz(cursor, 1, gql_runtime_vm_cursor_t);
+  cursor->refcount = 1;
+  cursor->native_program = program;
+  cursor->block_index = block_index;
+  cursor->slot_index = slot_index;
+  cursor->op_index = op_index;
+  return cursor;
+}
+
+static SV *
+gql_runtime_vm_new_exec_state_handle_sv(
+  pTHX_
+  const char *pkg,
+  SV *runtime_schema,
+  SV *program,
+  gql_runtime_vm_cursor_t *cursor,
+  gql_runtime_vm_writer_t *writer,
+  SV *context,
+  SV *variables,
+  SV *root_value,
+  SV *empty_args
+)
+{
+  gql_runtime_vm_exec_state_handle_t *state;
+
+  Newxz(state, 1, gql_runtime_vm_exec_state_handle_t);
+  state->runtime_schema = newSVsv(runtime_schema ? runtime_schema : &PL_sv_undef);
+  state->program = newSVsv(program ? program : &PL_sv_undef);
+  state->native_runtime = NULL;
+  state->native_runtime_is_borrowed = 0;
+  state->cursor = cursor;
+  gql_runtime_vm_cursor_incref(state->cursor);
+  state->native_program = state->cursor ? state->cursor->native_program : NULL;
+  state->frame = NULL;
+  state->frame_stack_count = 0;
+  state->frame_stack_capacity = 0;
+  state->frame_stack = NULL;
+  state->field_frame = NULL;
+  state->writer = writer;
+  gql_runtime_vm_writer_incref(state->writer);
+  state->context = newSVsv(context ? context : &PL_sv_undef);
+  state->variables = newSVsv(variables ? variables : &PL_sv_undef);
+  state->root_value = newSVsv(root_value ? root_value : &PL_sv_undef);
+  state->promise_backend_code = GQL_VM_PROMISE_BACKEND_PROMISE_XS;
+  state->empty_args = (empty_args && SvOK(empty_args))
+    ? newSVsv(empty_args)
+    : gql_runtime_vm_empty_args_sv(aTHX);
+  return gql_runtime_vm_new_handle_sv(aTHX_ pkg, state);
+}
+
+static SV *
+gql_runtime_vm_execute_native_program_auto_sv(
+  pTHX_
+  SV *runtime_sv,
+  SV *program_sv,
+  SV *root_value,
+  SV *context_value,
+  SV *variables
+)
+{
+  gql_runtime_vm_native_runtime_t *runtime;
+  gql_runtime_vm_native_program_t *program;
+  gql_runtime_vm_cursor_t *cursor = NULL;
+  gql_runtime_vm_writer_t *writer = NULL;
+  gql_runtime_vm_exec_state_handle_t *state = NULL;
+  HV *provided_hv = NULL;
+  SV *runtime_schema_sv = &PL_sv_undef;
+  SV *prepared_variables_sv = NULL;
+  SV *state_sv = NULL;
+  SV *data_sv = NULL;
+  SV *effective_root = root_value;
+  SV *ret = NULL;
+
+  if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+    croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
+  }
+
+  runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
+  if (!runtime) {
+    croak("native VM runtime handle is no longer valid");
+  }
+
+  program = gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
+  if (variables && SvOK(variables) && SvROK(variables) && SvTYPE(SvRV(variables)) == SVt_PVHV) {
+    provided_hv = (HV *)SvRV(variables);
+  }
+
+  if (runtime->callback_catalog && runtime->callback_catalog->runtime_schema) {
+    runtime_schema_sv = runtime->callback_catalog->runtime_schema;
+  }
+  prepared_variables_sv = gql_runtime_vm_prepare_program_variables_sv(
+    aTHX_
+    runtime_schema_sv,
+    program,
+    provided_hv
+  );
+
+  cursor = gql_runtime_vm_new_cursor_struct_for_program(
+    aTHX_
+    program,
+    program->root_block_index,
+    0,
+    0
+  );
+  writer = gql_runtime_vm_new_writer_struct(aTHX);
+  state_sv = gql_runtime_vm_new_exec_state_handle_sv(
+    aTHX_
+    "GraphQL::Houtou::Runtime::ExecState",
+    runtime_schema_sv,
+    program_sv,
+    cursor,
+    writer,
+    context_value,
+    prepared_variables_sv,
+    root_value,
+    NULL
+  );
+  state = gql_runtime_vm_expect_exec_state_handle(aTHX_ state_sv);
+  state->native_runtime = runtime;
+  state->native_runtime_is_borrowed = 1;
+
+  if (!effective_root || !SvOK(effective_root)) {
+    effective_root = state->root_value;
+  }
+  data_sv = gql_runtime_vm_exec_state_execute_block_async_sv(
+    aTHX_
+    state_sv,
+    state,
+    program->root_block_index,
+    effective_root,
+    &PL_sv_undef
+  );
+  ret = gql_runtime_vm_exec_state_finalize_async_response_sv(aTHX_ state_sv, state, data_sv);
+
+  SvREFCNT_dec(state_sv);
+  SvREFCNT_dec(prepared_variables_sv);
+  gql_runtime_vm_cursor_decref(aTHX_ cursor);
+  gql_runtime_vm_writer_decref(aTHX_ writer);
+  return ret ? ret : newSVsv(&PL_sv_undef);
+}
+
 static SV *
 gql_runtime_vm_call_cb4(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV *arg3)
 {
@@ -6138,30 +6290,19 @@ exec_state_new_xs(class, runtime_schema, program, cursor, writer, context = &PL_
     SV *empty_args
   CODE:
     {
-      gql_runtime_vm_exec_state_handle_t *state;
       const char *pkg = SvPV_nolen(class);
-      Newxz(state, 1, gql_runtime_vm_exec_state_handle_t);
-      state->runtime_schema = newSVsv(runtime_schema ? runtime_schema : &PL_sv_undef);
-      state->program = newSVsv(program ? program : &PL_sv_undef);
-      state->native_runtime = NULL;
-      state->cursor = (cursor && SvOK(cursor)) ? gql_runtime_vm_expect_cursor(aTHX_ cursor) : NULL;
-      gql_runtime_vm_cursor_incref(state->cursor);
-      state->native_program = state->cursor ? state->cursor->native_program : NULL;
-      state->frame = NULL;
-      state->frame_stack_count = 0;
-      state->frame_stack_capacity = 0;
-      state->frame_stack = NULL;
-      state->field_frame = NULL;
-      state->writer = (writer && SvOK(writer)) ? gql_runtime_vm_expect_writer(aTHX_ writer) : NULL;
-      gql_runtime_vm_writer_incref(state->writer);
-      state->context = newSVsv(context ? context : &PL_sv_undef);
-      state->variables = newSVsv(variables ? variables : &PL_sv_undef);
-      state->root_value = newSVsv(root_value ? root_value : &PL_sv_undef);
-      state->promise_backend_code = GQL_VM_PROMISE_BACKEND_PROMISE_XS;
-      state->empty_args = (empty_args && SvOK(empty_args))
-        ? newSVsv(empty_args)
-        : gql_runtime_vm_empty_args_sv(aTHX);
-      RETVAL = gql_runtime_vm_new_handle_sv(aTHX_ pkg, state);
+      RETVAL = gql_runtime_vm_new_exec_state_handle_sv(
+        aTHX_
+        pkg,
+        runtime_schema,
+        program,
+        (cursor && SvOK(cursor)) ? gql_runtime_vm_expect_cursor(aTHX_ cursor) : NULL,
+        (writer && SvOK(writer)) ? gql_runtime_vm_expect_writer(aTHX_ writer) : NULL,
+        context,
+        variables,
+        root_value,
+        empty_args
+      );
     }
   OUTPUT:
     RETVAL
@@ -6415,6 +6556,27 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
   OUTPUT:
     RETVAL
 
+SV *
+execute_native_program_auto_xs(runtime_sv, program_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
+    SV *runtime_sv
+    SV *program_sv
+    SV *root_value
+    SV *context_value
+    SV *variables
+  CODE:
+    {
+      RETVAL = gql_runtime_vm_execute_native_program_auto_sv(
+        aTHX_
+        runtime_sv,
+        program_sv,
+        root_value,
+        context_value,
+        variables
+      );
+    }
+  OUTPUT:
+    RETVAL
+
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::Runtime::Cursor
 
 void
@@ -6563,7 +6725,9 @@ DESTROY(self)
         sv_setuv(inner_sv, 0);
         SvREFCNT_dec(state->runtime_schema);
         SvREFCNT_dec(state->program);
-        gql_runtime_vm_native_runtime_destroy(state->native_runtime);
+        if (state->native_runtime && !state->native_runtime_is_borrowed) {
+          gql_runtime_vm_native_runtime_destroy(state->native_runtime);
+        }
         gql_runtime_vm_cursor_decref(aTHX_ state->cursor);
         if (state->frame && state->frame_stack_count == 0) {
           gql_runtime_vm_free_block_frame(aTHX_ state->frame);

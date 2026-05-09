@@ -303,6 +303,7 @@ typedef struct {
   SV *runtime_schema;
   SV *program;
   gql_runtime_vm_native_runtime_t *native_runtime;
+  U8 native_runtime_is_borrowed;
   gql_runtime_vm_native_program_t *native_program;
   gql_runtime_vm_cursor_t *cursor;
   gql_runtime_vm_block_frame_t *frame;

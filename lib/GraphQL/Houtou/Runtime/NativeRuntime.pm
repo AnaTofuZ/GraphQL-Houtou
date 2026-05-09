@@ -203,12 +203,12 @@ sub execute_program {
     );
     return $self->execute_compact_program($native_program, %opts, variables => $prepared_variables);
   }
-
-  require GraphQL::Houtou::Runtime::ExecState;
-  return GraphQL::Houtou::Runtime::ExecState->run_program(
-    $self->runtime_schema,
+  return GraphQL::Houtou::Native::execute_native_program_auto(
+    $self->_native_runtime_handle,
     $native_program,
-    %opts,
+    $opts{root_value},
+    $opts{context},
+    $opts{variables},
   );
 }
 

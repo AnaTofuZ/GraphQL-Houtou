@@ -186,35 +186,44 @@ sub load_bundle_descriptor_file {
 sub execute_program {
   my ($self, $program, %opts) = @_;
   my $native_program = _require_native_program($program);
+  my $runtime_handle = $self->_native_runtime_handle;
+  my $has_root_value = exists $opts{root_value};
+  my $has_context_value = exists $opts{context};
+  my $has_variables = exists $opts{variables};
+  my $root_value = $has_root_value ? $opts{root_value} : undef;
+  my $context_value = $has_context_value ? $opts{context} : undef;
+  my $variables = $has_variables ? $opts{variables} : undef;
+  my $engine = exists $opts{engine} ? $opts{engine} : undef;
 
   die "promise_code is no longer supported; Promise::XS is detected automatically.\n"
     if exists $opts{promise_code};
 
   die "engine => 'perl' is no longer supported for sync runtime execution.\n"
-    if defined $opts{engine} && $opts{engine} eq 'perl';
+    if defined $engine && $engine eq 'perl';
 
-  $opts{engine} = delete $opts{vm_engine}
-    if !defined $opts{engine} && exists $opts{vm_engine};
-  if (defined $opts{engine} && $opts{engine} eq 'native') {
+  if (!defined $engine && exists $opts{vm_engine}) {
+    $engine = delete $opts{vm_engine};
+  }
+  if (defined $engine && $engine eq 'native') {
     my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
       $self->runtime_schema,
       $native_program,
-      $opts{variables} || {},
+      $variables || {},
     );
     return $self->execute_compact_program($native_program, %opts, variables => $prepared_variables);
   }
-  if (!exists $opts{root_value} && !exists $opts{context} && !exists $opts{variables}) {
-    return GraphQL::Houtou::Native::execute_native_program_auto(
-      $self->_native_runtime_handle,
+  if (!$has_root_value && !$has_context_value && !$has_variables) {
+    return GraphQL::Houtou::XS::VM::execute_native_program_auto_simple_xs(
+      $runtime_handle,
       $native_program,
     );
   }
-  return GraphQL::Houtou::Native::execute_native_program_auto(
-    $self->_native_runtime_handle,
+  return GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(
+    $runtime_handle,
     $native_program,
-    $opts{root_value},
-    $opts{context},
-    $opts{variables},
+    $root_value,
+    $context_value,
+    $variables,
   );
 }
 

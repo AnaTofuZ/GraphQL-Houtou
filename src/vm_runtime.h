@@ -1985,7 +1985,7 @@ gql_runtime_vm_block_frame_push_pending_pvn(
   gql_runtime_vm_pending_entry_t *entry = NULL;
   U8 payload_kind = GQL_VM_PENDING_PROMISE_SV;
 
-  if (outcome && sv_derived_from(outcome, "GraphQL::Houtou::Runtime::Outcome")) {
+  if (outcome && SvOK(outcome) && sv_derived_from(outcome, "GraphQL::Houtou::Runtime::Outcome")) {
     payload_kind = GQL_VM_PENDING_OUTCOME_PTR;
   }
 

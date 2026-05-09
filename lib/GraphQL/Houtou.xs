@@ -869,7 +869,7 @@ gql_runtime_vm_consume_current_result_now(pTHX_ gql_runtime_vm_exec_state_handle
     return;
   }
 
-  if (result_sv && sv_derived_from(result_sv, "GraphQL::Houtou::Runtime::Outcome")) {
+  if (result_sv && SvOK(result_sv) && sv_derived_from(result_sv, "GraphQL::Houtou::Runtime::Outcome")) {
     gql_runtime_vm_consume_current_outcome_now(aTHX_ s, gql_runtime_vm_expect_outcome(aTHX_ result_sv));
     return;
   }
@@ -986,7 +986,7 @@ gql_runtime_vm_block_frame_finalize_sv(
   aggregate = gql_runtime_vm_call_all_promise_xs_sv(aTHX_ pending_av, NULL);
   SvREFCNT_dec((SV *)pending_av);
 
-  if (aggregate && sv_derived_from(aggregate, "GraphQL::Houtou::Runtime::Outcome")) {
+  if (aggregate && SvOK(aggregate) && sv_derived_from(aggregate, "GraphQL::Houtou::Runtime::Outcome")) {
     return aggregate;
   }
 
@@ -1109,6 +1109,7 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
     SV **outcome_svp = av_fetch(resolved_av, i, 0);
     if (outcome_svp && *outcome_svp) {
       if (state->frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
+          && SvOK(*outcome_svp)
           && !sv_derived_from(*outcome_svp, "GraphQL::Houtou::Runtime::Outcome")) {
         gql_runtime_vm_consume_value_native_object(
           aTHX_
@@ -1716,7 +1717,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
           path_frame
         );
         SvREFCNT_dec((SV *)resolved_items_av);
-        if (aggregate && sv_derived_from(aggregate, "GraphQL::Houtou::Runtime::Outcome")) {
+        if (aggregate && SvOK(aggregate) && sv_derived_from(aggregate, "GraphQL::Houtou::Runtime::Outcome")) {
           return aggregate;
         }
         {
@@ -6651,6 +6652,24 @@ execute_native_program_auto_xs(runtime_sv, program_sv, root_value = &PL_sv_undef
         root_value,
         context_value,
         variables
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+execute_native_program_auto_simple_xs(runtime_sv, program_sv)
+    SV *runtime_sv
+    SV *program_sv
+  CODE:
+    {
+      RETVAL = gql_runtime_vm_execute_native_program_auto_sv(
+        aTHX_
+        runtime_sv,
+        program_sv,
+        &PL_sv_undef,
+        &PL_sv_undef,
+        &PL_sv_undef
       );
     }
   OUTPUT:

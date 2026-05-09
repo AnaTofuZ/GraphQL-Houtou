@@ -150,6 +150,7 @@ typedef struct {
   UV refcount;
   gql_runtime_vm_block_frame_t *frame;
   gql_runtime_vm_writer_t *writer;
+  SV *state_sv;
 } gql_runtime_vm_pending_merge_t;
 
 typedef struct {
@@ -300,6 +301,9 @@ gql_runtime_vm_pending_merge_decref(pTHX_ gql_runtime_vm_pending_merge_t *merge)
   }
   gql_runtime_vm_free_block_frame(aTHX_ merge->frame);
   gql_runtime_vm_writer_decref(aTHX_ merge->writer);
+  if (merge->state_sv) {
+    SvREFCNT_dec(merge->state_sv);
+  }
   Safefree(merge);
 }
 
@@ -883,21 +887,33 @@ gql_runtime_vm_consume_current_result_now(pTHX_ gql_runtime_vm_exec_state_handle
     result_name_len = (STRLEN)strlen(result_name_pv);
   }
   if (frame && result_name_pv && result_name_len > 0 && result_sv && SvOK(result_sv)) {
-    gql_runtime_vm_block_frame_push_pending_pvn(
+    gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
       aTHX_ frame,
       result_name_pv,
       result_name_len,
-      result_sv
+      1,
+      result_sv,
+      GQL_VM_PENDING_PROMISE_SV,
+      NULL,
+      -1,
+      -1,
+      -1
     );
   }
   gql_runtime_vm_leave_field_now(aTHX_ s);
 }
 
 static SV *
-gql_runtime_vm_block_frame_finalize_sv(pTHX_ gql_runtime_vm_block_frame_t *frame, U8 promise_backend_code, gql_runtime_vm_writer_t *writer);
+gql_runtime_vm_block_frame_finalize_sv(
+  pTHX_
+  gql_runtime_vm_block_frame_t *frame,
+  U8 promise_backend_code,
+  gql_runtime_vm_writer_t *writer,
+  SV *state_sv
+);
 
 static SV *
-gql_runtime_vm_finalize_current_block_now(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *snapshot)
+gql_runtime_vm_finalize_current_block_now(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *snapshot)
 {
   gql_runtime_vm_block_frame_t *frame;
   gql_runtime_vm_block_frame_t *completed_frame;
@@ -914,7 +930,8 @@ gql_runtime_vm_finalize_current_block_now(pTHX_ gql_runtime_vm_exec_state_handle
       aTHX_
       frame,
       s->promise_backend_code,
-      s->writer
+      s->writer,
+      state_sv
     );
   } else {
     result = gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
@@ -939,12 +956,14 @@ gql_runtime_vm_block_frame_finalize_sv(
   pTHX_
   gql_runtime_vm_block_frame_t *frame,
   U8 promise_backend_code,
-  gql_runtime_vm_writer_t *writer
+  gql_runtime_vm_writer_t *writer,
+  SV *state_sv
 )
 {
   IV i;
   AV *pending_av;
   SV *aggregate;
+  gql_runtime_vm_block_frame_t next_pending;
 
   if (!frame) {
     return newSVsv(&PL_sv_undef);
@@ -956,20 +975,45 @@ gql_runtime_vm_block_frame_finalize_sv(
     croak("pending async runtime blocks require Promise::XS");
   }
 
-  pending_av = newAV();
+  Zero(&next_pending, 1, gql_runtime_vm_block_frame_t);
   for (i = 0; i < frame->pending_count; i++) {
     if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_OUTCOME_PTR) {
-      gql_runtime_vm_outcome_t *outcome = frame->pending_entries[i].payload.outcome_ptr;
-      if (outcome) {
-        gql_runtime_vm_outcome_incref(outcome);
-        av_push(pending_av, gql_runtime_vm_new_handle_sv(
-          aTHX_ "GraphQL::Houtou::Runtime::Outcome",
-          outcome
-        ));
-      } else {
-        av_push(pending_av, newSVsv(&PL_sv_undef));
-      }
-    } else if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_SV
+      gql_runtime_vm_consume_outcome_native_object(
+        aTHX_
+        frame->values_value,
+        frame->pending_entries[i].result_name_pv,
+        frame->pending_entries[i].payload.outcome_ptr,
+        writer
+      );
+    } else {
+      gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
+        aTHX_
+        &next_pending,
+        frame->pending_entries[i].result_name_pv,
+        frame->pending_entries[i].result_name_len,
+        frame->pending_entries[i].result_name_pv_borrowed,
+        frame->pending_entries[i].payload.promise_sv,
+        frame->pending_entries[i].payload_kind,
+        frame->pending_entries[i].path_frame,
+        frame->pending_entries[i].block_index,
+        frame->pending_entries[i].slot_index,
+        frame->pending_entries[i].op_index
+      );
+    }
+  }
+  gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);
+  frame->pending_entries = next_pending.pending_entries;
+  frame->pending_count = next_pending.pending_count;
+  frame->pending_capacity = next_pending.pending_capacity;
+
+  if (frame->pending_count == 0) {
+    return gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
+  }
+
+  pending_av = newAV();
+  for (i = 0; i < frame->pending_count; i++) {
+    if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_SV
+        || frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV
         || frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV) {
       av_push(
         pending_av,
@@ -1001,6 +1045,7 @@ gql_runtime_vm_block_frame_finalize_sv(
     frame->refcount++;
     merge->writer = writer;
     gql_runtime_vm_writer_incref(writer);
+    merge->state_sv = state_sv ? SvREFCNT_inc_simple_NN(state_sv) : NULL;
     callback_sv = gql_runtime_vm_new_finalize_callback_sv(aTHX_ merge);
     gql_runtime_vm_pending_merge_decref(aTHX_ merge);
 
@@ -1104,32 +1149,120 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
 {
   AV *resolved_av = gql_runtime_vm_expect_arrayref(aTHX_ resolved, "resolved outcomes");
   SSize_t i;
+  gql_runtime_vm_block_frame_t next_pending;
+  gql_runtime_vm_exec_state_handle_t *exec_state =
+    (state && state->state_sv) ? gql_runtime_vm_expect_exec_state_handle(aTHX_ state->state_sv) : NULL;
+
+  Zero(&next_pending, 1, gql_runtime_vm_block_frame_t);
 
   for (i = 0; i <= av_len(resolved_av) && i < state->frame->pending_count; i++) {
     SV **outcome_svp = av_fetch(resolved_av, i, 0);
-    if (outcome_svp && *outcome_svp) {
-      if (state->frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
-          && SvOK(*outcome_svp)
-          && !sv_derived_from(*outcome_svp, "GraphQL::Houtou::Runtime::Outcome")) {
+    gql_runtime_vm_pending_entry_t *entry = &state->frame->pending_entries[i];
+    SV *resolved_sv = (outcome_svp && *outcome_svp) ? *outcome_svp : &PL_sv_undef;
+
+    if (entry->payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV) {
+      if (SvOK(resolved_sv) && !sv_derived_from(resolved_sv, "GraphQL::Houtou::Runtime::Outcome")) {
         gql_runtime_vm_consume_value_native_object(
           aTHX_
           state->frame->values_value,
-          state->frame->pending_entries[i].result_name_pv,
-          *outcome_svp
+          entry->result_name_pv,
+          resolved_sv
         );
       } else {
         gql_runtime_vm_consume_outcome_native_object(
           aTHX_
           state->frame->values_value,
-          state->frame->pending_entries[i].result_name_pv,
-          gql_runtime_vm_expect_outcome(aTHX_ *outcome_svp),
+          entry->result_name_pv,
+          gql_runtime_vm_expect_outcome(aTHX_ resolved_sv),
           state->writer
+        );
+      }
+    } else if (entry->payload_kind == GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV) {
+      if (SvOK(resolved_sv) && sv_derived_from(resolved_sv, "GraphQL::Houtou::Runtime::Outcome")) {
+        gql_runtime_vm_consume_outcome_native_object(
+          aTHX_
+          state->frame->values_value,
+          entry->result_name_pv,
+          gql_runtime_vm_expect_outcome(aTHX_ resolved_sv),
+          state->writer
+        );
+      } else {
+        SV *completed_sv;
+
+        if (!exec_state || !state->state_sv) {
+          croak("pending async completion requires an exec state");
+        }
+        completed_sv = gql_runtime_vm_exec_state_complete_async_sv(
+          aTHX_
+          state->state_sv,
+          exec_state,
+          entry->path_frame,
+          entry->block_index,
+          entry->slot_index,
+          entry->op_index,
+          resolved_sv
+        );
+        if (completed_sv && SvOK(completed_sv) && sv_derived_from(completed_sv, "GraphQL::Houtou::Runtime::Outcome")) {
+          gql_runtime_vm_consume_outcome_native_object(
+            aTHX_
+            state->frame->values_value,
+            entry->result_name_pv,
+            gql_runtime_vm_expect_outcome(aTHX_ completed_sv),
+            state->writer
+          );
+        } else if (completed_sv && SvOK(completed_sv)) {
+          gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
+            aTHX_
+            &next_pending,
+            entry->result_name_pv,
+            entry->result_name_len,
+            entry->result_name_pv_borrowed,
+            completed_sv,
+            GQL_VM_PENDING_PROMISE_SV,
+            NULL,
+            -1,
+            -1,
+            -1
+          );
+        }
+        if (completed_sv) {
+          SvREFCNT_dec(completed_sv);
+        }
+      }
+    } else if (entry->payload_kind == GQL_VM_PENDING_PROMISE_SV) {
+      if (SvOK(resolved_sv) && sv_derived_from(resolved_sv, "GraphQL::Houtou::Runtime::Outcome")) {
+        gql_runtime_vm_consume_outcome_native_object(
+          aTHX_
+          state->frame->values_value,
+          entry->result_name_pv,
+          gql_runtime_vm_expect_outcome(aTHX_ resolved_sv),
+          state->writer
+        );
+      } else {
+        gql_runtime_vm_consume_value_native_object(
+          aTHX_
+          state->frame->values_value,
+          entry->result_name_pv,
+          resolved_sv
         );
       }
     }
   }
 
   gql_runtime_vm_block_frame_clear_pending(aTHX_ state->frame);
+  state->frame->pending_entries = next_pending.pending_entries;
+  state->frame->pending_count = next_pending.pending_count;
+  state->frame->pending_capacity = next_pending.pending_capacity;
+
+  if (state->frame->pending_count > 0) {
+    return gql_runtime_vm_block_frame_finalize_sv(
+      aTHX_
+      state->frame,
+      GQL_VM_PROMISE_BACKEND_PROMISE_XS,
+      state->writer,
+      state->state_sv
+    );
+  }
   return gql_runtime_vm_native_value_materialize_sv(aTHX_ state->frame->values_value);
 }
 
@@ -2594,7 +2727,7 @@ gql_runtime_vm_exec_state_execute_block_async_path_sv(
   }
 
   {
-    SV *result = gql_runtime_vm_finalize_current_block_now(aTHX_ s, &PL_sv_undef);
+    SV *result = gql_runtime_vm_finalize_current_block_now(aTHX_ state_sv, s, &PL_sv_undef);
     if (s && s->cursor) {
       gql_runtime_vm_cursor_restore_copy(aTHX_ s->cursor, &snapshot);
     }
@@ -2947,21 +3080,12 @@ gql_runtime_vm_then_complete_current_sv(
     gql_runtime_vm_effective_slot(runtime, (s && s->cursor) ? gql_runtime_vm_cursor_current_native_slot(s->cursor) : NULL);
   const char *result_name_pv = (slot && slot->result_name && *slot->result_name) ? slot->result_name : NULL;
   STRLEN result_name_len = result_name_pv ? (STRLEN)strlen(result_name_pv) : 0;
+  IV complete_code = op ? op->complete_code : GQL_VM_COMPLETE_GENERIC;
   SV *callback_sv;
   SV *error_callback_sv;
   SV *ret = NULL;
 
-  if (op && op->complete_code == GQL_VM_COMPLETE_GENERIC) {
-    callback_sv = gql_runtime_vm_identity_callback_sv(aTHX);
-  } else {
-    callback_sv = gql_runtime_vm_new_complete_callback_sv(
-      aTHX_ state_sv,
-      path_frame,
-      block_index,
-      slot_index,
-      op_index
-    );
-  }
+  callback_sv = gql_runtime_vm_identity_callback_sv(aTHX);
   error_callback_sv = gql_runtime_vm_new_error_callback_sv(aTHX_ path_frame);
 
   ret = gql_runtime_vm_call_then_promise_for_state_sv(
@@ -2981,24 +3105,60 @@ gql_runtime_vm_then_complete_current_sv(
   }
 
   if (op
-      && op->complete_code == GQL_VM_COMPLETE_GENERIC
       && ret
       && SvOK(ret)
       && !sv_derived_from(ret, "GraphQL::Houtou::Runtime::Outcome")
+      && gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, ret)
       && s
       && s->frame
       && result_name_pv
       && result_name_len > 0) {
-    gql_runtime_vm_block_frame_push_pending_pvn_with_kind(
+    gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
       aTHX_
       s->frame,
       result_name_pv,
       result_name_len,
+      1,
       ret,
-      GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
+      complete_code == GQL_VM_COMPLETE_GENERIC
+        ? GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
+        : GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV,
+      path_frame,
+      block_index,
+      slot_index,
+      op_index
     );
     SvREFCNT_dec(ret);
     return newSVsv(&PL_sv_undef);
+  }
+
+  if (ret
+      && SvOK(ret)
+      && !sv_derived_from(ret, "GraphQL::Houtou::Runtime::Outcome")
+      && !gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, ret)) {
+    SV *completed_sv;
+
+    if (complete_code == GQL_VM_COMPLETE_GENERIC) {
+      completed_sv = gql_runtime_vm_new_outcome_handle_sv(
+        aTHX_
+        GQL_VM_KIND_SCALAR,
+        ret,
+        &PL_sv_undef
+      );
+    } else {
+      completed_sv = gql_runtime_vm_exec_state_complete_async_sv(
+        aTHX_
+        state_sv,
+        s,
+        path_frame,
+        block_index,
+        slot_index,
+        op_index,
+        ret
+      );
+    }
+    SvREFCNT_dec(ret);
+    return completed_sv ? completed_sv : newSVsv(&PL_sv_undef);
   }
 
   return ret ? ret : newSVsv(&PL_sv_undef);
@@ -6310,7 +6470,8 @@ block_frame_finalize_xs(frame, writer)
         aTHX_
         state,
         GQL_VM_PROMISE_BACKEND_PROMISE_XS,
-        writer_state
+        writer_state,
+        &PL_sv_undef
       );
     }
   OUTPUT:

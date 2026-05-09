@@ -908,3 +908,54 @@ perl -Ilib t/19_vm_execute.t
     と、leaf-heavy case を中心に改善した
   - sync `runtime_program` は query ごとに増減があるが、public mainline が `100k/s` を大きく超える水準は維持している
   - specialized `native_bundle` はほぼ横ばいで、今回の batch の主効果は async/public path 側にある
+
+- `optimize-async-batch-continuation` branch follow-up
+  - async pending entry に
+    - `path_frame`
+    - `block_index`
+    - `slot_index`
+    - `op_index`
+    - `result_name_pv_borrowed`
+    を追加し、field ごとの complete callback を作らず block finalize で completion できるようにした
+  - resolver promise は `identity + error_callback` で正規化し、
+    - generic field は raw value pending
+    - object/list/abstract は resolved-value pending
+    に分けて積む
+  - finalize callback は
+    - phase 1: resolved value を `complete_async(...)` へ流す
+    - phase 2: nested completion が返した outcome promise だけを再度 finalize する
+    形の 2-phase continuation になった
+  - immediate outcome pending は `Promise::XS::all(...)` に入れず、finalize 前に `values_value` へ直接 merge する
+  - pending result name は slot lifetime にぶら下がる borrowed pointer を使い、
+    async hot path の `savepvn/free` を削った
+  - `./Build test` 通過
+- latest median (after async batch continuation / native-first merge)
+  - sync:
+    - `nested_variable_object`
+      - `houtou_runtime_program`: `150436/s`
+      - `houtou_runtime_native_bundle`: `592111/s`
+    - `list_of_objects`
+      - `houtou_runtime_program`: `194869/s`
+      - `houtou_runtime_native_bundle`: `517476/s`
+    - `abstract_with_fragment`
+      - `houtou_runtime_program`: `187563/s`
+      - `houtou_runtime_native_bundle`: `570511/s`
+  - async (`--include-async --promise-backend promise_xs`):
+    - `async_scalar`
+      - `houtou_runtime_program`: `170666/s`
+    - `async_list`
+      - `houtou_runtime_program`: `127999/s`
+    - `async_object`
+      - `houtou_runtime_program`: `132741/s`
+    - `async_abstract`
+      - `houtou_runtime_program`: `111348/s`
+- 解釈:
+  - async mainline は直前 checkpoint 比で
+    - `async_scalar`: 約 `+2.7%`
+    - `async_list`: 約 `+3.5%`
+    - `async_object`: 約 `+3.7%`
+    - `async_abstract`: 約 `+1.0%`
+    と全 case で改善した
+  - object/list/abstract でも per-field complete callback を減らせたので、
+    leaf-heavy case 以外にも改善が広がった
+  - sync `native_bundle` も即時 outcome pending の pre-merge によりわずかに改善した

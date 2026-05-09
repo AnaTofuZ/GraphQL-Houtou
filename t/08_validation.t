@@ -10,7 +10,6 @@ use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 use GraphQL::Houtou::Schema qw(lookup_type);
 
 use GraphQL::Houtou::Validation qw(validate);
-use GraphQL::Houtou::XS::Validation qw(validate_xs);
 
 my $Node;
 my $User;
@@ -88,42 +87,17 @@ sub messages {
   return [ map $_->{message}, @$errors ];
 }
 
-subtest 'XS validation entrypoint matches facade behavior' => sub {
-  my $source = q|{
-    viewer {
-      id
-      name
-    }
-  }|;
-
-  is_deeply validate_xs($schema, $source), validate($schema, $source),
-    'XS path currently matches the public facade';
-
-  $source = q|
-    query Q { viewer { id } }
-    query Q { viewer { name } }
-  |;
-
-  is_deeply validate_xs($schema, $source), validate($schema, $source),
-    'XS path matches duplicate-operation validation too';
-
-  $source = q|
-    subscription S {
-      importantUser { id }
-      otherUser { id }
-    }
-  |;
-
-  is_deeply validate_xs($schema, $source), validate($schema, $source),
-    'XS path matches subscription root-field validation too';
-
-  $source = q|
-    query Q { viewer { ...Loop } }
-    fragment Loop on MissingType { ...Loop }
-  |;
-
-  is_deeply validate_xs($schema, $source), validate($schema, $source),
-    'XS path matches fragment-cycle validation too';
+subtest 'validation facade stays minimal' => sub {
+  is_deeply [ sort @GraphQL::Houtou::Validation::EXPORT_OK ], [qw(validate)],
+    'only validate is exported as public API';
+  ok(
+    GraphQL::Houtou::Validation->can('validate'),
+    'public validate entrypoint exists',
+  );
+  ok(
+    !GraphQL::Houtou::Validation->can('validate_xs'),
+    'internal XS symbol is not exposed as public facade method',
+  );
 };
 
 subtest 'valid query passes' => sub {

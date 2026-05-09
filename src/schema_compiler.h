@@ -110,7 +110,7 @@ gql_schema_clone_hashref_shallow(pTHX_ SV *hashref_sv) {
 
   src_hv = (HV *)SvRV(hashref_sv);
   dst_hv = newHV();
-  keys = gqljs_sorted_hash_keys(aTHX_ src_hv, &count);
+  keys = gql_parser_sorted_hash_keys(aTHX_ src_hv, &count);
   if (!keys) {
     return newRV_noinc((SV *)dst_hv);
   }
@@ -123,9 +123,9 @@ gql_schema_clone_hashref_shallow(pTHX_ SV *hashref_sv) {
       continue;
     }
     value_sv = HeVAL(he);
-    gqljs_store_hash_key_sv(dst_hv, keys[i], newSVsv(value_sv));
+    gql_parser_store_hash_key_sv(dst_hv, keys[i], newSVsv(value_sv));
   }
-  gqljs_free_sorted_hash_keys(keys, count);
+  gql_parser_free_sorted_hash_keys(keys, count);
 
   return newRV_noinc((SV *)dst_hv);
 }
@@ -324,7 +324,7 @@ gql_schema_compile_input_fields(pTHX_ SV *fields_sv) {
   }
 
   fields_hv = (HV *)SvRV(fields_sv);
-  keys = gqljs_sorted_hash_keys(aTHX_ fields_hv, &count);
+  keys = gql_parser_sorted_hash_keys(aTHX_ fields_hv, &count);
   if (!keys) {
     return newRV_noinc((SV *)out_hv);
   }
@@ -394,10 +394,10 @@ gql_schema_compile_input_fields(pTHX_ SV *fields_sv) {
     gql_store_sv(compiled_hv, "is_deprecated", newSViv(deprecated_svp && SvTRUE(*deprecated_svp) ? 1 : 0));
     gql_store_sv(compiled_hv, "source_field", newSVsv(field_sv));
 
-    gqljs_store_hash_key_sv(out_hv, keys[i], newRV_noinc((SV *)compiled_hv));
+    gql_parser_store_hash_key_sv(out_hv, keys[i], newRV_noinc((SV *)compiled_hv));
   }
 
-  gqljs_free_sorted_hash_keys(keys, count);
+  gql_parser_free_sorted_hash_keys(keys, count);
   return newRV_noinc((SV *)out_hv);
 }
 
@@ -414,7 +414,7 @@ gql_schema_compile_fields(pTHX_ SV *fields_sv) {
   }
 
   fields_hv = (HV *)SvRV(fields_sv);
-  keys = gqljs_sorted_hash_keys(aTHX_ fields_hv, &count);
+  keys = gql_parser_sorted_hash_keys(aTHX_ fields_hv, &count);
   if (!keys) {
     return newRV_noinc((SV *)out_hv);
   }
@@ -487,10 +487,10 @@ gql_schema_compile_fields(pTHX_ SV *fields_sv) {
     }
 
     gql_store_sv(compiled_hv, "source_field", newSVsv(field_sv));
-    gqljs_store_hash_key_sv(out_hv, keys[i], newRV_noinc((SV *)compiled_hv));
+    gql_parser_store_hash_key_sv(out_hv, keys[i], newRV_noinc((SV *)compiled_hv));
   }
 
-  gqljs_free_sorted_hash_keys(keys, count);
+  gql_parser_free_sorted_hash_keys(keys, count);
   return newRV_noinc((SV *)out_hv);
 }
 
@@ -507,7 +507,7 @@ gql_schema_compile_enum_values(pTHX_ SV *values_sv) {
   }
 
   values_hv = (HV *)SvRV(values_sv);
-  keys = gqljs_sorted_hash_keys(aTHX_ values_hv, &count);
+  keys = gql_parser_sorted_hash_keys(aTHX_ values_hv, &count);
   if (!keys) {
     return newRV_noinc((SV *)out_hv);
   }
@@ -549,10 +549,10 @@ gql_schema_compile_enum_values(pTHX_ SV *values_sv) {
     gql_store_sv(compiled_hv, "is_deprecated", newSViv(deprecated_svp && SvTRUE(*deprecated_svp) ? 1 : 0));
     gql_store_sv(compiled_hv, "source_value", newSVsv(value_sv));
 
-    gqljs_store_hash_key_sv(out_hv, keys[i], newRV_noinc((SV *)compiled_hv));
+    gql_parser_store_hash_key_sv(out_hv, keys[i], newRV_noinc((SV *)compiled_hv));
   }
 
-  gqljs_free_sorted_hash_keys(keys, count);
+  gql_parser_free_sorted_hash_keys(keys, count);
   return newRV_noinc((SV *)out_hv);
 }
 
@@ -732,7 +732,7 @@ gql_schema_compile_schema(pTHX_ SV *schema_sv) {
     croak("GraphQL::Schema->name2type did not return a hash reference");
   }
   name2type_hv = (HV *)SvRV(name2type_sv);
-  type_keys = gqljs_sorted_hash_keys(aTHX_ name2type_hv, &type_count);
+  type_keys = gql_parser_sorted_hash_keys(aTHX_ name2type_hv, &type_count);
   if (type_keys) {
     hv_ksplit(types_hv, type_count > 1 ? type_count : 1);
     for (i = 0; i < type_count; i++) {
@@ -742,7 +742,7 @@ gql_schema_compile_schema(pTHX_ SV *schema_sv) {
         continue;
       }
       type_sv = HeVAL(he);
-      gqljs_store_hash_key_sv(types_hv, type_keys[i], gql_schema_compile_named_type(aTHX_ type_sv));
+      gql_parser_store_hash_key_sv(types_hv, type_keys[i], gql_schema_compile_named_type(aTHX_ type_sv));
     }
 
     for (i = 0; i < type_count; i++) {
@@ -777,7 +777,7 @@ gql_schema_compile_schema(pTHX_ SV *schema_sv) {
               existing_av = (AV *)SvRV(existing_sv);
             } else {
               existing_av = newAV();
-              gqljs_store_hash_key_sv(interface_implementations_hv, iface_name_sv, newRV_noinc((SV *)existing_av));
+              gql_parser_store_hash_key_sv(interface_implementations_hv, iface_name_sv, newRV_noinc((SV *)existing_av));
             }
             av_push(existing_av, newSVsv(type_keys[i]));
             SvREFCNT_dec(iface_name_sv);
@@ -791,11 +791,11 @@ gql_schema_compile_schema(pTHX_ SV *schema_sv) {
           || sv_derived_from(type_sv, "GraphQL::Type::Union")
           || sv_derived_from(type_sv, "GraphQL::Houtou::Type::Union")) {
         SV *possible_sv = gql_schema_call_method1(aTHX_ schema_sv, "get_possible_types", newSVsv(type_sv));
-        gqljs_store_hash_key_sv(possible_types_hv, type_keys[i], gql_schema_compile_type_name_array(aTHX_ possible_sv));
+        gql_parser_store_hash_key_sv(possible_types_hv, type_keys[i], gql_schema_compile_type_name_array(aTHX_ possible_sv));
         SvREFCNT_dec(possible_sv);
       }
     }
-    gqljs_free_sorted_hash_keys(type_keys, type_count);
+    gql_parser_free_sorted_hash_keys(type_keys, type_count);
   }
   SvREFCNT_dec(name2type_sv);
 
@@ -815,7 +815,7 @@ gql_schema_compile_schema(pTHX_ SV *schema_sv) {
       continue;
     }
     name_sv = gql_schema_call_method0(aTHX_ *directive_svp, "name");
-    gqljs_store_hash_key_sv(directives_hv, name_sv, gql_schema_compile_directive(aTHX_ *directive_svp));
+    gql_parser_store_hash_key_sv(directives_hv, name_sv, gql_schema_compile_directive(aTHX_ *directive_svp));
     SvREFCNT_dec(name_sv);
   }
   SvREFCNT_dec(directives_sv);

@@ -61,6 +61,9 @@ graphql_perl_xs        2599/s            1424%                  1302%           
 
 ## Notes
 
+> Note: この文書の parser 節には旧 parser 移行期の計測が含まれます。現在の mainline は
+> `docs/runtime-mainline-overview.md` を参照してください。
+
 `graphql-js + xs` が `graphql-perl + xs` より遅い主因は、XS parse 後に Perl 側で
 graphql-js AST へ変換し、その後 `tokenize_xs()` を使って `loc` を再構築している点にある。
 
@@ -189,7 +192,7 @@ executable 変換そのものよりも、legacy 互換チェックと SDL / 非 
 対象:
 
 - dialect: `graphql-perl`
-- backend: `pegex`, `xs`
+- backend: `xs`
 - file: `t/kitchen-sink.graphql`
 - iterations: `300`
 

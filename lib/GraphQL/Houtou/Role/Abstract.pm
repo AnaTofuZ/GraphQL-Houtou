@@ -4,33 +4,13 @@ use 5.014;
 use strict;
 use warnings;
 
-use Moo::Role;
-
-use GraphQL::Error ();
+use Role::Tiny;
 
 # Runtime completion helpers for interfaces and unions.
 
 sub _complete_value {
-  my ($self, $context, $nodes, $info, $path, $result) = @_;
-  my $resolve_type = $self->resolve_type || \&_default_resolve_type;
-  my $runtime_type = $resolve_type->(
-    $result, $context->{context_value}, $info, $self
-  );
-  $runtime_type = $self->_ensure_valid_runtime_type(
-    $runtime_type,
-    $context,
-    $nodes,
-    $info,
-    $result,
-  );
-
-  return $runtime_type->_complete_value(
-    $context,
-    $nodes,
-    $info,
-    $path,
-    $result,
-  );
+  my ($self) = @_;
+  die "Abstract::_complete_value is part of the removed legacy execution path; use GraphQL::Houtou::Schema->build_runtime or ->build_native_runtime for abstract completion on '@{[$self->name]}'.\n";
 }
 
 sub _ensure_valid_runtime_type {
@@ -60,7 +40,24 @@ sub _ensure_valid_runtime_type {
 
 sub _default_resolve_type {
   my ($value, $context, $info, $abstract_type) = @_;
-  my @possibles = @{ $info->{schema}->get_possible_types($abstract_type) };
+  my $schema = ($info && $info->{schema}) || $context->{schema};
+  my $tag_resolver = $abstract_type->can('tag_resolver') ? $abstract_type->tag_resolver : undef;
+
+  if ($tag_resolver) {
+    my $tag = $tag_resolver->($value, $context, $abstract_type);
+    if (defined $tag) {
+      my $declared_tag_map = $abstract_type->can('tag_map') ? $abstract_type->tag_map : undef;
+      return $declared_tag_map->{$tag}
+        if $declared_tag_map && exists $declared_tag_map->{$tag};
+
+      my $runtime_cache = ($info && $info->{runtime_cache}) || $schema->runtime_cache || $schema->prepare_runtime;
+      my $tag_map = ($runtime_cache->{runtime_tag_map} || {})->{ $abstract_type->name } || {};
+      return $tag_map->{$tag} if exists $tag_map->{$tag};
+    }
+  }
+
+  my $runtime_cache = ($info && $info->{runtime_cache}) || $schema->runtime_cache || $schema->prepare_runtime;
+  my @possibles = @{ $runtime_cache->{possible_types}{ $abstract_type->name } || $schema->get_possible_types($abstract_type) };
   return (grep { $_->is_type_of->($value, $context, $info) } grep { $_->is_type_of } @possibles)[0];
 }
 

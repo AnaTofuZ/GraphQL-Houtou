@@ -4,17 +4,8 @@ use 5.014;
 use strict;
 use warnings;
 
-use Moo::Role;
-use MooX::Thunking;
+use Role::Tiny;
 
-use GraphQL::Houtou::Type::Library qw(FieldMapInput);
-
-# Input field container role with thunked field materialization.
-
-has fields => (
-  is => 'thunked',
-  isa => FieldMapInput,
-  required => 1,
-);
+# Marker role for input field containers.
 
 1;

@@ -12,16 +12,15 @@ BEGIN {
   my $upstream = File::Spec->catdir($root, '..', 'graphql-perl');
 
   unshift @INC,
+    File::Spec->catdir($root, 'local', 'lib', 'perl5'),
+    File::Spec->catdir($root, 'local', 'lib', 'perl5', 'darwin-2level'),
+    File::Spec->catdir($root, 'lib'),
     File::Spec->catdir($root, 'blib', 'lib'),
     File::Spec->catdir($root, 'blib', 'arch'),
-    File::Spec->catdir($root, 'lib'),
     File::Spec->catdir($upstream, 'lib');
 }
 
 use GraphQL::Execution qw(execute);
-use GraphQL::Houtou::Execution ();
-use GraphQL::Houtou::GraphQLPerl::Parser qw(parse_with_options);
-use GraphQL::Houtou::XS::Execution ();
 use GraphQL::Language::Parser qw(parse);
 
 use GraphQL::Schema;
@@ -31,6 +30,9 @@ use GraphQL::Type::Scalar ();
 use GraphQL::Type::Union;
 
 use GraphQL::Houtou::Schema;
+use GraphQL::Houtou::Promise::PromiseXS qw(
+  maybe_get_promise_xs
+);
 use GraphQL::Houtou::Type::Interface ();
 use GraphQL::Houtou::Type::Object ();
 use GraphQL::Houtou::Type::Scalar ();
@@ -39,104 +41,64 @@ use GraphQL::Houtou::Type::Union ();
 my $count = -3;
 my @only;
 my $include_async = 1;
+my $promise_backend = 'promise_xs';
 
 GetOptions(
   'count=s' => \$count,
   'case=s@' => \@only,
   'include-async!' => \$include_async,
+  'promise-backend=s' => \$promise_backend,
 ) or die "Usage: $0 [--count Benchmark-count] [--case name] [--include-async|--no-include-async]\n";
 
 my %only = map { $_ => 1 } @only;
 
-{
-  package Local::ImmediatePromise;
-
-  sub new {
-    my ($class, %args) = @_;
-    return bless {
-      status => $args{status},
-      values => $args{values} || [],
-    }, $class;
-  }
-
-  sub resolve {
-    my ($class, @values) = @_;
-    return $class->new(status => 'fulfilled', values => \@values);
-  }
-
-  sub reject {
-    my ($class, @values) = @_;
-    return $class->new(status => 'rejected', values => \@values);
-  }
-
-  sub all {
-    my ($class, @values) = @_;
-    my @rows;
-
-    for my $value (@values) {
-      if (ref($value) && eval { $value->isa(__PACKAGE__) }) {
-        return $class->reject(@{ $value->{values} })
-          if ($value->{status} || '') eq 'rejected';
-        push @rows, [ @{ $value->{values} } ];
-      } else {
-        push @rows, [ $value ];
-      }
-    }
-
-    return $class->resolve(@rows);
-  }
-
-  sub then {
-    my ($self, $on_fulfilled, $on_rejected) = @_;
-    my $callback = ($self->{status} || '') eq 'rejected'
-      ? $on_rejected
-      : $on_fulfilled;
-
-    return __PACKAGE__->new(
-      status => $self->{status},
-      values => [ @{ $self->{values} } ],
-    ) if !$callback;
-
-    my @ret = eval { $callback->(@{ $self->{values} }) };
-    return __PACKAGE__->reject($@) if $@;
-    return $ret[0]
-      if @ret == 1 && ref($ret[0]) && eval { $ret[0]->isa(__PACKAGE__) };
-    return __PACKAGE__->resolve(@ret);
-  }
-
-  sub get {
-    my ($self) = @_;
-    die @{ $self->{values} } if ($self->{status} || '') eq 'rejected';
-    return wantarray ? @{ $self->{values} } : $self->{values}[0];
-  }
-}
-
-sub promise_code {
+sub upstream_promise_xs_code {
+  require Promise::XS;
   return {
-    resolve => sub { Local::ImmediatePromise->resolve(@_) },
-    reject => sub { Local::ImmediatePromise->reject(@_) },
-    all => sub { Local::ImmediatePromise->all(@_) },
-    new => sub { Local::ImmediatePromise->new },
+    resolve => sub { Promise::XS::resolved(@_) },
+    reject => sub { Promise::XS::rejected(@_) },
+    all => sub {
+      my $all_promise = Promise::XS::all(@_);
+      return $all_promise->then(sub {
+        my @rows = @_;
+        my @flattened = map {
+          ref($_) eq 'ARRAY' && @{$_} == 1 ? $_->[0] : $_
+        } @rows;
+        return \@flattened;
+      });
+    },
     then => sub {
       my ($promise, $on_fulfilled, $on_rejected) = @_;
-      return $promise->then($on_fulfilled, $on_rejected);
+      return defined $on_rejected
+        ? $promise->then($on_fulfilled, $on_rejected)
+        : $promise->then($on_fulfilled);
     },
     is_promise => sub {
       my ($value) = @_;
-      return ref($value) eq 'Local::ImmediatePromise';
+      return !!($value && ref($value) && eval { $value->isa('Promise::XS::Promise') });
     },
   };
 }
 
-sub maybe_get {
-  my ($value) = @_;
-  return (ref($value) && eval { $value->isa('Local::ImmediatePromise') })
-    ? scalar $value->get
-    : $value;
+sub promise_backend {
+  my ($backend_name) = @_;
+  $backend_name ||= 'promise_xs';
+
+  return {
+    name => 'promise_xs',
+    upstream_code => upstream_promise_xs_code(),
+    resolve => sub {
+      require Promise::XS;
+      return Promise::XS::resolved(@_);
+    },
+    maybe_get => sub { maybe_get_promise_xs(@_) },
+  } if $backend_name eq 'promise_xs';
+
+  die "Unknown promise backend '$backend_name'\n";
 }
 
 sub build_upstream_schema {
-  my ($include_async_case) = @_;
+  my ($include_async_case, $promise) = @_;
 
   my $User = GraphQL::Type::Object->new(
     name => 'User',
@@ -212,16 +174,34 @@ sub build_upstream_schema {
     $fields{asyncHello} = {
       type => $GraphQL::Type::Scalar::String->non_null,
       resolve => sub {
-        return Local::ImmediatePromise->resolve('async-world');
+        return $promise->{resolve}->('async-world');
       },
     };
     $fields{asyncList} = {
       type => $GraphQL::Type::Scalar::String->non_null->list->non_null,
       resolve => sub {
         return [
-          Local::ImmediatePromise->resolve('alpha'),
-          Local::ImmediatePromise->resolve('beta'),
+          $promise->{resolve}->('alpha'),
+          $promise->{resolve}->('beta'),
         ];
+      },
+    };
+    $fields{asyncUser} = {
+      type => $User,
+      resolve => sub {
+        return $promise->{resolve}->({
+          id => '41',
+          name => 'async:41',
+        });
+      },
+    };
+    $fields{asyncSearchResult} = {
+      type => $SearchResult,
+      resolve => sub {
+        return $promise->{resolve}->({
+          id => '42',
+          name => 'async:42',
+        });
       },
     };
   }
@@ -238,7 +218,7 @@ sub build_upstream_schema {
 }
 
 sub build_houtou_schema {
-  my ($include_async_case) = @_;
+  my ($include_async_case, $promise) = @_;
 
   my $User = GraphQL::Houtou::Type::Object->new(
     name => 'User',
@@ -265,6 +245,7 @@ sub build_houtou_schema {
   my %fields = (
     hello => {
       type => $GraphQL::Houtou::Type::Scalar::String->non_null,
+      resolver_mode => 'native',
       resolve => sub { 'world' },
     },
     greet => {
@@ -272,6 +253,7 @@ sub build_houtou_schema {
       args => {
         name => { type => $GraphQL::Houtou::Type::Scalar::String->non_null },
       },
+      resolver_mode => 'native',
       resolve => sub {
         my ($root, $args) = @_;
         return "hello $args->{name}";
@@ -282,6 +264,7 @@ sub build_houtou_schema {
       args => {
         id => { type => $GraphQL::Houtou::Type::Scalar::ID->non_null },
       },
+      resolver_mode => 'native',
       resolve => sub {
         my ($root, $args) = @_;
         return {
@@ -292,6 +275,7 @@ sub build_houtou_schema {
     },
     users => {
       type => $User->list->non_null,
+      resolver_mode => 'native',
       resolve => sub {
         return [
           { id => '21', name => 'user:21' },
@@ -301,6 +285,7 @@ sub build_houtou_schema {
     },
     searchResult => {
       type => $SearchResult,
+      resolver_mode => 'native',
       resolve => sub {
         return {
           id => '13',
@@ -313,17 +298,39 @@ sub build_houtou_schema {
   if ($include_async_case) {
     $fields{asyncHello} = {
       type => $GraphQL::Houtou::Type::Scalar::String->non_null,
+      resolver_mode => 'native',
       resolve => sub {
-        return Local::ImmediatePromise->resolve('async-world');
+        return $promise->{resolve}->('async-world');
       },
     };
     $fields{asyncList} = {
       type => $GraphQL::Houtou::Type::Scalar::String->non_null->list->non_null,
+      resolver_mode => 'native',
       resolve => sub {
         return [
-          Local::ImmediatePromise->resolve('alpha'),
-          Local::ImmediatePromise->resolve('beta'),
+          $promise->{resolve}->('alpha'),
+          $promise->{resolve}->('beta'),
         ];
+      },
+    };
+    $fields{asyncUser} = {
+      type => $User,
+      resolver_mode => 'native',
+      resolve => sub {
+        return $promise->{resolve}->({
+          id => '41',
+          name => 'async:41',
+        });
+      },
+    };
+    $fields{asyncSearchResult} = {
+      type => $SearchResult,
+      resolver_mode => 'native',
+      resolve => sub {
+        return $promise->{resolve}->({
+          id => '42',
+          name => 'async:42',
+        });
       },
     };
   }
@@ -346,83 +353,73 @@ sub benchmark_case {
   my $query = $spec->{query};
   my $vars = $spec->{vars};
   my $op = $spec->{op};
-  my $promise_code = $spec->{promise} ? promise_code() : undef;
+  my $promise = $spec->{promise} ? promise_backend($promise_backend) : undef;
+  my $upstream_promise_code = $promise ? $promise->{upstream_code} : undef;
   my $up_ast = parse($query);
-  my $houtou_ast = parse_with_options($query, { backend => 'xs' });
-  my $prepared_ir = GraphQL::Houtou::XS::Execution::_prepare_executable_ir_xs($query);
-  my $compiled_ir = GraphQL::Houtou::XS::Execution::_compile_executable_ir_plan_xs(
-    $houtou_schema,
-    $prepared_ir,
-    $op,
-  );
+  my $runtime = $houtou_schema->build_runtime;
+  my $program = $runtime->compile_program($query);
+  my $native_runtime = !$promise ? $houtou_schema->build_native_runtime : undef;
+  my $native_bundle = $native_runtime
+    ? $native_runtime->compile_bundle(
+        $program,
+        (defined($vars) ? (variables => $vars) : ()),
+      )
+    : undef;
 
-  my $expected = maybe_get(
-    execute(
-      $up_schema,
-      $up_ast,
-      undef,
-      undef,
-      $vars,
-      $op,
-      undef,
-      $promise_code,
-    )
-  );
+  my $expected;
+  $expected = _normalize_result(($promise ? $promise->{maybe_get} : \&maybe_get_promise_xs)->(
+    $promise
+      ? $runtime->execute_program(
+        $program,
+        (defined($vars) ? (variables => $vars) : ()),
+      )
+      : execute(
+        $up_schema,
+        $up_ast,
+        undef,
+        undef,
+        $vars,
+        $op,
+        undef,
+        $upstream_promise_code,
+      )
+  ));
 
-  my @checks = (
-    [ 'upstream_ast', sub {
-      return maybe_get(execute($up_schema, $up_ast, undef, undef, $vars, $op, undef, $promise_code));
-    } ],
-    [ 'upstream_string', sub {
-      return maybe_get(execute($up_schema, $query, undef, undef, $vars, $op, undef, $promise_code));
-    } ],
-    [ 'houtou_facade_ast', sub {
-      return maybe_get(GraphQL::Houtou::Execution::execute($houtou_schema, $houtou_ast, undef, undef, $vars, $op, undef, $promise_code));
-    } ],
-    [ 'houtou_facade_string', sub {
-      return maybe_get(GraphQL::Houtou::Execution::execute($houtou_schema, $query, undef, undef, $vars, $op, undef, $promise_code));
-    } ],
-    [ 'houtou_prepared_ir', sub {
-      return maybe_get(
-        GraphQL::Houtou::XS::Execution::execute_prepared_ir_xs(
-          $houtou_schema,
-          $prepared_ir,
-          undef,
-          undef,
-          $vars,
-          $op,
-          undef,
-          $promise_code,
-        )
-      );
-    } ],
-    [ 'houtou_compiled_ir', sub {
-      return maybe_get(
-        GraphQL::Houtou::XS::Execution::execute_compiled_ir_xs(
-          $compiled_ir,
-          undef,
-          undef,
-          $vars,
-          undef,
-          $promise_code,
-        )
-      );
-    } ],
-  );
-
-  if (!$spec->{promise}) {
+  my @checks;
+  if (!$promise) {
     push @checks,
-      [ 'houtou_xs_ast', sub {
-        return GraphQL::Houtou::XS::Execution::execute_xs($houtou_schema, $houtou_ast, undef, undef, $vars, $op);
+      [ 'upstream_ast', sub {
+        return maybe_get_promise_xs(
+          execute($up_schema, $up_ast, undef, undef, $vars, $op, undef, $upstream_promise_code)
+        );
       } ],
-      [ 'houtou_xs_string', sub {
-        return GraphQL::Houtou::XS::Execution::execute_xs($houtou_schema, $query, undef, undef, $vars, $op);
+      [ 'upstream_string', sub {
+        return maybe_get_promise_xs(
+          execute($up_schema, $query, undef, undef, $vars, $op, undef, $upstream_promise_code)
+        );
       } ];
+  }
+
+  push @checks, [ 'houtou_runtime_program', sub {
+    return ($promise ? $promise->{maybe_get} : \&maybe_get_promise_xs)->(
+      $runtime->execute_program(
+        $program,
+        (defined($vars) ? (variables => $vars) : ()),
+      )
+    );
+  } ];
+
+  if ($native_bundle) {
+    push @checks, [ 'houtou_runtime_native_bundle', sub {
+      return maybe_get_promise_xs(
+        $native_runtime->execute_bundle($native_bundle)
+      );
+    } ];
   }
 
   for my $check (@checks) {
     my ($label, $code) = @$check;
-    my $got = $code->();
+    my $got = _normalize_result($code->());
     die "Sanity check failed for $name/$label\n" if !$got;
     require Data::Dumper;
     die "Result mismatch for $name/$label\nExpected: " . Data::Dumper::Dumper($expected) . "Got: " . Data::Dumper::Dumper($got)
@@ -431,7 +428,7 @@ sub benchmark_case {
 
   print "\n=== $name ===\n";
   print "Query: $query\n";
-  print "Mode: " . ($spec->{promise} ? "promise-backed execute\n" : "sync execute\n");
+  print "Mode: " . ($spec->{promise} ? "promise-backed execute ($promise_backend)\n" : "sync execute\n");
   cmpthese($count, { map { $_->[0] => $_->[1] } @checks });
 }
 
@@ -441,8 +438,17 @@ sub _dump {
   return Data::Dumper::Dumper($_[0]);
 }
 
-my $up_schema = build_upstream_schema($include_async);
-my $houtou_schema = build_houtou_schema($include_async);
+sub _normalize_result {
+  my ($value) = @_;
+  return $value if ref($value) ne 'HASH';
+  my %copy = %{$value};
+  $copy{errors} ||= [];
+  return \%copy;
+}
+
+my $promise = promise_backend($promise_backend);
+my $up_schema = build_upstream_schema($include_async, $promise);
+my $houtou_schema = build_houtou_schema($include_async, $promise);
 
 my @cases = (
   {
@@ -474,6 +480,18 @@ push @cases, {
 push @cases, {
   name => 'async_list',
   query => '{ asyncList }',
+  promise => 1,
+} if $include_async;
+
+push @cases, {
+  name => 'async_object',
+  query => '{ asyncUser { id name } }',
+  promise => 1,
+} if $include_async;
+
+push @cases, {
+  name => 'async_abstract',
+  query => '{ asyncSearchResult { __typename ... on User { id name } } }',
   promise => 1,
 } if $include_async;
 

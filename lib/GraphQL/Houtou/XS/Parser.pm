@@ -3,31 +3,25 @@ package GraphQL::Houtou::XS::Parser;
 use 5.014;
 use strict;
 use warnings;
-use Exporter 'import';
-use GraphQL ();
+use GraphQL::Error;
+use GraphQL::Houtou ();
+use GraphQL::Language::Receiver ();
+use JSON::PP ();
+
+our $VERSION = '0.01';
+
+BEGIN {
+  GraphQL::Houtou::_bootstrap_xs();
+}
+
+package GraphQL::Houtou::Parser::Internal;
+
+use 5.014;
+use strict;
+use warnings;
 use GraphQL::Error;
 use GraphQL::Language::Receiver ();
 use JSON::PP ();
-use XSLoader ();
-
-our $VERSION = '0.01';
-our @EXPORT_OK = qw(
-  graphqljs_apply_executable_loc_xs
-  graphqljs_build_document_xs
-  graphqljs_build_executable_document_xs
-  graphqljs_build_directives_xs
-  graphqljs_parse_document_xs
-  graphqljs_parse_executable_document_xs
-  graphqlperl_build_document_xs
-  graphqlperl_find_legacy_empty_object_location_xs
-  graphqljs_preprocess_xs
-  graphqljs_patch_document_xs
-  parse_xs
-  parse_directives_xs
-  tokenize_xs
-);
-
-XSLoader::load('GraphQL::Houtou', $VERSION);
 
 sub _make_bool {
   return $_[0] ? JSON::PP::true : JSON::PP::false;
@@ -101,7 +95,7 @@ sub _new_lazy_array_ref {
 
 sub _new_lazy_array_tie {
   my ($class, $state, $ptr, $kind) = @_;
-  # NOTE: these keys are part of the XS fast-path contract in gqljs_fetch_array().
+  # NOTE: these keys are part of the XS fast-path contract in gql_parser_fetch_array().
   # If you rename them, update the XS reader and the contract test together.
   return bless {
     state => $state,
@@ -111,7 +105,7 @@ sub _new_lazy_array_tie {
   }, $class;
 }
 
-package GraphQL::Houtou::XS::LazyLoc;
+package GraphQL::Houtou::Parser::Internal::LazyLoc;
 
 use 5.014;
 use strict;
@@ -123,7 +117,7 @@ sub start {
 
 sub as_hash {
   my ($self, $source) = @_;
-  my ($line, $column) = GraphQL::Houtou::XS::Parser::_line_column($source, $self->[0]);
+  my ($line, $column) = GraphQL::Houtou::Parser::Internal::_line_column($source, $self->[0]);
   return {
     line => $line,
     column => $column,
@@ -132,17 +126,17 @@ sub as_hash {
 
 sub line {
   my ($self, $source) = @_;
-  my ($line) = GraphQL::Houtou::XS::Parser::_line_column($source, $self->[0]);
+  my ($line) = GraphQL::Houtou::Parser::Internal::_line_column($source, $self->[0]);
   return $line;
 }
 
 sub column {
   my ($self, $source) = @_;
-  my (undef, $column) = GraphQL::Houtou::XS::Parser::_line_column($source, $self->[0]);
+  my (undef, $column) = GraphQL::Houtou::Parser::Internal::_line_column($source, $self->[0]);
   return $column;
 }
 
-package GraphQL::Houtou::XS::LazyArray::Arguments;
+package GraphQL::Houtou::Parser::Internal::LazyArray::Arguments;
 
 use 5.014;
 use strict;
@@ -150,18 +144,18 @@ use warnings;
 
 sub _new {
   my ($state, $ptr) = @_;
-  return GraphQL::Houtou::XS::Parser::_new_lazy_array_ref(__PACKAGE__, $state, $ptr);
+  return GraphQL::Houtou::Parser::Internal::_new_lazy_array_ref(__PACKAGE__, $state, $ptr);
 }
 
 sub TIEARRAY {
   my ($class, $state, $ptr) = @_;
-  return GraphQL::Houtou::XS::Parser::_new_lazy_array_tie($class, $state, $ptr, 1);
+  return GraphQL::Houtou::Parser::Internal::_new_lazy_array_tie($class, $state, $ptr, 1);
 }
 
 sub _materialize {
   my ($self) = @_;
   return $self->{data} if $self->{data};
-  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_arguments_xs(
+  $self->{data} = GraphQL::Houtou::XS::Parser::_materialize_arguments_xs(
     $self->{state},
     $self->{ptr},
   );
@@ -231,7 +225,7 @@ sub SPLICE {
   return splice @{ $self->_materialize }, @_;
 }
 
-package GraphQL::Houtou::XS::LazyArray::Directives;
+package GraphQL::Houtou::Parser::Internal::LazyArray::Directives;
 
 use 5.014;
 use strict;
@@ -239,18 +233,18 @@ use warnings;
 
 sub _new {
   my ($state, $ptr) = @_;
-  return GraphQL::Houtou::XS::Parser::_new_lazy_array_ref(__PACKAGE__, $state, $ptr);
+  return GraphQL::Houtou::Parser::Internal::_new_lazy_array_ref(__PACKAGE__, $state, $ptr);
 }
 
 sub TIEARRAY {
   my ($class, $state, $ptr) = @_;
-  return GraphQL::Houtou::XS::Parser::_new_lazy_array_tie($class, $state, $ptr, 2);
+  return GraphQL::Houtou::Parser::Internal::_new_lazy_array_tie($class, $state, $ptr, 2);
 }
 
 sub _materialize {
   my ($self) = @_;
   return $self->{data} if $self->{data};
-  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_directives_xs(
+  $self->{data} = GraphQL::Houtou::XS::Parser::_materialize_directives_xs(
     $self->{state},
     $self->{ptr},
   );
@@ -320,7 +314,7 @@ sub SPLICE {
   return splice @{ $self->_materialize }, @_;
 }
 
-package GraphQL::Houtou::XS::LazyArray::VariableDefinitions;
+package GraphQL::Houtou::Parser::Internal::LazyArray::VariableDefinitions;
 
 use 5.014;
 use strict;
@@ -328,18 +322,18 @@ use warnings;
 
 sub _new {
   my ($state, $ptr) = @_;
-  return GraphQL::Houtou::XS::Parser::_new_lazy_array_ref(__PACKAGE__, $state, $ptr);
+  return GraphQL::Houtou::Parser::Internal::_new_lazy_array_ref(__PACKAGE__, $state, $ptr);
 }
 
 sub TIEARRAY {
   my ($class, $state, $ptr) = @_;
-  return GraphQL::Houtou::XS::Parser::_new_lazy_array_tie($class, $state, $ptr, 3);
+  return GraphQL::Houtou::Parser::Internal::_new_lazy_array_tie($class, $state, $ptr, 3);
 }
 
 sub _materialize {
   my ($self) = @_;
   return $self->{data} if $self->{data};
-  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_variable_definitions_xs(
+  $self->{data} = GraphQL::Houtou::XS::Parser::_materialize_variable_definitions_xs(
     $self->{state},
     $self->{ptr},
   );
@@ -409,7 +403,7 @@ sub SPLICE {
   return splice @{ $self->_materialize }, @_;
 }
 
-package GraphQL::Houtou::XS::LazyArray::ObjectFields;
+package GraphQL::Houtou::Parser::Internal::LazyArray::ObjectFields;
 
 use 5.014;
 use strict;
@@ -417,18 +411,18 @@ use warnings;
 
 sub _new {
   my ($state, $ptr) = @_;
-  return GraphQL::Houtou::XS::Parser::_new_lazy_array_ref(__PACKAGE__, $state, $ptr);
+  return GraphQL::Houtou::Parser::Internal::_new_lazy_array_ref(__PACKAGE__, $state, $ptr);
 }
 
 sub TIEARRAY {
   my ($class, $state, $ptr) = @_;
-  return GraphQL::Houtou::XS::Parser::_new_lazy_array_tie($class, $state, $ptr, 4);
+  return GraphQL::Houtou::Parser::Internal::_new_lazy_array_tie($class, $state, $ptr, 4);
 }
 
 sub _materialize {
   my ($self) = @_;
   return $self->{data} if $self->{data};
-  $self->{data} = GraphQL::Houtou::XS::Parser::_graphqljs_materialize_object_fields_xs(
+  $self->{data} = GraphQL::Houtou::XS::Parser::_materialize_object_fields_xs(
     $self->{state},
     $self->{ptr},
   );

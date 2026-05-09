@@ -4,31 +4,29 @@ use 5.014;
 use strict;
 use warnings;
 
-use Moo;
+use parent 'GraphQL::Houtou::Type';
 use Exporter 'import';
 use JSON::MaybeXS qw(JSON is_bool);
+use Role::Tiny::With;
 use Scalar::Util qw(looks_like_number);
-use Types::Standard qw(CodeRef);
+use GraphQL::Houtou::Internal::TypeSupport qw(named_from_ast);
+use GraphQL::Houtou::Type::List ();
+use GraphQL::Houtou::Type::NonNull ();
 
-extends 'GraphQL::Houtou::Type';
 with qw(
   GraphQL::Houtou::Role::Input
   GraphQL::Houtou::Role::Output
   GraphQL::Houtou::Role::Leaf
-  GraphQL::Houtou::Role::Named
-  GraphQL::Houtou::Role::FieldsEither
 );
 
 our @EXPORT_OK = qw($Int $Float $String $Boolean $ID);
 use constant DEBUG => $ENV{GRAPHQL_DEBUG};
 
 sub list {
-  require GraphQL::Houtou::Type::List;
   $_[0]->{_houtou_list} ||= GraphQL::Houtou::Type::List->new(of => $_[0]);
 }
 
 sub non_null {
-  require GraphQL::Houtou::Type::NonNull;
   $_[0]->{_houtou_non_null} ||= GraphQL::Houtou::Type::NonNull->new(of => $_[0]);
 }
 
@@ -37,9 +35,23 @@ sub _leave_undef {
   sub { return undef if !defined $_[0]; goto &$closure; };
 }
 
-has serialize => (is => 'ro', isa => CodeRef, required => 1);
-has parse_value => (is => 'ro', isa => CodeRef);
-has _builtin_kind => (is => 'ro');
+sub new {
+  my ($class, %args) = @_;
+  my $self = $class->SUPER::new(%args);
+  $self->{name} = $args{name};
+  $self->{description} = $args{description};
+  $self->{serialize} = $args{serialize};
+  $self->{parse_value} = $args{parse_value};
+  $self->{_builtin_kind} = $args{_builtin_kind};
+  return bless $self, $class;
+}
+
+sub name { $_[0]->{name} }
+sub description { $_[0]->{description} }
+sub to_string { $_[0]->{to_string} ||= $_[0]->name }
+sub serialize { $_[0]->{serialize} }
+sub parse_value { $_[0]->{parse_value} }
+sub _builtin_kind { $_[0]->{_builtin_kind} }
 
 sub _fast_is_nonref_defined {
   defined $_[0] && !ref($_[0]);

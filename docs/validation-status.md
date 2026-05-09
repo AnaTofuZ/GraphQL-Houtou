@@ -1,6 +1,6 @@
 # Validation Status
 
-Last updated: 2026-04-05
+Last updated: 2026-04-27
 
 This note records the current state of `GraphQL::Houtou` validation work.
 It exists so validation can be deprioritized without losing the current
@@ -9,12 +9,13 @@ It exists so validation can be deprioritized without losing the current
 ## Current Architecture
 
 - public entrypoint: `GraphQL::Houtou::Validation`
-- XS entrypoint: `GraphQL::Houtou::XS::Validation::validate_xs`
-- PP implementation: `GraphQL::Houtou::Validation::PP`
+- XS bundle owner: `GraphQL::Houtou::_bootstrap_xs`
+- XSUB package: `GraphQL::Houtou::XS::Validation::validate_xs`
+- native implementation: `src/validation.h`
 
-The public facade prefers XS when available. The XS layer currently owns
-selected validation rules and then delegates the remaining work to the PP
-validator through `validate_prepared`.
+The public facade bootstraps the shared XS bundle through `GraphQL::Houtou`
+and then calls the validation XSUB package directly. The previous internal PP
+bridge has been removed from the mainline.
 
 ## Rules Currently Implemented In XS
 
@@ -23,11 +24,6 @@ validator through `validate_prepared`.
 - lone anonymous operation
 - subscription single root field
 - fragment cycle detection
-
-These rules are executed in `src/validation.h`.
-
-## Rules Still Running In PP
-
 - root operation type existence
 - variable definitions are input types
 - undefined variable use
@@ -36,37 +32,30 @@ These rules are executed in `src/validation.h`.
 - fragment target existence
 - fragment spread type compatibility
 - inline fragment type compatibility
-- directive existence, location, and uniqueness
 - input object field validation
 
-These still run in `lib/GraphQL/Houtou/Validation/PP.pm`.
+These rules now execute directly in `src/validation.h`.
 
 ## Integration Strategy
 
-The current transition pattern is:
+The current validation path is:
 
 1. parse/coerce document once
 2. compile schema once
-3. run selected XS rules
-4. pass seeded errors and skip flags into PP
-5. let PP run the remaining rules
+3. collect operations / fragments once
+4. run native rule passes directly over the coerced AST and compiled schema
 
-This keeps error ordering close to the PP implementation while allowing rule
- migration one piece at a time.
+The old PP bridge is no longer part of the active mainline.
 
 ## Current Priority
 
 Validation is no longer the highest-priority workstream for this repository.
-The current implementation is considered sufficient for now, and further rule
- migration is intentionally deprioritized.
+The current implementation is sufficient for the active suite, so follow-up
+work should focus on:
 
-That means:
-
-- keep the existing XS/PP split working
-- do not spend more time moving minor rules into XS unless needed for a real
-  workload
-- shift focus to other compatibility surfaces such as introspection,
-  execution, and subscription
+- directive validation parity
+- richer input coercion edge cases
+- alignment with the runtime / VM mainline
 
 ## Verification
 
@@ -78,4 +67,4 @@ env PERL5LIB=/Users/anatofuz/src/github.com/graphql-perl/GraphQL-Houtou/lib:/Use
 
 Current result at the time of this note:
 
-- `9 files / 130 tests / PASS`
+- `12 files / 156 tests / PASS`

@@ -66,21 +66,21 @@ typedef struct {
   AV *rewrites;
   UV *line_starts;
   I32 num_lines;
-  struct gqljs_rewrite_index *rewrite_index;
+  struct gql_parser_rewrite_index *rewrite_index;
   I32 rewrite_index_count;
   UV last_original_pos;
   I32 last_line_index;
   bool has_last_line_index;
   bool lazy_location;
   bool compact_location;
-} gqljs_loc_context_t;
+} gql_parser_loc_context_t;
 
-typedef struct gqljs_rewrite_index {
+typedef struct gql_parser_rewrite_index {
   UV original_start;
   IV rewritten_start;
   IV rewritten_end;
   IV delta_after;
-} gqljs_rewrite_index_t;
+} gql_parser_rewrite_index_t;
 
 typedef struct {
   I32 count;
@@ -147,7 +147,7 @@ typedef struct gql_ir_prepared_exec gql_ir_prepared_exec_t;
 typedef struct gql_ir_compiled_exec gql_ir_compiled_exec_t;
 typedef struct gql_ir_compiled_root_field_plan_entry gql_ir_compiled_root_field_plan_entry_t;
 typedef struct gql_ir_compiled_root_field_plan gql_ir_compiled_root_field_plan_t;
-typedef struct gql_ir_execution_lowered_plan gql_ir_execution_lowered_plan_t;
+typedef struct gql_runtime_vm_lowered_plan gql_runtime_vm_lowered_plan_t;
 typedef struct gql_ir_vm_block gql_ir_vm_block_t;
 typedef struct gql_ir_vm_exec_state gql_ir_vm_exec_state_t;
 typedef struct gql_ir_vm_field_meta gql_ir_vm_field_meta_t;
@@ -175,6 +175,7 @@ typedef enum gql_ir_native_meta_dispatch_kind gql_ir_native_meta_dispatch_kind_t
 typedef enum gql_ir_native_resolve_dispatch_kind gql_ir_native_resolve_dispatch_kind_t;
 typedef enum gql_ir_native_args_dispatch_kind gql_ir_native_args_dispatch_kind_t;
 typedef enum gql_ir_native_completion_dispatch_kind gql_ir_native_completion_dispatch_kind_t;
+typedef enum gql_ir_abstract_dispatch_kind gql_ir_abstract_dispatch_kind_t;
 typedef enum gql_ir_compilation_stage gql_ir_compilation_stage_t;
 typedef struct {
   gql_ir_document_t *document;
@@ -196,8 +197,11 @@ enum gql_ir_native_field_op {
   GQL_IR_NATIVE_FIELD_OP_COMPLETE_GENERIC = 7,
   GQL_IR_NATIVE_FIELD_OP_COMPLETE_OBJECT = 8,
   GQL_IR_NATIVE_FIELD_OP_COMPLETE_LIST = 9,
-  GQL_IR_NATIVE_FIELD_OP_COMPLETE_ABSTRACT = 10,
-  GQL_IR_NATIVE_FIELD_OP_CONSUME = 11
+  GQL_IR_NATIVE_FIELD_OP_COMPLETE_ABSTRACT_TAG = 10,
+  GQL_IR_NATIVE_FIELD_OP_COMPLETE_ABSTRACT_RESOLVE_TYPE = 11,
+  GQL_IR_NATIVE_FIELD_OP_COMPLETE_ABSTRACT_POSSIBLE_TYPES = 12,
+  GQL_IR_NATIVE_FIELD_OP_COMPLETE_ABSTRACT = 13,
+  GQL_IR_NATIVE_FIELD_OP_CONSUME = 14
 };
 
 enum gql_ir_native_meta_dispatch_kind {
@@ -221,6 +225,13 @@ enum gql_ir_native_completion_dispatch_kind {
   GQL_IR_NATIVE_COMPLETION_OBJECT = 2,
   GQL_IR_NATIVE_COMPLETION_LIST = 3,
   GQL_IR_NATIVE_COMPLETION_ABSTRACT = 4
+};
+
+enum gql_ir_abstract_dispatch_kind {
+  GQL_IR_ABSTRACT_DISPATCH_NONE = 0,
+  GQL_IR_ABSTRACT_DISPATCH_TAG = 1,
+  GQL_IR_ABSTRACT_DISPATCH_RESOLVE_TYPE = 2,
+  GQL_IR_ABSTRACT_DISPATCH_POSSIBLE_TYPES = 3
 };
 
 struct gql_execution_lazy_resolve_info {
@@ -255,7 +266,8 @@ enum {
   GQL_IR_NATIVE_FIELD_OUTCOME_NONE = 0,
   GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_VALUE = 1,
   GQL_IR_NATIVE_FIELD_OUTCOME_COMPLETED_SV = 2,
-  GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV = 3
+  GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_OBJECT_HV = 3,
+  GQL_IR_NATIVE_FIELD_OUTCOME_DIRECT_LIST_AV = 4
 };
 
 struct gql_ir_prepared_exec {
@@ -285,6 +297,7 @@ struct gql_ir_vm_field_meta {
   gql_ir_native_resolve_dispatch_kind_t resolve_dispatch_kind;
   gql_ir_native_args_dispatch_kind_t args_dispatch_kind;
   gql_ir_native_completion_dispatch_kind_t completion_dispatch_kind;
+  gql_ir_abstract_dispatch_kind_t abstract_dispatch_kind;
 };
 
 struct gql_ir_vm_field_hot {
@@ -314,13 +327,15 @@ typedef enum {
   GQL_EXECUTION_SYNC_OUTCOME_NONE = 0,
   GQL_EXECUTION_SYNC_OUTCOME_DIRECT_VALUE = 1,
   GQL_EXECUTION_SYNC_OUTCOME_COMPLETED_SV = 2,
-  GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV = 3
+  GQL_EXECUTION_SYNC_OUTCOME_DIRECT_OBJECT_HV = 3,
+  GQL_EXECUTION_SYNC_OUTCOME_DIRECT_LIST_AV = 4
 } gql_execution_sync_outcome_kind_t;
 
 struct gql_execution_sync_outcome {
   gql_execution_sync_outcome_kind_t kind;
   SV *value_sv;
   HV *object_hv;
+  AV *list_av;
   AV *errors_av;
   SV *completed_sv;
 };
@@ -415,13 +430,14 @@ struct gql_ir_vm_program {
   gql_ir_vm_block_t *root_block;
 };
 
-struct gql_ir_execution_lowered_plan {
+struct gql_runtime_vm_lowered_plan {
   gql_ir_vm_program_t *program;
 };
 
 struct gql_ir_lowered_abstract_child_entry {
   SV *possible_type_sv;
   SV *possible_type_name_sv;
+  SV *dispatch_tag_sv;
   gql_ir_compiled_root_field_plan_t *native_field_plan;
   gql_ir_vm_block_t *native_block;
 };
@@ -429,10 +445,13 @@ struct gql_ir_lowered_abstract_child_entry {
 struct gql_ir_lowered_abstract_child_plan_table {
   UV count;
   gql_ir_lowered_abstract_child_entry_t *entries;
+  SV *tag_resolver_sv;
   SV *cached_possible_type_sv;
   SV *cached_possible_type_name_sv;
+  SV *cached_dispatch_tag_sv;
   gql_ir_compiled_root_field_plan_t *cached_native_field_plan;
   gql_ir_vm_block_t *cached_native_block;
+  U8 dispatch_tags_ready;
 };
 
 struct gql_ir_compiled_concrete_plan_entry {
@@ -464,7 +483,7 @@ struct gql_ir_compiled_exec {
   SV *operation_name_sv;
   gql_ir_operation_definition_t *selected_operation;
   SV *root_selection_plan_sv;
-  gql_ir_execution_lowered_plan_t *lowered_plan;
+  gql_runtime_vm_lowered_plan_t *lowered_plan;
   SV *root_field_plan_sv;
   SV *root_type_sv;
 };
@@ -526,14 +545,14 @@ typedef enum {
   GQLJS_LAZY_ARRAY_DIRECTIVES = 2,
   GQLJS_LAZY_ARRAY_VARIABLE_DEFINITIONS = 3,
   GQLJS_LAZY_ARRAY_OBJECT_FIELDS = 4
-} gqljs_lazy_array_kind_t;
+} gql_parser_lazy_array_kind_t;
 
 typedef struct {
   gql_ir_document_t *document;
   SV *source_sv;
-  gqljs_loc_context_t ctx;
+  gql_parser_loc_context_t ctx;
   bool has_ctx;
-} gqljs_lazy_state_t;
+} gql_parser_lazy_state_t;
 
 struct gql_ir_type {
   gql_ir_type_kind_t kind;
@@ -722,32 +741,29 @@ static SV *gql_current_token_desc_sv(pTHX_ gql_parser_t *p);
 static void gql_throw_expected_message(pTHX_ gql_parser_t *p, STRLEN pos, const char *msg);
 static void gql_throw_expected_token(pTHX_ gql_parser_t *p, gql_token_kind_t kind);
 static void gql_throw_unexpected_character(pTHX_ gql_parser_t *p, STRLEN pos, unsigned char c);
-static int gqljs_is_name_start(char c);
-static int gqljs_is_name_continue(char c);
-static void gqljs_skip_ignored_raw(const char *src, STRLEN len, STRLEN *pos);
-static void gqljs_skip_quoted_string_raw(const char *src, STRLEN len, STRLEN *pos);
-static void gqljs_skip_delimited_raw(const char *src, STRLEN len, STRLEN *pos, char open, char close);
-static int gqljs_read_name_bounds(const char *src, STRLEN len, STRLEN *pos, STRLEN *start, STRLEN *end);
-static SV *gqljs_make_string_sv(pTHX_ const char *src, STRLEN start, STRLEN end, int is_utf8);
-static int gqljs_match_word(const char *src, STRLEN start, STRLEN end, const char *word);
-static void gqljs_push_rewrite(pTHX_ AV *rewrites, UV start, UV end, const char *replacement);
-static UV gqljs_bump_occurrence(pTHX_ HV *counts, const char *kind, SV *name_sv);
-static void gqljs_push_extension(pTHX_ AV *extensions, const char *kind, SV *name_sv, UV occurrence);
-static void gqljs_store_hash_key_sv(HV *hv, SV *key_sv, SV *value);
-static SV *gqljs_apply_rewrites_sv(pTHX_ SV *source_sv, AV *rewrites);
-static SV *gqljs_skip_directive_raw(pTHX_ const char *src, STRLEN len, STRLEN *pos, int is_utf8);
-static void gqljs_scan_variable_definition_directives(pTHX_ const char *src, STRLEN len, STRLEN *pos, int is_utf8, HV *operation_meta, AV *rewrites);
-static SV *gql_graphqljs_preprocess(pTHX_ SV *source_sv);
+static int gql_parser_is_name_start(char c);
+static int gql_parser_is_name_continue(char c);
+static void gql_parser_skip_ignored_raw(const char *src, STRLEN len, STRLEN *pos);
+static void gql_parser_skip_quoted_string_raw(const char *src, STRLEN len, STRLEN *pos);
+static void gql_parser_skip_delimited_raw(const char *src, STRLEN len, STRLEN *pos, char open, char close);
+static int gql_parser_read_name_bounds(const char *src, STRLEN len, STRLEN *pos, STRLEN *start, STRLEN *end);
+static SV *gql_parser_make_string_sv(pTHX_ const char *src, STRLEN start, STRLEN end, int is_utf8);
+static int gql_parser_match_word(const char *src, STRLEN start, STRLEN end, const char *word);
+static void gql_parser_push_rewrite(pTHX_ AV *rewrites, UV start, UV end, const char *replacement);
+static UV gql_parser_bump_occurrence(pTHX_ HV *counts, const char *kind, SV *name_sv);
+static void gql_parser_push_extension(pTHX_ AV *extensions, const char *kind, SV *name_sv, UV occurrence);
+static void gql_parser_store_hash_key_sv(HV *hv, SV *key_sv, SV *value);
+static SV *gql_parser_apply_rewrites_sv(pTHX_ SV *source_sv, AV *rewrites);
+static SV *gql_parser_skip_directive_raw(pTHX_ const char *src, STRLEN len, STRLEN *pos, int is_utf8);
+static void gql_parser_scan_variable_definition_directives(pTHX_ const char *src, STRLEN len, STRLEN *pos, int is_utf8, HV *operation_meta, AV *rewrites);
+static SV *gql_parser_preprocess_document(pTHX_ SV *source_sv);
 static SV *gql_parse_directives_only(pTHX_ SV *source_sv);
 static SV *gql_tokenize_source(pTHX_ SV *source_sv);
 static SV *gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv);
-static SV *gql_graphqljs_build_directives_from_source(pTHX_ SV *source_sv);
-static int gql_graphqljs_looks_like_executable_source(pTHX_ SV *source_sv);
-static int gqljs_legacy_document_is_executable(SV *legacy_sv);
-static void gqljs_materialize_operation_variable_directives(pTHX_ HV *meta_hv);
-static SV *gql_graphqljs_build_document(pTHX_ SV *legacy_sv);
-static SV *gql_graphqljs_parse_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_location_sv, SV *compact_location_sv);
-static SV *gql_graphqljs_parse_executable_document(pTHX_ SV *source_sv, SV *no_location_sv, SV *lazy_location_sv, SV *compact_location_sv);
+static SV *gql_parse_directives_only(pTHX_ SV *source_sv);
+static SV *gql_tokenize_source(pTHX_ SV *source_sv);
+static int gql_parser_legacy_document_is_executable(SV *legacy_sv);
+static void gql_parser_materialize_operation_variable_directives(pTHX_ HV *meta_hv);
 static void gql_ir_arena_init(gql_ir_arena_t *arena);
 static void *gql_ir_arena_alloc_zero(gql_ir_arena_t *arena, Size_t size);
 static void gql_ir_arena_free(gql_ir_arena_t *arena);
@@ -782,96 +798,91 @@ static void gql_ir_free_fragment_definition(gql_ir_fragment_definition_t *defini
 static void gql_ir_free_definition(gql_ir_definition_t *definition);
 static void gql_ir_free_document(gql_ir_document_t *document);
 static void gql_ir_prepared_exec_destroy(gql_ir_prepared_exec_t *prepared);
-static void gqljs_loc_context_init(pTHX_ gqljs_loc_context_t *ctx, SV *source_sv, AV *rewrites);
-static void gqljs_loc_context_destroy(gqljs_loc_context_t *ctx);
-static UV gqljs_original_pos_from_rewritten_pos(gqljs_loc_context_t *ctx, UV rewritten_pos);
-static SV *gqljs_new_loc_sv(pTHX_ IV line, IV column);
-static SV *gqljs_new_lazy_loc_sv(pTHX_ UV start);
-static SV *gqljs_new_lazy_state_sv(pTHX_ gql_ir_document_t *document, SV *source_sv, int with_locations, SV *lazy_location_sv, SV *compact_location_sv);
-static gqljs_lazy_state_t *gqljs_lazy_state_from_sv(SV *state_sv);
-static void gqljs_lazy_state_destroy(gqljs_lazy_state_t *state);
-static void gqljs_attach_magic_state(pTHX_ SV *sv, SV *state_sv);
-static SV *gqljs_new_lazy_arguments_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *arguments);
-static SV *gqljs_new_lazy_directives_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *directives);
-static SV *gqljs_new_lazy_variable_definitions_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *definitions);
-static SV *gqljs_new_lazy_object_fields_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *fields);
-static AV *gqljs_materialize_lazy_array(pTHX_ SV *state_sv, UV ptr, IV kind);
-static SV *gqljs_loc_from_rewritten_pos(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos);
+static void gql_parser_loc_context_init(pTHX_ gql_parser_loc_context_t *ctx, SV *source_sv, AV *rewrites);
+static void gql_parser_loc_context_destroy(gql_parser_loc_context_t *ctx);
+static UV gql_parser_original_pos_from_rewritten_pos(gql_parser_loc_context_t *ctx, UV rewritten_pos);
+static SV *gql_parser_new_loc_sv(pTHX_ IV line, IV column);
+static SV *gql_parser_new_lazy_loc_sv(pTHX_ UV start);
+static SV *gql_parser_new_lazy_state_sv(pTHX_ gql_ir_document_t *document, SV *source_sv, int with_locations, SV *lazy_location_sv, SV *compact_location_sv);
+static gql_parser_lazy_state_t *gql_parser_lazy_state_from_sv(SV *state_sv);
+static void gql_parser_lazy_state_destroy(gql_parser_lazy_state_t *state);
+static void gql_parser_attach_magic_state(pTHX_ SV *sv, SV *state_sv);
+static SV *gql_parser_new_lazy_arguments_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *arguments);
+static SV *gql_parser_new_lazy_directives_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *directives);
+static SV *gql_parser_new_lazy_variable_definitions_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *definitions);
+static SV *gql_parser_new_lazy_object_fields_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *fields);
+static AV *gql_parser_materialize_lazy_array(pTHX_ SV *state_sv, UV ptr, IV kind);
+static SV *gql_parser_loc_from_rewritten_pos(pTHX_ gql_parser_loc_context_t *ctx, UV rewritten_pos);
 static SV *gql_ir_make_sv_from_span(pTHX_ gql_ir_document_t *document, gql_ir_span_t span);
 static SV *gql_ir_make_string_value_sv(pTHX_ gql_ir_document_t *document, gql_ir_value_t *value);
-static SV *gqljs_build_type_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_type_t *type);
-static AV *gqljs_build_object_fields_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *fields, SV *state_sv);
-static SV *gqljs_build_value_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_value_t *value, SV *state_sv);
-static AV *gqljs_build_arguments_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *arguments, SV *state_sv);
-static AV *gqljs_build_directives_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *directives, SV *state_sv);
-static SV *gqljs_build_selection_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_t *selection, SV *state_sv);
-static SV *gqljs_build_selection_set_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_set_t *selection_set, SV *state_sv);
-static AV *gqljs_build_variable_definitions_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *definitions, SV *state_sv);
-static SV *gqljs_build_executable_definition_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_definition_t *definition, SV *state_sv);
-static SV *gqljs_build_executable_document_from_ir(pTHX_ gqljs_loc_context_t *ctx, gql_ir_document_t *document, SV *state_sv);
-static SV *gqljs_clone_with_loc(pTHX_ SV *value, SV *loc_sv);
-static int gqljs_sv_eq_pv(SV *sv, const char *literal);
-static const char *gqljs_definition_source_kind(SV *kind_sv);
-static const char *gqljs_extension_kind_name(const char *source_kind);
-static SV *gql_graphqljs_patch_document(pTHX_ SV *doc_sv, SV *meta_sv);
-static SV *gql_graphqljs_apply_executable_loc(pTHX_ SV *doc_sv, SV *source_sv);
-static void gqljs_set_loc_node(pTHX_ SV *node_sv, SV *loc_sv);
-static void gqljs_set_rewritten_loc_node(pTHX_ gqljs_loc_context_t *ctx, SV *node_sv, UV rewritten_pos);
-static void gqljs_set_shared_rewritten_loc_nodes(pTHX_ gqljs_loc_context_t *ctx, UV rewritten_pos, SV *left_sv, SV *right_sv);
-static HV *gqljs_node_hv(SV *node_sv);
-static SV *gqljs_fetch_sv(HV *hv, const char *key);
-static AV *gqljs_fetch_array(HV *hv, const char *key);
-static const char *gqljs_fetch_kind(HV *hv);
-static const char *gqljs_name_value(SV *node_sv);
-static SV *gqljs_find_named_node(AV *av, const char *name);
-static SV *gqljs_find_named_node_sv(AV *av, SV *name_sv);
-static SV *gqljs_find_variable_definition(AV *av, const char *name);
-static SV *gqljs_find_variable_definition_sv(AV *av, SV *name_sv);
-static SV *gqljs_locate_name_node(pTHX_ gql_parser_t *p, SV *node_sv);
-static SV *gqljs_locate_type_node(pTHX_ gql_parser_t *p, SV *node_sv);
-static SV *gqljs_locate_value_node(pTHX_ gql_parser_t *p, SV *node_sv);
-static void gqljs_locate_arguments_nodes(pTHX_ gql_parser_t *p, AV *av);
-static void gqljs_locate_directives_nodes(pTHX_ gql_parser_t *p, AV *av);
-static void gqljs_locate_variable_definitions_nodes(pTHX_ gql_parser_t *p, AV *av);
-static void gqljs_locate_input_value_definitions_nodes(pTHX_ gql_parser_t *p, AV *av);
-static void gqljs_locate_arguments_definition_nodes(pTHX_ gql_parser_t *p, AV *av);
-static void gqljs_locate_field_definitions_nodes(pTHX_ gql_parser_t *p, AV *av);
-static void gqljs_locate_enum_values_nodes(pTHX_ gql_parser_t *p, AV *av);
-static void gqljs_locate_operation_types_nodes(pTHX_ gql_parser_t *p, AV *av);
-static void gqljs_locate_interfaces_nodes(pTHX_ gql_parser_t *p, AV *av);
-static void gqljs_locate_union_types_nodes(pTHX_ gql_parser_t *p, AV *av);
-static void gqljs_locate_directive_locations_nodes(pTHX_ gql_parser_t *p, AV *av);
-static SV *gqljs_locate_selection_set_node(pTHX_ gql_parser_t *p, SV *node_sv);
-static void gqljs_locate_selection_node(pTHX_ gql_parser_t *p, SV *node_sv);
-static int gqljs_locate_definition(pTHX_ gql_parser_t *p, SV *node_sv);
-static SV *gql_graphqljs_build_executable_document(pTHX_ SV *legacy_sv);
-static SV *gql_graphqlperl_build_document(pTHX_ SV *doc_sv);
-static HV *gqljs_new_node_hv_sized(const char *kind, I32 keys);
-static HV *gqljs_new_node_hv(const char *kind);
-static SV *gqljs_new_node_ref(const char *kind);
-static SV *gqljs_new_name_node_sv(pTHX_ SV *value_sv);
-static SV *gqljs_new_named_type_node_sv(pTHX_ SV *value_sv);
-static SV *gqljs_new_variable_node_sv(pTHX_ SV *value_sv);
-static SV *gqljs_new_description_node_sv(pTHX_ SV *value_sv);
-static SV *gqljs_convert_legacy_type_sv(pTHX_ SV *type_sv);
-static SV *gqljs_convert_legacy_value_sv(pTHX_ SV *value_sv);
-static AV *gqljs_convert_legacy_arguments_hv(pTHX_ HV *hv);
-static AV *gqljs_convert_legacy_directives_av(pTHX_ AV *av);
-static SV *gqljs_convert_legacy_selection_sv(pTHX_ SV *selection_sv);
-static SV *gqljs_convert_legacy_selection_set_av(pTHX_ AV *av);
-static AV *gqljs_convert_legacy_variable_definitions_hv(pTHX_ HV *hv);
-static AV *gqljs_convert_legacy_named_types_av(pTHX_ AV *av);
-static AV *gqljs_convert_legacy_name_nodes_av(pTHX_ AV *av);
-static AV *gqljs_convert_legacy_input_value_definitions_hv(pTHX_ HV *hv);
-static AV *gqljs_convert_legacy_field_definitions_hv(pTHX_ HV *hv);
-static AV *gqljs_convert_legacy_enum_values_hv(pTHX_ HV *hv);
-static SV *gqljs_convert_legacy_executable_definition_sv(pTHX_ SV *definition_sv);
-static SV *gqljs_convert_legacy_definition_sv(pTHX_ SV *definition_sv);
-static int gqljs_cmp_sv_ptrs(const void *a, const void *b);
-static SV **gqljs_sorted_hash_keys(pTHX_ HV *hv, I32 *count_out);
-static void gqljs_free_sorted_hash_keys(SV **keys, I32 count);
-static SV *gqlperl_location_from_gqljs_node(pTHX_ SV *node_sv);
-static void gqlperl_store_location_from_gqljs_node(pTHX_ HV *dst_hv, SV *node_sv);
+static SV *gql_parser_build_type_from_ir(pTHX_ gql_parser_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_type_t *type);
+static AV *gql_parser_build_object_fields_from_ir(pTHX_ gql_parser_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *fields, SV *state_sv);
+static SV *gql_parser_build_value_from_ir(pTHX_ gql_parser_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_value_t *value, SV *state_sv);
+static AV *gql_parser_build_arguments_from_ir(pTHX_ gql_parser_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *arguments, SV *state_sv);
+static AV *gql_parser_build_directives_from_ir(pTHX_ gql_parser_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *directives, SV *state_sv);
+static SV *gql_parser_build_selection_from_ir(pTHX_ gql_parser_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_t *selection, SV *state_sv);
+static SV *gql_parser_build_selection_set_from_ir(pTHX_ gql_parser_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_selection_set_t *selection_set, SV *state_sv);
+static AV *gql_parser_build_variable_definitions_from_ir(pTHX_ gql_parser_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_ptr_array_t *definitions, SV *state_sv);
+static SV *gql_parser_build_executable_definition_from_ir(pTHX_ gql_parser_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_definition_t *definition, SV *state_sv);
+static SV *gql_parser_build_executable_document_from_ir(pTHX_ gql_parser_loc_context_t *ctx, gql_ir_document_t *document, SV *state_sv);
+static SV *gql_parser_clone_with_loc(pTHX_ SV *value, SV *loc_sv);
+static int gql_parser_sv_eq_pv(SV *sv, const char *literal);
+static const char *gql_parser_definition_source_kind(SV *kind_sv);
+static const char *gql_parser_extension_kind_name(const char *source_kind);
+static void gql_parser_set_loc_node(pTHX_ SV *node_sv, SV *loc_sv);
+static void gql_parser_set_rewritten_loc_node(pTHX_ gql_parser_loc_context_t *ctx, SV *node_sv, UV rewritten_pos);
+static void gql_parser_set_shared_rewritten_loc_nodes(pTHX_ gql_parser_loc_context_t *ctx, UV rewritten_pos, SV *left_sv, SV *right_sv);
+static HV *gql_parser_node_hv(SV *node_sv);
+static SV *gql_parser_fetch_sv(HV *hv, const char *key);
+static AV *gql_parser_fetch_array(HV *hv, const char *key);
+static const char *gql_parser_fetch_kind(HV *hv);
+static const char *gql_parser_name_value(SV *node_sv);
+static SV *gql_parser_find_named_node(AV *av, const char *name);
+static SV *gql_parser_find_named_node_sv(AV *av, SV *name_sv);
+static SV *gql_parser_find_variable_definition(AV *av, const char *name);
+static SV *gql_parser_find_variable_definition_sv(AV *av, SV *name_sv);
+static SV *gql_parser_locate_name_node(pTHX_ gql_parser_t *p, SV *node_sv);
+static SV *gql_parser_locate_type_node(pTHX_ gql_parser_t *p, SV *node_sv);
+static SV *gql_parser_locate_value_node(pTHX_ gql_parser_t *p, SV *node_sv);
+static void gql_parser_locate_arguments_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gql_parser_locate_directives_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gql_parser_locate_variable_definitions_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gql_parser_locate_input_value_definitions_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gql_parser_locate_arguments_definition_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gql_parser_locate_field_definitions_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gql_parser_locate_enum_values_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gql_parser_locate_operation_types_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gql_parser_locate_interfaces_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gql_parser_locate_union_types_nodes(pTHX_ gql_parser_t *p, AV *av);
+static void gql_parser_locate_directive_locations_nodes(pTHX_ gql_parser_t *p, AV *av);
+static SV *gql_parser_locate_selection_set_node(pTHX_ gql_parser_t *p, SV *node_sv);
+static void gql_parser_locate_selection_node(pTHX_ gql_parser_t *p, SV *node_sv);
+static int gql_parser_locate_definition(pTHX_ gql_parser_t *p, SV *node_sv);
+static HV *gql_parser_new_node_hv_sized(const char *kind, I32 keys);
+static HV *gql_parser_new_node_hv(const char *kind);
+static SV *gql_parser_new_node_ref(const char *kind);
+static SV *gql_parser_new_name_node_sv(pTHX_ SV *value_sv);
+static SV *gql_parser_new_named_type_node_sv(pTHX_ SV *value_sv);
+static SV *gql_parser_new_variable_node_sv(pTHX_ SV *value_sv);
+static SV *gql_parser_convert_legacy_type_sv(pTHX_ SV *type_sv);
+static SV *gql_parser_convert_legacy_value_sv(pTHX_ SV *value_sv);
+static AV *gql_parser_convert_legacy_arguments_hv(pTHX_ HV *hv);
+static AV *gql_parser_convert_legacy_directives_av(pTHX_ AV *av);
+static SV *gql_parser_convert_legacy_selection_sv(pTHX_ SV *selection_sv);
+static SV *gql_parser_convert_legacy_selection_set_av(pTHX_ AV *av);
+static AV *gql_parser_convert_legacy_variable_definitions_hv(pTHX_ HV *hv);
+static AV *gql_parser_convert_legacy_named_types_av(pTHX_ AV *av);
+static AV *gql_parser_convert_legacy_name_nodes_av(pTHX_ AV *av);
+static AV *gql_parser_convert_legacy_input_value_definitions_hv(pTHX_ HV *hv);
+static AV *gql_parser_convert_legacy_field_definitions_hv(pTHX_ HV *hv);
+static AV *gql_parser_convert_legacy_enum_values_hv(pTHX_ HV *hv);
+static SV *gql_parser_convert_legacy_executable_definition_sv(pTHX_ SV *definition_sv);
+static SV *gql_parser_convert_legacy_definition_sv(pTHX_ SV *definition_sv);
+static int gql_parser_cmp_sv_ptrs(const void *a, const void *b);
+static SV **gql_parser_sorted_hash_keys(pTHX_ HV *hv, I32 *count_out);
+static void gql_parser_free_sorted_hash_keys(SV **keys, I32 count);
+static SV *gqlperl_location_from_gql_parser_node(pTHX_ SV *node_sv);
+static void gqlperl_store_location_from_gql_parser_node(pTHX_ HV *dst_hv, SV *node_sv);
 static SV *gqlperl_convert_type_from_gqljs(pTHX_ SV *node_sv);
 static SV *gqlperl_convert_value_from_gqljs(pTHX_ SV *node_sv);
 static SV *gqlperl_convert_arguments_from_gqljs(pTHX_ AV *av);

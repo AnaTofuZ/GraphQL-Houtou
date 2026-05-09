@@ -19,65 +19,23 @@ GetOptions(
 open my $fh, '<', $file or die "Failed to open $file: $!";
 my $source = do { local $/; <$fh> };
 
-sub run_graphql_perl_pegex {
-  return parse_with_options($source, {
-    dialect => 'graphql-perl',
-    backend => 'pegex',
-  });
+sub run_graphql_perl_default {
+  return parse($source);
 }
 
-sub run_graphql_perl_xs {
+sub run_graphql_perl_noloc {
   return parse_with_options($source, {
-    dialect => 'graphql-perl',
-    backend => 'xs',
-  });
-}
-
-sub run_graphql_perl_canonical_xs {
-  return parse_with_options($source, {
-    dialect => 'graphql-perl',
-    backend => 'canonical-xs',
-  });
-}
-
-sub run_graphql_js_xs {
-  return parse_with_options($source, {
-    dialect => 'graphql-js',
-    backend => 'xs',
-  });
-}
-
-sub run_graphql_js_xs_lazy {
-  return parse_with_options($source, {
-    dialect => 'graphql-js',
-    backend => 'xs',
-    lazy_location => 1,
-  });
-}
-
-sub run_graphql_js_xs_noloc {
-  return parse_with_options($source, {
-    dialect => 'graphql-js',
-    backend => 'xs',
     no_location => 1,
   });
 }
 
-run_graphql_perl_pegex();
-run_graphql_perl_xs();
-run_graphql_perl_canonical_xs();
-run_graphql_js_xs();
-run_graphql_js_xs_lazy();
-run_graphql_js_xs_noloc();
+run_graphql_perl_default();
+run_graphql_perl_noloc();
 
 print "Benchmark target: $file\n";
 print "Benchmark count: $count\n";
 
 cmpthese($count, {
-  graphql_perl_pegex => \&run_graphql_perl_pegex,
-  graphql_perl_xs    => \&run_graphql_perl_xs,
-  graphql_perl_canonical_xs => \&run_graphql_perl_canonical_xs,
-  graphql_js_xs      => \&run_graphql_js_xs,
-  graphql_js_xs_lazy => \&run_graphql_js_xs_lazy,
-  graphql_js_xs_noloc    => \&run_graphql_js_xs_noloc,
+  graphql_perl_default => \&run_graphql_perl_default,
+  graphql_perl_noloc   => \&run_graphql_perl_noloc,
 });

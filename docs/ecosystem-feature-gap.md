@@ -332,6 +332,6 @@ prefork PSGI（Starman 等）/ mod_perl ベース
 
 ## 関連文書
 
-- `docs/compatibility-roadmap.md` — graphql-perl 互換の開発ロードマップ
 - `docs/validation-status.md` — validation ルールの実装状況詳細
 - `docs/project-status.md` — 現在の実装状況の概要
+- `docs/runtime-mainline-overview.md` — 現在の mainline runtime / VM の入口

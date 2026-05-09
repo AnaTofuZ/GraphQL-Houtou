@@ -4,12 +4,18 @@ use 5.014;
 use strict;
 use warnings;
 
-use Moo;
+use parent 'GraphQL::Houtou::Type';
+use Role::Tiny::With;
 use GraphQL::Houtou::Directive ();
-use Types::Standard qw(ArrayRef Object CodeRef);
 use GraphQL::Error;
+use GraphQL::Houtou::Internal::TypeSupport qw(
+  apply_fields_deprecation
+  description_doc_lines
+  make_fieldtuples
+);
+use GraphQL::Houtou::Type::List ();
+use GraphQL::Houtou::Type::NonNull ();
 
-extends 'GraphQL::Houtou::Type';
 with qw(
   GraphQL::Houtou::Role::Output
   GraphQL::Houtou::Role::Composite
@@ -19,19 +25,47 @@ with qw(
 );
 
 sub list {
-  require GraphQL::Houtou::Type::List;
   $_[0]->{_houtou_list} ||= GraphQL::Houtou::Type::List->new(of => $_[0]);
 }
 
 sub non_null {
-  require GraphQL::Houtou::Type::NonNull;
   $_[0]->{_houtou_non_null} ||= GraphQL::Houtou::Type::NonNull->new(of => $_[0]);
 }
 
 use constant DEBUG => $ENV{GRAPHQL_DEBUG};
 
-has interfaces => (is => 'ro', isa => ArrayRef[Object], default => sub { [] });
-has is_type_of => (is => 'ro', isa => CodeRef);
+sub new {
+  my ($class, %args) = @_;
+  die "GraphQL::Houtou::Type::Object requires name" if !defined $args{name};
+  die "GraphQL::Houtou::Type::Object requires fields" if !exists $args{fields};
+  my $self = $class->SUPER::new(%args);
+  $self->{name} = $args{name};
+  $self->{description} = $args{description};
+  $self->{fields} = $args{fields};
+  $self->{interfaces} = $args{interfaces} || [];
+  $self->{is_type_of} = $args{is_type_of};
+  $self->{runtime_tag} = $args{runtime_tag};
+  return $self;
+}
+
+sub name { return $_[0]->{name} }
+sub description { return $_[0]->{description} }
+sub to_string { return $_[0]->{to_string} ||= $_[0]->name }
+sub interfaces { return $_[0]->{interfaces} }
+sub is_type_of { return $_[0]->{is_type_of} }
+sub runtime_tag { return $_[0]->{runtime_tag} }
+
+sub fields {
+  my ($self) = @_;
+  if (ref($self->{fields}) eq 'CODE') {
+    $self->{fields} = $self->{fields}->();
+  }
+  if (!$self->{_fields_deprecation_applied}) {
+    $self->{fields} = apply_fields_deprecation($self->{fields});
+    $self->{_fields_deprecation_applied} = 1;
+  }
+  return $self->{fields};
+}
 
 sub graphql_to_perl {
   my ($self, $item) = @_;
@@ -126,46 +160,24 @@ sub _should_include_node {
 }
 
 sub _complete_value {
-  my ($self, $context, $nodes, $info, $path, $result) = @_;
-  my $subfield_nodes = [ [], {} ];
-  my $visited_fragment_names = {};
-
-  if ($self->is_type_of) {
-    my $is_type_of = $self->is_type_of->($result, $context->{context_value}, $info);
-    die GraphQL::Error->new(
-      message => "Expected a value of type '@{[$self->to_string]}' but received: '@{[ref($result) || $result]}'."
-    ) if !$is_type_of;
-  }
-
-  for (grep { $_->{selections} } @$nodes) {
-    ($subfield_nodes, $visited_fragment_names) = $self->_collect_fields(
-      $context,
-      $_->{selections},
-      $subfield_nodes,
-      $visited_fragment_names,
-    );
-  }
-
-  require GraphQL::Houtou::Execution::PP;
-  return GraphQL::Houtou::Execution::PP::_execute_fields($context, $self, $result, $path, $subfield_nodes);
+  my ($self) = @_;
+  die "Type::Object->_complete_value is part of the removed legacy execution path; use GraphQL::Houtou::Schema->build_runtime or ->build_native_runtime for object completion on '@{[$self->name]}'.\n";
 }
 
-has to_doc => (
-  is => 'lazy',
-  builder => sub {
-    my ($self) = @_;
-    my @fieldlines = map {
-      my ($main, @description) = @$_;
-      (@description, $main);
-    } $self->_make_fieldtuples($self->fields);
-    my $implements = join ' & ', map $_->name, @{ $self->interfaces || [] };
-    $implements &&= 'implements ' . $implements . ' ';
-    return join '', map "$_\n",
-      $self->_description_doc_lines($self->description),
-      "type @{[$self->name]} $implements\{",
-      (map length() ? "  $_" : "", @fieldlines),
-      "}";
-  },
-);
+sub to_doc {
+  my ($self) = @_;
+  return $self->{to_doc} if exists $self->{to_doc};
+  my @fieldlines = map {
+    my ($main, @description) = @$_;
+    (@description, $main);
+  } make_fieldtuples($self->fields);
+  my $implements = join ' & ', map $_->name, @{ $self->interfaces || [] };
+  $implements &&= 'implements ' . $implements . ' ';
+  return $self->{to_doc} = join '', map "$_\n",
+    description_doc_lines($self->description),
+    "type @{[$self->name]} $implements\{",
+    (map length() ? "  $_" : "", @fieldlines),
+    "}";
+}
 
 1;

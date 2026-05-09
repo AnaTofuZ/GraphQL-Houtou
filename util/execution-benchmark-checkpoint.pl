@@ -9,17 +9,27 @@ use Getopt::Long qw(GetOptions);
 my $count = -3;
 my $repeat = 5;
 my @cases;
-my @modes = qw(houtou_runtime_cached_perl houtou_runtime_native_bundle);
+my @modes = qw(houtou_runtime_program houtou_runtime_native_bundle);
+my $include_async = 0;
+my $promise_backend = 'promise_xs';
 
 GetOptions(
   'count=s' => \$count,
   'repeat=i' => \$repeat,
   'case=s@' => \@cases,
   'mode=s@' => \@modes,
+  'include-async!' => \$include_async,
+  'promise-backend=s' => \$promise_backend,
 ) or die usage();
 
-@cases = qw(nested_variable_object list_of_objects abstract_with_fragment)
+@cases = $include_async
+  ? qw(async_scalar async_list async_object async_abstract)
+  : qw(nested_variable_object list_of_objects abstract_with_fragment)
   if !@cases;
+if ($include_async && $promise_backend eq 'promise_xs') {
+  @modes = grep { $_ eq 'houtou_runtime_program' } @modes;
+  @modes = qw(houtou_runtime_program) if !@modes;
+}
 {
   my %seen;
   @modes = grep { !$seen{$_}++ } @modes;
@@ -35,6 +45,8 @@ for my $run (1 .. $repeat) {
     '-Iblib/arch',
     $script,
     '--count=' . $count,
+    ($include_async ? '--include-async' : '--no-include-async'),
+    '--promise-backend=' . $promise_backend,
     (map { ('--case', $_) } @cases),
   );
 

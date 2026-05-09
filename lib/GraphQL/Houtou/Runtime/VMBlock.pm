@@ -3,13 +3,14 @@ package GraphQL::Houtou::Runtime::VMBlock;
 use 5.014;
 use strict;
 use warnings;
-use Scalar::Util qw(refaddr);
+use Scalar::Util qw(refaddr weaken);
 
 use constant {
   NAME_SLOT      => 0,
   TYPE_NAME_SLOT => 1,
   FAMILY_SLOT    => 2,
   OPS_SLOT       => 3,
+  PROGRAM_SLOT   => 4,
 };
 
 sub new {
@@ -19,6 +20,7 @@ sub new {
     $args{type_name},
     $args{family} || 'OBJECT',
     $args{ops} || [],
+    undef,
   ], $class;
 }
 
@@ -26,7 +28,18 @@ sub name { return $_[0][NAME_SLOT] }
 sub type_name { return $_[0][TYPE_NAME_SLOT] }
 sub family { return $_[0][FAMILY_SLOT] }
 sub ops { return $_[0][OPS_SLOT] }
+sub program { return $_[0][PROGRAM_SLOT] }
 sub set_ops { $_[0][OPS_SLOT] = $_[1] || []; return $_[0][OPS_SLOT] }
+sub set_program {
+  my ($self, $program) = @_;
+  $self->[PROGRAM_SLOT] = $program;
+  weaken($self->[PROGRAM_SLOT]) if ref($self->[PROGRAM_SLOT]);
+  for my $op (@{ $self->ops || [] }) {
+    next if !$op || !$op->can('set_block');
+    $op->set_block($self);
+  }
+  return $self->[PROGRAM_SLOT];
+}
 
 sub to_struct {
   my ($self) = @_;
@@ -39,7 +52,7 @@ sub to_struct {
 }
 
 sub to_native_struct {
-  my ($self, $block_index) = @_;
+  my ($self, $block_index, $payload_catalog) = @_;
   my @slot_table;
   my %slot_index;
   for my $op (@{ $self->ops || [] }) {
@@ -47,7 +60,7 @@ sub to_native_struct {
     my $id = join("\x1E", refaddr($slot), ($op->result_name // q()));
     next if exists $slot_index{$id};
     $slot_index{$id} = scalar @slot_table;
-    my $native_slot = $slot->to_native_struct;
+    my $native_slot = $slot->to_native_struct(include_arg_defs => 1);
     $native_slot->{result_name} = $op->result_name;
     push @slot_table, $native_slot;
   }
@@ -57,12 +70,12 @@ sub to_native_struct {
     family => $self->family,
     family_code => _family_code($self->family),
     slots => \@slot_table,
-    ops => [ map { $_->to_native_struct($block_index, \%slot_index) } @{ $self->ops || [] } ],
+    ops => [ map { $_->to_native_struct($block_index, \%slot_index, $payload_catalog) } @{ $self->ops || [] } ],
   };
 }
 
 sub to_native_compact_struct {
-  my ($self, $block_index) = @_;
+  my ($self, $block_index, $payload_catalog) = @_;
   my @slot_table;
   my %slot_index;
   for my $op (@{ $self->ops || [] }) {
@@ -70,26 +83,16 @@ sub to_native_compact_struct {
     my $id = join("\x1E", refaddr($slot), ($op->result_name // q()));
     next if exists $slot_index{$id};
     $slot_index{$id} = scalar @slot_table;
-    my $native_slot = $slot->to_native_struct;
-    push @slot_table, [
-      $native_slot->{field_name},
-      ($op->result_name // $native_slot->{result_name}),
-      $native_slot->{return_type_name},
-      $native_slot->{schema_slot_index},
-      $native_slot->{resolver_shape_code},
-      $native_slot->{completion_family_code},
-      $native_slot->{dispatch_family_code},
-      $native_slot->{return_type_kind_code},
-      $native_slot->{has_args},
-      $native_slot->{has_directives},
-    ];
+    my $native_slot = $slot->to_native_compact_struct(include_arg_defs => 1);
+    $native_slot->[1] = ($op->result_name // $native_slot->[1]);
+    push @slot_table, $native_slot;
   }
   return [
     $self->name,
     $self->type_name,
     _family_code($self->family),
     \@slot_table,
-    [ map { $_->to_native_compact_struct($block_index, \%slot_index) } @{ $self->ops || [] } ],
+    [ map { $_->to_native_compact_struct($block_index, \%slot_index, $payload_catalog) } @{ $self->ops || [] } ],
   ];
 }
 

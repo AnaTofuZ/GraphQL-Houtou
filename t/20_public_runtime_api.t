@@ -10,6 +10,7 @@ use GraphQL::Houtou qw(
   compile_runtime
   build_runtime
   build_native_runtime
+  compile_native_program
   compile_native_bundle
   compile_native_bundle_descriptor
 );
@@ -65,6 +66,7 @@ subtest 'top-level compile_runtime returns schema runtime' => sub {
   my $runtime = compile_runtime($schema);
   isa_ok $runtime, 'GraphQL::Houtou::Runtime::SchemaGraph';
   my $program = $runtime->compile_program('{ hello }');
+  isa_ok $program, 'GraphQL::Houtou::Runtime::NativeProgram';
   my $result = $runtime->execute_program($program);
   is_deeply $result, {
     data => { hello => 'world' },
@@ -79,8 +81,8 @@ subtest 'schema runtime descriptor helpers prefer program/native names' => sub {
   my $program_descriptor = $schema->dump_program_descriptor('{ hello }', $program_path);
   my $program = $schema->load_program_descriptor($program_path);
 
-  isa_ok $program, 'GraphQL::Houtou::Runtime::VMProgram';
-  ok $program_descriptor->{blocks}, 'program descriptor payload is written to disk';
+  isa_ok $program, 'GraphQL::Houtou::Runtime::NativeProgram';
+  ok $program_descriptor->{blocks_compact}, 'program descriptor payload is written to disk';
   is_deeply $schema->build_runtime->execute_program($program), {
     data => { hello => 'world' },
     errors => [],
@@ -122,6 +124,7 @@ subtest 'top-level build_native_runtime returns cached native runtime wrapper' =
   my $program = $native->compile_program(
     'query Q($name: String = "bob") { greet(name: $name) }',
   );
+  isa_ok $program, 'GraphQL::Houtou::Runtime::NativeProgram';
   my $result = $native->execute_program($program, variables => { name => 'cached' });
 
   is_deeply $result, {
@@ -187,6 +190,17 @@ subtest 'top-level compile_native_bundle returns executable bundle' => sub {
     data => { hello => 'world' },
     errors => [],
   }, 'top-level bundle compile returns executable native bundle';
+};
+
+subtest 'top-level compile_native_program returns executable native program handle' => sub {
+  my $program = compile_native_program($schema, '{ hello }');
+  my $native = build_native_runtime($schema);
+  isa_ok $program, 'GraphQL::Houtou::Runtime::NativeProgram';
+  my $result = $native->execute_program($program);
+  is_deeply $result, {
+    data => { hello => 'world' },
+    errors => [],
+  }, 'top-level native program compile returns executable handle';
 };
 
 subtest 'top-level compile_native_bundle_descriptor returns compact descriptor' => sub {

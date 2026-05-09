@@ -1,5 +1,6 @@
 requires 'perl', '5.014000';
 requires 'GraphQL', '0.54';
+requires 'Promise::XS', '0.21',
 requires 'XSLoader';
 
 on configure => sub {

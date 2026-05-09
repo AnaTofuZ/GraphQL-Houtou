@@ -4,6 +4,7 @@ use warnings;
 use Test::More 0.98;
 use File::Temp qw(tempfile);
 
+use GraphQL::Houtou::Native qw(native_program_summary);
 use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Schema;
@@ -62,10 +63,20 @@ my $schema = GraphQL::Houtou::Schema->new(
   types => [ $User, $Node, $SearchResult ],
 );
 
+sub lower_vm_program {
+  my ($runtime, $document) = @_;
+  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program(
+    $runtime,
+    $runtime->compile_program_descriptor($document),
+  );
+}
+
 subtest 'schema runtime can lower source into execution program' => sub {
   my $runtime = $schema->compile_runtime;
-  my $program = $runtime->compile_program('{ viewer { id name } }');
+  my $native_program = $runtime->compile_program('{ viewer { id name } }');
+  my $program = lower_vm_program($runtime, '{ viewer { id name } }');
 
+  isa_ok $native_program, 'GraphQL::Houtou::Runtime::NativeProgram';
   isa_ok $program, 'GraphQL::Houtou::Runtime::VMProgram';
   isa_ok $program->root_block, 'GraphQL::Houtou::Runtime::VMBlock';
   is $program->operation_type, 'query', 'query operation inferred';
@@ -94,44 +105,60 @@ subtest 'top-level helper can lower operation source' => sub {
 };
 
 subtest 'execution program can round-trip through struct form' => sub {
-  my $program = $schema->compile_program('{ viewer { id } }');
-  my $struct = $program->to_struct;
-  my ($root_block) = grep { $_->{name} eq $struct->{root_block} } @{ $struct->{blocks} };
+  my $struct = $schema->compile_program_descriptor('{ viewer { id } }');
+  my $program = GraphQL::Houtou::Runtime::VMCompiler->inflate_program(
+    $schema->build_runtime,
+    $struct,
+  );
+  my $root_block = $struct->{blocks_compact}[ $struct->{root_block_index} ];
 
-  is $struct->{operation_type}, 'query', 'struct keeps operation type';
-  is $struct->{root_block}, $program->root_block->name, 'struct keeps root block name';
-  is $root_block->{ops}[0]{complete_family}, 'COMPLETE_OBJECT', 'op family is serialized on root block';
+  is $struct->{operation_type_code}, 1, 'descriptor keeps operation type code';
+  is $struct->{root_block_index}, $program->root_block_index, 'descriptor keeps root block index';
+  is $root_block->[4][0][2], 2, 'root op keeps complete code';
 };
 
 subtest 'execution program descriptor can round-trip back into executable program' => sub {
   my $runtime = $schema->compile_runtime;
-  my $program = $runtime->compile_program('{ viewer { id name } }');
-  my $descriptor = $program->to_struct;
+  my $descriptor = $runtime->compile_program_descriptor('{ viewer { id name } }');
+  my $program = $runtime->inflate_program($descriptor);
   my $inflated = GraphQL::Houtou::Runtime::VMCompiler->inflate_program($runtime, $descriptor);
+  my $summary = native_program_summary($program);
 
+  isa_ok $program, 'GraphQL::Houtou::Runtime::NativeProgram';
   isa_ok $inflated, 'GraphQL::Houtou::Runtime::VMProgram';
   is $inflated->operation_type, 'query', 'inflated program keeps operation type';
-  is $inflated->root_block->name, $program->root_block->name, 'inflated program keeps root block name';
-  is scalar(@{ $inflated->blocks || [] }), scalar(@{ $program->blocks || [] }), 'inflated program keeps block count';
+  is $summary->{root_block_index}, $descriptor->{root_block_index},
+    'public inflate helper keeps root block index';
+  is $summary->{block_count}, scalar(@{ $descriptor->{blocks_compact} || [] }),
+    'public inflate helper keeps block count';
+  is $inflated->root_block->name,
+    $descriptor->{blocks_compact}[ $descriptor->{root_block_index} ][0],
+    'inflated program keeps root block name';
+  is scalar(@{ $inflated->blocks || [] }), scalar(@{ $descriptor->{blocks_compact} || [] }),
+    'inflated program keeps block count';
   is_deeply
     [ map { $_->field_name } @{ $inflated->root_block->ops } ],
-    [ map { $_->field_name } @{ $program->root_block->ops } ],
+    [ qw(viewer) ],
     'inflated root block keeps instruction fields';
 };
 
 subtest 'schema helper can compile and inflate operation descriptors' => sub {
-  my $descriptor = $schema->compile_program('{ viewer { id } }')->to_struct;
+  my $descriptor = $schema->compile_program_descriptor('{ viewer { id } }');
   my $inflated = $schema->inflate_program($descriptor);
+  my $summary = native_program_summary($inflated);
 
-  isa_ok $inflated, 'GraphQL::Houtou::Runtime::VMProgram';
-  is $inflated->root_block->type_name, 'Query', 'schema helper inflates operation root block';
+  isa_ok $inflated, 'GraphQL::Houtou::Runtime::NativeProgram';
+  is $summary->{root_block_index}, $descriptor->{root_block_index},
+    'schema helper inflates native program handle with root block index';
+  is $summary->{block_count}, scalar(@{ $descriptor->{blocks_compact} || [] }),
+    'schema helper inflates native program handle with block count';
 };
 
 subtest 'operation descriptor can round-trip through JSON file helpers' => sub {
   my ($fh, $path) = tempfile();
   close $fh;
 
-  my $descriptor = $schema->compile_program('{ viewer { id } }')->to_struct;
+  my $descriptor = $schema->compile_program_descriptor('{ viewer { id } }');
   open my $out, '>', $path or die $!;
   print {$out} JSON::PP::encode_json($descriptor);
   close $out;
@@ -140,15 +167,19 @@ subtest 'operation descriptor can round-trip through JSON file helpers' => sub {
   my $loaded = JSON::PP::decode_json(<$in>);
   close $in;
   my $inflated = $schema->inflate_program($loaded);
+  my $summary = native_program_summary($inflated);
 
-  isa_ok $inflated, 'GraphQL::Houtou::Runtime::VMProgram';
-  is_deeply $inflated->to_struct, $descriptor, 'schema helper preserves operation descriptor through file boundary';
+  isa_ok $inflated, 'GraphQL::Houtou::Runtime::NativeProgram';
+  is $summary->{root_block_index}, $descriptor->{root_block_index},
+    'schema helper preserves root block index through file boundary';
+  is $summary->{block_count}, scalar(@{ $descriptor->{blocks_compact} || [] }),
+    'schema helper preserves block count through file boundary';
 };
 
 subtest 'instruction lowering classifies static and dynamic args' => sub {
   my $runtime = $schema->compile_runtime;
-  my $static = $runtime->compile_program('{ greet(name: "Ana") }');
-  my $dynamic = $runtime->compile_program('query Q($name: String) { greet(name: $name) }');
+  my $static = lower_vm_program($runtime, '{ greet(name: "Ana") }');
+  my $dynamic = lower_vm_program($runtime, 'query Q($name: String) { greet(name: $name) }');
 
   my ($static_greet) = grep { $_->field_name eq 'greet' } @{ $static->root_block->ops };
   my ($dynamic_greet) = grep { $_->field_name eq 'greet' } @{ $dynamic->root_block->ops };
@@ -162,7 +193,7 @@ subtest 'instruction lowering classifies static and dynamic args' => sub {
 
 subtest 'operation variable definitions are lowered into immutable program metadata' => sub {
   my $runtime = $schema->compile_runtime;
-  my $program = $runtime->compile_program('query Q($name: String = "Ana") { greet(name: $name) }');
+  my $program = lower_vm_program($runtime, 'query Q($name: String = "Ana") { greet(name: $name) }');
 
   is_deeply $program->variable_defs, {
     name => {
@@ -175,7 +206,7 @@ subtest 'operation variable definitions are lowered into immutable program metad
 
 subtest 'fragment spreads are normalized into lowered child blocks' => sub {
   my $runtime = $schema->compile_runtime;
-  my $program = $runtime->compile_program(<<'GRAPHQL');
+  my $program = lower_vm_program($runtime, <<'GRAPHQL');
 query Q {
   viewer { ...UserBits }
 }
@@ -185,7 +216,6 @@ fragment UserBits on User {
   name
 }
 GRAPHQL
-
   my ($viewer) = grep { $_->field_name eq 'viewer' } @{ $program->root_block->ops };
   my $child = $program->block_by_name($viewer->child_block_name);
   is_deeply [ map { $_->field_name } @{ $child->ops } ], [ qw(id name) ], 'fragment spread fields are lowered into child block';
@@ -193,7 +223,7 @@ GRAPHQL
 
 subtest 'include/skip directives are lowered onto instructions as runtime guards' => sub {
   my $runtime = $schema->compile_runtime;
-  my $program = $runtime->compile_program('query Q($show: Boolean) { viewer { id name @include(if: $show) } }');
+  my $program = lower_vm_program($runtime, 'query Q($show: Boolean) { viewer { id name @include(if: $show) } }');
   my ($viewer) = grep { $_->field_name eq 'viewer' } @{ $program->root_block->ops };
   my $child = $program->block_by_name($viewer->child_block_name);
   my ($name) = grep { $_->field_name eq 'name' } @{ $child->ops };

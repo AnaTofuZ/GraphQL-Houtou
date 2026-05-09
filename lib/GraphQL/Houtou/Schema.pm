@@ -6,67 +6,54 @@ use warnings;
 
 use Exporter 'import';
 use JSON::PP ();
-use Moo;
-use Types::Standard qw(HashRef Object ArrayRef);
 
+use GraphQL::Houtou::Native ();
 use GraphQL::Houtou::Directive ();
-use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::SchemaGraph ();
-use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Type::Scalar qw($Int $Float $String $Boolean $ID);
 use GraphQL::Houtou::Introspection qw($SCHEMA_META_TYPE);
 
 our @EXPORT_OK = qw(lookup_type);
 
-has query => (
-  is => 'ro',
-  isa => Object,
-  required => 1,
-);
+sub new {
+  my ($class, %args) = @_;
+  die "GraphQL::Houtou::Schema requires query" if !defined $args{query};
+  my $self = bless {
+    query => $args{query},
+    mutation => $args{mutation},
+    subscription => $args{subscription},
+    types => $args{types} || [ $Int, $Float, $String, $Boolean, $ID ],
+    directives => $args{directives} || \@GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES,
+  }, $class;
+  return $self;
+}
 
-has mutation => (
-  is => 'ro',
-  isa => Object,
-);
+sub query { return $_[0]->{query} }
+sub mutation { return $_[0]->{mutation} }
+sub subscription { return $_[0]->{subscription} }
+sub types { return $_[0]->{types} }
+sub directives { return $_[0]->{directives} }
 
-has subscription => (
-  is => 'ro',
-  isa => Object,
-);
+sub name2type {
+  my ($self) = @_;
+  return $self->{name2type} ||= $self->_build_name2type;
+}
 
-has types => (
-  is => 'ro',
-  isa => ArrayRef,
-  default => sub { [ $Int, $Float, $String, $Boolean, $ID ] },
-);
+sub name2directive {
+  my ($self) = @_;
+  return $self->{name2directive} ||= $self->_build_name2directive;
+}
 
-has directives => (
-  is => 'ro',
-  isa => ArrayRef,
-  default => sub { \@GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES },
-);
+sub _interface2types {
+  my ($self) = @_;
+  return $self->{_interface2types} ||= $self->_build__interface2types;
+}
 
-has name2type => (
-  is => 'lazy',
-  isa => HashRef,
-);
-
-has name2directive => (
-  is => 'lazy',
-  isa => HashRef,
-  builder => '_build_name2directive',
-);
-
-has _interface2types => (
-  is => 'lazy',
-  isa => HashRef,
-  builder => '_build__interface2types',
-);
-
-has _possible_type_map => (
-  is => 'rw',
-  isa => HashRef,
-);
+sub _possible_type_map {
+  my ($self, @set) = @_;
+  $self->{_possible_type_map} = $set[0] if @set;
+  return $self->{_possible_type_map};
+}
 
 sub prepare_runtime {
   my ($self) = @_;
@@ -149,7 +136,8 @@ sub compile_program {
 
 sub compile_program_descriptor {
   my ($self, $document, %opts) = @_;
-  return $self->compile_program($document, %opts)->to_struct;
+  my $runtime = $self->build_runtime;
+  return $runtime->compile_program_descriptor($document, %opts);
 }
 
 sub dump_program_descriptor {
@@ -168,11 +156,19 @@ sub load_program_descriptor {
 sub inflate_program {
   my ($self, $descriptor, %opts) = @_;
   my $runtime = $self->build_runtime;
-  return GraphQL::Houtou::Runtime::VMCompiler->inflate_program($runtime, $descriptor);
+  return $runtime->inflate_program($descriptor, %opts);
 }
 
 sub execute {
   my ($self, $document, %opts) = @_;
+  die "promise_code is no longer supported; Promise::XS is detected automatically.\n"
+    if exists $opts{promise_code};
+
+  if (!defined $opts{engine} || $opts{engine} ne 'perl') {
+    my $runtime = $self->build_native_runtime;
+    return $runtime->execute_document($document, %opts);
+  }
+
   my $runtime = $self->build_runtime;
   my $program = $runtime->compile_program($document, %opts);
   return $runtime->execute_program($program, %opts);
@@ -180,8 +176,15 @@ sub execute {
 
 sub compile_native_program_descriptor {
   my ($self, $document, %opts) = @_;
-  my $runtime = delete $opts{runtime_schema};
-  return $self->compile_program($document, ($runtime ? (runtime_schema => $runtime) : ()), %opts)->to_native_compact_struct;
+  my $runtime = $self->build_native_runtime;
+  return $runtime->compile_program_descriptor_for_document($document, %opts);
+}
+
+sub compile_native_program {
+  my ($self, $document, %opts) = @_;
+  return GraphQL::Houtou::Native::load_native_program(
+    $self->compile_native_program_descriptor($document, %opts),
+  );
 }
 
 sub compile_native_bundle_descriptor {
@@ -234,7 +237,7 @@ sub execute_native_bundle_descriptor {
 sub execute_native {
   my ($self, $document, %opts) = @_;
   my $runtime = $self->build_native_runtime;
-  return $runtime->execute_document($document, %opts);
+  return $runtime->execute_document($document, %opts, engine => 'native');
 }
 
 sub runtime_cache {

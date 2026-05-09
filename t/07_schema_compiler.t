@@ -129,7 +129,8 @@ subtest 'Houtou types consume Houtou roles' => sub {
   ok $schema->name2type->{Filter}->DOES('GraphQL::Houtou::Role::Input'), 'input object uses Houtou input role';
   ok $schema->name2type->{Filter}->DOES('GraphQL::Houtou::Role::FieldsInput'), 'input object uses Houtou fields input role';
   ok $schema->name2type->{Status}->DOES('GraphQL::Houtou::Role::Leaf'), 'enum uses Houtou leaf role';
-  ok $schema->directives->[-1]->DOES('GraphQL::Houtou::Role::Named'), 'directive uses Houtou named role';
+  ok $schema->directives->[-1]->can('name'), 'directive keeps named accessor without helper role';
+  ok defined $schema->directives->[-1]->name, 'directive accessor returns a directive name';
   ok !$schema->query->DOES('GraphQL::Role::Output'), 'object no longer depends on upstream output role';
   ok !$schema->name2type->{Filter}->DOES('GraphQL::Role::Input'), 'input object no longer depends on upstream input role';
   isa_ok $compiled, 'GraphQL::Houtou::Runtime::SchemaGraph';
@@ -186,9 +187,13 @@ subtest 'root blocks and slots are compiled' => sub {
   ok $search_slot, 'search slot is present';
   is $search_slot->completion_family, 'LIST', 'search slot is list family';
   is $search_slot->dispatch_family, 'LIST', 'search slot dispatch stays list';
-  is_deeply $search_slot->arg_defs->{ids}{type}, {
-    type => ['list', { type => ['non_null', { type => 'String' }] }],
-  }, 'argument lowering preserves list/non-null shape';
+  my ($ids_arg) = grep { $_->[0] eq 'ids' } @{ $search_slot->arg_defs_compact || [] };
+  is_deeply $ids_arg, [
+    'ids',
+    { type => ['list', { type => ['non_null', { type => 'String' }] }] },
+    0,
+    undef,
+  ], 'argument lowering preserves compact arg defs';
 };
 
 subtest 'type and dispatch indexes are compiled' => sub {

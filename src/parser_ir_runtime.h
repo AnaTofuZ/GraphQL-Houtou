@@ -741,7 +741,7 @@ gql_ir_make_string_value_sv(pTHX_ gql_ir_document_t *document, gql_ir_value_t *v
 
   raw = gql_ir_make_sv_from_span(aTHX_ document, value->as.span);
   if (value->is_block_string) {
-    ret = gql_call_helper1(aTHX_ "GraphQL::Houtou::XS::Parser::_block_string_value", raw);
+    ret = gql_call_helper1(aTHX_ "GraphQL::Houtou::Parser::Internal::_block_string_value", raw);
   } else {
     ret = gql_unescape_string_sv(aTHX_ raw);
   }
@@ -1354,7 +1354,7 @@ gqlperl_convert_value_from_gqljs(pTHX_ SV *node_sv) {
   }
   if (strEQ(kind, "BooleanValue")) {
     value_sv = gql_parser_fetch_sv(src_hv, "value");
-    return gql_call_helper1(aTHX_ "GraphQL::Houtou::XS::Parser::_make_bool",
+    return gql_call_helper1(aTHX_ "GraphQL::Houtou::Parser::Internal::_make_bool",
       newSViv(SvTRUE(value_sv) ? 1 : 0));
   }
   if (strEQ(kind, "NullValue")) {

@@ -209,7 +209,7 @@ gql_parser_new_loc_sv(pTHX_ IV line, IV column) {
 static SV *
 gql_parser_new_lazy_loc_sv(pTHX_ UV start) {
   AV *loc_av = newAV();
-  HV *stash = gv_stashpv("GraphQL::Houtou::XS::LazyLoc", GV_ADD);
+  HV *stash = gv_stashpv("GraphQL::Houtou::Parser::Internal::LazyLoc", GV_ADD);
   SV *loc_sv;
 
   av_push(loc_av, newSVuv(start));
@@ -368,7 +368,7 @@ gql_parser_new_lazy_arguments_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *argumen
   XPUSHs(sv_2mortal(newSVsv(state_sv)));
   XPUSHs(sv_2mortal(newSVuv(PTR2UV(arguments))));
   PUTBACK;
-  call_pv("GraphQL::Houtou::XS::LazyArray::Arguments::_new", G_SCALAR);
+  call_pv("GraphQL::Houtou::Parser::Internal::LazyArray::Arguments::_new", G_SCALAR);
   SPAGAIN;
   ret_sv = newSVsv(POPs);
   PUTBACK;
@@ -389,7 +389,7 @@ gql_parser_new_lazy_directives_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *direct
   XPUSHs(sv_2mortal(newSVsv(state_sv)));
   XPUSHs(sv_2mortal(newSVuv(PTR2UV(directives))));
   PUTBACK;
-  call_pv("GraphQL::Houtou::XS::LazyArray::Directives::_new", G_SCALAR);
+  call_pv("GraphQL::Houtou::Parser::Internal::LazyArray::Directives::_new", G_SCALAR);
   SPAGAIN;
   ret_sv = newSVsv(POPs);
   PUTBACK;
@@ -410,7 +410,7 @@ gql_parser_new_lazy_variable_definitions_sv(pTHX_ SV *state_sv, gql_ir_ptr_array
   XPUSHs(sv_2mortal(newSVsv(state_sv)));
   XPUSHs(sv_2mortal(newSVuv(PTR2UV(definitions))));
   PUTBACK;
-  call_pv("GraphQL::Houtou::XS::LazyArray::VariableDefinitions::_new", G_SCALAR);
+  call_pv("GraphQL::Houtou::Parser::Internal::LazyArray::VariableDefinitions::_new", G_SCALAR);
   SPAGAIN;
   ret_sv = newSVsv(POPs);
   PUTBACK;
@@ -431,7 +431,7 @@ gql_parser_new_lazy_object_fields_sv(pTHX_ SV *state_sv, gql_ir_ptr_array_t *fie
   XPUSHs(sv_2mortal(newSVsv(state_sv)));
   XPUSHs(sv_2mortal(newSVuv(PTR2UV(fields))));
   PUTBACK;
-  call_pv("GraphQL::Houtou::XS::LazyArray::ObjectFields::_new", G_SCALAR);
+  call_pv("GraphQL::Houtou::Parser::Internal::LazyArray::ObjectFields::_new", G_SCALAR);
   SPAGAIN;
   ret_sv = newSVsv(POPs);
   PUTBACK;

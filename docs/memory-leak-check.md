@@ -37,8 +37,8 @@ perl util/leak-check.pl --backend asan
 
 ## Covered Cases
 
-- `parser_graphqljs`
-  - Runs `t/03_parser_graphqljs.t`
+- `parser_public`
+  - Runs `t/21_public_parser_api.t`
 - `xs_smoke`
   - Runs `t/04_xs_smoke.t`
 - `execution`
@@ -46,7 +46,7 @@ perl util/leak-check.pl --backend asan
 - `promise`
   - Runs `t/12_promise.t`
 
-These cases cover the main graphql-js parser path, XS parser helpers,
+These cases cover the main public parser path, XS parser helpers,
 execution, abstract completion, and promise-aware execution.
 
 ## Current Result
@@ -59,7 +59,7 @@ perl util/leak-check.pl --backend leaks --keep-build-dir
 
 Observed result:
 
-- `parser_graphqljs`: `0 leaks for 0 total leaked bytes`
+- `parser_public`: `0 leaks for 0 total leaked bytes`
 - `xs_smoke`: `0 leaks for 0 total leaked bytes`
 - `execution`: `0 leaks for 0 total leaked bytes`
 - `promise`: `0 leaks for 0 total leaked bytes`

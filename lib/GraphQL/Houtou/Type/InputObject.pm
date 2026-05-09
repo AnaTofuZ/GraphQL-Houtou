@@ -4,28 +4,50 @@ use 5.014;
 use strict;
 use warnings;
 
-use Moo;
+use parent 'GraphQL::Houtou::Type';
+use Role::Tiny::With;
+use GraphQL::Houtou::Internal::TypeSupport qw(description_doc_lines named_from_ast);
+use GraphQL::Houtou::Type::List ();
+use GraphQL::Houtou::Type::NonNull ();
 
-extends 'GraphQL::Houtou::Type';
 with qw(
   GraphQL::Houtou::Role::Input
-  GraphQL::Houtou::Role::Named
   GraphQL::Houtou::Role::FieldsInput
   GraphQL::Houtou::Role::HashMappable
-  GraphQL::Houtou::Role::FieldsEither
 );
 
 sub list {
-  require GraphQL::Houtou::Type::List;
   $_[0]->{_houtou_list} ||= GraphQL::Houtou::Type::List->new(of => $_[0]);
 }
 
 sub non_null {
-  require GraphQL::Houtou::Type::NonNull;
   $_[0]->{_houtou_non_null} ||= GraphQL::Houtou::Type::NonNull->new(of => $_[0]);
 }
 
 use constant DEBUG => $ENV{GRAPHQL_DEBUG};
+
+sub new {
+  my ($class, %args) = @_;
+  my $self = $class->SUPER::new(%args);
+  $self->{name} = $args{name};
+  $self->{description} = $args{description};
+  $self->{fields} = $args{fields};
+  return bless $self, $class;
+}
+
+sub name { $_[0]->{name} }
+sub description { $_[0]->{description} }
+sub to_string { $_[0]->{to_string} ||= $_[0]->name }
+
+sub fields {
+  my ($self) = @_;
+  my $fields = $self->{fields};
+  if (ref($fields) eq 'CODE') {
+    $fields = $fields->();
+    $self->{fields} = $fields;
+  }
+  return $fields;
+}
 
 sub is_valid {
   my ($self, $item) = @_;

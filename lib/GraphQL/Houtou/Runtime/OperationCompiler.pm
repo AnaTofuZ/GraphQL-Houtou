@@ -3,30 +3,19 @@ package GraphQL::Houtou::Runtime::OperationCompiler;
 use 5.014;
 use strict;
 use warnings;
+use Scalar::Util qw(refaddr);
 
 use GraphQL::Houtou ();
 use GraphQL::Houtou::Runtime::Slot ();
 use GraphQL::Houtou::Runtime::VMBlock ();
-use GraphQL::Houtou::Runtime::VMDispatch ();
 use GraphQL::Houtou::Runtime::VMOp ();
 use GraphQL::Houtou::Runtime::VMProgram ();
-
-my %RESOLVE_HANDLER = (
-  RESOLVE_DEFAULT  => 'resolve_default',
-  RESOLVE_EXPLICIT => 'resolve_explicit',
-);
 
 my %RESOLVE_CODE = (
   RESOLVE_DEFAULT  => 1,
   RESOLVE_EXPLICIT => 2,
 );
 
-my %COMPLETE_HANDLER = (
-  COMPLETE_GENERIC  => 'complete_generic',
-  COMPLETE_OBJECT   => 'complete_object',
-  COMPLETE_LIST     => 'complete_list',
-  COMPLETE_ABSTRACT => 'complete_abstract',
-);
 
 my %COMPLETE_CODE = (
   COMPLETE_GENERIC  => 1,
@@ -71,8 +60,50 @@ sub compile_operation {
   );
 
   _bind_instruction_blocks($program);
-  GraphQL::Houtou::Runtime::VMDispatch->bind_program($program);
   return $program;
+}
+
+sub compile_operation_native_compact {
+  my ($class, $runtime_schema, $document, %opts) = @_;
+  my $ast = ref($document) ? $document : GraphQL::Houtou::parse($document);
+  my ($operation) = grep { ($_->{kind} || '') eq 'operation' } @{ $ast || [] };
+  die "No operation found for runtime compiler.\n" if !$operation;
+  my %fragments = map { (($_->{name} || '') => $_) }
+    grep { ($_->{kind} || '') eq 'fragment' } @{ $ast || [] };
+
+  my $operation_type = $operation->{operation} || 'query';
+  my $schema_block = $runtime_schema->root_block($operation_type)
+    or die "No root block for operation type '$operation_type'.\n";
+
+  my %state = (
+    runtime_schema => $runtime_schema,
+    block_index => 0,
+    blocks_compact => [],
+    args_payloads_compact => [],
+    directives_payloads_compact => [],
+    args_payload_index => {},
+    directives_payload_index => {},
+    fragments => \%fragments,
+  );
+
+  my $root_block_index = _lower_selection_block_compact(
+    \%state,
+    $schema_block->root_type_name,
+    $schema_block,
+    $operation->{selections} || [],
+    uc($operation_type),
+  );
+
+  return {
+    version => 1,
+    operation_type_code => _operation_type_code($operation_type),
+    operation_name => $operation->{name},
+    variable_defs => _lower_variable_defs($operation->{variables}),
+    args_payloads_compact => $state{args_payloads_compact},
+    directives_payloads_compact => $state{directives_payloads_compact},
+    root_block_index => $root_block_index,
+    blocks_compact => $state{blocks_compact},
+  };
 }
 
 sub inflate_operation {
@@ -90,7 +121,6 @@ sub inflate_operation {
     root_block => $root_block,
   );
   _bind_instruction_blocks($program);
-  GraphQL::Houtou::Runtime::VMDispatch->bind_program($program);
   return $program;
 }
 
@@ -147,7 +177,6 @@ sub _lower_selection_block {
       complete_family => $complete_family,
       complete_code => $COMPLETE_CODE{$complete_family} || 0,
       dispatch_family => $slot->dispatch_family,
-      arg_defs => $slot->arg_defs,
       has_args => $slot->has_args,
       args_mode => $args_mode,
       args_payload => $args_payload,
@@ -156,12 +185,8 @@ sub _lower_selection_block {
       directives_payload => $directives_payload,
       child_block_name => $child_block ? $child_block->name : undef,
       abstract_child_blocks => $abstract_child_blocks,
+      abstract_child_blocks_index => undef,
       bound_slot => $slot,
-      abstract_dispatch => (($slot->completion_family || '') eq 'ABSTRACT')
-        ? _bind_abstract_dispatch($state->{runtime_schema}, $slot->return_type_name)
-        : undef,
-      resolve_handler => $RESOLVE_HANDLER{$resolve_family},
-      complete_handler => $COMPLETE_HANDLER{$complete_family},
     );
   }
 
@@ -173,6 +198,125 @@ sub _lower_selection_block {
   );
   push @{ $state->{blocks} }, $block;
   return $block;
+}
+
+sub _lower_selection_block_compact {
+  my ($state, $type_name, $schema_block, $selections, $base_name) = @_;
+  my %schema_slots = map { ($_->field_name => $_) } @{ $schema_block->slots || [] };
+  my @ops;
+  my @slot_table;
+  my %slot_index;
+  my $field_selections = _normalize_selections($state, $selections, $type_name);
+
+  for my $selection (@{ $field_selections || [] }) {
+    next if !$selection || ($selection->{kind} || '') ne 'field';
+    my $field_name = $selection->{name};
+
+    if (($field_name || q()) eq '__typename') {
+      my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
+      my $directives_payload_index = _intern_compact_payload(
+        $state->{directives_payloads_compact},
+        $state->{directives_payload_index},
+        $directives_payload,
+      );
+      my $result_name = ($selection->{alias} || '__typename');
+      my $slot = _lookup_typename_slot($state->{runtime_schema}, $type_name, $result_name, $directives_mode);
+      my $slot_compact_index = _intern_slot_compact(\@slot_table, \%slot_index, $slot, $result_name);
+      push @ops, _build_compact_op(
+        field_name => '__typename',
+        result_name => $result_name,
+        return_type_name => 'String',
+        resolve_family => 'RESOLVE_DEFAULT',
+        complete_family => 'COMPLETE_GENERIC',
+        dispatch_family => 'DEFAULT',
+        slot_index => $slot_compact_index,
+        args_mode => 'NONE',
+        args_payload_index => undef,
+        args_payload => undef,
+        has_args => 0,
+        directives_mode => $directives_mode,
+        directives_payload_index => $directives_payload_index,
+        directives_payload => defined $directives_payload_index ? undef : $directives_payload,
+        has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
+        child_block_index => undef,
+        abstract_child_block_indexes => {},
+      );
+      next;
+    }
+
+    my $slot = $schema_slots{$field_name} or next;
+    my $child_block_index;
+    my $abstract_child_block_indexes = {};
+    my ($args_mode, $args_payload) = _lower_arguments($selection->{arguments});
+    my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
+    my $args_payload_index = _intern_compact_payload(
+      $state->{args_payloads_compact},
+      $state->{args_payload_index},
+      $args_payload,
+    );
+    my $directives_payload_index = _intern_compact_payload(
+      $state->{directives_payloads_compact},
+      $state->{directives_payload_index},
+      $directives_payload,
+    );
+
+    if ($selection->{selections} && @{ $selection->{selections} }) {
+      my $child_type_name = $slot->return_type_name;
+      if (($slot->completion_family || '') eq 'ABSTRACT') {
+        $abstract_child_block_indexes = _lower_abstract_child_blocks_compact(
+          $state,
+          $child_type_name,
+          $selection->{selections},
+          $base_name . q(.) . $field_name,
+        );
+      }
+      elsif (my $child_schema_block = $state->{runtime_schema}->block_by_type_name($child_type_name)) {
+        $child_block_index = _lower_selection_block_compact(
+          $state,
+          $child_type_name,
+          $child_schema_block,
+          $selection->{selections},
+          $base_name . q(.) . $field_name,
+        );
+      }
+    }
+
+    my $resolve_family = _resolve_op_for_slot($slot);
+    my $complete_family = _complete_op_for_slot($slot);
+    my $result_name = ($selection->{alias} || $field_name);
+    my $slot_compact_index = _intern_slot_compact(\@slot_table, \%slot_index, $slot, $result_name);
+
+    push @ops, _build_compact_op(
+      field_name => $field_name,
+      result_name => $result_name,
+      return_type_name => $slot->return_type_name,
+      resolve_family => $resolve_family,
+      complete_family => $complete_family,
+      dispatch_family => $slot->dispatch_family,
+      slot_index => $slot_compact_index,
+      args_mode => $args_mode,
+      args_payload_index => $args_payload_index,
+      args_payload => defined $args_payload_index ? undef : $args_payload,
+      has_args => $slot->has_args,
+      directives_mode => $directives_mode,
+      directives_payload_index => $directives_payload_index,
+      directives_payload => defined $directives_payload_index ? undef : $directives_payload,
+      has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
+      child_block_index => $child_block_index,
+      abstract_child_block_indexes => $abstract_child_block_indexes,
+    );
+  }
+
+  my $name = _next_block_name($state, $base_name);
+  my $block = [
+    $name,
+    $type_name,
+    2,
+    \@slot_table,
+    \@ops,
+  ];
+  push @{ $state->{blocks_compact} }, $block;
+  return $#{$state->{blocks_compact}};
 }
 
 sub _next_block_name {
@@ -206,7 +350,6 @@ sub _inflate_instruction {
     complete_family => $complete_family,
     complete_code => $struct->{complete_code} || $COMPLETE_CODE{$complete_family} || 0,
     dispatch_family => $struct->{dispatch_family},
-    arg_defs => _clone_argument_value($struct->{arg_defs} || {}),
     has_args => $struct->{has_args},
     args_mode => $struct->{args_mode} || 'NONE',
     args_payload => _clone_argument_value($struct->{args_payload}),
@@ -215,8 +358,7 @@ sub _inflate_instruction {
     directives_payload => _clone_argument_value($struct->{directives_payload}),
     child_block_name => $struct->{child_block_name},
     abstract_child_blocks => _clone_argument_value($struct->{abstract_child_blocks} || {}),
-    resolve_handler => $RESOLVE_HANDLER{$resolve_family},
-    complete_handler => $COMPLETE_HANDLER{$complete_family},
+    abstract_child_blocks_index => $struct->{abstract_child_blocks_index},
   );
 }
 
@@ -228,10 +370,6 @@ sub _bind_instructions_to_schema_slots {
     my %slots = map { ($_->field_name => $_) } @{ $schema_block->slots || [] };
     for my $op (@{ $block->ops || [] }) {
       $op->set_bound_slot($slots{ $op->field_name });
-      $op->set_abstract_dispatch(_bind_abstract_dispatch(
-        $runtime_schema,
-        $op->return_type_name,
-      )) if ($op->complete_family || '') eq 'COMPLETE_ABSTRACT';
     }
   }
 
@@ -263,31 +401,6 @@ sub _bind_instruction_blocks {
   return $program;
 }
 
-sub _bind_abstract_dispatch {
-  my ($runtime_schema, $abstract_name) = @_;
-  return undef if !defined $abstract_name;
-  my $cache = $runtime_schema->runtime_cache || {};
-  my $abstract_type = ($cache->{name2type} || {})->{$abstract_name} or return undef;
-  my $tag_resolver = ($cache->{tag_resolver_map} || {})->{$abstract_name};
-  my $resolve_type = ($cache->{resolve_type_map} || {})->{$abstract_name};
-  my $possible_types = ($cache->{possible_types} || {})->{$abstract_name} || [];
-  return {
-    abstract_name => $abstract_name,
-    abstract_type => $abstract_type,
-    dispatch_family => $tag_resolver
-      ? 'TAG'
-      : $resolve_type
-        ? 'RESOLVE_TYPE'
-        : 'POSSIBLE_TYPES',
-    tag_resolver => $tag_resolver,
-    tag_map => ($cache->{runtime_tag_map} || {})->{$abstract_name} || {},
-    resolve_type => $resolve_type,
-    possible_types => $possible_types,
-    is_type_of_map => $cache->{is_type_of_map} || {},
-    name2type => $cache->{name2type} || {},
-  };
-}
-
 sub _lower_abstract_child_blocks {
   my ($state, $abstract_type_name, $selections, $base_name) = @_;
   my $possible_types = $state->{runtime_schema}->runtime_cache->{possible_types}{$abstract_type_name} || [];
@@ -307,6 +420,94 @@ sub _lower_abstract_child_blocks {
   }
 
   return \%blocks;
+}
+
+sub _lower_abstract_child_blocks_compact {
+  my ($state, $abstract_type_name, $selections, $base_name) = @_;
+  my $possible_types = $state->{runtime_schema}->runtime_cache->{possible_types}{$abstract_type_name} || [];
+  my %blocks;
+
+  for my $type (@$possible_types) {
+    next if !$type || !$type->isa('GraphQL::Houtou::Type::Object');
+    my $schema_block = $state->{runtime_schema}->block_by_type_name($type->name) or next;
+    my $block_index = _lower_selection_block_compact(
+      $state,
+      $type->name,
+      $schema_block,
+      $selections,
+      $base_name . q(.) . $type->name,
+    );
+    $blocks{ $type->name } = $block_index if defined $block_index;
+  }
+
+  return \%blocks;
+}
+
+sub _intern_slot_compact {
+  my ($slot_table, $slot_index, $slot, $result_name) = @_;
+  my $id = join("\x1E", refaddr($slot), ($result_name // q()));
+  return $slot_index->{$id} if exists $slot_index->{$id};
+  my $compact = $slot->to_native_compact_struct;
+  $compact->[1] = ($result_name // $compact->[1]);
+  my $index = @$slot_table;
+  push @$slot_table, $compact;
+  $slot_index->{$id} = $index;
+  return $index;
+}
+
+sub _build_compact_op {
+  my (%args) = @_;
+  my $resolve_code = $RESOLVE_CODE{ $args{resolve_family} || 'RESOLVE_DEFAULT' } || 0;
+  my $complete_code = $COMPLETE_CODE{ $args{complete_family} || 'COMPLETE_GENERIC' } || 0;
+  return [
+    ($resolve_code * 16) + $complete_code,
+    $resolve_code,
+    $complete_code,
+    _dispatch_family_code($args{dispatch_family}),
+    $args{slot_index},
+    $args{child_block_index},
+    $args{abstract_child_block_indexes} || {},
+    _args_mode_code($args{args_mode}),
+    $args{args_payload_index},
+    $args{args_payload},
+    $args{has_args} ? 1 : 0,
+    _directives_mode_code($args{directives_mode}),
+    $args{directives_payload_index},
+    $args{directives_payload},
+    $args{has_directives} ? 1 : 0,
+    $args{field_name},
+    $args{result_name},
+    $args{return_type_name},
+  ];
+}
+
+sub _dispatch_family_code {
+  my ($family) = @_;
+  return 2 if ($family || q()) eq 'RESOLVE_TYPE';
+  return 3 if ($family || q()) eq 'TAG';
+  return 4 if ($family || q()) eq 'POSSIBLE_TYPES';
+  return 1;
+}
+
+sub _args_mode_code {
+  my ($mode) = @_;
+  return 1 if ($mode || q()) eq 'STATIC';
+  return 2 if ($mode || q()) eq 'DYNAMIC';
+  return 0;
+}
+
+sub _directives_mode_code {
+  my ($mode) = @_;
+  return 1 if ($mode || q()) eq 'STATIC';
+  return 2 if ($mode || q()) eq 'DYNAMIC';
+  return 0;
+}
+
+sub _operation_type_code {
+  my ($type) = @_;
+  return 2 if ($type || q()) eq 'mutation';
+  return 3 if ($type || q()) eq 'subscription';
+  return 1;
 }
 
 sub _normalize_selections {
@@ -366,7 +567,6 @@ sub _build_typename_instruction {
     complete_family => $complete_family,
     complete_code => $COMPLETE_CODE{$complete_family} || 0,
     dispatch_family => 'DEFAULT',
-    arg_defs => {},
     has_args => 0,
     args_mode => 'NONE',
     args_payload => undef,
@@ -374,8 +574,6 @@ sub _build_typename_instruction {
     directives_mode => $directives_mode,
     directives_payload => $directives_payload,
     bound_slot => $slot,
-    resolve_handler => $RESOLVE_HANDLER{$resolve_family},
-    complete_handler => $COMPLETE_HANDLER{$complete_family},
   );
 }
 
@@ -391,33 +589,28 @@ sub _lookup_typename_slot {
         field_name => '__typename',
         result_name => $result_name,
         return_type_name => $slot->return_type_name,
+        return_type_kind_code => $slot->return_type_kind_code,
         resolver_shape => $slot->resolver_shape,
         resolver_mode => $slot->resolver_mode,
         completion_family => $slot->completion_family,
         dispatch_family => $slot->dispatch_family,
-        arg_defs => {},
         has_args => 0,
         has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
-        resolve => $slot->resolve,
-        return_type => $slot->return_type,
       );
     }
   }
-
-  my $string_type = $runtime_schema->runtime_cache->{name2type}{String};
   return GraphQL::Houtou::Runtime::Slot->new(
     schema_slot_key => join(q(.), ($type_name || q()), '__typename'),
     field_name => '__typename',
     result_name => $result_name,
     return_type_name => 'String',
+    return_type_kind_code => 1,
     resolver_shape => 'DEFAULT',
     resolver_mode => 'DEFAULT',
     completion_family => 'GENERIC',
     dispatch_family => 'GENERIC',
-    arg_defs => {},
     has_args => 0,
     has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
-    return_type => $string_type,
   );
 }
 
@@ -530,6 +723,38 @@ sub _clone_argument_value {
   return [ map { _clone_argument_value($_) } @$value ] if $ref eq 'ARRAY';
   return { map { $_ => _clone_argument_value($value->{$_}) } keys %$value } if $ref eq 'HASH';
   return $value;
+}
+
+sub _intern_compact_payload {
+  my ($payloads, $index, $payload) = @_;
+  return undef if !_payload_present($payload);
+  my $key = _compact_payload_key($payload);
+  return $index->{$key} if exists $index->{$key};
+  my $slot = @$payloads;
+  push @$payloads, _clone_argument_value($payload);
+  $index->{$key} = $slot;
+  return $slot;
+}
+
+sub _payload_present {
+  my ($value) = @_;
+  return 0 if !defined $value;
+  my $ref = ref($value);
+  return 1 if !$ref;
+  return scalar(@$value) ? 1 : 0 if $ref eq 'ARRAY';
+  return scalar(keys %$value) ? 1 : 0 if $ref eq 'HASH';
+  return 1;
+}
+
+sub _compact_payload_key {
+  my ($value) = @_;
+  my $ref = ref($value);
+  return '!undef' if !defined $value;
+  return "S:$value" if !$ref;
+  return "R:${$value}" if $ref eq 'REF' || $ref eq 'SCALAR';
+  return 'A:[' . join(',', map { _compact_payload_key($_) } @$value) . ']' if $ref eq 'ARRAY';
+  return 'H:{' . join(',', map { $_ . '=>' . _compact_payload_key($value->{$_}) } sort keys %$value) . '}' if $ref eq 'HASH';
+  return "$ref:$value";
 }
 
 sub _complete_op_for_slot {

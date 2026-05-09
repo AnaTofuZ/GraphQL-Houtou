@@ -69,7 +69,8 @@
 - query document を schema-aware な lowered program に変換
 - variables / args / directives / fragments を実行しやすい shape に lower
 - block / op family / child block 参照を固定
-- variable / argument coercion と runtime guard evaluation の shared helper を提供
+- active path の variable preparation facade を提供
+- coercion loop 自体は `native_program_prepare_variables_xs(...)` が owner
 
 ### 4. VM Lowering
 
@@ -92,23 +93,24 @@
 主なモジュール:
 
 - `GraphQL::Houtou::Runtime::ExecState`
-- `GraphQL::Houtou::Runtime::Cursor`
-- `GraphQL::Houtou::Runtime::BlockFrame`
-- `GraphQL::Houtou::Runtime::FieldFrame`
-- `GraphQL::Houtou::Runtime::Outcome`
-- `GraphQL::Houtou::Runtime::Writer`
-- `GraphQL::Houtou::Runtime::LazyInfo`
-- `GraphQL::Houtou::Runtime::PathFrame`
-- `GraphQL::Houtou::Runtime::ErrorRecord`
+- XS-only opaque handle packages
+  - `GraphQL::Houtou::Runtime::Cursor`
+  - `GraphQL::Houtou::Runtime::BlockFrame`
+  - `GraphQL::Houtou::Runtime::FieldFrame`
+  - `GraphQL::Houtou::Runtime::Outcome`
+  - `GraphQL::Houtou::Runtime::Writer`
+  - `GraphQL::Houtou::Runtime::LazyInfo`
+  - `GraphQL::Houtou::Runtime::PathFrame`
+  - `GraphQL::Houtou::Runtime::ErrorRecord`
 
 責務:
 
-- `ExecState` が block / field lifecycle を所有
-- `Cursor` が current block / op / slot を指す
-- `BlockFrame` が block-local values と pending state を保持
-- `FieldFrame` が field-local temporary を保持
-- `Outcome` が kind-first な結果通貨
-- `Writer` が response materialization を担当
+- `ExecState` が block / field lifecycle を所有し、Perl 側は `new/build_for_program/run_program` の thin facade に縮退している
+- `Cursor` が current block / op / slot を指す XS opaque handle
+- `BlockFrame` が block-local values と pending state を保持する XS opaque handle
+- `FieldFrame` が field-local temporary を保持する XS opaque handle
+- `Outcome` が kind-first な結果通貨を表す XS opaque handle
+- `Writer` が response materialization を担当する XS opaque handle
 
 ### 6. Native Boundary
 
@@ -120,7 +122,7 @@
 
 責務:
 
-- request-time specialization の owner
+- 固定 specialization / native artifact 構築の owner
 - native runtime handle / native bundle handle の owner
 - Perl VM artifact から native compact descriptor への変換境界
 - XS 実行呼び出しの集中管理
@@ -128,7 +130,7 @@
 現在の状態:
 
 - `Runtime::ProgramSpecializer` は削除済み
-- request-time specialization は `NativeRuntime` に統合済み
+- request-local variable preparation は `NativeRuntime` と `InputCoercion` に統合済み
 - variable / argument coercion と runtime guard evaluation は `InputCoercion` に集約し、
   `ExecState` と `NativeRuntime` の重複実装を持たない
 - `Runtime::NativeBundle` の Perl wrapper は削除済み
@@ -139,10 +141,10 @@
   compact runtime struct と compact program struct を part-based API で XS に渡す
 - compact program 実行では Perl 側で一時 native bundle handle を作らず、
   `execute_native_program_xs(...)` に直接渡す
-- `VMProgram` は compact native struct を memoize し、
-  specialization 後の同一 program 再実行では descriptor 再構築を避ける
-- `NativeRuntime->execute_program(...)` も `compile_bundle -> execute_bundle` を通らず、
-  `specialize -> execute_compact_program` の経路へ寄せてある
+- `NativeProgram` は variable-invariant artifact として保持し、
+  sync path では request ごとに prepared variables を渡して fast lane を実行する
+- `NativeRuntime->execute_program(...)` は `compile_bundle -> execute_bundle` を通らず、
+  request-local state を持った `execute_compact_program` へ流す
 
 ## 内部通貨
 
@@ -202,7 +204,6 @@ active tree からは次を削除済みです。
 - `src/execution.h`
 - `src/ir_engine.h`
 - `src/ir_execution.h`
-- `src/legacy_compat.h`
 - `Runtime::Program`
 - `Runtime::ProgramSpecializer`
 - `Runtime::NativeBundle` Perl wrapper

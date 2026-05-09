@@ -27,6 +27,9 @@ use GraphQL::Type::Scalar ();
 use GraphQL::Type::Union;
 
 use GraphQL::Houtou::Schema;
+use GraphQL::Houtou::Promise::PromiseXS qw(
+  maybe_get_promise_xs
+);
 use GraphQL::Houtou::Type::Interface ();
 use GraphQL::Houtou::Type::Object ();
 use GraphQL::Houtou::Type::Scalar ();
@@ -44,91 +47,32 @@ GetOptions(
 
 die usage() if !$case_name || !$target;
 
-{
-  package Local::ImmediatePromise;
-
-  sub new {
-    my ($class, %args) = @_;
-    return bless {
-      status => $args{status},
-      values => $args{values} || [],
-    }, $class;
-  }
-
-  sub resolve {
-    my ($class, @values) = @_;
-    return $class->new(status => 'fulfilled', values => \@values);
-  }
-
-  sub reject {
-    my ($class, @values) = @_;
-    return $class->new(status => 'rejected', values => \@values);
-  }
-
-  sub all {
-    my ($class, @values) = @_;
-    my @rows;
-
-    for my $value (@values) {
-      if (ref($value) && eval { $value->isa(__PACKAGE__) }) {
-        return $class->reject(@{ $value->{values} })
-          if ($value->{status} || '') eq 'rejected';
-        push @rows, [ @{ $value->{values} } ];
-      } else {
-        push @rows, [ $value ];
-      }
-    }
-
-    return $class->resolve(@rows);
-  }
-
-  sub then {
-    my ($self, $on_fulfilled, $on_rejected) = @_;
-    my $callback = ($self->{status} || '') eq 'rejected'
-      ? $on_rejected
-      : $on_fulfilled;
-
-    return __PACKAGE__->new(
-      status => $self->{status},
-      values => [ @{ $self->{values} } ],
-    ) if !$callback;
-
-    my @ret = eval { $callback->(@{ $self->{values} }) };
-    return __PACKAGE__->reject($@) if $@;
-    return $ret[0]
-      if @ret == 1 && ref($ret[0]) && eval { $ret[0]->isa(__PACKAGE__) };
-    return __PACKAGE__->resolve(@ret);
-  }
-
-  sub get {
-    my ($self) = @_;
-    die @{ $self->{values} } if ($self->{status} || '') eq 'rejected';
-    return wantarray ? @{ $self->{values} } : $self->{values}[0];
-  }
-}
-
-sub promise_code {
+sub upstream_promise_xs_code {
+  require Promise::XS;
   return {
-    resolve => sub { Local::ImmediatePromise->resolve(@_) },
-    reject => sub { Local::ImmediatePromise->reject(@_) },
-    all => sub { Local::ImmediatePromise->all(@_) },
-    new => sub { Local::ImmediatePromise->new },
+    resolve => sub { Promise::XS::resolved(@_) },
+    reject => sub { Promise::XS::rejected(@_) },
+    all => sub {
+      my $all_promise = Promise::XS::all(@_);
+      return $all_promise->then(sub {
+        my @rows = @_;
+        my @flattened = map {
+          ref($_) eq 'ARRAY' && @{$_} == 1 ? $_->[0] : $_
+        } @rows;
+        return \@flattened;
+      });
+    },
     then => sub {
       my ($promise, $on_fulfilled, $on_rejected) = @_;
-      return $promise->then($on_fulfilled, $on_rejected);
+      return defined $on_rejected
+        ? $promise->then($on_fulfilled, $on_rejected)
+        : $promise->then($on_fulfilled);
     },
     is_promise => sub {
       my ($value) = @_;
-      return ref($value) eq 'Local::ImmediatePromise';
+      return !!($value && ref($value) && eval { $value->isa('Promise::XS::Promise') });
     },
   };
-}
-
-sub maybe_get {
-  my ($value) = @_;
-  return (ref($value) && eval { $value->isa('Local::ImmediatePromise') })
-    ? scalar $value->get
-    : $value;
 }
 
 sub build_upstream_schema {
@@ -207,14 +151,15 @@ sub build_upstream_schema {
   if ($include_async_case) {
     $fields{asyncHello} = {
       type => $GraphQL::Type::Scalar::String->non_null,
-      resolve => sub { Local::ImmediatePromise->resolve('async-world') },
+      resolve => sub { require Promise::XS; Promise::XS::resolved('async-world') },
     };
     $fields{asyncList} = {
       type => $GraphQL::Type::Scalar::String->non_null->list->non_null,
       resolve => sub {
+        require Promise::XS;
         return [
-          Local::ImmediatePromise->resolve('alpha'),
-          Local::ImmediatePromise->resolve('beta'),
+          Promise::XS::resolved('alpha'),
+          Promise::XS::resolved('beta'),
         ];
       },
     };
@@ -310,15 +255,16 @@ sub build_houtou_schema {
     $fields{asyncHello} = {
       type => $GraphQL::Houtou::Type::Scalar::String->non_null,
       resolver_mode => 'native',
-      resolve => sub { Local::ImmediatePromise->resolve('async-world') },
+      resolve => sub { require Promise::XS; Promise::XS::resolved('async-world') },
     };
     $fields{asyncList} = {
       type => $GraphQL::Houtou::Type::Scalar::String->non_null->list->non_null,
       resolver_mode => 'native',
       resolve => sub {
+        require Promise::XS;
         return [
-          Local::ImmediatePromise->resolve('alpha'),
-          Local::ImmediatePromise->resolve('beta'),
+          Promise::XS::resolved('alpha'),
+          Promise::XS::resolved('beta'),
         ];
       },
     };
@@ -363,7 +309,7 @@ my $spec = $cases{$case_name};
 my %targets = map { $_ => 1 } qw(
   upstream_ast
   upstream_string
-  houtou_runtime_cached_perl
+  houtou_runtime_program
   houtou_runtime_native_bundle
 );
 die "Unknown target: $target\n" unless $targets{$target};
@@ -377,7 +323,8 @@ my $houtou_schema = build_houtou_schema($spec->{promise});
 my $query = $spec->{query};
 my $vars = $spec->{vars};
 my $op = $spec->{op};
-my $promise = $spec->{promise} ? promise_code() : undef;
+my $promise = $spec->{promise} ? 1 : 0;
+my $upstream_promise = $spec->{promise} ? upstream_promise_xs_code() : undef;
 my $up_ast = parse($query);
 my $runtime = $houtou_schema->build_runtime;
 my $program = $runtime->compile_program($query);
@@ -391,23 +338,21 @@ my $native_bundle = $native_runtime
 
 my %dispatch = (
   upstream_ast => sub {
-    return maybe_get(execute($up_schema, $up_ast, undef, undef, $vars, $op, undef, $promise));
+    return maybe_get_promise_xs(execute($up_schema, $up_ast, undef, undef, $vars, $op, undef, $upstream_promise));
   },
   upstream_string => sub {
-    return maybe_get(execute($up_schema, $query, undef, undef, $vars, $op, undef, $promise));
+    return maybe_get_promise_xs(execute($up_schema, $query, undef, undef, $vars, $op, undef, $upstream_promise));
   },
-  houtou_runtime_cached_perl => sub {
-    return maybe_get(
+  houtou_runtime_program => sub {
+    return maybe_get_promise_xs(
       $runtime->execute_program(
         $program,
-        engine => 'perl',
         (defined($vars) ? (variables => $vars) : ()),
-        ($promise ? (promise_code => $promise) : ()),
       )
     );
   },
   houtou_runtime_native_bundle => sub {
-    return maybe_get($native_bundle->execute);
+    return maybe_get_promise_xs($native_bundle->execute);
   },
 );
 

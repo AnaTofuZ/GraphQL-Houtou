@@ -25,28 +25,14 @@ use_ok $_ for qw(
     GraphQL::Houtou::Type::Enum
     GraphQL::Houtou::Type::List
     GraphQL::Houtou::Type::NonNull
-    GraphQL::Houtou::Type::Library
     GraphQL::Houtou::Type::Scalar
-    GraphQL::Houtou::Promise::Adapter
+    GraphQL::Houtou::Promise::PromiseXS
     GraphQL::Houtou::Validation
     GraphQL::Houtou::Runtime::OperationCompiler
     GraphQL::Houtou::Runtime::SchemaGraph
     GraphQL::Houtou::Runtime::SchemaBlock
-    GraphQL::Houtou::Runtime::Slot
-    GraphQL::Houtou::Runtime::Outcome
-    GraphQL::Houtou::Runtime::Writer
-    GraphQL::Houtou::Runtime::LazyInfo
-    GraphQL::Houtou::Runtime::PathFrame
-    GraphQL::Houtou::Runtime::ErrorRecord
-    GraphQL::Houtou::Runtime::FieldFrame
-    GraphQL::Houtou::Runtime::BlockFrame
-    GraphQL::Houtou::Runtime::Cursor
     GraphQL::Houtou::Runtime::ExecState
     GraphQL::Houtou::Runtime::VMCompiler
-    GraphQL::Houtou::Runtime::VMDispatch
-    GraphQL::Houtou::Runtime::VMProgram
-    GraphQL::Houtou::Runtime::VMBlock
-    GraphQL::Houtou::Runtime::VMOp
     GraphQL::Houtou::Runtime::NativeRuntime
 );
 

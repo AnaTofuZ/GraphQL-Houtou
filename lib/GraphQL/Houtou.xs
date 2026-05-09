@@ -16,8 +16,6 @@ static SV *gql_runtime_vm_global_empty_errors_sv = NULL;
 static SV *gql_runtime_vm_global_wrap_object_outcome_callback_sv = NULL;
 static SV *gql_runtime_vm_global_wrap_list_outcome_callback_sv = NULL;
 static SV *gql_runtime_vm_global_promise_xs_flatten_all_callback_sv = NULL;
-static SV *gql_runtime_vm_global_promise_xs_await_is_ready_callback_sv = NULL;
-static SV *gql_runtime_vm_global_promise_xs_await_get_callback_sv = NULL;
 
 #define GQL_VM_PROMISE_BACKEND_NONE 0
 #define GQL_VM_PROMISE_BACKEND_PROMISE_XS 1
@@ -71,40 +69,6 @@ gql_runtime_vm_promise_xs_flatten_all_callback_sv(pTHX)
   return gql_runtime_vm_named_coderef_sv(
     aTHX_ "GraphQL::Houtou::XS::VM::promise_xs_flatten_all_callback_xs"
   );
-}
-
-static SV *
-gql_runtime_vm_promise_xs_await_is_ready_callback_sv(pTHX)
-{
-  if (gql_runtime_vm_global_promise_xs_await_is_ready_callback_sv) {
-    return SvREFCNT_inc_simple_NN(gql_runtime_vm_global_promise_xs_await_is_ready_callback_sv);
-  }
-  {
-    SV *sv = gql_runtime_vm_named_coderef_sv(
-      aTHX_ "Promise::XS::Promise::AWAIT_IS_READY"
-    );
-    if (sv && SvOK(sv) && SvROK(sv)) {
-      gql_runtime_vm_global_promise_xs_await_is_ready_callback_sv = SvREFCNT_inc_simple_NN(sv);
-    }
-    return sv;
-  }
-}
-
-static SV *
-gql_runtime_vm_promise_xs_await_get_callback_sv(pTHX)
-{
-  if (gql_runtime_vm_global_promise_xs_await_get_callback_sv) {
-    return SvREFCNT_inc_simple_NN(gql_runtime_vm_global_promise_xs_await_get_callback_sv);
-  }
-  {
-    SV *sv = gql_runtime_vm_named_coderef_sv(
-      aTHX_ "Promise::XS::Promise::AWAIT_GET"
-    );
-    if (sv && SvOK(sv) && SvROK(sv)) {
-      gql_runtime_vm_global_promise_xs_await_get_callback_sv = SvREFCNT_inc_simple_NN(sv);
-    }
-    return sv;
-  }
 }
 
 static HV *
@@ -220,9 +184,6 @@ static SV *gql_runtime_vm_new_finalize_callback_sv(pTHX_ gql_runtime_vm_pending_
 static SV *gql_runtime_vm_new_materialize_response_callback_sv(pTHX_ SV *state_sv);
 static SV *gql_runtime_vm_call_then_promise_xs_sv(pTHX_ SV *promise_sv, SV *callback_sv, SV *error_callback_sv, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_all_promise_xs_sv(pTHX_ AV *values_av, gql_runtime_vm_path_frame_t *path_frame);
-static int gql_runtime_vm_promise_xs_is_ready_now(pTHX_ SV *promise_sv, int *ready_out);
-static int gql_runtime_vm_promise_xs_try_get_sync_values_av(pTHX_ SV *promise_sv, AV **values_av_out);
-static SV *gql_runtime_vm_call_callback_values_av_sv(pTHX_ SV *callback_sv, AV *values_av, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_callback_scalar_sv(pTHX_ SV *callback_sv, SV *arg_sv, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_then_promise_for_state_sv(pTHX_ const gql_runtime_vm_exec_state_handle_t *s, SV *promise_sv, SV *callback_sv, SV *error_callback_sv, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_all_promise_for_state_sv(pTHX_ const gql_runtime_vm_exec_state_handle_t *s, AV *values_av, gql_runtime_vm_path_frame_t *path_frame);
@@ -1074,178 +1035,6 @@ gql_runtime_vm_is_promise_value_for_state_sv(
   return 0;
 }
 
-static int
-gql_runtime_vm_promise_xs_is_ready_now(pTHX_ SV *promise_sv, int *ready_out)
-{
-#if !PERL_VERSION_GE(5, 16, 0)
-  PERL_UNUSED_CONTEXT;
-  PERL_UNUSED_ARG(promise_sv);
-  if (ready_out) {
-    *ready_out = 0;
-  }
-  /* Promise::XS direct await helpers are a pure optimization. On old perls,
-   * fall back to the ordinary then(...) path instead of risking callback /
-   * await lifetime issues in the fast shortcut. */
-  return 0;
-#else
-  dSP;
-  SV *callback_sv = gql_runtime_vm_promise_xs_await_is_ready_callback_sv(aTHX);
-  int have_ready = 0;
-
-  if (ready_out) {
-    *ready_out = 0;
-  }
-  if (!callback_sv || !SvOK(callback_sv)) {
-    SvREFCNT_dec(callback_sv);
-    return 0;
-  }
-
-  ENTER;
-  SAVETMPS;
-  PUSHMARK(SP);
-  XPUSHs(promise_sv ? promise_sv : &PL_sv_undef);
-  PUTBACK;
-  call_sv(callback_sv, G_SCALAR | G_EVAL);
-  SPAGAIN;
-  if (!SvTRUE(ERRSV) && SP > PL_stack_base) {
-    if (ready_out) {
-      *ready_out = SvTRUE(POPs) ? 1 : 0;
-    } else {
-      (void)POPs;
-    }
-    have_ready = 1;
-  } else if (SP > PL_stack_base) {
-    (void)POPs;
-  }
-  if (SvTRUE(ERRSV)) {
-    sv_setsv(ERRSV, &PL_sv_undef);
-  }
-  PUTBACK;
-  FREETMPS;
-  LEAVE;
-  SvREFCNT_dec(callback_sv);
-
-  return have_ready;
-#endif
-}
-
-static int
-gql_runtime_vm_promise_xs_try_get_sync_values_av(pTHX_ SV *promise_sv, AV **values_av_out)
-{
-#if !PERL_VERSION_GE(5, 16, 0)
-  PERL_UNUSED_CONTEXT;
-  PERL_UNUSED_ARG(promise_sv);
-  if (values_av_out) {
-    *values_av_out = NULL;
-  }
-  return 0;
-#else
-  dSP;
-  SV *callback_sv = gql_runtime_vm_promise_xs_await_get_callback_sv(aTHX);
-  int ok = 0;
-  AV *values_av = NULL;
-  I32 count = 0;
-  I32 i;
-
-  if (values_av_out) {
-    *values_av_out = NULL;
-  }
-  if (!callback_sv || !SvOK(callback_sv)) {
-    SvREFCNT_dec(callback_sv);
-    return 0;
-  }
-
-  ENTER;
-  SAVETMPS;
-  PUSHMARK(SP);
-  XPUSHs(promise_sv ? promise_sv : &PL_sv_undef);
-  PUTBACK;
-  count = call_sv(callback_sv, G_ARRAY | G_EVAL);
-  SPAGAIN;
-  if (!SvTRUE(ERRSV)) {
-    values_av = newAV();
-    if (count > 0) {
-      av_extend(values_av, count - 1);
-    }
-    for (i = count - 1; i >= 0; i--) {
-      SV *value = POPs;
-      av_store(values_av, i, newSVsv(value ? value : &PL_sv_undef));
-    }
-    if (values_av_out) {
-      *values_av_out = values_av;
-      values_av = NULL;
-    }
-    ok = 1;
-  } else {
-    while (SP > PL_stack_base) {
-      (void)POPs;
-    }
-  }
-  while (SP > PL_stack_base) {
-    (void)POPs;
-  }
-  if (SvTRUE(ERRSV)) {
-    sv_setsv(ERRSV, &PL_sv_undef);
-  }
-  PUTBACK;
-  FREETMPS;
-  LEAVE;
-  SvREFCNT_dec(callback_sv);
-  if (values_av) {
-    SvREFCNT_dec((SV *)values_av);
-  }
-
-  return ok;
-#endif
-}
-
-static SV *
-gql_runtime_vm_call_callback_values_av_sv(
-  pTHX_
-  SV *callback_sv,
-  AV *values_av,
-  gql_runtime_vm_path_frame_t *path_frame
-)
-{
-  dSP;
-  SV *ret = NULL;
-  SSize_t i;
-
-  if (!callback_sv || !SvOK(callback_sv)) {
-    return newSVsv(&PL_sv_undef);
-  }
-
-  ENTER;
-  SAVETMPS;
-  PUSHMARK(SP);
-  for (i = 0; values_av && i <= av_len(values_av); i++) {
-    SV **svp = av_fetch(values_av, i, 0);
-    XPUSHs((svp && *svp) ? *svp : &PL_sv_undef);
-  }
-  PUTBACK;
-  call_sv(callback_sv, G_SCALAR | G_EVAL);
-  SPAGAIN;
-  if (!SvTRUE(ERRSV) && SP > PL_stack_base) {
-    SV *stack_ret = POPs;
-    ret = stack_ret ? newSVsv(stack_ret) : newSVsv(&PL_sv_undef);
-  } else if (SP > PL_stack_base) {
-    (void)POPs;
-  }
-  if (SvTRUE(ERRSV)) {
-    ret = gql_runtime_vm_new_error_outcome_for_path_sv(
-      aTHX_
-      ERRSV,
-      path_frame
-    );
-    sv_setsv(ERRSV, &PL_sv_undef);
-  }
-  PUTBACK;
-  FREETMPS;
-  LEAVE;
-
-  return ret ? ret : newSVsv(&PL_sv_undef);
-}
-
 static SV *
 gql_runtime_vm_call_callback_scalar_sv(
   pTHX_
@@ -1574,7 +1363,6 @@ gql_runtime_vm_call_then_promise_xs_sv(
   dSP;
   SV *ret = NULL;
   SV *stack_ret = NULL;
-  int is_ready = 0;
 
   if (!promise_sv || !SvOK(promise_sv) || !gql_runtime_vm_is_promise_xs_value_sv(promise_sv)) {
     return gql_runtime_vm_call_callback_scalar_sv(
@@ -1583,27 +1371,6 @@ gql_runtime_vm_call_then_promise_xs_sv(
       promise_sv ? promise_sv : &PL_sv_undef,
       path_frame
     );
-  }
-
-  if (
-    callback_sv &&
-    SvOK(callback_sv) &&
-    gql_runtime_vm_promise_xs_is_ready_now(aTHX_ promise_sv, &is_ready) &&
-    is_ready
-  ) {
-    AV *values_av = NULL;
-    if (gql_runtime_vm_promise_xs_try_get_sync_values_av(aTHX_ promise_sv, &values_av)) {
-      ret = gql_runtime_vm_call_callback_values_av_sv(
-        aTHX_
-        callback_sv,
-        values_av,
-        path_frame
-      );
-      if (values_av) {
-        SvREFCNT_dec((SV *)values_av);
-      }
-      return ret ? ret : newSVsv(&PL_sv_undef);
-    }
   }
 
   ENTER;

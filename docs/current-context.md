@@ -855,3 +855,10 @@ perl -Ilib t/19_vm_execute.t
   - 原因の見立て:
     - Promise::XS direct await helper 自体、または old perl の callback / await lifetime 周辺が怪しい
     - shortcut は最適化であって必須ではないので、old perl では安全側に倒した
+
+- Promise::XS undocumented await shortcut removal
+  - clean Docker で `e7ab702` を Perl `5.16`, `5.18`, `5.20`, `5.22`, `5.24`, `5.26`, `5.30`
+    まで検証したところ、`t/16_runtime_promise.t` の終了時 SEGV は old perl 限定ではなかった
+  - `Promise::XS::Promise::AWAIT_IS_READY` / `AWAIT_GET` は POD や export surface に載っておらず、
+    stable な public API とみなせないため mainline から撤去した
+  - Promise::XS fast path は documented な `then` / `all` と promise type 判定だけに戻す

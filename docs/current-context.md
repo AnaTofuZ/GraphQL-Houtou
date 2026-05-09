@@ -862,3 +862,49 @@ perl -Ilib t/19_vm_execute.t
   - `Promise::XS::Promise::AWAIT_IS_READY` / `AWAIT_GET` は POD や export surface に載っておらず、
     stable な public API とみなせないため mainline から撤去した
   - Promise::XS fast path は documented な `then` / `all` と promise type 判定だけに戻す
+
+- `optimize-async-xsub-entry` branch follow-up
+  - public async mainline の入口を XSUB 化した `9f68eeb` の上で、leaf/generic async completion の callback churn を削減した
+  - `GQL_VM_COMPLETE_GENERIC` で resolver が promise を返したとき、
+    per-field `complete_callback` を作らず shared identity callback を使い、
+    block finalize 時に pending merge で native object へ書き戻す
+  - pending payload kind に `GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV` を追加し、
+    `Outcome` handle を経由しない generic scalar completion を block 単位で処理できるようにした
+  - Promise callback 用 identity XSUB は `PPCODE` 委譲をやめて通常の `CODE/OUTPUT` で返し、
+    Promise::XS に返す fulfilled value は `SvREFCNT_inc` ベースの ownership transfer にした
+  - `NativeRuntime->execute_program(...)` の auto path は Promise::XS async mainline へ直接入るまま維持しつつ、
+    `G_EVAL` helper で stale `$@` を持ち込まないように整理した
+  - `GraphQL::Houtou::Native::execute_native_program_auto(...)` wrapper では
+    `uninitialized` warning を局所抑制し、benchmark と promise test の warning flood を止めた
+  - `./Build test` 通過
+
+- latest median (after leaf/generic async callback reduction)
+  - sync:
+    - `nested_variable_object`
+      - `houtou_runtime_program`: `144777/s`
+      - `houtou_runtime_native_bundle`: `571946/s`
+    - `list_of_objects`
+      - `houtou_runtime_program`: `202885/s`
+      - `houtou_runtime_native_bundle`: `502626/s`
+    - `abstract_with_fragment`
+      - `houtou_runtime_program`: `194682/s`
+      - `houtou_runtime_native_bundle`: `563581/s`
+  - async (`--include-async --promise-backend promise_xs`):
+    - `async_scalar`
+      - `houtou_runtime_program`: `166134/s`
+    - `async_list`
+      - `houtou_runtime_program`: `123675/s`
+    - `async_object`
+      - `houtou_runtime_program`: `127999/s`
+    - `async_abstract`
+      - `houtou_runtime_program`: `110277/s`
+
+- 解釈:
+  - async mainline は `9f68eeb` 時点からさらに
+    - `async_scalar`: 約 `+5.3%`
+    - `async_list`: 約 `-0.9%`
+    - `async_object`: 約 `+0.9%`
+    - `async_abstract`: 約 `+0.5%`
+    と、leaf-heavy case を中心に改善した
+  - sync `runtime_program` は query ごとに増減があるが、public mainline が `100k/s` を大きく超える水準は維持している
+  - specialized `native_bundle` はほぼ横ばいで、今回の batch の主効果は async/public path 側にある

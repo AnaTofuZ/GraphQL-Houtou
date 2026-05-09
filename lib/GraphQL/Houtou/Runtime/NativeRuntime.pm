@@ -203,6 +203,12 @@ sub execute_program {
     );
     return $self->execute_compact_program($native_program, %opts, variables => $prepared_variables);
   }
+  if (!exists $opts{root_value} && !exists $opts{context} && !exists $opts{variables}) {
+    return GraphQL::Houtou::Native::execute_native_program_auto(
+      $self->_native_runtime_handle,
+      $native_program,
+    );
+  }
   return GraphQL::Houtou::Native::execute_native_program_auto(
     $self->_native_runtime_handle,
     $native_program,

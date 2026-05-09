@@ -362,6 +362,7 @@ struct gql_runtime_vm_block_frame_t {
 enum {
   GQL_VM_PENDING_PROMISE_SV = 1,
   GQL_VM_PENDING_OUTCOME_PTR = 2,
+  GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV = 3,
 };
 
 struct gql_runtime_vm_pending_entry_t {
@@ -1982,6 +1983,11 @@ gql_runtime_vm_block_frame_push_pending_pvn(
 )
 {
   gql_runtime_vm_pending_entry_t *entry = NULL;
+  U8 payload_kind = GQL_VM_PENDING_PROMISE_SV;
+
+  if (outcome && sv_derived_from(outcome, "GraphQL::Houtou::Runtime::Outcome")) {
+    payload_kind = GQL_VM_PENDING_OUTCOME_PTR;
+  }
 
   if (!frame || !result_name_pv || result_name_len == 0 || !outcome) {
     return;
@@ -1995,12 +2001,47 @@ gql_runtime_vm_block_frame_push_pending_pvn(
   entry = &frame->pending_entries[frame->pending_count];
   entry->result_name_pv = savepvn(result_name_pv, result_name_len);
   entry->result_name_len = result_name_len;
-  if (sv_derived_from(outcome, "GraphQL::Houtou::Runtime::Outcome")) {
+  if (payload_kind == GQL_VM_PENDING_OUTCOME_PTR) {
     entry->payload_kind = GQL_VM_PENDING_OUTCOME_PTR;
     entry->payload.outcome_ptr = gql_runtime_vm_expect_outcome(aTHX_ outcome);
     gql_runtime_vm_outcome_incref(entry->payload.outcome_ptr);
   } else {
-    entry->payload_kind = GQL_VM_PENDING_PROMISE_SV;
+    entry->payload_kind = payload_kind;
+    entry->payload.promise_sv = newSVsv(outcome);
+  }
+  frame->pending_count++;
+}
+
+static void
+gql_runtime_vm_block_frame_push_pending_pvn_with_kind(
+  pTHX_
+  gql_runtime_vm_block_frame_t *frame,
+  const char *result_name_pv,
+  STRLEN result_name_len,
+  SV *outcome,
+  U8 payload_kind
+)
+{
+  gql_runtime_vm_pending_entry_t *entry = NULL;
+
+  if (!frame || !result_name_pv || result_name_len == 0 || !outcome) {
+    return;
+  }
+
+  if (frame->pending_count == frame->pending_capacity) {
+    frame->pending_capacity = frame->pending_capacity ? frame->pending_capacity * 2 : 4;
+    Renew(frame->pending_entries, frame->pending_capacity, gql_runtime_vm_pending_entry_t);
+  }
+
+  entry = &frame->pending_entries[frame->pending_count];
+  entry->result_name_pv = savepvn(result_name_pv, result_name_len);
+  entry->result_name_len = result_name_len;
+  if (payload_kind == GQL_VM_PENDING_OUTCOME_PTR) {
+    entry->payload_kind = GQL_VM_PENDING_OUTCOME_PTR;
+    entry->payload.outcome_ptr = gql_runtime_vm_expect_outcome(aTHX_ outcome);
+    gql_runtime_vm_outcome_incref(entry->payload.outcome_ptr);
+  } else {
+    entry->payload_kind = payload_kind;
     entry->payload.promise_sv = newSVsv(outcome);
   }
   frame->pending_count++;
@@ -2034,7 +2075,8 @@ gql_runtime_vm_block_frame_clear_pending(pTHX_ gql_runtime_vm_block_frame_t *fra
     Safefree(frame->pending_entries[i].result_name_pv);
     if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_OUTCOME_PTR) {
       gql_runtime_vm_outcome_decref(aTHX_ frame->pending_entries[i].payload.outcome_ptr);
-    } else if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_SV) {
+    } else if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_SV
+        || frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV) {
       SvREFCNT_dec(frame->pending_entries[i].payload.promise_sv);
     }
   }
@@ -2428,6 +2470,26 @@ gql_runtime_vm_consume_outcome_native_object(
   }
 }
 
+static void
+gql_runtime_vm_consume_value_native_object(
+  pTHX_
+  gql_runtime_vm_native_value_t *data_value,
+  const char *result_name_pv,
+  SV *value_sv
+)
+{
+  if (!data_value || data_value->kind_code != GQL_VM_NATIVE_VALUE_OBJECT || !result_name_pv) {
+    return;
+  }
+
+  gql_runtime_vm_native_object_store(
+    aTHX_
+    data_value,
+    result_name_pv,
+    gql_runtime_vm_native_value_from_sv(aTHX_ value_sv ? value_sv : &PL_sv_undef)
+  );
+}
+
 static SV *
 gql_runtime_vm_writer_materialize_errors_sv(pTHX_ const gql_runtime_vm_writer_t *writer)
 {
@@ -2486,6 +2548,7 @@ gql_runtime_vm_call_cb_scalar(pTHX_ SV *cb, SV *value, SV *context, SV *info, SV
 
   ENTER;
   SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
   PUSHMARK(SP);
   XPUSHs(sv_2mortal(newSVsv(value ? value : &PL_sv_undef)));
   XPUSHs(sv_2mortal(newSVsv(context ? context : &PL_sv_undef)));
@@ -4553,6 +4616,7 @@ gql_runtime_vm_lookup_input_type_by_typedef_sv(pTHX_ SV *runtime_schema, SV *typ
 
   ENTER;
   SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
   PUSHMARK(SP);
   XPUSHs(typedef_sv);
   XPUSHs(name2type_sv);
@@ -4591,6 +4655,7 @@ gql_runtime_vm_coerce_input_value_sv(pTHX_ SV *type_sv, SV *value_sv)
 
   ENTER;
   SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
   PUSHMARK(SP);
   XPUSHs(type_sv);
   XPUSHs(value_sv);

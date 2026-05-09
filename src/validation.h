@@ -93,6 +93,7 @@ gql_validation_lookup_type_sv(pTHX_ SV *schema, SV *type_ref) {
 
   ENTER;
   SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
   PUSHMARK(SP);
   XPUSHs(sv_2mortal(newSVsv(type_ref)));
   XPUSHs(sv_2mortal(name2type_sv));

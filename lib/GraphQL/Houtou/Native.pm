@@ -76,6 +76,7 @@ sub execute_native_program_handle {
 }
 
 sub execute_native_program_auto {
+  no warnings 'uninitialized';
   return GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(@_);
 }
 

@@ -23,7 +23,7 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 
 - `GraphQL::Houtou`
 - `GraphQL::Houtou::Schema`
-- `GraphQL::Houtou::Native` (low-level native handles)
+- `GraphQL::Houtou::XS::VM` (bootstrapped low-level native handles)
 - parser / validation facade
 
 役割:
@@ -31,9 +31,9 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 - XS bundle bootstrap の入口を 1 箇所にまとめる
 - schema compile / operation compile / VM execute の公開 API を提供する
 - `GraphQL::Houtou::Runtime` façade は削除済み
-- public な low-level native handle 操作は `GraphQL::Houtou::Native` に集約する
+- public な low-level native handle 操作は `GraphQL::Houtou` が XS を bootstrap した後の
+  `GraphQL::Houtou::XS::VM` に直接出す
 - internal 専用の native bundle stitching は `Runtime::NativeRuntime` から XS を直接呼ぶ
-- `GraphQL::Houtou::Native` は public low-level facade であり、internal 専用 API の受け皿ではない
 - `GraphQL::Houtou::Validation` は `validate` だけの public facade
 - parser public surface は最小限で、互換層は mainline に含めない
 

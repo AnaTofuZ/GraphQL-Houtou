@@ -128,7 +128,7 @@ Pure Perl の VM 実装は
 
 - `GraphQL::Houtou`
 - `GraphQL::Houtou::Schema`
-- `GraphQL::Houtou::Native`
+- `GraphQL::Houtou::XS::VM`
 
 責務:
 
@@ -210,7 +210,7 @@ Pure Perl の VM 実装は
 主なモジュール / ファイル:
 
 - `Runtime::NativeRuntime`
-- `GraphQL::Houtou::Native`
+- `GraphQL::Houtou::XS::VM`
 - `src/vm_runtime.h`
 
 責務:
@@ -281,8 +281,8 @@ native mainline では 3 の後にさらに
 - `GraphQL::Houtou::Schema`
 - `GraphQL::Houtou::Validation`
   - `validate` のみ
-- `GraphQL::Houtou::Native`
-  - low-level native handle facade
+- `GraphQL::Houtou::XS::VM`
+  - bootstrapped low-level native handle entrypoints
 
 ## parser の位置づけ
 

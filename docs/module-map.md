@@ -16,8 +16,8 @@
 - `GraphQL::Houtou::Validation`
   - validation の最小 facade
   - 公開面は `validate` のみ
-- `GraphQL::Houtou::Native`
-  - native bundle / native runtime の低レベル facade
+- `GraphQL::Houtou::XS::VM`
+  - bootstrapped native bundle / native runtime の低レベル entrypoints
 
 判断:
 

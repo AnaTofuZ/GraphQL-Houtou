@@ -4,20 +4,16 @@ use Test::More;
 use File::Temp qw(tempfile);
 
 use lib 'lib';
-use GraphQL::Houtou::Native qw(
-  load_native_bundle
-  load_native_program
-  load_native_runtime
-  native_bundle_summary
-  native_codes
-  native_program_summary
-  native_runtime_summary
-);
+use GraphQL::Houtou ();
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Scalar qw($String);
+
+BEGIN {
+  GraphQL::Houtou::_bootstrap_xs();
+}
 
 my $Node = GraphQL::Houtou::Type::Interface->new(
   name => 'VmNode',
@@ -90,7 +86,7 @@ subtest 'VM program descriptor can round-trip through schema helpers' => sub {
   my $descriptor = $schema->compile_program_descriptor('{ viewer { id } }');
   my $vm = $schema->inflate_program($descriptor);
   isa_ok $vm, 'GraphQL::Houtou::Runtime::NativeProgram';
-  my $summary = native_program_summary($vm);
+  my $summary = GraphQL::Houtou::XS::VM::native_program_summary_xs($vm);
   is $summary->{root_block_index}, $descriptor->{root_block_index},
     'inflated native program keeps root block index';
   is $summary->{block_count}, scalar(@{ $descriptor->{blocks_compact} || [] }),
@@ -115,10 +111,10 @@ subtest 'schema can emit XS-friendly native VM descriptor' => sub {
 
 subtest 'native VM program descriptor can inflate into a native program handle' => sub {
   my $descriptor = $schema->compile_native_program_descriptor('{ viewer { id } node { id } }');
-  my $handle = load_native_program($descriptor);
+  my $handle = GraphQL::Houtou::XS::VM::load_native_program_xs($descriptor);
 
   isa_ok $handle, 'GraphQL::Houtou::Runtime::NativeProgram';
-  my $summary = native_program_summary($handle);
+  my $summary = GraphQL::Houtou::XS::VM::native_program_summary_xs($handle);
   is $summary->{block_count}, scalar(@{ $descriptor->{blocks_compact} || [] }),
     'native program handle sees block count';
   is $summary->{root_block_index}, $descriptor->{root_block_index},
@@ -127,7 +123,7 @@ subtest 'native VM program descriptor can inflate into a native program handle' 
 
 subtest 'schema can emit bundled native runtime and VM descriptor' => sub {
   my $bundle = $schema->compile_native_bundle_descriptor('{ viewer { id } node { id } }');
-  my $codes = native_codes();
+  my $codes = GraphQL::Houtou::XS::VM::native_codes_xs();
   ok ref($bundle->{runtime}{slot_catalog_compact}) eq 'ARRAY' && @{$bundle->{runtime}{slot_catalog_compact}} >= 2,
     'native bundle keeps runtime slot catalog';
   ok defined $bundle->{runtime}{slot_catalog_compact}[0][5],
@@ -170,12 +166,12 @@ subtest 'native VM bundle can inflate back into a VM program' => sub {
 
 subtest 'XS can inflate native VM bundle descriptor into a native handle' => sub {
   my $bundle = $schema->compile_native_bundle_descriptor('{ viewer { id } node { id } }');
-  my $codes = native_codes();
-  my $handle = load_native_bundle($bundle);
+  my $codes = GraphQL::Houtou::XS::VM::native_codes_xs();
+  my $handle = GraphQL::Houtou::XS::VM::load_native_bundle_xs($bundle);
 
   isa_ok $handle, 'GraphQL::Houtou::Runtime::NativeBundle';
 
-  my $summary = native_bundle_summary($handle);
+  my $summary = GraphQL::Houtou::XS::VM::native_bundle_summary_xs($handle);
   is $summary->{runtime_slot_count}, scalar(@{ $bundle->{runtime}{slot_catalog_compact} || [] }),
     'XS native handle sees runtime slot count';
   is $summary->{block_count}, scalar(@{ $bundle->{program}{blocks_compact} || [] }),
@@ -192,11 +188,11 @@ subtest 'XS can inflate native VM bundle descriptor into a native handle' => sub
 
 subtest 'XS can inflate runtime schema into a native runtime handle' => sub {
   my $runtime = $schema->build_runtime;
-  my $handle = load_native_runtime($runtime->to_native_exec_struct);
+  my $handle = GraphQL::Houtou::XS::VM::load_native_runtime_xs($runtime->to_native_exec_struct);
 
   isa_ok $handle, 'GraphQL::Houtou::Runtime::NativeRuntime';
 
-  my $summary = native_runtime_summary($handle);
+  my $summary = GraphQL::Houtou::XS::VM::native_runtime_summary_xs($handle);
   is $summary->{runtime_slot_count}, scalar(@{ $runtime->slot_catalog || [] }),
     'native runtime handle sees slot catalog count';
   ok $summary->{has_slot_type_objects}, 'native runtime handle keeps concrete type objects';

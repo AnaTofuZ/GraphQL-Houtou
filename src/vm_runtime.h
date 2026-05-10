@@ -317,6 +317,10 @@ typedef struct {
   SV *root_value;
   U8 promise_backend_code;
   SV *empty_args;
+  IV async_ready_frame_count;
+  IV async_ready_frame_capacity;
+  gql_runtime_vm_block_frame_t **async_ready_frames;
+  U8 async_scheduler_draining;
 } gql_runtime_vm_exec_state_handle_t;
 
 struct gql_runtime_vm_cursor_t {
@@ -333,6 +337,7 @@ struct gql_runtime_vm_field_frame_t {
   gql_runtime_vm_path_frame_t *path_frame;
   SV *resolved_value;
   gql_runtime_vm_outcome_t *outcome;
+  U8 source_is_runtime_owned;
 };
 
 struct gql_runtime_vm_path_frame {
@@ -356,7 +361,12 @@ struct gql_runtime_vm_block_frame_t {
   gql_runtime_vm_native_value_t *values_value;
   IV pending_count;
   IV pending_capacity;
+  IV pending_unresolved;
   gql_runtime_vm_pending_entry_t *pending_entries;
+  SV *deferred_sv;
+  SV *promise_sv;
+  U8 queued;
+  U8 deferred_resolves_response;
 };
 
 enum {
@@ -364,6 +374,13 @@ enum {
   GQL_VM_PENDING_OUTCOME_PTR = 2,
   GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV = 3,
   GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV = 4,
+};
+
+enum {
+  GQL_VM_PENDING_STATE_WAITING_UNARMED = 1,
+  GQL_VM_PENDING_STATE_WAITING_ARMED = 2,
+  GQL_VM_PENDING_STATE_READY_SV = 3,
+  GQL_VM_PENDING_STATE_READY_OUTCOME = 4
 };
 
 struct gql_runtime_vm_pending_entry_t {
@@ -375,6 +392,7 @@ struct gql_runtime_vm_pending_entry_t {
   IV op_index;
   U8 result_name_pv_borrowed;
   U8 payload_kind;
+  U8 state_code;
   union {
     SV *promise_sv;
     gql_runtime_vm_outcome_t *outcome_ptr;
@@ -2063,11 +2081,20 @@ gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
   entry->result_name_pv_borrowed = result_name_pv_borrowed ? 1 : 0;
   if (payload_kind == GQL_VM_PENDING_OUTCOME_PTR) {
     entry->payload_kind = GQL_VM_PENDING_OUTCOME_PTR;
+    entry->state_code = GQL_VM_PENDING_STATE_READY_OUTCOME;
     entry->payload.outcome_ptr = gql_runtime_vm_expect_outcome(aTHX_ outcome);
     gql_runtime_vm_outcome_incref(entry->payload.outcome_ptr);
   } else {
     entry->payload_kind = payload_kind;
     entry->payload.promise_sv = newSVsv(outcome);
+    if (outcome
+        && SvOK(outcome)
+        && SvROK(outcome)
+        && sv_derived_from(outcome, "Promise::XS::Promise")) {
+      entry->state_code = GQL_VM_PENDING_STATE_WAITING_UNARMED;
+    } else {
+      entry->state_code = GQL_VM_PENDING_STATE_READY_SV;
+    }
   }
   frame->pending_count++;
 }
@@ -2143,6 +2170,7 @@ gql_runtime_vm_block_frame_clear_pending(pTHX_ gql_runtime_vm_block_frame_t *fra
   frame->pending_entries = NULL;
   frame->pending_count = 0;
   frame->pending_capacity = 0;
+  frame->pending_unresolved = 0;
 }
 
 static SV *

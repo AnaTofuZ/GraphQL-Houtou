@@ -959,3 +959,52 @@ perl -Ilib t/19_vm_execute.t
   - object/list/abstract でも per-field complete callback を減らせたので、
     leaf-heavy case 以外にも改善が広がった
   - sync `native_bundle` も即時 outcome pending の pre-merge によりわずかに改善した
+
+- `optimize-async-scheduler` branch checkpoint
+  - async block finalize を Promise chain 主導から XS scheduler 主導へ寄せた
+    - root block は `Promise::XS::deferred` を 1 個だけ持ち、
+      ready block queue を drain して resolve する
+    - mainline の `block_frame_finalize_sv(...)` は `Promise::XS::all(...)`
+      を使わず、pending entry の state machine を arm/drain する
+  - `pending_entry` に `state_code` と borrowed result-name ownership を追加し、
+    pending result name の `savepvn/free` を減らした
+  - object/list/abstract を scheduler drain 側へ寄せ、
+    nested completion promise は phase 2 の pending として再投入する形にした
+  - 実装中に見つかった correctness bug を修正
+    - Promise callback の resolved value / outcome を copy する前に元の promise
+      を `SvREFCNT_dec` してしまい、scalar と outcome handle が壊れていた
+    - list item promise は resolved callback が同期実行される前提なので、
+      `unresolved_count` を callback 登録前に全件数えておかないと early resolve
+      して 2 件目以降が落ちる
+  - `./Build test` 通過
+- latest median (after async scheduler / root deferred / no-mainline-all)
+  - sync:
+    - `nested_variable_object`
+      - `houtou_runtime_program`: `151775/s`
+      - `houtou_runtime_native_bundle`: `589278/s`
+    - `list_of_objects`
+      - `houtou_runtime_program`: `194794/s`
+      - `houtou_runtime_native_bundle`: `510630/s`
+    - `abstract_with_fragment`
+      - `houtou_runtime_program`: `188449/s`
+      - `houtou_runtime_native_bundle`: `576014/s`
+  - async (`--include-async --promise-backend promise_xs`)
+    - `async_scalar`
+      - `houtou_runtime_program`: `180705/s`
+    - `async_list`
+      - `houtou_runtime_program`: `125754/s`
+    - `async_object`
+      - `houtou_runtime_program`: `140894/s`
+    - `async_abstract`
+      - `houtou_runtime_program`: `118153/s`
+- 解釈:
+  - async mainline は前 checkpoint 比で
+    - `async_scalar`: 約 `+5.9%`
+    - `async_list`: 約 `-1.8%`
+    - `async_object`: 約 `+6.1%`
+    - `async_abstract`: 約 `+6.1%`
+    となり、list 以外の case で scheduler 化の効果が出た
+  - list は `Promise::XS::all(...)` を外した代わりに list-specific scheduler の
+    固定コストが残っており、次の調整点になった
+  - sync `runtime_program` / `native_bundle` はほぼ横ばいで、今回の batch の
+    主効果は async path にある

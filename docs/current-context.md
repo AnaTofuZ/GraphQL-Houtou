@@ -1055,3 +1055,40 @@ perl -Ilib t/19_vm_execute.t
     次の主戦場は nested block / list item の native container 化と clone 削減になった
   - sync `runtime_program` / `native_bundle` は小幅なぶれの範囲で、
     今回の batch の主目的は async scheduler の内部 artifact 整理だった
+
+- `optimize-async-scheduler` branch checkpoint (native-first nested object completion)
+  - nested object / abstract child block の immediate 完了で Perl hash へ materialize してから
+    `Outcome` に包み直していた経路を外した
+    - `return_pending_handle = 1` の child block が pending 0 の場合は
+      owned native object value から直接 `Outcome` を返す
+    - object / abstract completion はその `Outcome` をそのまま親へ返す
+  - `gql_runtime_vm_exec_state_complete_async_sv(...)` から
+    - `cursor` の snapshot / restore
+    - `FieldFrame` の alloc / free
+    を外した
+    - native program の `block/op/slot` を直接引いて completion する
+    - completion 専用 path では `FieldFrame` を参照していなかったので削除は意味論に影響しない
+  - `./Build test` 通過
+- latest median (after native-first nested object completion)
+  - async (`--include-async --promise-backend promise_xs`)
+    - `async_scalar`
+      - `houtou_runtime_program`: `175363/s`
+    - `async_list`
+      - `houtou_runtime_program`: `146161/s`
+    - `async_object`
+      - `houtou_runtime_program`: `143479/s`
+    - `async_abstract`
+      - `houtou_runtime_program`: `122530/s`
+- 解釈:
+  - 直前 checkpoint 比で async は
+    - `async_scalar`: 約 `-0.9%`
+    - `async_list`: 約 `+1.9%`
+    - `async_object`: 約 `+6.1%`
+    - `async_abstract`: 約 `+6.7%`
+    となり、狙いどおり object / abstract completion に効いた
+  - list は internal Promise 撤去の checkpoint で大きく改善し、今回の batch では小幅上積み
+  - scalar は誤差の範囲で、残る主課題は
+    - Promise callback 後の scalarish snapshot
+    - list item の native container 化の徹底
+    - nested block / list pending のさらに direct な merge
+    に絞られてきた

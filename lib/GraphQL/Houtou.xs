@@ -194,6 +194,7 @@ static SV *gql_runtime_vm_exec_state_execute_block_async_sv(pTHX_ SV *state_sv, 
 static SV *gql_runtime_vm_exec_state_execute_block_async_path_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, gql_runtime_vm_path_frame_t *base_path_ptr, U8 return_pending_handle);
 static SV *gql_runtime_vm_exec_state_resolve_current_value_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *source_sv, gql_runtime_vm_path_frame_t *path_frame, SV **error_out);
 static SV *gql_runtime_vm_exec_state_complete_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame, IV block_index, IV slot_index, IV op_index, SV *resolved_sv);
+static SV *gql_runtime_vm_exec_state_complete_current_native_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame, const gql_runtime_vm_native_op_t *op, const gql_runtime_vm_native_slot_t *slot, SV *resolved_sv);
 static SV *gql_runtime_vm_exec_state_execute_current_op_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s);
 static SV *gql_runtime_vm_new_lazy_info_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *path_frame);
 static SV *gql_runtime_vm_new_lazy_info_for_path_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame);
@@ -201,6 +202,8 @@ static SV *gql_runtime_vm_new_outcome_handle_sv(pTHX_ U8 kind_code, SV *value, S
 static SV *gql_runtime_vm_lookup_type_object_by_name_sv(pTHX_ SV *runtime_schema, const char *type_name);
 static SV *gql_runtime_vm_direct_slot_type_object_sv(const gql_runtime_vm_native_runtime_t *runtime, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_state_current_return_type_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *op_sv, SV *slot_sv);
+static SV *gql_runtime_vm_state_return_type_for_slot_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, const gql_runtime_vm_native_slot_t *slot);
+static SV *gql_runtime_vm_exec_state_resolve_runtime_type_for_slot_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, const gql_runtime_vm_native_slot_t *slot, SV *resolved_sv, gql_runtime_vm_path_frame_t *path_frame, SV **error_out);
 static IV gql_runtime_vm_find_abstract_child_block_index(const gql_runtime_vm_native_op_t *op, const char *type_name);
 static const char *gql_runtime_vm_type_name_from_sv(pTHX_ SV *type_sv);
 static SV *gql_runtime_vm_snapshot_scalarish_value_sv(pTHX_ SV *value);
@@ -1219,6 +1222,15 @@ gql_runtime_vm_block_frame_finalize_sv(
     return newSVsv(&PL_sv_undef);
   }
   if (frame->pending_count == 0) {
+    if (return_pending_handle) {
+      SV *ret = gql_runtime_vm_new_outcome_from_owned_native_value_handle_sv(
+        aTHX_
+        GQL_VM_KIND_OBJECT,
+        frame->values_value
+      );
+      frame->values_value = NULL;
+      return ret;
+    }
     return gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
   }
   if (promise_backend_code != GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
@@ -2864,9 +2876,31 @@ gql_runtime_vm_exec_state_resolve_runtime_type_current_sv(
   SV **error_out
 )
 {
-  const gql_runtime_vm_native_runtime_t *runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
   const gql_runtime_vm_native_slot_t *slot = (s && s->cursor) ? gql_runtime_vm_cursor_current_native_slot(s->cursor) : NULL;
-  SV *abstract_type_sv = gql_runtime_vm_state_current_return_type_sv(aTHX_ s, NULL, NULL);
+  return gql_runtime_vm_exec_state_resolve_runtime_type_for_slot_sv(
+    aTHX_
+    state_sv,
+    s,
+    slot,
+    resolved_sv,
+    path_frame,
+    error_out
+  );
+}
+
+static SV *
+gql_runtime_vm_exec_state_resolve_runtime_type_for_slot_sv(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_exec_state_handle_t *s,
+  const gql_runtime_vm_native_slot_t *slot,
+  SV *resolved_sv,
+  gql_runtime_vm_path_frame_t *path_frame,
+  SV **error_out
+)
+{
+  const gql_runtime_vm_native_runtime_t *runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+  SV *abstract_type_sv = gql_runtime_vm_state_return_type_for_slot_sv(aTHX_ s, slot);
   SV *info_sv = NULL;
   HV *schema_hv;
   SV *runtime_cache_sv;
@@ -2905,12 +2939,12 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
   SV *state_sv,
   gql_runtime_vm_exec_state_handle_t *s,
   gql_runtime_vm_path_frame_t *path_frame,
+  const gql_runtime_vm_native_op_t *op,
+  const gql_runtime_vm_native_slot_t *slot,
   SV *resolved_sv
 )
 {
   const gql_runtime_vm_native_runtime_t *runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
-  const gql_runtime_vm_native_op_t *op = (s && s->cursor) ? gql_runtime_vm_cursor_current_native_op(s->cursor) : NULL;
-  const gql_runtime_vm_native_slot_t *slot = (s && s->cursor) ? gql_runtime_vm_cursor_current_native_slot(s->cursor) : NULL;
   IV complete_code = op ? op->complete_code : 0;
 
   slot = gql_runtime_vm_effective_slot(runtime, slot);
@@ -2938,6 +2972,9 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         1
       );
       if (gql_runtime_vm_is_block_frame_value_sv(child_value)) {
+        return child_value;
+      }
+      if (child_value && SvOK(child_value) && sv_derived_from(child_value, "GraphQL::Houtou::Runtime::Outcome")) {
         return child_value;
       }
       if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, child_value)) {
@@ -3037,10 +3074,11 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         return gql_runtime_vm_new_outcome_handle_sv(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, &PL_sv_undef);
       }
 
-      runtime_type_sv = gql_runtime_vm_exec_state_resolve_runtime_type_current_sv(
+      runtime_type_sv = gql_runtime_vm_exec_state_resolve_runtime_type_for_slot_sv(
         aTHX_
         state_sv,
         s,
+        slot,
         resolved_sv,
         path_frame,
         &runtime_error_sv
@@ -3081,6 +3119,9 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
           1
         );
         if (gql_runtime_vm_is_block_frame_value_sv(child_value)) {
+          return child_value;
+        }
+        if (child_value && SvOK(child_value) && sv_derived_from(child_value, "GraphQL::Houtou::Runtime::Outcome")) {
           return child_value;
         }
         if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, child_value)) {
@@ -3126,14 +3167,11 @@ static SV *
 gql_runtime_vm_state_current_return_type_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *op_sv, SV *slot_sv)
 {
   const gql_runtime_vm_native_slot_t *native_slot;
-  const char *type_name;
   SV *type_name_sv;
 
   native_slot = (s && s->cursor) ? gql_runtime_vm_cursor_current_native_slot(s->cursor) : NULL;
-  if (native_slot && native_slot->return_type_name && *native_slot->return_type_name) {
-    type_name_sv = newSVpv(native_slot->return_type_name, 0);
-    type_name_sv = sv_2mortal(type_name_sv);
-    return gql_runtime_vm_state_type_by_name_sv(aTHX_ s, type_name_sv);
+  if (native_slot) {
+    return gql_runtime_vm_state_return_type_for_slot_sv(aTHX_ s, native_slot);
   }
 
   type_name_sv = gql_runtime_vm_op_slot_sv(aTHX_ op_sv, 8);
@@ -3141,6 +3179,25 @@ gql_runtime_vm_state_current_return_type_sv(pTHX_ gql_runtime_vm_exec_state_hand
     return NULL;
   }
 
+  return gql_runtime_vm_state_type_by_name_sv(aTHX_ s, type_name_sv);
+}
+
+static SV *
+gql_runtime_vm_state_return_type_for_slot_sv(
+  pTHX_
+  gql_runtime_vm_exec_state_handle_t *s,
+  const gql_runtime_vm_native_slot_t *slot
+)
+{
+  const gql_runtime_vm_native_runtime_t *runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+  SV *type_name_sv;
+
+  slot = gql_runtime_vm_effective_slot(runtime, slot);
+  if (!slot || !slot->return_type_name || !*slot->return_type_name) {
+    return NULL;
+  }
+
+  type_name_sv = sv_2mortal(newSVpv(slot->return_type_name, 0));
   return gql_runtime_vm_state_type_by_name_sv(aTHX_ s, type_name_sv);
 }
 
@@ -4177,41 +4234,37 @@ gql_runtime_vm_exec_state_complete_async_sv(
   SV *resolved_sv
 )
 {
-  gql_runtime_vm_cursor_t snapshot;
-  gql_runtime_vm_field_frame_t *saved_field_frame = NULL;
-  gql_runtime_vm_field_frame_t *field_frame = NULL;
+  const gql_runtime_vm_native_runtime_t *runtime;
+  const gql_runtime_vm_native_block_t *block;
+  const gql_runtime_vm_native_op_t *op;
+  const gql_runtime_vm_native_slot_t *slot;
   SV *result_sv = NULL;
 
-  Zero(&snapshot, 1, gql_runtime_vm_cursor_t);
-  if (!s || !s->cursor) {
+  if (!s || !s->native_program) {
     return newSVsv(&PL_sv_undef);
   }
-
-  saved_field_frame = s->field_frame;
-  gql_runtime_vm_cursor_snapshot_copy(aTHX_ &snapshot, s->cursor);
-  s->cursor->block_index = block_index;
-  s->cursor->slot_index = slot_index;
-  s->cursor->op_index = op_index;
-
-  field_frame = gql_runtime_vm_new_field_frame_struct(aTHX_ &PL_sv_undef, path_ptr);
-  if (s->field_frame && s->field_frame != saved_field_frame) {
-    gql_runtime_vm_free_field_frame(aTHX_ s->field_frame);
+  runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+  if (block_index < 0 || block_index >= s->native_program->block_count) {
+    return newSVsv(&PL_sv_undef);
   }
-  s->field_frame = field_frame;
+  block = &s->native_program->blocks[block_index];
+  if (op_index < 0 || op_index >= block->op_count) {
+    return newSVsv(&PL_sv_undef);
+  }
+  op = &block->ops[op_index];
+  if (slot_index < 0 || slot_index >= block->slot_count) {
+    return newSVsv(&PL_sv_undef);
+  }
+  slot = gql_runtime_vm_effective_slot(runtime, &block->slots[slot_index]);
 
   result_sv = gql_runtime_vm_exec_state_complete_current_native_async_sv(
     aTHX_ state_sv,
     s,
     path_ptr,
+    op,
+    slot,
     resolved_sv
   );
-
-  gql_runtime_vm_cursor_restore_copy(aTHX_ s->cursor, &snapshot);
-  gql_runtime_vm_cursor_destroy_copy(aTHX_ &snapshot);
-  if (s->field_frame && s->field_frame != saved_field_frame) {
-    gql_runtime_vm_free_field_frame(aTHX_ s->field_frame);
-  }
-  s->field_frame = saved_field_frame;
 
   return result_sv ? result_sv : newSVsv(&PL_sv_undef);
 }

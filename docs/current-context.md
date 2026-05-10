@@ -1008,3 +1008,50 @@ perl -Ilib t/19_vm_execute.t
     固定コストが残っており、次の調整点になった
   - sync `runtime_program` / `native_bundle` はほぼ横ばいで、今回の batch の
     主効果は async path にある
+
+- `optimize-async-scheduler` branch checkpoint (rootless finalize fix / internal list pending)
+  - root async finalize の use-after-free を修正した
+    - root frame は `Promise::XS::resolved(...)` が即時 callback を走らせても、
+      `block_frame_finalize_sv(...)` の途中で promise handle を失わない
+    - rootless child block (`return_pending_handle = 1`) は finalize 時点で drain せず、
+      親 block に接続してから scheduler が処理する
+  - list async path から internal `Promise::XS::deferred` を外した
+    - `GraphQL::Houtou::Runtime::ListPending` handle を追加
+    - list item promise は `ListPending` 内で callback を張り、
+      全 item が揃ったら owner frame を ready queue へ戻す
+    - mainline では top-level response 以外の list 集約用 Promise を作らない
+  - async pending ownership をもう一段整理した
+    - child block / list pending の owner frame を explicit に持たせた
+    - pending result-name は引き続き borrowed pointer で持つ
+  - `./Build test` 通過
+- latest median (after rootless finalize fix / internal list pending)
+  - sync:
+    - `nested_variable_object`
+      - `houtou_runtime_program`: `146688/s`
+      - `houtou_runtime_native_bundle`: `572334/s`
+    - `list_of_objects`
+      - `houtou_runtime_program`: `187570/s`
+      - `houtou_runtime_native_bundle`: `494673/s`
+    - `abstract_with_fragment`
+      - `houtou_runtime_program`: `186163/s`
+      - `houtou_runtime_native_bundle`: `560274/s`
+  - async (`--include-async --promise-backend promise_xs`)
+    - `async_scalar`
+      - `houtou_runtime_program`: `176987/s`
+    - `async_list`
+      - `houtou_runtime_program`: `143479/s`
+    - `async_object`
+      - `houtou_runtime_program`: `135244/s`
+    - `async_abstract`
+      - `houtou_runtime_program`: `114840/s`
+- 解釈:
+  - 直前 checkpoint 比で async は
+    - `async_scalar`: 約 `-2.1%`
+    - `async_list`: 約 `+14.1%`
+    - `async_object`: 約 `-4.0%`
+    - `async_abstract`: 約 `-2.8%`
+    となり、internal list promise の撤去は list-heavy case に明確に効いた
+  - その代わり object / abstract はまだ internal outcome/materialization cost が残り、
+    次の主戦場は nested block / list item の native container 化と clone 削減になった
+  - sync `runtime_program` / `native_bundle` は小幅なぶれの範囲で、
+    今回の batch の主目的は async scheduler の内部 artifact 整理だった

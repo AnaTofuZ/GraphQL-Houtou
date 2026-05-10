@@ -1092,3 +1092,54 @@ perl -Ilib t/19_vm_execute.t
     - list item の native container 化の徹底
     - nested block / list pending のさらに direct な merge
     に絞られてきた
+
+- `optimize-async-scheduler` branch checkpoint (async native resolver ABI + lower-overhead field/list state)
+  - async resolver path が `resolver_mode => native` / `callback_abi_code` を見ずに
+    常に generic ABI (`args + info + return_type`) を組んでいたのを修正した
+    - `gql_runtime_vm_exec_state_resolve_current_value_sv(...)` で
+      `GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE` は sync fast lane と同じ 4-arg ABI を使う
+    - benchmark の async cases はすべて `resolver_mode => native` なので、
+      ここが今回の主因だった
+  - nested block execute の per-op `FieldFrame` を stack frame に置き換えた
+    - async/sync ともに `new/free` を外し、hot loop の heap churn を減らした
+  - list pending の内部集約を `AV` ではなく native list value に変更した
+    - item promise 完了後に Perl `AV` を更新せず、
+      native list value を index 代入で埋める
+    - ready 時はその owned native list から直接 `Outcome` を作って親 frame に consume する
+  - async immediate outcome の hot path で `Outcome` handle を作って直後に unwrap する往復を削減した
+  - `./Build test` 通過
+- latest median (after async native resolver ABI + lower-overhead field/list state)
+  - sync:
+    - `nested_variable_object`
+      - `houtou_runtime_program`: `157284/s`
+      - `houtou_runtime_native_bundle`: `549818/s`
+    - `list_of_objects`
+      - `houtou_runtime_program`: `202239/s`
+      - `houtou_runtime_native_bundle`: `483840/s`
+    - `abstract_with_fragment`
+      - `houtou_runtime_program`: `209024/s`
+      - `houtou_runtime_native_bundle`: `544514/s`
+  - async (`--include-async --promise-backend promise_xs`)
+    - `async_scalar`
+      - `houtou_runtime_program`: `183991/s`
+    - `async_list`
+      - `houtou_runtime_program`: `150377/s`
+    - `async_object`
+      - `houtou_runtime_program`: `143479/s`
+    - `async_abstract`
+      - `houtou_runtime_program`: `124660/s`
+- 解釈:
+  - 直前 checkpoint 比で async は
+    - `async_scalar`: 約 `+4.9%`
+    - `async_list`: 約 `+2.9%`
+    - `async_object`: ほぼ同水準
+    - `async_abstract`: 約 `+1.7%`
+    となり、async mainline は全体として baseline を上回った
+  - いちばん効いたのは async resolver path が native fast ABI を使っていなかった点の修正で、
+    field/list state の軽量化はそれを補助した形
+  - まだ sync `native_bundle` との差は大きく、
+    次の本命は
+    - nested block の internal Promise / Outcome artifact をさらに減らすこと
+    - ownership provenance を持たせて safe な clone を削ること
+    - object / abstract completion の internal result representation を raw/native 寄りにすること
+    になる

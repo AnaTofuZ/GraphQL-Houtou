@@ -339,6 +339,7 @@ struct gql_runtime_vm_field_frame_t {
   SV *resolved_value;
   gql_runtime_vm_outcome_t *outcome;
   U8 source_is_runtime_owned;
+  U8 storage_is_stack;
 };
 
 struct gql_runtime_vm_path_frame {
@@ -360,7 +361,7 @@ typedef struct {
 struct gql_runtime_vm_list_pending_t {
   UV refcount;
   gql_runtime_vm_block_frame_t *owner_frame;
-  AV *values_av;
+  gql_runtime_vm_native_value_t *values_value;
   IV unresolved_count;
 };
 

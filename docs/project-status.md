@@ -72,7 +72,7 @@ active suite は `legacy-tests/` を基準にはしていません。
 今後の主方向は次です。
 
 1. runtime / VM を mainline として育てる
-2. hot path の内部通貨から Perl envelope を追い出す
+2. hot path の内部表現から Perl envelope を追い出す
 3. family-owned completion と VM block/state ownership を強める
 4. native execution surface を mainline に寄せる
 5. 旧 mixed implementation の露出を順次下げる

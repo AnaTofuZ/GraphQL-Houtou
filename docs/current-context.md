@@ -123,10 +123,10 @@
    - dialect/backend の選択 surface と benchmark/profile script 上の旧 option は削除済み
    - compat parser XSUB の公開 entrypoint も active mainline から削除済み
 
-## 内部通貨
+## 内部表現
 
-hot path の内部通貨は Perl の `{ data => ..., errors => ... }` ではなく、
-次の kind-first / state-first なオブジェクトです。
+hot path の内部表現は Perl の `{ data => ..., errors => ... }` ではなく、
+次の kind-first / state-first なランタイムオブジェクトです。
 
 - `ExecState`
 - `Cursor`
@@ -348,7 +348,7 @@ fresh `./Build build` 済み環境で、
 - `Runtime::ErrorRecord` は XS-owned native record を本体とする thin facade に寄せ、
   resolver/runtime error の message cleanup と path capture は `src/vm_runtime.h` 側で処理する
 - 現在の runtime hot path では、`Outcome` / `Writer` / `ErrorRecord` / `FieldFrame` などの
-  Perl hash/array は内部通貨ではなく、境界用の facade に限定する方向で再実装している
+  Perl hash/array は内部表現ではなく、境界用の facade に限定する方向で再実装している
 - `FieldFrame` の `outcome` は XS-owned `gql_runtime_vm_outcome_t *` を直接保持し、
   `BlockFrame` の pending queue だけは promise cold path のため `SV*` queue として維持する。
   これにより sync hot path は C struct owner、promise path は Perl promise object owner という

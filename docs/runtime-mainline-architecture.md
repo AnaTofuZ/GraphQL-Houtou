@@ -8,7 +8,7 @@
 現在の mainline は、旧 `execution` / `compiled_ir` 系ではなく、次の方針で再構成されています。
 
 - 公開 API は Perl のまま保つ
-- hot path の内部通貨は Perl の `{ data => ..., errors => ... }` ではなく専用 runtime object にする
+- hot path の内部表現は Perl の `{ data => ..., errors => ... }` ではなく専用 runtime object にする
 - schema / operation / VM program を段階的に lower する
 - native 実行は `NativeRuntime` と XS VM の境界に集約する
 - `GraphQL::Houtou` が XS bootstrap の owner となり、low-level native handle API は
@@ -146,9 +146,9 @@
 - `NativeRuntime->execute_program(...)` は `compile_bundle -> execute_bundle` を通らず、
   request-local state を持った `execute_compact_program` へ流す
 
-## 内部通貨
+## 内部表現
 
-hot path の一次通貨は以下です。
+hot path のランタイムオブジェクトは以下です。
 
 - `ExecState`
 - `Cursor`

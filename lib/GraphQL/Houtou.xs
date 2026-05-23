@@ -150,7 +150,20 @@ typedef struct {
   UV refcount;
   gql_runtime_vm_block_frame_t *frame;
   gql_runtime_vm_writer_t *writer;
+  SV *state_sv;
 } gql_runtime_vm_pending_merge_t;
+
+typedef struct {
+  SV *state_sv;
+  gql_runtime_vm_block_frame_t *frame;
+  IV entry_index;
+} gql_runtime_vm_pending_callback_ctx_t;
+
+typedef struct {
+  gql_runtime_vm_list_pending_t *pending;
+  SV *state_sv;
+  IV index;
+} gql_runtime_vm_list_pending_callback_ctx_t;
 
 typedef struct {
   SV *state_sv;
@@ -178,20 +191,26 @@ static SV *gql_runtime_vm_state_type_by_name_sv(pTHX_ gql_runtime_vm_exec_state_
 static gql_runtime_vm_native_runtime_t *gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema);
 static gql_runtime_vm_native_runtime_t *gql_runtime_vm_exec_state_native_runtime(pTHX_ gql_runtime_vm_exec_state_handle_t *s);
 static SV *gql_runtime_vm_exec_state_execute_block_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, SV *base_path);
-static SV *gql_runtime_vm_exec_state_execute_block_async_path_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, gql_runtime_vm_path_frame_t *base_path_ptr);
+static SV *gql_runtime_vm_exec_state_execute_block_async_path_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, gql_runtime_vm_path_frame_t *base_path_ptr, U8 return_pending_handle);
 static SV *gql_runtime_vm_exec_state_resolve_current_value_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *source_sv, gql_runtime_vm_path_frame_t *path_frame, SV **error_out);
 static SV *gql_runtime_vm_exec_state_complete_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame, IV block_index, IV slot_index, IV op_index, SV *resolved_sv);
-static SV *gql_runtime_vm_exec_state_execute_current_op_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s);
+static SV *gql_runtime_vm_exec_state_complete_current_native_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame, const gql_runtime_vm_native_op_t *op, const gql_runtime_vm_native_slot_t *slot, SV *resolved_sv);
+static SV *gql_runtime_vm_exec_state_execute_current_op_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_outcome_t **outcome_out);
 static SV *gql_runtime_vm_new_lazy_info_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *path_frame);
 static SV *gql_runtime_vm_new_lazy_info_for_path_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame);
+static SV *gql_runtime_vm_new_outcome_handle_sv(pTHX_ U8 kind_code, SV *value, SV *error_records);
 static SV *gql_runtime_vm_lookup_type_object_by_name_sv(pTHX_ SV *runtime_schema, const char *type_name);
 static SV *gql_runtime_vm_direct_slot_type_object_sv(const gql_runtime_vm_native_runtime_t *runtime, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_state_current_return_type_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *op_sv, SV *slot_sv);
+static SV *gql_runtime_vm_state_return_type_for_slot_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, const gql_runtime_vm_native_slot_t *slot);
+static SV *gql_runtime_vm_exec_state_resolve_runtime_type_for_slot_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, const gql_runtime_vm_native_slot_t *slot, SV *resolved_sv, gql_runtime_vm_path_frame_t *path_frame, SV **error_out);
 static IV gql_runtime_vm_find_abstract_child_block_index(const gql_runtime_vm_native_op_t *op, const char *type_name);
 static const char *gql_runtime_vm_type_name_from_sv(pTHX_ SV *type_sv);
+static SV *gql_runtime_vm_snapshot_scalarish_value_sv(pTHX_ SV *value);
 static gql_runtime_vm_path_frame_t *gql_runtime_vm_new_result_path_frame(pTHX_ gql_runtime_vm_path_frame_t *parent, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_new_complete_callback_sv(pTHX_ SV *state_sv, gql_runtime_vm_path_frame_t *path_frame, IV block_index, IV slot_index, IV op_index);
 static SV *gql_runtime_vm_new_error_callback_sv(pTHX_ gql_runtime_vm_path_frame_t *path_frame);
+static SV *gql_runtime_vm_new_pending_callback_sv(pTHX_ SV *state_sv, gql_runtime_vm_block_frame_t *frame, IV entry_index);
 static SV *gql_runtime_vm_new_finalize_callback_sv(pTHX_ gql_runtime_vm_pending_merge_t *merge);
 static SV *gql_runtime_vm_new_materialize_response_callback_sv(pTHX_ SV *state_sv);
 static SV *gql_runtime_vm_call_then_promise_xs_sv(pTHX_ SV *promise_sv, SV *callback_sv, SV *error_callback_sv, gql_runtime_vm_path_frame_t *path_frame);
@@ -199,8 +218,27 @@ static SV *gql_runtime_vm_call_all_promise_xs_sv(pTHX_ AV *values_av, gql_runtim
 static SV *gql_runtime_vm_call_callback_scalar_sv(pTHX_ SV *callback_sv, SV *arg_sv, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_then_promise_for_state_sv(pTHX_ const gql_runtime_vm_exec_state_handle_t *s, SV *promise_sv, SV *callback_sv, SV *error_callback_sv, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_all_promise_for_state_sv(pTHX_ const gql_runtime_vm_exec_state_handle_t *s, AV *values_av, gql_runtime_vm_path_frame_t *path_frame);
+static int gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slot);
+static int gql_runtime_vm_slot_uses_explicit_generic_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
+static SV *gql_runtime_vm_promise_xs_new_deferred_sv(pTHX);
+static SV *gql_runtime_vm_promise_xs_deferred_promise_sv(pTHX_ SV *deferred_sv);
+static void gql_runtime_vm_promise_xs_deferred_resolve_sv(pTHX_ SV *deferred_sv, SV *value_sv);
+static void gql_runtime_vm_async_scheduler_enqueue_frame(gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_block_frame_t *frame);
+static void gql_runtime_vm_async_scheduler_arm_frame(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_block_frame_t *frame);
+static void gql_runtime_vm_async_scheduler_drain(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s);
+static void gql_runtime_vm_async_scheduler_resolve_frame(pTHX_ gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_block_frame_t *frame);
+static void gql_runtime_vm_push_pending_block_frame(pTHX_ gql_runtime_vm_block_frame_t *frame, const char *result_name_pv, STRLEN result_name_len, gql_runtime_vm_path_frame_t *path_frame, gql_runtime_vm_block_frame_t *child_frame);
+static void gql_runtime_vm_push_pending_list_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, const char *result_name_pv, STRLEN result_name_len, gql_runtime_vm_path_frame_t *path_frame, gql_runtime_vm_list_pending_t *list_pending);
+static void gql_runtime_vm_native_list_store_at(pTHX_ gql_runtime_vm_native_value_t *value, IV index, gql_runtime_vm_native_value_t *child);
+static gql_runtime_vm_native_value_t *gql_runtime_vm_native_value_from_list_pending_sv(pTHX_ SV *value_sv);
+static gql_runtime_vm_list_pending_t *gql_runtime_vm_expect_list_pending(pTHX_ SV *self);
+static SV *gql_runtime_vm_wrap_list_pending_sv(pTHX_ gql_runtime_vm_list_pending_t *pending);
+static int gql_runtime_vm_is_list_pending_value_sv(SV *value);
+static SV *gql_runtime_vm_list_pending_handle_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, AV *values_av, gql_runtime_vm_path_frame_t *path_frame);
 static XS(gql_runtime_vm_xs_complete_callback);
+static XS(gql_runtime_vm_xs_pending_callback);
+static XS(gql_runtime_vm_xs_list_pending_callback);
 static XS(gql_runtime_vm_xs_error_callback);
 static XS(gql_runtime_vm_xs_finalize_callback);
 static XS(gql_runtime_vm_xs_materialize_response_callback);
@@ -240,6 +278,10 @@ gql_runtime_vm_free_field_frame(pTHX_ gql_runtime_vm_field_frame_t *frame)
     SvREFCNT_dec(frame->resolved_value);
   }
   gql_runtime_vm_outcome_decref(aTHX_ frame->outcome);
+  if (frame->storage_is_stack) {
+    Zero(frame, 1, gql_runtime_vm_field_frame_t);
+    return;
+  }
   Safefree(frame);
 }
 
@@ -254,6 +296,15 @@ gql_runtime_vm_free_block_frame(pTHX_ gql_runtime_vm_block_frame_t *frame)
   }
   gql_runtime_vm_native_value_destroy(aTHX_ frame->values_value);
   gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);
+  if (frame->deferred_sv) {
+    SvREFCNT_dec(frame->deferred_sv);
+  }
+  if (frame->promise_sv) {
+    SvREFCNT_dec(frame->promise_sv);
+  }
+  if (frame->parent_frame) {
+    gql_runtime_vm_free_block_frame(aTHX_ frame->parent_frame);
+  }
   Safefree(frame);
 }
 
@@ -290,6 +341,14 @@ gql_runtime_vm_pending_merge_incref(gql_runtime_vm_pending_merge_t *merge)
 }
 
 static void
+gql_runtime_vm_list_pending_incref(gql_runtime_vm_list_pending_t *pending)
+{
+  if (pending) {
+    pending->refcount++;
+  }
+}
+
+static void
 gql_runtime_vm_pending_merge_decref(pTHX_ gql_runtime_vm_pending_merge_t *merge)
 {
   if (!merge) {
@@ -300,7 +359,64 @@ gql_runtime_vm_pending_merge_decref(pTHX_ gql_runtime_vm_pending_merge_t *merge)
   }
   gql_runtime_vm_free_block_frame(aTHX_ merge->frame);
   gql_runtime_vm_writer_decref(aTHX_ merge->writer);
+  if (merge->state_sv) {
+    SvREFCNT_dec(merge->state_sv);
+  }
   Safefree(merge);
+}
+
+static void
+gql_runtime_vm_list_pending_decref(pTHX_ gql_runtime_vm_list_pending_t *pending)
+{
+  if (!pending) {
+    return;
+  }
+  if (--pending->refcount > 0) {
+    return;
+  }
+  if (pending->owner_frame) {
+    gql_runtime_vm_free_block_frame(aTHX_ pending->owner_frame);
+  }
+  if (pending->values_value) {
+    gql_runtime_vm_native_value_destroy(aTHX_ pending->values_value);
+  }
+  Safefree(pending);
+}
+
+static int
+gql_runtime_vm_pending_callback_ctx_free(pTHX_ SV *sv, MAGIC *mg)
+{
+  gql_runtime_vm_pending_callback_ctx_t *ctx = mg && mg->mg_ptr
+    ? INT2PTR(gql_runtime_vm_pending_callback_ctx_t *, mg->mg_ptr)
+    : NULL;
+  if (ctx) {
+    SvREFCNT_dec(ctx->state_sv);
+    gql_runtime_vm_free_block_frame(aTHX_ ctx->frame);
+    Safefree(ctx);
+    mg->mg_ptr = NULL;
+  }
+  if (sv && SvTYPE(sv) == SVt_PVCV) {
+    CvXSUBANY((CV *)sv).any_ptr = NULL;
+  }
+  return 0;
+}
+
+static int
+gql_runtime_vm_list_pending_callback_ctx_free(pTHX_ SV *sv, MAGIC *mg)
+{
+  gql_runtime_vm_list_pending_callback_ctx_t *ctx = mg && mg->mg_ptr
+    ? INT2PTR(gql_runtime_vm_list_pending_callback_ctx_t *, mg->mg_ptr)
+    : NULL;
+  if (ctx) {
+    SvREFCNT_dec(ctx->state_sv);
+    gql_runtime_vm_list_pending_decref(aTHX_ ctx->pending);
+    Safefree(ctx);
+    mg->mg_ptr = NULL;
+  }
+  if (sv && SvTYPE(sv) == SVt_PVCV) {
+    CvXSUBANY((CV *)sv).any_ptr = NULL;
+  }
+  return 0;
 }
 
 static int
@@ -371,6 +487,32 @@ gql_runtime_vm_materialize_response_callback_ctx_free(pTHX_ SV *sv, MAGIC *mg)
   }
   return 0;
 }
+
+static MGVTBL gql_runtime_vm_pending_callback_ctx_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gql_runtime_vm_pending_callback_ctx_free
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
+
+static MGVTBL gql_runtime_vm_list_pending_callback_ctx_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gql_runtime_vm_list_pending_callback_ctx_free
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
 
 static MGVTBL gql_runtime_vm_complete_callback_ctx_vtbl = {
   NULL,
@@ -461,6 +603,30 @@ gql_runtime_vm_wrap_block_frame_sv(pTHX_ gql_runtime_vm_block_frame_t *frame)
   return gql_runtime_vm_new_handle_sv(aTHX_ "GraphQL::Houtou::Runtime::BlockFrame", frame);
 }
 
+static int
+gql_runtime_vm_is_block_frame_value_sv(SV *value)
+{
+  return value && SvOK(value) && SvROK(value)
+    && sv_derived_from(value, "GraphQL::Houtou::Runtime::BlockFrame");
+}
+
+static SV *
+gql_runtime_vm_wrap_list_pending_sv(pTHX_ gql_runtime_vm_list_pending_t *pending)
+{
+  if (!pending) {
+    return newSVsv(&PL_sv_undef);
+  }
+  gql_runtime_vm_list_pending_incref(pending);
+  return gql_runtime_vm_new_handle_sv(aTHX_ "GraphQL::Houtou::Runtime::ListPending", pending);
+}
+
+static int
+gql_runtime_vm_is_list_pending_value_sv(SV *value)
+{
+  return value && SvOK(value) && SvROK(value)
+    && sv_derived_from(value, "GraphQL::Houtou::Runtime::ListPending");
+}
+
 static SV *
 gql_runtime_vm_wrap_field_frame_sv(pTHX_ gql_runtime_vm_field_frame_t *frame)
 {
@@ -519,6 +685,12 @@ gql_runtime_vm_expect_block_frame(pTHX_ SV *self)
   return (gql_runtime_vm_block_frame_t *)gql_runtime_vm_expect_handle_ptr(aTHX_ self, "block frame");
 }
 
+static gql_runtime_vm_list_pending_t *
+gql_runtime_vm_expect_list_pending(pTHX_ SV *self)
+{
+  return (gql_runtime_vm_list_pending_t *)gql_runtime_vm_expect_handle_ptr(aTHX_ self, "list pending");
+}
+
 static gql_runtime_vm_error_record_t *
 gql_runtime_vm_expect_error_record(pTHX_ SV *self)
 {
@@ -562,6 +734,39 @@ gql_runtime_vm_wrap_outcome_sv(pTHX_ gql_runtime_vm_outcome_t *outcome)
   }
   gql_runtime_vm_outcome_incref(outcome);
   return gql_runtime_vm_new_handle_sv(aTHX_ "GraphQL::Houtou::Runtime::Outcome", outcome);
+}
+
+static gql_runtime_vm_outcome_t *
+gql_runtime_vm_new_outcome_from_owned_native_value_struct(
+  pTHX_
+  U8 kind_code,
+  gql_runtime_vm_native_value_t *value
+)
+{
+  gql_runtime_vm_outcome_t *outcome;
+
+  Newxz(outcome, 1, gql_runtime_vm_outcome_t);
+  outcome->refcount = 1;
+  outcome->kind_code = kind_code;
+  outcome->value = value ? value : gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);
+  outcome->error_record_count = 0;
+  outcome->error_records = NULL;
+
+  return outcome;
+}
+
+static SV *
+gql_runtime_vm_new_outcome_from_owned_native_value_handle_sv(
+  pTHX_
+  U8 kind_code,
+  gql_runtime_vm_native_value_t *value
+)
+{
+  gql_runtime_vm_outcome_t *outcome =
+    gql_runtime_vm_new_outcome_from_owned_native_value_struct(aTHX_ kind_code, value);
+  SV *ret = gql_runtime_vm_wrap_outcome_sv(aTHX_ outcome);
+  gql_runtime_vm_outcome_decref(aTHX_ outcome);
+  return ret;
 }
 
 static SV *
@@ -681,7 +886,14 @@ gql_runtime_vm_new_block_frame_struct(pTHX)
   frame->values_value = gql_runtime_vm_new_native_value_object();
   frame->pending_count = 0;
   frame->pending_capacity = 0;
+  frame->pending_unresolved = 0;
   frame->pending_entries = NULL;
+  frame->parent_frame = NULL;
+  frame->parent_entry_index = -1;
+  frame->deferred_sv = NULL;
+  frame->promise_sv = NULL;
+  frame->queued = 0;
+  frame->deferred_resolves_response = 0;
   return frame;
 }
 
@@ -697,13 +909,38 @@ gql_runtime_vm_new_field_frame_struct(pTHX_ SV *source, gql_runtime_vm_path_fram
   gql_runtime_vm_field_frame_t *frame;
   Newxz(frame, 1, gql_runtime_vm_field_frame_t);
   frame->refcount = 1;
-  frame->source = newSVsv(source ? source : &PL_sv_undef);
+  frame->source = SvREFCNT_inc_simple_NN(source ? source : &PL_sv_undef);
   if (path_frame) {
     frame->path_frame = path_frame;
     frame->path_frame->refcount++;
   }
   frame->resolved_value = NULL;
   frame->outcome = NULL;
+  frame->source_is_runtime_owned = 0;
+  frame->storage_is_stack = 0;
+  return frame;
+}
+
+static gql_runtime_vm_field_frame_t *
+gql_runtime_vm_init_stack_field_frame(
+  pTHX_
+  gql_runtime_vm_field_frame_t *frame,
+  SV *source,
+  gql_runtime_vm_path_frame_t *path_frame
+)
+{
+  if (!frame) {
+    return NULL;
+  }
+  Zero(frame, 1, gql_runtime_vm_field_frame_t);
+  frame->refcount = 1;
+  frame->storage_is_stack = 1;
+  frame->source = SvREFCNT_inc_simple_NN(source ? source : &PL_sv_undef);
+  if (path_frame) {
+    frame->path_frame = path_frame;
+    frame->path_frame->refcount++;
+  }
+  frame->source_is_runtime_owned = 0;
   return frame;
 }
 
@@ -857,11 +1094,13 @@ gql_runtime_vm_consume_current_outcome_now(pTHX_ gql_runtime_vm_exec_state_handl
 }
 
 static void
-gql_runtime_vm_consume_current_result_now(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *result_sv)
+gql_runtime_vm_consume_current_result_now(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *result_sv)
 {
   gql_runtime_vm_block_frame_t *frame;
+  gql_runtime_vm_list_pending_t *list_pending = NULL;
   const gql_runtime_vm_native_runtime_t *runtime;
   const gql_runtime_vm_native_slot_t *native_slot;
+  gql_runtime_vm_block_frame_t *child_frame = NULL;
   const char *result_name_pv = NULL;
   STRLEN result_name_len = 0;
 
@@ -882,26 +1121,78 @@ gql_runtime_vm_consume_current_result_now(pTHX_ gql_runtime_vm_exec_state_handle
     result_name_pv = native_slot->result_name;
     result_name_len = (STRLEN)strlen(result_name_pv);
   }
+  if (frame && result_name_pv && result_name_len > 0
+      && result_sv && SvOK(result_sv)
+      && gql_runtime_vm_is_block_frame_value_sv(result_sv)) {
+    child_frame = gql_runtime_vm_expect_block_frame(aTHX_ result_sv);
+    gql_runtime_vm_push_pending_block_frame(
+      aTHX_
+      frame,
+      result_name_pv,
+      result_name_len,
+      s->field_frame ? s->field_frame->path_frame : NULL,
+      child_frame
+    );
+    if (s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS
+        && child_frame
+        && child_frame->pending_unresolved == 0) {
+      gql_runtime_vm_async_scheduler_enqueue_frame(s, child_frame);
+      if (!s->async_scheduler_draining) {
+        gql_runtime_vm_async_scheduler_drain(aTHX_ state_sv, s);
+      }
+    }
+    gql_runtime_vm_leave_field_now(aTHX_ s);
+    return;
+  }
+  if (frame && result_name_pv && result_name_len > 0
+      && result_sv && SvOK(result_sv)
+      && gql_runtime_vm_is_list_pending_value_sv(result_sv)) {
+    list_pending = gql_runtime_vm_expect_list_pending(aTHX_ result_sv);
+    gql_runtime_vm_push_pending_list_pending(
+      aTHX_
+      frame,
+      result_name_pv,
+      result_name_len,
+      s->field_frame ? s->field_frame->path_frame : NULL,
+      list_pending
+    );
+    gql_runtime_vm_leave_field_now(aTHX_ s);
+    return;
+  }
   if (frame && result_name_pv && result_name_len > 0 && result_sv && SvOK(result_sv)) {
-    gql_runtime_vm_block_frame_push_pending_pvn(
+    gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
       aTHX_ frame,
       result_name_pv,
       result_name_len,
-      result_sv
+      1,
+      result_sv,
+      GQL_VM_PENDING_PROMISE_SV,
+      NULL,
+      -1,
+      -1,
+      -1
     );
   }
   gql_runtime_vm_leave_field_now(aTHX_ s);
 }
 
 static SV *
-gql_runtime_vm_block_frame_finalize_sv(pTHX_ gql_runtime_vm_block_frame_t *frame, U8 promise_backend_code, gql_runtime_vm_writer_t *writer);
+gql_runtime_vm_block_frame_finalize_sv(
+  pTHX_
+  gql_runtime_vm_block_frame_t *frame,
+  U8 promise_backend_code,
+  gql_runtime_vm_writer_t *writer,
+  SV *state_sv,
+  U8 return_pending_handle
+);
 
 static SV *
-gql_runtime_vm_finalize_current_block_now(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *snapshot)
+gql_runtime_vm_finalize_current_block_now(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *snapshot, U8 return_pending_handle)
 {
   gql_runtime_vm_block_frame_t *frame;
   gql_runtime_vm_block_frame_t *completed_frame;
   SV *result;
+  U8 scheduler_owned = 0;
 
   if (!s || !s->frame) {
     return newSVsv(&PL_sv_undef);
@@ -910,11 +1201,17 @@ gql_runtime_vm_finalize_current_block_now(pTHX_ gql_runtime_vm_exec_state_handle
   frame = s->frame;
   completed_frame = frame;
   if (s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
+    if (frame->pending_count > 0) {
+      frame->deferred_resolves_response = (s->frame_stack_count == 1) ? 1 : 0;
+      scheduler_owned = 1;
+    }
     result = gql_runtime_vm_block_frame_finalize_sv(
       aTHX_
       frame,
       s->promise_backend_code,
-      s->writer
+      s->writer,
+      state_sv,
+      return_pending_handle
     );
   } else {
     result = gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
@@ -928,7 +1225,9 @@ gql_runtime_vm_finalize_current_block_now(pTHX_ gql_runtime_vm_exec_state_handle
     s->frame_stack_count--;
     s->frame_stack[s->frame_stack_count] = NULL;
   }
-  gql_runtime_vm_free_block_frame(aTHX_ completed_frame);
+  if (!scheduler_owned) {
+    gql_runtime_vm_free_block_frame(aTHX_ completed_frame);
+  }
   s->frame = s->frame_stack_count > 0 ? s->frame_stack[s->frame_stack_count - 1] : NULL;
 
   return result;
@@ -939,37 +1238,102 @@ gql_runtime_vm_block_frame_finalize_sv(
   pTHX_
   gql_runtime_vm_block_frame_t *frame,
   U8 promise_backend_code,
-  gql_runtime_vm_writer_t *writer
+  gql_runtime_vm_writer_t *writer,
+  SV *state_sv,
+  U8 return_pending_handle
 )
 {
   IV i;
   AV *pending_av;
   SV *aggregate;
+  gql_runtime_vm_block_frame_t next_pending;
+  gql_runtime_vm_exec_state_handle_t *exec_state =
+    (state_sv && SvOK(state_sv)) ? gql_runtime_vm_expect_exec_state_handle(aTHX_ state_sv) : NULL;
 
   if (!frame) {
     return newSVsv(&PL_sv_undef);
   }
   if (frame->pending_count == 0) {
+    if (return_pending_handle) {
+      SV *ret = gql_runtime_vm_new_outcome_from_owned_native_value_handle_sv(
+        aTHX_
+        GQL_VM_KIND_OBJECT,
+        frame->values_value
+      );
+      frame->values_value = NULL;
+      return ret;
+    }
     return gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
   }
   if (promise_backend_code != GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
     croak("pending async runtime blocks require Promise::XS");
   }
+  if (exec_state) {
+    SV *ret_sv;
+    U8 saved_draining = exec_state->async_scheduler_draining;
+    U8 resolve_response = frame->deferred_resolves_response ? 1 : 0;
+    U8 return_promise = (resolve_response || !return_pending_handle) ? 1 : 0;
+
+    if (return_promise && !frame->deferred_sv) {
+      frame->deferred_sv = gql_runtime_vm_promise_xs_new_deferred_sv(aTHX);
+      frame->promise_sv = gql_runtime_vm_promise_xs_deferred_promise_sv(aTHX_ frame->deferred_sv);
+    }
+    ret_sv = return_promise
+      ? (frame->promise_sv ? newSVsv(frame->promise_sv) : newSVsv(&PL_sv_undef))
+      : gql_runtime_vm_wrap_block_frame_sv(aTHX_ frame);
+
+    exec_state->async_scheduler_draining = 1;
+    gql_runtime_vm_async_scheduler_arm_frame(aTHX_ state_sv, exec_state, frame);
+    exec_state->async_scheduler_draining = saved_draining;
+
+    if (return_promise && frame->pending_unresolved == 0) {
+      gql_runtime_vm_async_scheduler_enqueue_frame(exec_state, frame);
+      if (!exec_state->async_scheduler_draining) {
+        gql_runtime_vm_async_scheduler_drain(aTHX_ state_sv, exec_state);
+      }
+    }
+    return ret_sv;
+  }
+
+  Zero(&next_pending, 1, gql_runtime_vm_block_frame_t);
+  for (i = 0; i < frame->pending_count; i++) {
+    if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_OUTCOME_PTR) {
+      gql_runtime_vm_consume_outcome_native_object(
+        aTHX_
+        frame->values_value,
+        frame->pending_entries[i].result_name_pv,
+        frame->pending_entries[i].payload.outcome_ptr,
+        writer
+      );
+    } else {
+      gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
+        aTHX_
+        &next_pending,
+        frame->pending_entries[i].result_name_pv,
+        frame->pending_entries[i].result_name_len,
+        frame->pending_entries[i].result_name_pv_borrowed,
+        frame->pending_entries[i].payload.promise_sv,
+        frame->pending_entries[i].payload_kind,
+        frame->pending_entries[i].path_frame,
+        frame->pending_entries[i].block_index,
+        frame->pending_entries[i].slot_index,
+        frame->pending_entries[i].op_index
+      );
+    }
+  }
+  gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);
+  frame->pending_entries = next_pending.pending_entries;
+  frame->pending_count = next_pending.pending_count;
+  frame->pending_capacity = next_pending.pending_capacity;
+
+  if (frame->pending_count == 0) {
+    return gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
+  }
 
   pending_av = newAV();
   for (i = 0; i < frame->pending_count; i++) {
-    if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_OUTCOME_PTR) {
-      gql_runtime_vm_outcome_t *outcome = frame->pending_entries[i].payload.outcome_ptr;
-      if (outcome) {
-        gql_runtime_vm_outcome_incref(outcome);
-        av_push(pending_av, gql_runtime_vm_new_handle_sv(
-          aTHX_ "GraphQL::Houtou::Runtime::Outcome",
-          outcome
-        ));
-      } else {
-        av_push(pending_av, newSVsv(&PL_sv_undef));
-      }
-    } else if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_SV
+    if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_SV
+        || frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV
         || frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV) {
       av_push(
         pending_av,
@@ -1001,6 +1365,7 @@ gql_runtime_vm_block_frame_finalize_sv(
     frame->refcount++;
     merge->writer = writer;
     gql_runtime_vm_writer_incref(writer);
+    merge->state_sv = state_sv ? SvREFCNT_inc_simple_NN(state_sv) : NULL;
     callback_sv = gql_runtime_vm_new_finalize_callback_sv(aTHX_ merge);
     gql_runtime_vm_pending_merge_decref(aTHX_ merge);
 
@@ -1099,37 +1464,757 @@ gql_runtime_vm_named_coderef_sv(pTHX_ const char *name)
   return cv ? newRV_inc((SV *)cv) : newSVsv(&PL_sv_undef);
 }
 
+static void
+gql_runtime_vm_async_scheduler_enqueue_frame(gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_block_frame_t *frame)
+{
+  if (!s || !frame || frame->queued) {
+    return;
+  }
+  if (s->async_ready_frame_count == s->async_ready_frame_capacity) {
+    IV new_cap = s->async_ready_frame_capacity ? s->async_ready_frame_capacity * 2 : 4;
+    Renew(s->async_ready_frames, new_cap, gql_runtime_vm_block_frame_t *);
+    s->async_ready_frame_capacity = new_cap;
+  }
+  s->async_ready_frames[s->async_ready_frame_count++] = frame;
+  frame->queued = 1;
+}
+
+static void
+gql_runtime_vm_async_pending_entry_store_outcome(
+  pTHX_
+  gql_runtime_vm_pending_entry_t *entry,
+  SV *outcome_sv
+)
+{
+  gql_runtime_vm_outcome_t *outcome_ptr;
+
+  if (!entry || !outcome_sv || !SvOK(outcome_sv)) {
+    return;
+  }
+
+  outcome_ptr = gql_runtime_vm_expect_outcome(aTHX_ outcome_sv);
+  gql_runtime_vm_outcome_incref(outcome_ptr);
+
+  if (entry->payload_kind == GQL_VM_PENDING_OUTCOME_PTR) {
+    gql_runtime_vm_outcome_decref(aTHX_ entry->payload.outcome_ptr);
+  } else if (entry->payload.promise_sv) {
+    SvREFCNT_dec(entry->payload.promise_sv);
+  }
+
+  entry->payload_kind = GQL_VM_PENDING_OUTCOME_PTR;
+  entry->payload.outcome_ptr = outcome_ptr;
+  entry->state_code = GQL_VM_PENDING_STATE_READY_OUTCOME;
+}
+
+static void
+gql_runtime_vm_async_pending_entry_store_outcome_ptr(
+  pTHX_
+  gql_runtime_vm_pending_entry_t *entry,
+  gql_runtime_vm_outcome_t *outcome_ptr
+)
+{
+  if (!entry || !outcome_ptr) {
+    return;
+  }
+
+  gql_runtime_vm_outcome_incref(outcome_ptr);
+
+  if (entry->payload_kind == GQL_VM_PENDING_OUTCOME_PTR) {
+    gql_runtime_vm_outcome_decref(aTHX_ entry->payload.outcome_ptr);
+  } else if (entry->payload_kind == GQL_VM_PENDING_BLOCK_FRAME_PTR) {
+    gql_runtime_vm_free_block_frame(aTHX_ entry->payload.block_frame_ptr);
+  } else if (entry->payload_kind == GQL_VM_PENDING_LIST_PENDING_PTR) {
+    gql_runtime_vm_list_pending_decref(aTHX_ entry->payload.list_pending_ptr);
+  } else if (entry->payload.promise_sv) {
+    SvREFCNT_dec(entry->payload.promise_sv);
+  }
+
+  entry->payload_kind = GQL_VM_PENDING_OUTCOME_PTR;
+  entry->payload.outcome_ptr = outcome_ptr;
+  entry->state_code = GQL_VM_PENDING_STATE_READY_OUTCOME;
+}
+
+static void
+gql_runtime_vm_async_pending_entry_store_sv(
+  pTHX_
+  gql_runtime_vm_pending_entry_t *entry,
+  SV *value_sv
+)
+{
+  SV *copied_sv;
+
+  if (!entry) {
+    return;
+  }
+
+  copied_sv = gql_runtime_vm_snapshot_scalarish_value_sv(
+    aTHX_
+    value_sv ? value_sv : &PL_sv_undef
+  );
+
+  if (entry->payload_kind == GQL_VM_PENDING_OUTCOME_PTR) {
+    gql_runtime_vm_outcome_decref(aTHX_ entry->payload.outcome_ptr);
+  } else if (entry->payload.promise_sv) {
+    SvREFCNT_dec(entry->payload.promise_sv);
+  }
+
+  entry->payload.promise_sv = copied_sv;
+  entry->state_code = GQL_VM_PENDING_STATE_READY_SV;
+}
+
+static void
+gql_runtime_vm_native_list_store_at(
+  pTHX_
+  gql_runtime_vm_native_value_t *value,
+  IV index,
+  gql_runtime_vm_native_value_t *child
+)
+{
+  gql_runtime_vm_native_list_t *list;
+  IV i;
+
+  if (!value || value->kind_code != GQL_VM_NATIVE_VALUE_LIST || index < 0 || !child) {
+    return;
+  }
+
+  list = &value->list;
+  if (index >= list->capacity) {
+    IV new_capacity = list->capacity ? list->capacity : 8;
+    while (index >= new_capacity) {
+      new_capacity *= 2;
+    }
+    Renew(list->items, new_capacity, gql_runtime_vm_native_value_t *);
+    for (i = list->capacity; i < new_capacity; i++) {
+      list->items[i] = NULL;
+    }
+    list->capacity = new_capacity;
+  }
+
+  if (list->items[index]) {
+    gql_runtime_vm_native_value_destroy(aTHX_ list->items[index]);
+  }
+  list->items[index] = child;
+  if (index >= list->count) {
+    list->count = index + 1;
+  }
+}
+
+static gql_runtime_vm_native_value_t *
+gql_runtime_vm_native_value_from_list_pending_sv(pTHX_ SV *value_sv)
+{
+  if (value_sv && SvOK(value_sv) && sv_derived_from(value_sv, "GraphQL::Houtou::Runtime::Outcome")) {
+    gql_runtime_vm_outcome_t *outcome = gql_runtime_vm_expect_outcome(aTHX_ value_sv);
+    return gql_runtime_vm_native_value_clone(aTHX_ outcome ? outcome->value : NULL);
+  }
+  return gql_runtime_vm_native_value_from_sv(aTHX_ value_sv ? value_sv : &PL_sv_undef);
+}
+
+static void
+gql_runtime_vm_push_pending_block_frame(
+  pTHX_
+  gql_runtime_vm_block_frame_t *frame,
+  const char *result_name_pv,
+  STRLEN result_name_len,
+  gql_runtime_vm_path_frame_t *path_frame,
+  gql_runtime_vm_block_frame_t *child_frame
+)
+{
+  gql_runtime_vm_pending_entry_t *entry;
+
+  if (!frame || !child_frame || !result_name_pv || result_name_len == 0) {
+    return;
+  }
+
+  entry = gql_runtime_vm_block_frame_push_pending_entry_with_meta(
+    aTHX_
+    frame,
+    result_name_pv,
+    result_name_len,
+    1,
+    path_frame,
+    -1,
+    -1,
+    -1
+  );
+  if (!entry) {
+    return;
+  }
+
+  entry->payload_kind = GQL_VM_PENDING_BLOCK_FRAME_PTR;
+  entry->state_code = GQL_VM_PENDING_STATE_WAITING_ARMED;
+  entry->payload.block_frame_ptr = child_frame;
+  entry->payload.block_frame_ptr->refcount++;
+  frame->pending_unresolved++;
+
+  child_frame->parent_frame = frame;
+  child_frame->parent_frame->refcount++;
+  child_frame->parent_entry_index = frame->pending_count - 1;
+}
+
+static void
+gql_runtime_vm_push_pending_list_pending(
+  pTHX_
+  gql_runtime_vm_block_frame_t *frame,
+  const char *result_name_pv,
+  STRLEN result_name_len,
+  gql_runtime_vm_path_frame_t *path_frame,
+  gql_runtime_vm_list_pending_t *list_pending
+)
+{
+  gql_runtime_vm_pending_entry_t *entry;
+
+  if (!frame || !list_pending || !result_name_pv || result_name_len == 0) {
+    return;
+  }
+
+  entry = gql_runtime_vm_block_frame_push_pending_entry_with_meta(
+    aTHX_
+    frame,
+    result_name_pv,
+    result_name_len,
+    1,
+    path_frame,
+    -1,
+    -1,
+    -1
+  );
+  if (!entry) {
+    return;
+  }
+
+  entry->payload_kind = GQL_VM_PENDING_LIST_PENDING_PTR;
+  entry->state_code = GQL_VM_PENDING_STATE_WAITING_ARMED;
+  entry->payload.list_pending_ptr = list_pending;
+  gql_runtime_vm_list_pending_incref(list_pending);
+  frame->pending_unresolved++;
+
+  if (list_pending->owner_frame) {
+    gql_runtime_vm_free_block_frame(aTHX_ list_pending->owner_frame);
+  }
+  list_pending->owner_frame = frame;
+  list_pending->owner_frame->refcount++;
+}
+
+static SV *
+gql_runtime_vm_new_pending_callback_sv(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_block_frame_t *frame,
+  IV entry_index
+)
+{
+  CV *cv;
+  SV *rv;
+  gql_runtime_vm_pending_callback_ctx_t *ctx;
+
+  Newxz(ctx, 1, gql_runtime_vm_pending_callback_ctx_t);
+  ctx->state_sv = state_sv ? SvREFCNT_inc_simple_NN(state_sv) : NULL;
+  ctx->frame = frame;
+  if (ctx->frame) {
+    ctx->frame->refcount++;
+  }
+  ctx->entry_index = entry_index;
+
+  cv = newXS(NULL, gql_runtime_vm_xs_pending_callback, __FILE__);
+  CvXSUBANY(cv).any_ptr = ctx;
+  gql_runtime_vm_attach_callback_magic_ptr(aTHX_ (SV *)cv, &gql_runtime_vm_pending_callback_ctx_vtbl, ctx);
+  rv = newRV_noinc((SV *)cv);
+  return rv;
+}
+
+static void
+gql_runtime_vm_async_scheduler_resolve_frame(
+  pTHX_
+  gql_runtime_vm_exec_state_handle_t *s,
+  gql_runtime_vm_block_frame_t *frame
+)
+{
+  SV *data_sv;
+  SV *resolved_sv;
+  IV i;
+
+  if (!frame) {
+    return;
+  }
+
+  if (s) {
+    for (i = 0; i < s->async_ready_frame_count; i++) {
+      if (s->async_ready_frames[i] == frame) {
+        s->async_ready_frames[i] = NULL;
+      }
+    }
+  }
+  frame->queued = 0;
+
+  if (frame->parent_frame && frame->parent_entry_index >= 0) {
+    gql_runtime_vm_pending_entry_t *entry = NULL;
+    gql_runtime_vm_outcome_t *outcome = NULL;
+
+    if (frame->parent_entry_index < frame->parent_frame->pending_count) {
+      entry = &frame->parent_frame->pending_entries[frame->parent_entry_index];
+    }
+
+    outcome = gql_runtime_vm_new_outcome_from_owned_native_value_struct(
+      aTHX_
+      GQL_VM_KIND_OBJECT,
+      frame->values_value
+    );
+    frame->values_value = NULL;
+
+    if (entry) {
+      gql_runtime_vm_async_pending_entry_store_outcome_ptr(aTHX_ entry, outcome);
+    }
+
+    if (frame->parent_frame->pending_unresolved > 0) {
+      frame->parent_frame->pending_unresolved--;
+    }
+    if (frame->parent_frame->pending_unresolved == 0) {
+      gql_runtime_vm_async_scheduler_enqueue_frame(s, frame->parent_frame);
+    }
+
+    gql_runtime_vm_outcome_decref(aTHX_ outcome);
+    gql_runtime_vm_free_block_frame(aTHX_ frame);
+    return;
+  }
+
+  data_sv = gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
+  resolved_sv = data_sv;
+  if (frame->deferred_resolves_response) {
+    resolved_sv = gql_runtime_vm_exec_state_materialize_response_sv(aTHX_ s, data_sv);
+    SvREFCNT_dec(data_sv);
+  }
+
+  if (frame->deferred_sv && SvOK(frame->deferred_sv)) {
+    gql_runtime_vm_promise_xs_deferred_resolve_sv(aTHX_ frame->deferred_sv, resolved_sv);
+  }
+  if (frame->deferred_sv) {
+    SvREFCNT_dec(frame->deferred_sv);
+    frame->deferred_sv = NULL;
+  }
+  if (frame->promise_sv) {
+    SvREFCNT_dec(frame->promise_sv);
+    frame->promise_sv = NULL;
+  }
+  gql_runtime_vm_free_block_frame(aTHX_ frame);
+}
+
+static void
+gql_runtime_vm_async_scheduler_arm_frame(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_exec_state_handle_t *s,
+  gql_runtime_vm_block_frame_t *frame
+)
+{
+  IV i;
+
+  if (!s || !frame) {
+    return;
+  }
+
+  frame->pending_unresolved = 0;
+  for (i = 0; i < frame->pending_count; i++) {
+    gql_runtime_vm_pending_entry_t *entry = &frame->pending_entries[i];
+
+    if (entry->state_code == GQL_VM_PENDING_STATE_WAITING_ARMED) {
+      if (entry->payload_kind == GQL_VM_PENDING_LIST_PENDING_PTR
+          && entry->payload.list_pending_ptr
+          && entry->payload.list_pending_ptr->unresolved_count == 0) {
+        continue;
+      }
+      frame->pending_unresolved++;
+      continue;
+    }
+    if (entry->state_code != GQL_VM_PENDING_STATE_WAITING_UNARMED) {
+      continue;
+    }
+
+    entry->state_code = GQL_VM_PENDING_STATE_WAITING_ARMED;
+    frame->pending_unresolved++;
+
+    {
+      SV *callback_sv = gql_runtime_vm_new_pending_callback_sv(aTHX_ state_sv, frame, i);
+      SV *error_callback_sv = gql_runtime_vm_new_error_callback_sv(aTHX_ entry->path_frame);
+      SV *ret = gql_runtime_vm_call_then_promise_for_state_sv(
+        aTHX_
+        s,
+        entry->payload.promise_sv,
+        callback_sv,
+        error_callback_sv,
+        entry->path_frame
+      );
+
+      SvREFCNT_dec(callback_sv);
+      SvREFCNT_dec(error_callback_sv);
+
+      if (ret && SvOK(ret) && sv_derived_from(ret, "GraphQL::Houtou::Runtime::Outcome")) {
+        gql_runtime_vm_async_pending_entry_store_outcome(aTHX_ entry, ret);
+        if (frame->pending_unresolved > 0) {
+          frame->pending_unresolved--;
+        }
+      }
+      if (ret) {
+        SvREFCNT_dec(ret);
+      }
+    }
+  }
+}
+
+static void
+gql_runtime_vm_async_scheduler_process_frame(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_exec_state_handle_t *s,
+  gql_runtime_vm_block_frame_t *frame
+)
+{
+  while (frame) {
+    IV i;
+    gql_runtime_vm_block_frame_t next_pending;
+
+    if (frame->pending_count == 0) {
+      gql_runtime_vm_async_scheduler_resolve_frame(aTHX_ s, frame);
+      return;
+    }
+
+    Zero(&next_pending, 1, gql_runtime_vm_block_frame_t);
+    for (i = 0; i < frame->pending_count; i++) {
+      gql_runtime_vm_pending_entry_t *entry = &frame->pending_entries[i];
+
+      if (entry->state_code == GQL_VM_PENDING_STATE_WAITING_UNARMED
+          || entry->state_code == GQL_VM_PENDING_STATE_WAITING_ARMED) {
+        if (entry->payload_kind == GQL_VM_PENDING_LIST_PENDING_PTR
+            && entry->payload.list_pending_ptr
+            && entry->payload.list_pending_ptr->unresolved_count == 0) {
+          /* ready list pending entries are consumed below */
+        } else
+        if (entry->payload_kind == GQL_VM_PENDING_BLOCK_FRAME_PTR) {
+          gql_runtime_vm_pending_entry_t *next_entry =
+            gql_runtime_vm_block_frame_push_pending_entry_with_meta(
+              aTHX_
+              &next_pending,
+              entry->result_name_pv,
+              entry->result_name_len,
+              entry->result_name_pv_borrowed,
+              entry->path_frame,
+              entry->block_index,
+              entry->slot_index,
+              entry->op_index
+            );
+          next_entry->payload_kind = GQL_VM_PENDING_BLOCK_FRAME_PTR;
+          next_entry->state_code = entry->state_code;
+          next_entry->payload.block_frame_ptr = entry->payload.block_frame_ptr;
+          next_entry->payload.block_frame_ptr->refcount++;
+          next_entry->payload.block_frame_ptr->parent_entry_index = next_pending.pending_count - 1;
+        } else if (entry->payload_kind == GQL_VM_PENDING_LIST_PENDING_PTR) {
+          gql_runtime_vm_pending_entry_t *next_entry =
+            gql_runtime_vm_block_frame_push_pending_entry_with_meta(
+              aTHX_
+              &next_pending,
+              entry->result_name_pv,
+              entry->result_name_len,
+              entry->result_name_pv_borrowed,
+              entry->path_frame,
+              entry->block_index,
+              entry->slot_index,
+              entry->op_index
+            );
+          next_entry->payload_kind = GQL_VM_PENDING_LIST_PENDING_PTR;
+          next_entry->state_code = entry->state_code;
+          next_entry->payload.list_pending_ptr = entry->payload.list_pending_ptr;
+          gql_runtime_vm_list_pending_incref(next_entry->payload.list_pending_ptr);
+        } else {
+          gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
+            aTHX_
+            &next_pending,
+            entry->result_name_pv,
+            entry->result_name_len,
+            entry->result_name_pv_borrowed,
+            entry->payload.promise_sv,
+            entry->payload_kind,
+            entry->path_frame,
+            entry->block_index,
+            entry->slot_index,
+            entry->op_index
+          );
+          next_pending.pending_entries[next_pending.pending_count - 1].state_code = entry->state_code;
+        }
+        if (!(entry->payload_kind == GQL_VM_PENDING_LIST_PENDING_PTR
+              && entry->payload.list_pending_ptr
+              && entry->payload.list_pending_ptr->unresolved_count == 0)) {
+          continue;
+        }
+      }
+
+      if (entry->payload_kind == GQL_VM_PENDING_LIST_PENDING_PTR) {
+        gql_runtime_vm_outcome_t *outcome;
+
+        if (!entry->payload.list_pending_ptr
+            || entry->payload.list_pending_ptr->unresolved_count > 0
+            || !entry->payload.list_pending_ptr->values_value) {
+          gql_runtime_vm_pending_entry_t *next_entry =
+            gql_runtime_vm_block_frame_push_pending_entry_with_meta(
+              aTHX_
+              &next_pending,
+              entry->result_name_pv,
+              entry->result_name_len,
+              entry->result_name_pv_borrowed,
+              entry->path_frame,
+              entry->block_index,
+              entry->slot_index,
+              entry->op_index
+            );
+          next_entry->payload_kind = GQL_VM_PENDING_LIST_PENDING_PTR;
+          next_entry->state_code = GQL_VM_PENDING_STATE_WAITING_ARMED;
+          next_entry->payload.list_pending_ptr = entry->payload.list_pending_ptr;
+          gql_runtime_vm_list_pending_incref(next_entry->payload.list_pending_ptr);
+          continue;
+        }
+
+        outcome = gql_runtime_vm_new_outcome_from_owned_native_value_struct(
+          aTHX_
+          GQL_VM_KIND_LIST,
+          entry->payload.list_pending_ptr->values_value
+        );
+        entry->payload.list_pending_ptr->values_value = NULL;
+        gql_runtime_vm_consume_outcome_native_object(
+          aTHX_
+          frame->values_value,
+          entry->result_name_pv,
+          outcome,
+          s->writer
+        );
+        gql_runtime_vm_outcome_decref(aTHX_ outcome);
+        continue;
+      }
+
+      if (entry->state_code == GQL_VM_PENDING_STATE_READY_OUTCOME
+          || entry->payload_kind == GQL_VM_PENDING_OUTCOME_PTR) {
+        gql_runtime_vm_consume_outcome_native_object(
+          aTHX_
+          frame->values_value,
+          entry->result_name_pv,
+          entry->payload.outcome_ptr,
+          s->writer
+        );
+        continue;
+      }
+
+      if (entry->payload_kind == GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV) {
+        SV *completed_sv = gql_runtime_vm_exec_state_complete_async_sv(
+          aTHX_
+          state_sv,
+          s,
+          entry->path_frame,
+          entry->block_index,
+          entry->slot_index,
+          entry->op_index,
+          entry->payload.promise_sv
+        );
+
+        if (completed_sv && SvOK(completed_sv) && sv_derived_from(completed_sv, "GraphQL::Houtou::Runtime::Outcome")) {
+          gql_runtime_vm_consume_outcome_native_object(
+            aTHX_
+            frame->values_value,
+            entry->result_name_pv,
+            gql_runtime_vm_expect_outcome(aTHX_ completed_sv),
+            s->writer
+          );
+        } else if (completed_sv && SvOK(completed_sv)) {
+          gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
+            aTHX_
+            &next_pending,
+            entry->result_name_pv,
+            entry->result_name_len,
+            entry->result_name_pv_borrowed,
+            completed_sv,
+            GQL_VM_PENDING_PROMISE_SV,
+            NULL,
+            -1,
+            -1,
+            -1
+          );
+        }
+        if (completed_sv) {
+          SvREFCNT_dec(completed_sv);
+        }
+        continue;
+      }
+
+      if (entry->payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
+          || entry->payload_kind == GQL_VM_PENDING_PROMISE_SV) {
+        gql_runtime_vm_consume_value_native_object(
+          aTHX_
+          frame->values_value,
+          entry->result_name_pv,
+          entry->payload.promise_sv
+        );
+      }
+    }
+
+    gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);
+    frame->pending_entries = next_pending.pending_entries;
+    frame->pending_count = next_pending.pending_count;
+    frame->pending_capacity = next_pending.pending_capacity;
+    frame->pending_unresolved = 0;
+
+    if (frame->pending_count == 0) {
+      gql_runtime_vm_async_scheduler_resolve_frame(aTHX_ s, frame);
+      return;
+    }
+
+    gql_runtime_vm_async_scheduler_arm_frame(aTHX_ state_sv, s, frame);
+    if (frame->pending_unresolved > 0) {
+      return;
+    }
+  }
+}
+
+static void
+gql_runtime_vm_async_scheduler_drain(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_exec_state_handle_t *s
+)
+{
+  if (!s || s->async_scheduler_draining) {
+    return;
+  }
+
+  s->async_scheduler_draining = 1;
+  while (s->async_ready_frame_count > 0) {
+    gql_runtime_vm_block_frame_t *frame =
+      s->async_ready_frames[--s->async_ready_frame_count];
+    s->async_ready_frames[s->async_ready_frame_count] = NULL;
+    if (!frame) {
+      continue;
+    }
+    frame->queued = 0;
+    gql_runtime_vm_async_scheduler_process_frame(aTHX_ state_sv, s, frame);
+  }
+  s->async_scheduler_draining = 0;
+}
+
 static SV *
 gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *state, SV *resolved)
 {
   AV *resolved_av = gql_runtime_vm_expect_arrayref(aTHX_ resolved, "resolved outcomes");
   SSize_t i;
+  gql_runtime_vm_block_frame_t next_pending;
+  gql_runtime_vm_exec_state_handle_t *exec_state =
+    (state && state->state_sv) ? gql_runtime_vm_expect_exec_state_handle(aTHX_ state->state_sv) : NULL;
+
+  Zero(&next_pending, 1, gql_runtime_vm_block_frame_t);
 
   for (i = 0; i <= av_len(resolved_av) && i < state->frame->pending_count; i++) {
     SV **outcome_svp = av_fetch(resolved_av, i, 0);
-    if (outcome_svp && *outcome_svp) {
-      if (state->frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
-          && SvOK(*outcome_svp)
-          && !sv_derived_from(*outcome_svp, "GraphQL::Houtou::Runtime::Outcome")) {
+    gql_runtime_vm_pending_entry_t *entry = &state->frame->pending_entries[i];
+    SV *resolved_sv = (outcome_svp && *outcome_svp) ? *outcome_svp : &PL_sv_undef;
+
+    if (entry->payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV) {
+      if (SvOK(resolved_sv) && !sv_derived_from(resolved_sv, "GraphQL::Houtou::Runtime::Outcome")) {
         gql_runtime_vm_consume_value_native_object(
           aTHX_
           state->frame->values_value,
-          state->frame->pending_entries[i].result_name_pv,
-          *outcome_svp
+          entry->result_name_pv,
+          resolved_sv
         );
       } else {
         gql_runtime_vm_consume_outcome_native_object(
           aTHX_
           state->frame->values_value,
-          state->frame->pending_entries[i].result_name_pv,
-          gql_runtime_vm_expect_outcome(aTHX_ *outcome_svp),
+          entry->result_name_pv,
+          gql_runtime_vm_expect_outcome(aTHX_ resolved_sv),
           state->writer
+        );
+      }
+    } else if (entry->payload_kind == GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV) {
+      if (SvOK(resolved_sv) && sv_derived_from(resolved_sv, "GraphQL::Houtou::Runtime::Outcome")) {
+        gql_runtime_vm_consume_outcome_native_object(
+          aTHX_
+          state->frame->values_value,
+          entry->result_name_pv,
+          gql_runtime_vm_expect_outcome(aTHX_ resolved_sv),
+          state->writer
+        );
+      } else {
+        SV *completed_sv;
+
+        if (!exec_state || !state->state_sv) {
+          croak("pending async completion requires an exec state");
+        }
+        completed_sv = gql_runtime_vm_exec_state_complete_async_sv(
+          aTHX_
+          state->state_sv,
+          exec_state,
+          entry->path_frame,
+          entry->block_index,
+          entry->slot_index,
+          entry->op_index,
+          resolved_sv
+        );
+        if (completed_sv && SvOK(completed_sv) && sv_derived_from(completed_sv, "GraphQL::Houtou::Runtime::Outcome")) {
+          gql_runtime_vm_consume_outcome_native_object(
+            aTHX_
+            state->frame->values_value,
+            entry->result_name_pv,
+            gql_runtime_vm_expect_outcome(aTHX_ completed_sv),
+            state->writer
+          );
+        } else if (completed_sv && SvOK(completed_sv)) {
+          gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
+            aTHX_
+            &next_pending,
+            entry->result_name_pv,
+            entry->result_name_len,
+            entry->result_name_pv_borrowed,
+            completed_sv,
+            GQL_VM_PENDING_PROMISE_SV,
+            NULL,
+            -1,
+            -1,
+            -1
+          );
+        }
+        if (completed_sv) {
+          SvREFCNT_dec(completed_sv);
+        }
+      }
+    } else if (entry->payload_kind == GQL_VM_PENDING_PROMISE_SV) {
+      if (SvOK(resolved_sv) && sv_derived_from(resolved_sv, "GraphQL::Houtou::Runtime::Outcome")) {
+        gql_runtime_vm_consume_outcome_native_object(
+          aTHX_
+          state->frame->values_value,
+          entry->result_name_pv,
+          gql_runtime_vm_expect_outcome(aTHX_ resolved_sv),
+          state->writer
+        );
+      } else {
+        gql_runtime_vm_consume_value_native_object(
+          aTHX_
+          state->frame->values_value,
+          entry->result_name_pv,
+          resolved_sv
         );
       }
     }
   }
 
   gql_runtime_vm_block_frame_clear_pending(aTHX_ state->frame);
+  state->frame->pending_entries = next_pending.pending_entries;
+  state->frame->pending_count = next_pending.pending_count;
+  state->frame->pending_capacity = next_pending.pending_capacity;
+
+  if (state->frame->pending_count > 0) {
+    return gql_runtime_vm_block_frame_finalize_sv(
+      aTHX_
+      state->frame,
+      GQL_VM_PROMISE_BACKEND_PROMISE_XS,
+      state->writer,
+      state->state_sv,
+      0
+    );
+  }
   return gql_runtime_vm_native_value_materialize_sv(aTHX_ state->frame->values_value);
 }
 
@@ -1177,6 +2262,116 @@ static XS(gql_runtime_vm_xs_complete_callback)
 
   ST(0) = sv_2mortal(ret ? ret : newSVsv(&PL_sv_undef));
   XSRETURN(1);
+}
+
+static XS(gql_runtime_vm_xs_pending_callback)
+{
+  dVAR;
+  dXSARGS;
+  gql_runtime_vm_pending_callback_ctx_t *ctx = INT2PTR(
+    gql_runtime_vm_pending_callback_ctx_t *,
+    CvXSUBANY(cv).any_ptr
+  );
+  SV *resolved_sv = &PL_sv_undef;
+  SV *tmp_resolved = NULL;
+  gql_runtime_vm_exec_state_handle_t *state = NULL;
+  gql_runtime_vm_pending_entry_t *entry = NULL;
+
+  if (!ctx || !ctx->state_sv || !ctx->frame) {
+    XSRETURN_UNDEF;
+  }
+
+  if (items == 1) {
+    resolved_sv = ST(0) ? ST(0) : &PL_sv_undef;
+  } else if (items > 1) {
+    AV *resolved_av = newAV();
+    I32 i;
+    for (i = 0; i < items; i++) {
+      av_push(resolved_av, newSVsv(ST(i) ? ST(i) : &PL_sv_undef));
+    }
+    tmp_resolved = newRV_noinc((SV *)resolved_av);
+    resolved_sv = tmp_resolved;
+  }
+  state = gql_runtime_vm_expect_exec_state_handle(aTHX_ ctx->state_sv);
+  if (ctx->entry_index < 0 || ctx->entry_index >= ctx->frame->pending_count) {
+    if (tmp_resolved) {
+      SvREFCNT_dec(tmp_resolved);
+    }
+    XSRETURN_UNDEF;
+  }
+
+  entry = &ctx->frame->pending_entries[ctx->entry_index];
+  if (SvOK(resolved_sv) && sv_derived_from(resolved_sv, "GraphQL::Houtou::Runtime::Outcome")) {
+    gql_runtime_vm_async_pending_entry_store_outcome(aTHX_ entry, resolved_sv);
+  } else {
+    gql_runtime_vm_async_pending_entry_store_sv(aTHX_ entry, resolved_sv);
+  }
+
+  if (ctx->frame->pending_unresolved > 0) {
+    ctx->frame->pending_unresolved--;
+  }
+  if (ctx->frame->pending_unresolved == 0) {
+    gql_runtime_vm_async_scheduler_enqueue_frame(state, ctx->frame);
+    if (!state->async_scheduler_draining) {
+      gql_runtime_vm_async_scheduler_drain(aTHX_ ctx->state_sv, state);
+    }
+  }
+
+  if (tmp_resolved) {
+    SvREFCNT_dec(tmp_resolved);
+  }
+  XSRETURN_UNDEF;
+}
+
+static XS(gql_runtime_vm_xs_list_pending_callback)
+{
+  dVAR;
+  dXSARGS;
+  gql_runtime_vm_list_pending_callback_ctx_t *ctx = INT2PTR(
+    gql_runtime_vm_list_pending_callback_ctx_t *,
+    CvXSUBANY(cv).any_ptr
+  );
+  SV *resolved_sv = &PL_sv_undef;
+  SV *tmp_resolved = NULL;
+  gql_runtime_vm_exec_state_handle_t *state = NULL;
+
+  if (!ctx || !ctx->pending || !ctx->pending->values_value || !ctx->state_sv) {
+    XSRETURN_UNDEF;
+  }
+
+  if (items == 1) {
+    resolved_sv = ST(0) ? ST(0) : &PL_sv_undef;
+  } else if (items > 1) {
+    AV *resolved_av = newAV();
+    I32 i;
+    for (i = 0; i < items; i++) {
+      av_push(resolved_av, newSVsv(ST(i) ? ST(i) : &PL_sv_undef));
+    }
+    tmp_resolved = newRV_noinc((SV *)resolved_av);
+    resolved_sv = tmp_resolved;
+  }
+  state = gql_runtime_vm_expect_exec_state_handle(aTHX_ ctx->state_sv);
+
+  gql_runtime_vm_native_list_store_at(
+    aTHX_
+    ctx->pending->values_value,
+    ctx->index,
+    gql_runtime_vm_native_value_from_list_pending_sv(aTHX_ resolved_sv)
+  );
+  if (ctx->pending->unresolved_count > 0) {
+    ctx->pending->unresolved_count--;
+  }
+  if (ctx->pending->unresolved_count == 0 && ctx->pending->owner_frame) {
+    gql_runtime_vm_async_scheduler_enqueue_frame(state, ctx->pending->owner_frame);
+    if (!state->async_scheduler_draining) {
+      gql_runtime_vm_async_scheduler_drain(aTHX_ ctx->state_sv, state);
+    }
+  }
+
+  if (tmp_resolved) {
+    SvREFCNT_dec(tmp_resolved);
+  }
+  XSRETURN_UNDEF;
 }
 
 static XS(gql_runtime_vm_xs_error_callback)
@@ -1494,6 +2689,215 @@ gql_runtime_vm_call_all_promise_xs_sv(
 }
 
 static SV *
+gql_runtime_vm_promise_xs_new_deferred_sv(pTHX)
+{
+  dSP;
+  SV *ret = NULL;
+
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  PUSHMARK(SP);
+  PUTBACK;
+  call_pv("Promise::XS::deferred", G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (!SvTRUE(ERRSV) && SP > PL_stack_base) {
+    SV *stack_ret = POPs;
+    ret = stack_ret ? newSVsv(stack_ret) : newSVsv(&PL_sv_undef);
+  } else if (SP > PL_stack_base) {
+    (void)POPs;
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  if (!ret || !SvOK(ret)) {
+    croak("failed to create Promise::XS deferred");
+  }
+  return ret;
+}
+
+static SV *
+gql_runtime_vm_promise_xs_deferred_promise_sv(pTHX_ SV *deferred_sv)
+{
+  dSP;
+  SV *ret = NULL;
+
+  if (!deferred_sv || !SvOK(deferred_sv)) {
+    return newSVsv(&PL_sv_undef);
+  }
+
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  PUSHMARK(SP);
+  XPUSHs(deferred_sv);
+  PUTBACK;
+  call_method("promise", G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (!SvTRUE(ERRSV) && SP > PL_stack_base) {
+    SV *stack_ret = POPs;
+    ret = stack_ret ? newSVsv(stack_ret) : newSVsv(&PL_sv_undef);
+  } else if (SP > PL_stack_base) {
+    (void)POPs;
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  if (!ret || !SvOK(ret)) {
+    croak("failed to fetch Promise::XS deferred promise");
+  }
+  return ret;
+}
+
+static void
+gql_runtime_vm_promise_xs_deferred_resolve_sv(pTHX_ SV *deferred_sv, SV *value_sv)
+{
+  dSP;
+
+  if (!deferred_sv || !SvOK(deferred_sv)) {
+    return;
+  }
+
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  PUSHMARK(SP);
+  XPUSHs(deferred_sv);
+  XPUSHs(value_sv ? value_sv : &PL_sv_undef);
+  PUTBACK;
+  call_pv("GraphQL::Houtou::Promise::PromiseXS::resolve_deferred_xs", G_VOID | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV)) {
+    SV *error_sv = newSVsv(ERRSV);
+    sv_setsv(ERRSV, &PL_sv_undef);
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak("failed to resolve Promise::XS deferred: %s", SvPV_nolen(error_sv));
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+}
+
+static SV *
+gql_runtime_vm_new_list_pending_callback_sv(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_list_pending_t *pending,
+  IV index
+)
+{
+  CV *cv;
+  SV *rv;
+  gql_runtime_vm_list_pending_callback_ctx_t *ctx;
+
+  Newxz(ctx, 1, gql_runtime_vm_list_pending_callback_ctx_t);
+  ctx->pending = pending;
+  ctx->state_sv = state_sv ? SvREFCNT_inc_simple_NN(state_sv) : NULL;
+  gql_runtime_vm_list_pending_incref(pending);
+  ctx->index = index;
+
+  cv = newXS(NULL, gql_runtime_vm_xs_list_pending_callback, __FILE__);
+  CvXSUBANY(cv).any_ptr = ctx;
+  gql_runtime_vm_attach_callback_magic_ptr(aTHX_ (SV *)cv, &gql_runtime_vm_list_pending_callback_ctx_vtbl, ctx);
+  rv = newRV_noinc((SV *)cv);
+  return rv;
+}
+
+static SV *
+gql_runtime_vm_list_pending_handle_sv(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_exec_state_handle_t *s,
+  AV *values_av,
+  gql_runtime_vm_path_frame_t *path_frame
+)
+{
+  gql_runtime_vm_list_pending_t *pending;
+  SSize_t i;
+
+  if (!values_av) {
+    return gql_runtime_vm_new_outcome_from_owned_native_value_handle_sv(
+      aTHX_
+      GQL_VM_KIND_LIST,
+      gql_runtime_vm_new_native_value_list()
+    );
+  }
+
+  Newxz(pending, 1, gql_runtime_vm_list_pending_t);
+  pending->refcount = 1;
+  pending->owner_frame = NULL;
+  pending->values_value = gql_runtime_vm_new_native_value_list();
+  pending->unresolved_count = 0;
+
+  for (i = 0; i <= av_len(values_av); i++) {
+    SV **svp = av_fetch(values_av, i, 0);
+    SV *value_sv = (svp && *svp) ? *svp : &PL_sv_undef;
+
+    if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, value_sv)) {
+      pending->unresolved_count++;
+      gql_runtime_vm_native_list_store_at(
+        aTHX_
+        pending->values_value,
+        i,
+        gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef)
+      );
+    } else {
+      gql_runtime_vm_native_list_store_at(
+        aTHX_
+        pending->values_value,
+        i,
+        gql_runtime_vm_native_value_from_list_pending_sv(aTHX_ value_sv)
+      );
+    }
+  }
+
+  for (i = 0; i <= av_len(values_av); i++) {
+    SV **svp = av_fetch(values_av, i, 0);
+    SV *value_sv = (svp && *svp) ? *svp : &PL_sv_undef;
+
+    if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, value_sv)) {
+      SV *callback_sv = gql_runtime_vm_new_list_pending_callback_sv(aTHX_ state_sv, pending, i);
+      SV *error_callback_sv = gql_runtime_vm_new_error_callback_sv(aTHX_ path_frame);
+      SV *ret;
+
+      ret = gql_runtime_vm_call_then_promise_for_state_sv(
+        aTHX_
+        s,
+        value_sv,
+        callback_sv,
+        error_callback_sv,
+        path_frame
+      );
+
+      SvREFCNT_dec(callback_sv);
+      SvREFCNT_dec(error_callback_sv);
+
+      if (ret && SvOK(ret) && sv_derived_from(ret, "GraphQL::Houtou::Runtime::Outcome")) {
+        gql_runtime_vm_native_list_store_at(
+          aTHX_
+          pending->values_value,
+          i,
+          gql_runtime_vm_native_value_from_list_pending_sv(aTHX_ ret)
+        );
+        pending->unresolved_count--;
+      }
+      if (ret) {
+        SvREFCNT_dec(ret);
+      }
+    }
+  }
+  {
+    SV *ret = gql_runtime_vm_wrap_list_pending_sv(aTHX_ pending);
+    gql_runtime_vm_list_pending_decref(aTHX_ pending);
+    return ret;
+  }
+}
+
+static SV *
 gql_runtime_vm_call_then_promise_for_state_sv(
   pTHX_
   const gql_runtime_vm_exec_state_handle_t *s,
@@ -1570,9 +2974,31 @@ gql_runtime_vm_exec_state_resolve_runtime_type_current_sv(
   SV **error_out
 )
 {
-  const gql_runtime_vm_native_runtime_t *runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
   const gql_runtime_vm_native_slot_t *slot = (s && s->cursor) ? gql_runtime_vm_cursor_current_native_slot(s->cursor) : NULL;
-  SV *abstract_type_sv = gql_runtime_vm_state_current_return_type_sv(aTHX_ s, NULL, NULL);
+  return gql_runtime_vm_exec_state_resolve_runtime_type_for_slot_sv(
+    aTHX_
+    state_sv,
+    s,
+    slot,
+    resolved_sv,
+    path_frame,
+    error_out
+  );
+}
+
+static SV *
+gql_runtime_vm_exec_state_resolve_runtime_type_for_slot_sv(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_exec_state_handle_t *s,
+  const gql_runtime_vm_native_slot_t *slot,
+  SV *resolved_sv,
+  gql_runtime_vm_path_frame_t *path_frame,
+  SV **error_out
+)
+{
+  const gql_runtime_vm_native_runtime_t *runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+  SV *abstract_type_sv = gql_runtime_vm_state_return_type_for_slot_sv(aTHX_ s, slot);
   SV *info_sv = NULL;
   HV *schema_hv;
   SV *runtime_cache_sv;
@@ -1611,12 +3037,12 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
   SV *state_sv,
   gql_runtime_vm_exec_state_handle_t *s,
   gql_runtime_vm_path_frame_t *path_frame,
+  const gql_runtime_vm_native_op_t *op,
+  const gql_runtime_vm_native_slot_t *slot,
   SV *resolved_sv
 )
 {
   const gql_runtime_vm_native_runtime_t *runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
-  const gql_runtime_vm_native_op_t *op = (s && s->cursor) ? gql_runtime_vm_cursor_current_native_op(s->cursor) : NULL;
-  const gql_runtime_vm_native_slot_t *slot = (s && s->cursor) ? gql_runtime_vm_cursor_current_native_slot(s->cursor) : NULL;
   IV complete_code = op ? op->complete_code : 0;
 
   slot = gql_runtime_vm_effective_slot(runtime, slot);
@@ -1640,8 +3066,15 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         s,
         child_block_index,
         resolved_sv,
-        path_frame
+        path_frame,
+        1
       );
+      if (gql_runtime_vm_is_block_frame_value_sv(child_value)) {
+        return child_value;
+      }
+      if (child_value && SvOK(child_value) && sv_derived_from(child_value, "GraphQL::Houtou::Runtime::Outcome")) {
+        return child_value;
+      }
       if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, child_value)) {
         SV *callback_sv = gql_runtime_vm_wrap_object_outcome_callback_sv(aTHX);
         SV *ret = gql_runtime_vm_call_then_promise_for_state_sv(
@@ -1695,7 +3128,8 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
             s,
             child_block_index,
             item_sv,
-            item_path
+            item_path,
+            0
           );
           gql_runtime_vm_path_frame_decref(item_path);
           SvREFCNT_dec(item_key);
@@ -1710,30 +3144,15 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
       }
 
       if (has_promise) {
-        SV *aggregate = gql_runtime_vm_call_all_promise_for_state_sv(
+        SV *ret = gql_runtime_vm_list_pending_handle_sv(
           aTHX_
+          state_sv,
           s,
           resolved_items_av,
           path_frame
         );
         SvREFCNT_dec((SV *)resolved_items_av);
-        if (aggregate && SvOK(aggregate) && sv_derived_from(aggregate, "GraphQL::Houtou::Runtime::Outcome")) {
-          return aggregate;
-        }
-        {
-          SV *callback_sv = gql_runtime_vm_wrap_list_outcome_callback_sv(aTHX);
-          SV *ret = gql_runtime_vm_call_then_promise_for_state_sv(
-            aTHX_
-            s,
-            aggregate,
-            callback_sv,
-            NULL,
-            path_frame
-          );
-          SvREFCNT_dec(callback_sv);
-          SvREFCNT_dec(aggregate);
-          return ret;
-        }
+        return ret;
       }
 
       {
@@ -1753,10 +3172,11 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         return gql_runtime_vm_new_outcome_handle_sv(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, &PL_sv_undef);
       }
 
-      runtime_type_sv = gql_runtime_vm_exec_state_resolve_runtime_type_current_sv(
+      runtime_type_sv = gql_runtime_vm_exec_state_resolve_runtime_type_for_slot_sv(
         aTHX_
         state_sv,
         s,
+        slot,
         resolved_sv,
         path_frame,
         &runtime_error_sv
@@ -1793,8 +3213,15 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
           s,
           child_block_index,
           resolved_sv,
-          path_frame
+          path_frame,
+          1
         );
+        if (gql_runtime_vm_is_block_frame_value_sv(child_value)) {
+          return child_value;
+        }
+        if (child_value && SvOK(child_value) && sv_derived_from(child_value, "GraphQL::Houtou::Runtime::Outcome")) {
+          return child_value;
+        }
         if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, child_value)) {
           SV *callback_sv = gql_runtime_vm_wrap_object_outcome_callback_sv(aTHX);
           SV *ret = gql_runtime_vm_call_then_promise_for_state_sv(
@@ -1838,14 +3265,11 @@ static SV *
 gql_runtime_vm_state_current_return_type_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *op_sv, SV *slot_sv)
 {
   const gql_runtime_vm_native_slot_t *native_slot;
-  const char *type_name;
   SV *type_name_sv;
 
   native_slot = (s && s->cursor) ? gql_runtime_vm_cursor_current_native_slot(s->cursor) : NULL;
-  if (native_slot && native_slot->return_type_name && *native_slot->return_type_name) {
-    type_name_sv = newSVpv(native_slot->return_type_name, 0);
-    type_name_sv = sv_2mortal(type_name_sv);
-    return gql_runtime_vm_state_type_by_name_sv(aTHX_ s, type_name_sv);
+  if (native_slot) {
+    return gql_runtime_vm_state_return_type_for_slot_sv(aTHX_ s, native_slot);
   }
 
   type_name_sv = gql_runtime_vm_op_slot_sv(aTHX_ op_sv, 8);
@@ -1853,6 +3277,25 @@ gql_runtime_vm_state_current_return_type_sv(pTHX_ gql_runtime_vm_exec_state_hand
     return NULL;
   }
 
+  return gql_runtime_vm_state_type_by_name_sv(aTHX_ s, type_name_sv);
+}
+
+static SV *
+gql_runtime_vm_state_return_type_for_slot_sv(
+  pTHX_
+  gql_runtime_vm_exec_state_handle_t *s,
+  const gql_runtime_vm_native_slot_t *slot
+)
+{
+  const gql_runtime_vm_native_runtime_t *runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+  SV *type_name_sv;
+
+  slot = gql_runtime_vm_effective_slot(runtime, slot);
+  if (!slot || !slot->return_type_name || !*slot->return_type_name) {
+    return NULL;
+  }
+
+  type_name_sv = sv_2mortal(newSVpv(slot->return_type_name, 0));
   return gql_runtime_vm_state_type_by_name_sv(aTHX_ s, type_name_sv);
 }
 
@@ -2397,10 +3840,12 @@ gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_
 {
   gql_runtime_vm_cursor_t snapshot;
   gql_runtime_vm_field_frame_t *saved_field_frame;
+  gql_runtime_vm_field_frame_t stack_field_frame;
   gql_runtime_vm_path_frame_t *base_path_ptr = NULL;
   const gql_runtime_vm_native_block_t *block_ptr = NULL;
 
   Zero(&snapshot, 1, gql_runtime_vm_cursor_t);
+  Zero(&stack_field_frame, 1, gql_runtime_vm_field_frame_t);
   if (base_path && SvOK(base_path) && SvROK(base_path) && SvIOK(SvRV(base_path)) && SvUV(SvRV(base_path)) != 0) {
     base_path_ptr = INT2PTR(gql_runtime_vm_path_frame_t *, SvUV(SvRV(base_path)));
   }
@@ -2458,12 +3903,16 @@ gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_
         base_path_ptr,
         slot
       );
-      gql_runtime_vm_field_frame_t *field_frame = gql_runtime_vm_new_field_frame_struct(aTHX_ source, path_frame);
-      gql_runtime_vm_path_frame_decref(path_frame);
       if (s->field_frame && s->field_frame != saved_field_frame) {
         gql_runtime_vm_free_field_frame(aTHX_ s->field_frame);
       }
-      s->field_frame = field_frame;
+      s->field_frame = gql_runtime_vm_init_stack_field_frame(
+        aTHX_
+        &stack_field_frame,
+        source,
+        path_frame
+      );
+      gql_runtime_vm_path_frame_decref(path_frame);
     }
     outcome = gql_runtime_vm_exec_state_execute_current_op_sync_now(aTHX_ state_sv, s);
     gql_runtime_vm_consume_current_outcome_now(aTHX_ s, outcome);
@@ -2503,7 +3952,7 @@ gql_runtime_vm_exec_state_execute_block_async_sv(pTHX_ SV *state_sv, gql_runtime
   }
 
   return gql_runtime_vm_exec_state_execute_block_async_path_sv(
-    aTHX_ state_sv, s, block_index, source, base_path_ptr
+    aTHX_ state_sv, s, block_index, source, base_path_ptr, 0
   );
 }
 
@@ -2514,14 +3963,17 @@ gql_runtime_vm_exec_state_execute_block_async_path_sv(
   gql_runtime_vm_exec_state_handle_t *s,
   IV block_index,
   SV *source,
-  gql_runtime_vm_path_frame_t *base_path_ptr
+  gql_runtime_vm_path_frame_t *base_path_ptr,
+  U8 return_pending_handle
 )
 {
   gql_runtime_vm_cursor_t snapshot;
   gql_runtime_vm_field_frame_t *saved_field_frame;
+  gql_runtime_vm_field_frame_t stack_field_frame;
   const gql_runtime_vm_native_block_t *block_ptr = NULL;
 
   Zero(&snapshot, 1, gql_runtime_vm_cursor_t);
+  Zero(&stack_field_frame, 1, gql_runtime_vm_field_frame_t);
   saved_field_frame = s ? s->field_frame : NULL;
   gql_runtime_vm_cursor_snapshot_copy(aTHX_ &snapshot, (s && s->cursor) ? s->cursor : NULL);
   if (s->cursor) {
@@ -2575,26 +4027,40 @@ gql_runtime_vm_exec_state_execute_block_async_path_sv(
         base_path_ptr,
         slot
       );
-      gql_runtime_vm_field_frame_t *field_frame;
+      gql_runtime_vm_outcome_t *outcome = NULL;
       SV *result_sv;
 
-      field_frame = gql_runtime_vm_new_field_frame_struct(aTHX_ source, path_frame);
-      gql_runtime_vm_path_frame_decref(path_frame);
       if (s->field_frame && s->field_frame != saved_field_frame) {
         gql_runtime_vm_free_field_frame(aTHX_ s->field_frame);
       }
-      s->field_frame = field_frame;
+      s->field_frame = gql_runtime_vm_init_stack_field_frame(
+        aTHX_
+        &stack_field_frame,
+        source,
+        path_frame
+      );
+      gql_runtime_vm_path_frame_decref(path_frame);
 
-      result_sv = gql_runtime_vm_exec_state_execute_current_op_async_sv(aTHX_ state_sv, s);
-      gql_runtime_vm_consume_current_result_now(aTHX_ s, result_sv);
-      if (result_sv) {
-        SvREFCNT_dec(result_sv);
+      result_sv = gql_runtime_vm_exec_state_execute_current_op_async_sv(
+        aTHX_
+        state_sv,
+        s,
+        &outcome
+      );
+      if (outcome) {
+        gql_runtime_vm_consume_current_outcome_now(aTHX_ s, outcome);
+        gql_runtime_vm_outcome_decref(aTHX_ outcome);
+      } else {
+        gql_runtime_vm_consume_current_result_now(aTHX_ state_sv, s, result_sv);
+        if (result_sv) {
+          SvREFCNT_dec(result_sv);
+        }
       }
     }
   }
 
   {
-    SV *result = gql_runtime_vm_finalize_current_block_now(aTHX_ s, &PL_sv_undef);
+    SV *result = gql_runtime_vm_finalize_current_block_now(aTHX_ state_sv, s, &PL_sv_undef, return_pending_handle);
     if (s && s->cursor) {
       gql_runtime_vm_cursor_restore_copy(aTHX_ s->cursor, &snapshot);
     }
@@ -2821,6 +4287,7 @@ gql_runtime_vm_exec_state_resolve_current_value_sv(
   SV **error_out
 )
 {
+  const gql_runtime_vm_native_runtime_t *runtime;
   const gql_runtime_vm_native_block_t *block;
   const gql_runtime_vm_native_slot_t *slot;
   const char *field_name;
@@ -2836,8 +4303,10 @@ gql_runtime_vm_exec_state_resolve_current_value_sv(
     return newSVsv(&PL_sv_undef);
   }
 
+  runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
   block = gql_runtime_vm_cursor_current_native_block(s->cursor);
   slot = gql_runtime_vm_cursor_current_native_slot(s->cursor);
+  slot = gql_runtime_vm_effective_slot(runtime, slot);
   field_name = slot ? slot->field_name : "";
   resolver_sv = gql_runtime_vm_state_current_resolver_sv(aTHX_ s);
 
@@ -2849,19 +4318,42 @@ gql_runtime_vm_exec_state_resolve_current_value_sv(
 
   if (resolver_sv && SvOK(resolver_sv)) {
     SV *args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
-    SV *info_sv = gql_runtime_vm_new_lazy_info_for_path_sv(aTHX_ state_sv, s, path_frame);
-    SV *return_type_sv = gql_runtime_vm_state_current_return_type_sv(aTHX_ s, NULL, NULL);
-    resolved_sv = gql_runtime_vm_call_resolver_sv(
-      aTHX_ resolver_sv,
-      source_sv,
-      args_sv,
-      s->context,
-      info_sv,
-      return_type_sv,
-      error_out
-    );
+    SV *return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
+
+    if (gql_runtime_vm_slot_uses_native_fast_abi(slot)) {
+      resolved_sv = gql_runtime_vm_call_cb4_nonfatal(
+        aTHX_
+        resolver_sv,
+        source_sv,
+        args_sv,
+        s->context,
+        return_type_sv ? return_type_sv : &PL_sv_undef,
+        error_out
+      );
+    } else {
+      SV *info_sv = gql_runtime_vm_new_lazy_info_for_path_sv(aTHX_ state_sv, s, path_frame);
+
+      if (!return_type_sv && !gql_runtime_vm_slot_uses_explicit_generic_fast_abi(slot)) {
+        return_type_sv = gql_runtime_vm_state_current_return_type_sv(aTHX_ s, NULL, NULL);
+      }
+      if (!return_type_sv && gql_runtime_vm_slot_uses_explicit_generic_fast_abi(slot)) {
+        croak("native VM slot type object is missing for explicit generic callback");
+      }
+
+      resolved_sv = gql_runtime_vm_call_cb5_nonfatal(
+        aTHX_
+        resolver_sv,
+        source_sv,
+        args_sv,
+        s->context,
+        info_sv,
+        return_type_sv ? return_type_sv : &PL_sv_undef,
+        error_out
+      );
+      SvREFCNT_dec(info_sv);
+    }
+
     SvREFCNT_dec(args_sv);
-    SvREFCNT_dec(info_sv);
     return resolved_sv ? resolved_sv : newSVsv(&PL_sv_undef);
   }
 
@@ -2888,41 +4380,37 @@ gql_runtime_vm_exec_state_complete_async_sv(
   SV *resolved_sv
 )
 {
-  gql_runtime_vm_cursor_t snapshot;
-  gql_runtime_vm_field_frame_t *saved_field_frame = NULL;
-  gql_runtime_vm_field_frame_t *field_frame = NULL;
+  const gql_runtime_vm_native_runtime_t *runtime;
+  const gql_runtime_vm_native_block_t *block;
+  const gql_runtime_vm_native_op_t *op;
+  const gql_runtime_vm_native_slot_t *slot;
   SV *result_sv = NULL;
 
-  Zero(&snapshot, 1, gql_runtime_vm_cursor_t);
-  if (!s || !s->cursor) {
+  if (!s || !s->native_program) {
     return newSVsv(&PL_sv_undef);
   }
-
-  saved_field_frame = s->field_frame;
-  gql_runtime_vm_cursor_snapshot_copy(aTHX_ &snapshot, s->cursor);
-  s->cursor->block_index = block_index;
-  s->cursor->slot_index = slot_index;
-  s->cursor->op_index = op_index;
-
-  field_frame = gql_runtime_vm_new_field_frame_struct(aTHX_ &PL_sv_undef, path_ptr);
-  if (s->field_frame && s->field_frame != saved_field_frame) {
-    gql_runtime_vm_free_field_frame(aTHX_ s->field_frame);
+  runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+  if (block_index < 0 || block_index >= s->native_program->block_count) {
+    return newSVsv(&PL_sv_undef);
   }
-  s->field_frame = field_frame;
+  block = &s->native_program->blocks[block_index];
+  if (op_index < 0 || op_index >= block->op_count) {
+    return newSVsv(&PL_sv_undef);
+  }
+  op = &block->ops[op_index];
+  if (slot_index < 0 || slot_index >= block->slot_count) {
+    return newSVsv(&PL_sv_undef);
+  }
+  slot = gql_runtime_vm_effective_slot(runtime, &block->slots[slot_index]);
 
   result_sv = gql_runtime_vm_exec_state_complete_current_native_async_sv(
     aTHX_ state_sv,
     s,
     path_ptr,
+    op,
+    slot,
     resolved_sv
   );
-
-  gql_runtime_vm_cursor_restore_copy(aTHX_ s->cursor, &snapshot);
-  gql_runtime_vm_cursor_destroy_copy(aTHX_ &snapshot);
-  if (s->field_frame && s->field_frame != saved_field_frame) {
-    gql_runtime_vm_free_field_frame(aTHX_ s->field_frame);
-  }
-  s->field_frame = saved_field_frame;
 
   return result_sv ? result_sv : newSVsv(&PL_sv_undef);
 }
@@ -2947,21 +4435,12 @@ gql_runtime_vm_then_complete_current_sv(
     gql_runtime_vm_effective_slot(runtime, (s && s->cursor) ? gql_runtime_vm_cursor_current_native_slot(s->cursor) : NULL);
   const char *result_name_pv = (slot && slot->result_name && *slot->result_name) ? slot->result_name : NULL;
   STRLEN result_name_len = result_name_pv ? (STRLEN)strlen(result_name_pv) : 0;
+  IV complete_code = op ? op->complete_code : GQL_VM_COMPLETE_GENERIC;
   SV *callback_sv;
   SV *error_callback_sv;
   SV *ret = NULL;
 
-  if (op && op->complete_code == GQL_VM_COMPLETE_GENERIC) {
-    callback_sv = gql_runtime_vm_identity_callback_sv(aTHX);
-  } else {
-    callback_sv = gql_runtime_vm_new_complete_callback_sv(
-      aTHX_ state_sv,
-      path_frame,
-      block_index,
-      slot_index,
-      op_index
-    );
-  }
+  callback_sv = gql_runtime_vm_identity_callback_sv(aTHX);
   error_callback_sv = gql_runtime_vm_new_error_callback_sv(aTHX_ path_frame);
 
   ret = gql_runtime_vm_call_then_promise_for_state_sv(
@@ -2981,37 +4460,81 @@ gql_runtime_vm_then_complete_current_sv(
   }
 
   if (op
-      && op->complete_code == GQL_VM_COMPLETE_GENERIC
       && ret
       && SvOK(ret)
       && !sv_derived_from(ret, "GraphQL::Houtou::Runtime::Outcome")
+      && gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, ret)
       && s
       && s->frame
       && result_name_pv
       && result_name_len > 0) {
-    gql_runtime_vm_block_frame_push_pending_pvn_with_kind(
+    gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
       aTHX_
       s->frame,
       result_name_pv,
       result_name_len,
+      1,
       ret,
-      GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
+      complete_code == GQL_VM_COMPLETE_GENERIC
+        ? GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
+        : GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV,
+      path_frame,
+      block_index,
+      slot_index,
+      op_index
     );
     SvREFCNT_dec(ret);
     return newSVsv(&PL_sv_undef);
+  }
+
+  if (ret
+      && SvOK(ret)
+      && !sv_derived_from(ret, "GraphQL::Houtou::Runtime::Outcome")
+      && !gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, ret)) {
+    SV *completed_sv;
+
+    if (complete_code == GQL_VM_COMPLETE_GENERIC) {
+      completed_sv = gql_runtime_vm_new_outcome_handle_sv(
+        aTHX_
+        GQL_VM_KIND_SCALAR,
+        ret,
+        &PL_sv_undef
+      );
+    } else {
+      completed_sv = gql_runtime_vm_exec_state_complete_async_sv(
+        aTHX_
+        state_sv,
+        s,
+        path_frame,
+        block_index,
+        slot_index,
+        op_index,
+        ret
+      );
+    }
+    SvREFCNT_dec(ret);
+    return completed_sv ? completed_sv : newSVsv(&PL_sv_undef);
   }
 
   return ret ? ret : newSVsv(&PL_sv_undef);
 }
 
 static SV *
-gql_runtime_vm_exec_state_execute_current_op_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s)
+gql_runtime_vm_exec_state_execute_current_op_async_sv(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_exec_state_handle_t *s,
+  gql_runtime_vm_outcome_t **outcome_out
+)
 {
   gql_runtime_vm_path_frame_t *path_frame = NULL;
   SV *resolved_sv = NULL;
   SV *error_sv = NULL;
   SV *result_sv = NULL;
 
+  if (outcome_out) {
+    *outcome_out = NULL;
+  }
   if (!s || !s->field_frame || !s->cursor) {
     return newSVsv(&PL_sv_undef);
   }
@@ -3026,7 +4549,15 @@ gql_runtime_vm_exec_state_execute_current_op_async_sv(pTHX_ SV *state_sv, gql_ru
     &error_sv
   );
   if (error_sv && SvOK(error_sv)) {
-    result_sv = gql_runtime_vm_new_error_outcome_for_path_sv(aTHX_ error_sv, path_frame);
+    if (outcome_out) {
+      *outcome_out = gql_runtime_vm_new_error_outcome_struct_for_path(
+        aTHX_
+        error_sv,
+        path_frame
+      );
+    } else {
+      result_sv = gql_runtime_vm_new_error_outcome_for_path_sv(aTHX_ error_sv, path_frame);
+    }
     SvREFCNT_dec(error_sv);
     goto done_async_current_op;
   }
@@ -3055,6 +4586,15 @@ gql_runtime_vm_exec_state_execute_current_op_async_sv(pTHX_ SV *state_sv, gql_ru
     s->cursor->op_index,
     resolved_sv
   );
+  if (outcome_out
+      && result_sv
+      && SvOK(result_sv)
+      && sv_derived_from(result_sv, "GraphQL::Houtou::Runtime::Outcome")) {
+    *outcome_out = gql_runtime_vm_expect_outcome(aTHX_ result_sv);
+    gql_runtime_vm_outcome_incref(*outcome_out);
+    SvREFCNT_dec(result_sv);
+    result_sv = NULL;
+  }
 
 done_async_current_op:
   if (resolved_sv) {
@@ -3408,6 +4948,10 @@ gql_runtime_vm_new_exec_state_handle_sv(
   state->empty_args = (empty_args && SvOK(empty_args))
     ? newSVsv(empty_args)
     : gql_runtime_vm_empty_args_sv(aTHX);
+  state->async_ready_frame_count = 0;
+  state->async_ready_frame_capacity = 0;
+  state->async_ready_frames = NULL;
+  state->async_scheduler_draining = 0;
   return gql_runtime_vm_new_handle_sv(aTHX_ pkg, state);
 }
 
@@ -3493,7 +5037,12 @@ gql_runtime_vm_execute_native_program_auto_sv(
     effective_root,
     &PL_sv_undef
   );
-  ret = gql_runtime_vm_exec_state_finalize_async_response_sv(aTHX_ state_sv, state, data_sv);
+  if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ state, data_sv)) {
+    ret = data_sv;
+  } else {
+    ret = gql_runtime_vm_exec_state_materialize_response_sv(aTHX_ state, data_sv);
+    SvREFCNT_dec(data_sv);
+  }
 
   SvREFCNT_dec(state_sv);
   SvREFCNT_dec(prepared_variables_sv);
@@ -3926,6 +5475,20 @@ static SV *
 gql_runtime_vm_clone_value_sv(pTHX_ SV *value)
 {
   return newSVsv(value ? value : &PL_sv_undef);
+}
+
+/*
+ * Async pending paths store callback values beyond the current Perl stack.
+ * Keep these on the conservative clone path until the scheduler carries
+ * stronger ownership provenance for every stored value.
+ */
+static SV *
+gql_runtime_vm_snapshot_scalarish_value_sv(pTHX_ SV *value)
+{
+  if (!value || !SvOK(value)) {
+    return newSVsv(&PL_sv_undef);
+  }
+  return newSVsv(value);
 }
 
 static SV *
@@ -6310,7 +7873,9 @@ block_frame_finalize_xs(frame, writer)
         aTHX_
         state,
         GQL_VM_PROMISE_BACKEND_PROMISE_XS,
-        writer_state
+        writer_state,
+        &PL_sv_undef,
+        0
       );
     }
   OUTPUT:
@@ -6475,7 +8040,12 @@ exec_state_run_program_async_xs(state, root_value = &PL_sv_undef)
         effective_root,
         &PL_sv_undef
       );
-      RETVAL = gql_runtime_vm_exec_state_finalize_async_response_sv(aTHX_ state, s, data_sv);
+      if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, data_sv)) {
+        RETVAL = data_sv;
+      } else {
+        RETVAL = gql_runtime_vm_exec_state_materialize_response_sv(aTHX_ s, data_sv);
+        SvREFCNT_dec(data_sv);
+      }
     }
   OUTPUT:
     RETVAL
@@ -6750,6 +8320,21 @@ DESTROY(self)
       }
     }
 
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::Runtime::ListPending
+
+void
+DESTROY(self)
+    SV *self
+  CODE:
+    if (self && SvROK(self)) {
+      SV *inner_sv = SvRV(self);
+      if (SvIOK(inner_sv) && SvUV(inner_sv) != 0) {
+        gql_runtime_vm_list_pending_t *pending = INT2PTR(gql_runtime_vm_list_pending_t *, SvUV(inner_sv));
+        sv_setuv(inner_sv, 0);
+        gql_runtime_vm_list_pending_decref(aTHX_ pending);
+      }
+    }
+
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::Runtime::ErrorRecord
 
 void
@@ -6835,6 +8420,7 @@ DESTROY(self)
           state->frame_stack[state->frame_stack_count] = NULL;
         }
         Safefree(state->frame_stack);
+        Safefree(state->async_ready_frames);
         state->frame = NULL;
         gql_runtime_vm_free_field_frame(aTHX_ state->field_frame);
         state->field_frame = NULL;

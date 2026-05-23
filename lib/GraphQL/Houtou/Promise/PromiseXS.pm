@@ -48,4 +48,11 @@ sub maybe_get_promise_xs {
   return wantarray ? @fulfilled : $fulfilled[0];
 }
 
+sub resolve_deferred_xs {
+  my ($deferred, $value) = @_;
+  _load_promise_xs();
+  $deferred->resolve($value);
+  return;
+}
+
 1;

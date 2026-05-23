@@ -60,7 +60,7 @@
   - field-local execution state
   - XS opaque handle
 - `Outcome`
-  - kind-first の内部通貨
+  - kind-first のランタイムオブジェクト
   - XS opaque handle
 - `Writer`
   - outcome から response payload を構築

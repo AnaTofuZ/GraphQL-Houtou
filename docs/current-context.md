@@ -123,10 +123,10 @@
    - dialect/backend の選択 surface と benchmark/profile script 上の旧 option は削除済み
    - compat parser XSUB の公開 entrypoint も active mainline から削除済み
 
-## 内部通貨
+## 内部表現
 
-hot path の内部通貨は Perl の `{ data => ..., errors => ... }` ではなく、
-次の kind-first / state-first なオブジェクトです。
+hot path の内部表現は Perl の `{ data => ..., errors => ... }` ではなく、
+次の kind-first / state-first なランタイムオブジェクトです。
 
 - `ExecState`
 - `Cursor`
@@ -348,7 +348,7 @@ fresh `./Build build` 済み環境で、
 - `Runtime::ErrorRecord` は XS-owned native record を本体とする thin facade に寄せ、
   resolver/runtime error の message cleanup と path capture は `src/vm_runtime.h` 側で処理する
 - 現在の runtime hot path では、`Outcome` / `Writer` / `ErrorRecord` / `FieldFrame` などの
-  Perl hash/array は内部通貨ではなく、境界用の facade に限定する方向で再実装している
+  Perl hash/array は内部表現ではなく、境界用の facade に限定する方向で再実装している
 - `FieldFrame` の `outcome` は XS-owned `gql_runtime_vm_outcome_t *` を直接保持し、
   `BlockFrame` の pending queue だけは promise cold path のため `SV*` queue として維持する。
   これにより sync hot path は C struct owner、promise path は Perl promise object owner という
@@ -908,3 +908,238 @@ perl -Ilib t/19_vm_execute.t
     と、leaf-heavy case を中心に改善した
   - sync `runtime_program` は query ごとに増減があるが、public mainline が `100k/s` を大きく超える水準は維持している
   - specialized `native_bundle` はほぼ横ばいで、今回の batch の主効果は async/public path 側にある
+
+- `optimize-async-batch-continuation` branch follow-up
+  - async pending entry に
+    - `path_frame`
+    - `block_index`
+    - `slot_index`
+    - `op_index`
+    - `result_name_pv_borrowed`
+    を追加し、field ごとの complete callback を作らず block finalize で completion できるようにした
+  - resolver promise は `identity + error_callback` で正規化し、
+    - generic field は raw value pending
+    - object/list/abstract は resolved-value pending
+    に分けて積む
+  - finalize callback は
+    - phase 1: resolved value を `complete_async(...)` へ流す
+    - phase 2: nested completion が返した outcome promise だけを再度 finalize する
+    形の 2-phase continuation になった
+  - immediate outcome pending は `Promise::XS::all(...)` に入れず、finalize 前に `values_value` へ直接 merge する
+  - pending result name は slot lifetime にぶら下がる borrowed pointer を使い、
+    async hot path の `savepvn/free` を削った
+  - `./Build test` 通過
+- latest median (after async batch continuation / native-first merge)
+  - sync:
+    - `nested_variable_object`
+      - `houtou_runtime_program`: `150436/s`
+      - `houtou_runtime_native_bundle`: `592111/s`
+    - `list_of_objects`
+      - `houtou_runtime_program`: `194869/s`
+      - `houtou_runtime_native_bundle`: `517476/s`
+    - `abstract_with_fragment`
+      - `houtou_runtime_program`: `187563/s`
+      - `houtou_runtime_native_bundle`: `570511/s`
+  - async (`--include-async --promise-backend promise_xs`):
+    - `async_scalar`
+      - `houtou_runtime_program`: `170666/s`
+    - `async_list`
+      - `houtou_runtime_program`: `127999/s`
+    - `async_object`
+      - `houtou_runtime_program`: `132741/s`
+    - `async_abstract`
+      - `houtou_runtime_program`: `111348/s`
+- 解釈:
+  - async mainline は直前 checkpoint 比で
+    - `async_scalar`: 約 `+2.7%`
+    - `async_list`: 約 `+3.5%`
+    - `async_object`: 約 `+3.7%`
+    - `async_abstract`: 約 `+1.0%`
+    と全 case で改善した
+  - object/list/abstract でも per-field complete callback を減らせたので、
+    leaf-heavy case 以外にも改善が広がった
+  - sync `native_bundle` も即時 outcome pending の pre-merge によりわずかに改善した
+
+- `optimize-async-scheduler` branch checkpoint
+  - async block finalize を Promise chain 主導から XS scheduler 主導へ寄せた
+    - root block は `Promise::XS::deferred` を 1 個だけ持ち、
+      ready block queue を drain して resolve する
+    - mainline の `block_frame_finalize_sv(...)` は `Promise::XS::all(...)`
+      を使わず、pending entry の state machine を arm/drain する
+  - `pending_entry` に `state_code` と borrowed result-name ownership を追加し、
+    pending result name の `savepvn/free` を減らした
+  - object/list/abstract を scheduler drain 側へ寄せ、
+    nested completion promise は phase 2 の pending として再投入する形にした
+  - 実装中に見つかった correctness bug を修正
+    - Promise callback の resolved value / outcome を copy する前に元の promise
+      を `SvREFCNT_dec` してしまい、scalar と outcome handle が壊れていた
+    - list item promise は resolved callback が同期実行される前提なので、
+      `unresolved_count` を callback 登録前に全件数えておかないと early resolve
+      して 2 件目以降が落ちる
+  - `./Build test` 通過
+- latest median (after async scheduler / root deferred / no-mainline-all)
+  - sync:
+    - `nested_variable_object`
+      - `houtou_runtime_program`: `151775/s`
+      - `houtou_runtime_native_bundle`: `589278/s`
+    - `list_of_objects`
+      - `houtou_runtime_program`: `194794/s`
+      - `houtou_runtime_native_bundle`: `510630/s`
+    - `abstract_with_fragment`
+      - `houtou_runtime_program`: `188449/s`
+      - `houtou_runtime_native_bundle`: `576014/s`
+  - async (`--include-async --promise-backend promise_xs`)
+    - `async_scalar`
+      - `houtou_runtime_program`: `180705/s`
+    - `async_list`
+      - `houtou_runtime_program`: `125754/s`
+    - `async_object`
+      - `houtou_runtime_program`: `140894/s`
+    - `async_abstract`
+      - `houtou_runtime_program`: `118153/s`
+- 解釈:
+  - async mainline は前 checkpoint 比で
+    - `async_scalar`: 約 `+5.9%`
+    - `async_list`: 約 `-1.8%`
+    - `async_object`: 約 `+6.1%`
+    - `async_abstract`: 約 `+6.1%`
+    となり、list 以外の case で scheduler 化の効果が出た
+  - list は `Promise::XS::all(...)` を外した代わりに list-specific scheduler の
+    固定コストが残っており、次の調整点になった
+  - sync `runtime_program` / `native_bundle` はほぼ横ばいで、今回の batch の
+    主効果は async path にある
+
+- `optimize-async-scheduler` branch checkpoint (rootless finalize fix / internal list pending)
+  - root async finalize の use-after-free を修正した
+    - root frame は `Promise::XS::resolved(...)` が即時 callback を走らせても、
+      `block_frame_finalize_sv(...)` の途中で promise handle を失わない
+    - rootless child block (`return_pending_handle = 1`) は finalize 時点で drain せず、
+      親 block に接続してから scheduler が処理する
+  - list async path から internal `Promise::XS::deferred` を外した
+    - `GraphQL::Houtou::Runtime::ListPending` handle を追加
+    - list item promise は `ListPending` 内で callback を張り、
+      全 item が揃ったら owner frame を ready queue へ戻す
+    - mainline では top-level response 以外の list 集約用 Promise を作らない
+  - async pending ownership をもう一段整理した
+    - child block / list pending の owner frame を explicit に持たせた
+    - pending result-name は引き続き borrowed pointer で持つ
+  - `./Build test` 通過
+- latest median (after rootless finalize fix / internal list pending)
+  - sync:
+    - `nested_variable_object`
+      - `houtou_runtime_program`: `146688/s`
+      - `houtou_runtime_native_bundle`: `572334/s`
+    - `list_of_objects`
+      - `houtou_runtime_program`: `187570/s`
+      - `houtou_runtime_native_bundle`: `494673/s`
+    - `abstract_with_fragment`
+      - `houtou_runtime_program`: `186163/s`
+      - `houtou_runtime_native_bundle`: `560274/s`
+  - async (`--include-async --promise-backend promise_xs`)
+    - `async_scalar`
+      - `houtou_runtime_program`: `176987/s`
+    - `async_list`
+      - `houtou_runtime_program`: `143479/s`
+    - `async_object`
+      - `houtou_runtime_program`: `135244/s`
+    - `async_abstract`
+      - `houtou_runtime_program`: `114840/s`
+- 解釈:
+  - 直前 checkpoint 比で async は
+    - `async_scalar`: 約 `-2.1%`
+    - `async_list`: 約 `+14.1%`
+    - `async_object`: 約 `-4.0%`
+    - `async_abstract`: 約 `-2.8%`
+    となり、internal list promise の撤去は list-heavy case に明確に効いた
+  - その代わり object / abstract はまだ internal outcome/materialization cost が残り、
+    次の主戦場は nested block / list item の native container 化と clone 削減になった
+  - sync `runtime_program` / `native_bundle` は小幅なぶれの範囲で、
+    今回の batch の主目的は async scheduler の内部 artifact 整理だった
+
+- `optimize-async-scheduler` branch checkpoint (native-first nested object completion)
+  - nested object / abstract child block の immediate 完了で Perl hash へ materialize してから
+    `Outcome` に包み直していた経路を外した
+    - `return_pending_handle = 1` の child block が pending 0 の場合は
+      owned native object value から直接 `Outcome` を返す
+    - object / abstract completion はその `Outcome` をそのまま親へ返す
+  - `gql_runtime_vm_exec_state_complete_async_sv(...)` から
+    - `cursor` の snapshot / restore
+    - `FieldFrame` の alloc / free
+    を外した
+    - native program の `block/op/slot` を直接引いて completion する
+    - completion 専用 path では `FieldFrame` を参照していなかったので削除は意味論に影響しない
+  - `./Build test` 通過
+- latest median (after native-first nested object completion)
+  - async (`--include-async --promise-backend promise_xs`)
+    - `async_scalar`
+      - `houtou_runtime_program`: `175363/s`
+    - `async_list`
+      - `houtou_runtime_program`: `146161/s`
+    - `async_object`
+      - `houtou_runtime_program`: `143479/s`
+    - `async_abstract`
+      - `houtou_runtime_program`: `122530/s`
+- 解釈:
+  - 直前 checkpoint 比で async は
+    - `async_scalar`: 約 `-0.9%`
+    - `async_list`: 約 `+1.9%`
+    - `async_object`: 約 `+6.1%`
+    - `async_abstract`: 約 `+6.7%`
+    となり、狙いどおり object / abstract completion に効いた
+  - list は internal Promise 撤去の checkpoint で大きく改善し、今回の batch では小幅上積み
+  - scalar は誤差の範囲で、残る主課題は
+    - Promise callback 後の scalarish snapshot
+    - list item の native container 化の徹底
+    - nested block / list pending のさらに direct な merge
+    に絞られてきた
+
+- `optimize-async-scheduler` branch checkpoint (async native resolver ABI + lower-overhead field/list state)
+  - async resolver path が `resolver_mode => native` / `callback_abi_code` を見ずに
+    常に generic ABI (`args + info + return_type`) を組んでいたのを修正した
+    - `gql_runtime_vm_exec_state_resolve_current_value_sv(...)` で
+      `GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE` は sync fast lane と同じ 4-arg ABI を使う
+    - benchmark の async cases はすべて `resolver_mode => native` なので、
+      ここが今回の主因だった
+  - nested block execute の per-op `FieldFrame` を stack frame に置き換えた
+    - async/sync ともに `new/free` を外し、hot loop の heap churn を減らした
+  - list pending の内部集約を `AV` ではなく native list value に変更した
+    - item promise 完了後に Perl `AV` を更新せず、
+      native list value を index 代入で埋める
+    - ready 時はその owned native list から直接 `Outcome` を作って親 frame に consume する
+  - async immediate outcome の hot path で `Outcome` handle を作って直後に unwrap する往復を削減した
+  - `./Build test` 通過
+- latest median (after async native resolver ABI + lower-overhead field/list state)
+  - sync:
+    - `nested_variable_object`
+      - `houtou_runtime_program`: `157284/s`
+      - `houtou_runtime_native_bundle`: `549818/s`
+    - `list_of_objects`
+      - `houtou_runtime_program`: `202239/s`
+      - `houtou_runtime_native_bundle`: `483840/s`
+    - `abstract_with_fragment`
+      - `houtou_runtime_program`: `209024/s`
+      - `houtou_runtime_native_bundle`: `544514/s`
+  - async (`--include-async --promise-backend promise_xs`)
+    - `async_scalar`
+      - `houtou_runtime_program`: `183991/s`
+    - `async_list`
+      - `houtou_runtime_program`: `150377/s`
+    - `async_object`
+      - `houtou_runtime_program`: `143479/s`
+    - `async_abstract`
+      - `houtou_runtime_program`: `124660/s`
+- 解釈:
+  - 直前 checkpoint 比で async は
+    - `async_scalar`: 約 `+4.9%`
+    - `async_list`: 約 `+2.9%`
+    - `async_object`: ほぼ同水準
+    - `async_abstract`: 約 `+1.7%`
+    となり、async mainline は全体として baseline を上回った
+  - いちばん効いたのは async resolver path が native fast ABI を使っていなかった点の修正で、
+    field/list state の軽量化はそれを補助した形
+  - まだ sync `native_bundle` との差は大きく、
+    次の本命は
+    - nested block の internal Promise / Outcome artifact をさらに減らすこと
+    - ownership provenance を持たせて safe な clone を削ること
+    - object / abstract completion の internal result representation を raw/native 寄りにすること
+    になる

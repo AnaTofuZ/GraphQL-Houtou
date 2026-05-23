@@ -34,7 +34,7 @@
 
 - Perl から使いやすい公開 API を維持する
 - 実行の主系を compile + VM + native bundle に置く
-- hot path で Perl の `HV/AV/SV` を内部通貨にしない
+- hot path で Perl の `HV/AV/SV` を内部表現にしない
 - schema と query を段階的に lower し、実行計画をキャッシュできる形にする
 - Pure Perl fallback を本命にせず、native mainline を主戦場にする
 
@@ -86,10 +86,10 @@ hot path ではまず
 
 のと同じ発想です。
 
-### 3. Perl object を hot path の内部通貨にしない
+### 3. Perl object を hot path の内部表現にしない
 
 hot path の helper 同士が `{ data => ..., errors => ... }` のような Perl envelope を受け渡す設計は取りません。
-代わりに次の runtime object を内部通貨として使います。
+代わりに次の runtime object を内部表現として使います。
 
 - `ExecState`
 - `Cursor`
@@ -101,8 +101,8 @@ hot path の helper 同士が `{ data => ..., errors => ... }` のような Perl
 - `VMBlock`
 - `VMOp`
 
-この文書でいう **内部通貨** とは、hot path の helper 同士が受け渡す主表現のことです。
-理想的な内部通貨は small / kind-first / state-first であり、response 直前まで Perl の response shape に戻さないものです。
+この文書でいう **内部表現** とは、hot path の helper 同士が受け渡すランタイムオブジェクトのことです。
+理想的な内部表現は small / kind-first / state-first であり、response 直前まで Perl の response shape に戻さないものです。
 
 ### 4. Pure Perl は bring-up / fallback であり、本命は native bundle
 
@@ -244,7 +244,7 @@ native mainline では 3 の後にさらに
 
 - `resolve_type` 周辺の micro-opt だけでは大勝ちしない
 - helper 境界を細かく増やすだけでは branch / call overhead が増える
-- `completed { data, errors }` を内部通貨にすると object allocation が重い
+- `completed { data, errors }` を内部表現にすると object allocation が重い
 - object/list/abstract の family ごとに ownership を持たせると改善しやすい
 - 真に効くのは、Perl object を hot path から遠ざけること
 

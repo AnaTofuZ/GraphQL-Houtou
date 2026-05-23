@@ -12,7 +12,7 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 - 旧 execution 実装は active code path から外してあります。
 - 旧テスト資産は `legacy-tests/` に退避してあり、必要なら Git 履歴と合わせて参照します。
 - Pure Perl fallback を主設計には置いていません。
-- 公開 API は Perl らしさを保ちつつ、内部通貨は Perl の `{ data => ..., errors => ... }` ではなく runtime/VM 用オブジェクトです。
+- 公開 API は Perl らしさを保ちつつ、内部表現は Perl の `{ data => ..., errors => ... }` ではなく runtime/VM 用オブジェクトです。
 - `Validation` は `validate` だけを公開する最小 facade として残します。
 - parser compatibility は mainline 要件から外しています。
 - parser public surface は `parse` / `parse_with_options` に絞ります。
@@ -125,9 +125,9 @@ ownership と層構成をまとめて読むには `docs/runtime-mainline-archite
 - outcome kind を先に決め、payload の Perl object 化を遅らせる
 - writer が最後の response materialization を担当する
 
-## 内部通貨
+## 内部表現
 
-hot path の helper 同士が受け渡す主表現は次です。
+hot path の helper 同士が受け渡すランタイムオブジェクトは次です。
 
 - `ExecState`
 - `Cursor`
@@ -136,7 +136,7 @@ hot path の helper 同士が受け渡す主表現は次です。
 - `Outcome`
 - `Writer`
 
-重要なのは、これらを runtime の一次通貨として使い、
+重要なのは、これらをランタイムオブジェクトとして使い、
 Perl の envelope や ad hoc な `SV/HV/AV` の組を hot path の標準形にしないことです。
 
 ## XS 境界

@@ -12,11 +12,15 @@ use JSON::PP ();
 sub new {
   my ($class, %args) = @_;
   die "runtime_schema is required\n" if !$args{runtime_schema};
+  my $max = exists $args{program_cache_max} ? $args{program_cache_max} : 1000;
   return bless {
     runtime_schema => $args{runtime_schema},
     native_runtime_struct => $args{native_runtime_struct},
     native_runtime_compact_struct => $args{native_runtime_compact_struct},
     native_runtime_handle => $args{native_runtime_handle},
+    _program_cache => {},
+    _program_cache_order => [],
+    _program_cache_max => $max,
   }, $class;
 }
 
@@ -45,7 +49,34 @@ sub _native_runtime_handle {
 
 sub compile_program {
   my ($self, $document, %opts) = @_;
+  if (!ref($document) && $self->{_program_cache_max}) {
+    my $cached = $self->{_program_cache}{$document};
+    return $cached if $cached;
+    my $program = $self->runtime_schema->compile_program($document, %opts);
+    $self->_store_program_cache($document, $program);
+    return $program;
+  }
   return $self->runtime_schema->compile_program($document, %opts);
+}
+
+sub _store_program_cache {
+  my ($self, $key, $program) = @_;
+  my $cache = $self->{_program_cache};
+  my $order = $self->{_program_cache_order};
+  if (scalar(@$order) >= $self->{_program_cache_max}) {
+    my $evicted = shift @$order;
+    delete $cache->{$evicted};
+  }
+  $cache->{$key} = $program;
+  push @$order, $key;
+}
+
+sub program_cache_size { scalar keys %{ $_[0]{_program_cache} } }
+
+sub clear_program_cache {
+  my ($self) = @_;
+  $self->{_program_cache} = {};
+  $self->{_program_cache_order} = [];
 }
 
 sub compile_bundle_for_document {

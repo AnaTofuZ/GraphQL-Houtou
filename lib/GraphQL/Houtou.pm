@@ -93,6 +93,7 @@ sub execute {
     promise_code
     engine
     vm_engine
+    max_depth
   );
 
   if (@rest) {

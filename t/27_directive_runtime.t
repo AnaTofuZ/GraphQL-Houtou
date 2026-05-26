@@ -139,6 +139,20 @@ subtest 'custom executable field directive materializes variable arguments on na
   }, 'FIELD directive middleware sees materialized variable args';
 };
 
+subtest 'native specialization freezes runtime directive payloads for variable-driven directives' => sub {
+  my $runtime = $schema->build_native_runtime;
+  my $program = $runtime->compile_program('query Q($enabled: Boolean!) { hello @mask(enabled: $enabled) }');
+  my $specialized = $runtime->specialize_program_for_native(
+    $program,
+    variables => { enabled => 1 },
+  );
+  my $descriptor = GraphQL::Houtou::XS::VM::native_program_descriptor_xs($specialized);
+  my $op = $descriptor->{blocks_compact}[0][4][0];
+
+  is $op->[18], 1, 'runtime directive payload becomes static after specialization';
+  is $op->[19][0]{arguments}{enabled}, 1, 'specialized payload stores materialized boolean value';
+};
+
 subtest 'schema-level executable directives do not force unrelated slots off the native fast path' => sub {
   my $runtime_schema = $schema->build_runtime;
   my $exec_struct = $runtime_schema->to_native_exec_struct;

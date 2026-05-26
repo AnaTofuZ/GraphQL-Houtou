@@ -6001,7 +6001,11 @@ gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_state_t *sta
       && slot->schema_slot_index < state->runtime->runtime_slot_count) {
     field_name_sv = catalog->slot_field_names[slot->schema_slot_index];
   }
-  if (ctx && ctx->program && state->block_index >= 0 && state->op_index >= 0) {
+  if (op
+      && op->runtime_directives_sv
+      && op->runtime_directives_mode_code == GQL_VM_ARGS_STATIC) {
+    directives_sv = newSVsv(op->runtime_directives_sv);
+  } else if (ctx && ctx->program && state->block_index >= 0 && state->op_index >= 0) {
     directives_sv = gql_runtime_vm_program_runtime_directives_sv(
       aTHX_
       ctx->program,

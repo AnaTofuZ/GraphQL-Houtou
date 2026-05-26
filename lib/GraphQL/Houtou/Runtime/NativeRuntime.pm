@@ -4,7 +4,10 @@ use 5.014;
 use strict;
 use warnings;
 
+use Scalar::Util qw(refaddr);
+
 use GraphQL::Houtou::Runtime::InputCoercion ();
+use GraphQL::Houtou::Runtime::DirectiveRuntime ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Schema ();
 use JSON::MaybeXS qw(decode_json encode_json);
@@ -21,6 +24,9 @@ sub new {
     _program_cache => {},
     _program_cache_order => [],
     _program_cache_max => $max,
+    _specialized_program_cache => {},
+    _specialized_program_cache_order => [],
+    _specialized_program_cache_max => $max,
   }, $class;
 }
 
@@ -77,6 +83,8 @@ sub clear_program_cache {
   my ($self) = @_;
   $self->{_program_cache} = {};
   $self->{_program_cache_order} = [];
+  $self->{_specialized_program_cache} = {};
+  $self->{_specialized_program_cache_order} = [];
 }
 
 sub compile_bundle_for_document {
@@ -107,11 +115,24 @@ sub specialize_program_for_native {
     $opts{variables} || {},
   );
   GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::specialize_native_program_xs(
+  return $self->_specialize_program_descriptor(
+    $native_program,
+    $variables,
+  );
+}
+
+sub _specialize_program_descriptor {
+  my ($self, $native_program, $variables) = @_;
+  my $specialized = GraphQL::Houtou::XS::VM::specialize_native_program_xs(
     $self->_native_runtime_handle,
     $native_program,
     $variables,
   );
+  my $descriptor = ref($specialized) && eval { $specialized->isa('GraphQL::Houtou::Runtime::NativeProgram') }
+    ? GraphQL::Houtou::XS::VM::native_program_descriptor_xs($specialized)
+    : $specialized;
+  _specialize_runtime_directives_payloads($descriptor, $variables);
+  return GraphQL::Houtou::XS::VM::load_native_program_xs($descriptor);
 }
 
 sub preferred_engine_for_program {
@@ -245,7 +266,23 @@ sub execute_program {
       $native_program,
       $variables || {},
     );
-    return $self->execute_compact_program($native_program, %opts, variables => $prepared_variables);
+    my $specialized = $self->_cached_specialized_program(
+      $native_program,
+      $prepared_variables,
+    );
+    return $self->execute_compact_program($specialized, %opts, variables => $prepared_variables);
+  }
+  if (!defined $engine && $has_variables) {
+    my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
+      $self->runtime_schema,
+      $native_program,
+      $variables || {},
+    );
+    my $specialized = $self->_cached_specialized_program(
+      $native_program,
+      $prepared_variables,
+    );
+    return $self->execute_compact_program($specialized, %opts, variables => $prepared_variables);
   }
   if (!$has_root_value && !$has_context_value && !$has_variables) {
     return GraphQL::Houtou::XS::VM::execute_native_program_auto_simple_xs(
@@ -295,6 +332,77 @@ sub execute_bundle {
     $opts{context},
     $opts{variables},
   );
+}
+
+sub _cached_specialized_program {
+  my ($self, $native_program, $variables) = @_;
+  return $native_program if !$variables || !keys %$variables;
+
+  my $key = join q(|),
+    refaddr($native_program),
+    JSON::MaybeXS->new(canonical => 1)->encode($variables);
+
+  if (my $cached = $self->{_specialized_program_cache}{$key}) {
+    return $cached;
+  }
+
+  my $specialized = $self->_specialize_program_descriptor($native_program, $variables);
+  my $cache = $self->{_specialized_program_cache};
+  my $order = $self->{_specialized_program_cache_order};
+  if (scalar(@$order) >= $self->{_specialized_program_cache_max}) {
+    my $evicted = shift @$order;
+    delete $cache->{$evicted};
+  }
+  $cache->{$key} = $specialized;
+  push @$order, $key;
+  return $specialized;
+}
+
+sub _specialize_runtime_directives_payloads {
+  my ($descriptor, $variables) = @_;
+  return $descriptor if !$descriptor;
+
+  if (ref($descriptor) eq 'HASH') {
+    my $blocks = $descriptor->{blocks_compact} || $descriptor->{blocks} || [];
+    for my $block (@$blocks) {
+      my $ops = ref($block) eq 'ARRAY' ? ($block->[4] || []) : ($block->{ops} || []);
+      for my $op (@$ops) {
+        _specialize_runtime_directives_op($op, $variables);
+      }
+    }
+  }
+
+  return $descriptor;
+}
+
+sub _specialize_runtime_directives_op {
+  my ($op, $variables) = @_;
+  return if !$op;
+
+  if (ref($op) eq 'ARRAY') {
+    my $mode_code = $op->[18] || 0;
+    return if !$mode_code || !$op->[20];
+    my $payload = GraphQL::Houtou::Runtime::DirectiveRuntime::materialize_runtime_directives(
+      $op->[19],
+      $variables,
+    );
+    $op->[18] = 1;
+    $op->[19] = $payload;
+    $op->[20] = @$payload ? 1 : 0;
+    return;
+  }
+
+  return if ref($op) ne 'HASH';
+  my $mode_code = $op->{runtime_directives_mode_code} || 0;
+  return if !$mode_code || !$op->{has_runtime_directives};
+
+  my $payload = GraphQL::Houtou::Runtime::DirectiveRuntime::materialize_runtime_directives(
+    $op->{runtime_directives_payload},
+    $variables,
+  );
+  $op->{runtime_directives_mode_code} = 1;
+  $op->{runtime_directives_payload} = $payload;
+  $op->{has_runtime_directives} = @$payload ? 1 : 0;
 }
 
 1;

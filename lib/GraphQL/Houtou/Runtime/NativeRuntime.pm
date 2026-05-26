@@ -9,10 +9,15 @@ use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Schema ();
 use JSON::PP ();
 
+use GraphQL::Houtou::Validation::DepthLimit ();
+
+use constant DEFAULT_MAX_DEPTH => GraphQL::Houtou::Validation::DepthLimit::DEFAULT_MAX_DEPTH();
+
 sub new {
   my ($class, %args) = @_;
   die "runtime_schema is required\n" if !$args{runtime_schema};
-  my $max = exists $args{program_cache_max} ? $args{program_cache_max} : 1000;
+  my $cache_max = exists $args{program_cache_max} ? $args{program_cache_max} : 1000;
+  my $max_depth = exists $args{max_depth} ? $args{max_depth} : DEFAULT_MAX_DEPTH;
   return bless {
     runtime_schema => $args{runtime_schema},
     native_runtime_struct => $args{native_runtime_struct},
@@ -20,7 +25,8 @@ sub new {
     native_runtime_handle => $args{native_runtime_handle},
     _program_cache => {},
     _program_cache_order => [],
-    _program_cache_max => $max,
+    _program_cache_max => $cache_max,
+    _max_depth => $max_depth,
   }, $class;
 }
 
@@ -282,6 +288,22 @@ sub execute_bundle_descriptor {
 
 sub execute_document {
   my ($self, $document, %opts) = @_;
+  my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
+
+  if (defined $max_depth) {
+    my $is_string = !ref($document);
+    my $already_cached = $is_string
+      && $self->{_program_cache_max}
+      && $self->{_program_cache}{$document};
+    if (!$already_cached) {
+      my $ast = $is_string ? GraphQL::Houtou::parse($document) : $document;
+      my @errors = GraphQL::Houtou::Validation::DepthLimit::check_query_depth(
+        $ast, max_depth => $max_depth,
+      );
+      return { data => undef, errors => \@errors } if @errors;
+    }
+  }
+
   my $program = $self->compile_program($document, %opts);
   return $self->execute_program($program, %opts);
 }

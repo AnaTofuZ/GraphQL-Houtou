@@ -136,45 +136,32 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
 
 =head1 SYNOPSIS
 
-    use GraphQL::Houtou qw(
-      parse
-      parse_with_options
-      execute
-      compile_runtime
-      compile_native_bundle
-      execute_native
-    );
+    use GraphQL::Houtou qw(execute build_native_runtime compile_native_bundle);
     use GraphQL::Houtou::Schema;
-    use GraphQL::Houtou::Type;
     use GraphQL::Houtou::Type::Object;
-    use GraphQL::Houtou::Type::Scalar;
-
-    my $ast = parse('{ user { id } }');
-
-    my $fast_ast = parse_with_options('{ user { id } }', {
-      no_location => 1,
-    });
+    use GraphQL::Houtou::Type::Scalar qw($String);
 
     my $schema = GraphQL::Houtou::Schema->new(
       query => GraphQL::Houtou::Type::Object->new(
-        name => 'Query',
+        name   => 'Query',
         fields => {
-          hello => {
-            type => GraphQL::Houtou::Type::Scalar->new(
-              name => 'String',
-              graphql_to_perl => sub { $_[0] },
-              perl_to_graphql => sub { $_[0] },
-            ),
-            resolve => sub { 'world' },
-          },
+          hello => { type => $String, resolve => sub { 'world' } },
         },
       ),
     );
 
+    # --- one-off ---
     my $result = execute($schema, '{ hello }');
-    my $runtime = compile_runtime($schema);
-    my $bundle = compile_native_bundle($schema, '{ hello }');
-    my $native = execute_native($schema, '{ hello }');
+
+    # --- dynamic queries with variables (production) ---
+    my $runtime = build_native_runtime($schema);
+    my $result  = $runtime->execute_document(
+      '{ user(id: $id) }', variables => { id => 42 },
+    );
+
+    # --- fixed query, maximum throughput (no variables) ---
+    my $bundle  = compile_native_bundle($schema, '{ hello }');
+    my $result  = $runtime->execute_bundle($bundle);
 
 =head1 DESCRIPTION
 
@@ -223,57 +210,110 @@ C<no_location =E<gt> 1> is still recommended.
       no_location => 1,
     });
 
-=head2 Executing Queries
+=head2 API Selection Guide
 
-The top-level runtime API is:
+Choose the execution API that fits your use case.
 
-    my $result = GraphQL::Houtou::execute($schema, $document, \%vars);
+=head3 One-off or development execution
 
-Where C<$document> can be either:
+    my $result = execute($schema, '{ hello }');
+    my $result = execute($schema, '{ user(id: $id) }', { id => 42 });
 
-=over 4
+C<execute()> is the simplest entry point. It builds and caches a native
+runtime automatically. Use this for one-off calls or during development.
 
-=item *
+=head3 Repeated execution with different variables (dynamic queries)
 
-a source string
+For production workloads where the same schema serves many queries or the
+same query with different variable sets, obtain a runtime once and reuse it:
 
-=item *
+    my $runtime = build_native_runtime($schema);
 
-a pre-parsed parser AST returned by C<parse()> or C<parse_with_options()>
+    # compile_program result is cached per query string (FIFO, default 1000).
+    # Repeated calls with the same query string skip the compiler entirely.
+    my $result = $runtime->execute_document($query, variables => \%vars);
 
-=back
+You can tune the cache size:
 
-If you need a reusable compiled runtime, use:
+    my $runtime = build_native_runtime($schema, program_cache_max => 500);
 
-    my $runtime = GraphQL::Houtou::compile_runtime($schema);
-    my $program = $runtime->compile_program($document);
-    my $result  = $runtime->execute_program($program, variables => \%vars);
+=head3 Persisted queries
 
-If you want a boot-time native artifact, use:
+A persisted query is a pre-compiled artifact stored outside the automatic
+program cache and reused across requests by application code.
 
-    my $bundle = GraphQL::Houtou::compile_native_bundle($schema, $document);
-    my $runtime = GraphQL::Houtou::build_native_runtime($schema);
-    my $result = $runtime->execute_bundle($bundle);
+B<Fixed query (no variables)> — compile once into a native bundle at startup,
+execute any number of times with zero compile overhead per request:
 
-Or execute directly through the cached native runtime:
+    use GraphQL::Houtou qw(build_native_runtime compile_native_bundle);
 
-    my $result = GraphQL::Houtou::execute_native($schema, $document);
+    my $runtime = build_native_runtime($schema);
+    my %store = (
+      hello => compile_native_bundle($schema, '{ hello }'),
+    );
 
-This runtime-backed API is native-first on the sync path. Programs that stay
-within the current native-safe subset are specialized into the native VM and
-executed there. If a resolver yields a C<Promise::XS::Promise>, execution
-automatically continues on the Promise::XS-backed async path.
+    # request time
+    my $result = $runtime->execute_bundle($store{hello});
 
-The runtime-backed API above is the intended mainline. The public compiler and
-validation facades now require XS. Older implementation tests and snapshots
-live under C<legacy-tests/> and are no longer part of the active suite.
+B<Variable-bearing query> — compile once into a program object; supply
+different variables per request:
 
-=head2 Promise Support
+    my $runtime = build_native_runtime($schema);
+    my %store = (
+      greet => $runtime->compile_program(
+        'query($name: String){ greet(name: $name) }',
+      ),
+    );
 
-Async execution now targets C<Promise::XS> directly and is detected
-automatically. If a resolver returns a C<Promise::XS::Promise>, the runtime
-will continue on the async path and may return a C<Promise::XS::Promise> as
-the top-level result.
+    # request time — same compiled program, different variables each call
+    my $alice = $runtime->execute_program(
+      $store{greet}, variables => { name => 'alice' },
+    );
+    my $bob = $runtime->execute_program(
+      $store{greet}, variables => { name => 'bob' },
+    );
+
+B<Bundle descriptor> — a serialisable representation of a fixed query bundle,
+useful when the artifact must cross a process boundary or be stored on disk:
+
+    use GraphQL::Houtou qw(build_native_runtime compile_native_bundle_descriptor);
+
+    # at build / warm-up time
+    my %store = (
+      hello => compile_native_bundle_descriptor($schema, '{ hello }'),
+    );
+
+    # request time
+    my $result = $runtime->execute_bundle_descriptor($store{hello});
+
+Use a native bundle object for in-process reuse; use a descriptor when the
+artifact needs to be serialised.
+
+=head3 Fixed queries compiled at boot time (maximum throughput)
+
+If your query is known at startup and uses B<no GraphQL variables>, compile it
+once into a native bundle and reuse it across all requests:
+
+    my $bundle  = compile_native_bundle($schema, '{ hello }');
+    my $runtime = build_native_runtime($schema);
+
+    # Hot path — no Perl VM compile overhead per request
+    my $result  = $runtime->execute_bundle($bundle);
+
+B<Important:> a native bundle bakes argument values into its binary
+representation at compile time. Queries that accept GraphQL variables
+(C<$id>, C<$name>, etc.) must use the dynamic query path above — passing
+variables to C<execute_bundle> at request time is not supported.
+
+=head3 Async / Promise resolvers
+
+No extra configuration is needed. If any resolver returns a
+C<Promise::XS::Promise>, the runtime automatically switches to the async path
+and may return a C<Promise::XS::Promise> as the top-level result.
+
+Mutation fields always execute serially: each resolver is called only after
+the previous resolver's promise has resolved, in conformance with the GraphQL
+specification.
 
 Generic promise adapters and C<promise_code> injection are no longer part of
 the active runtime path.

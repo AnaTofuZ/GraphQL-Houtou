@@ -185,6 +185,17 @@ typedef struct {
   SV *state_sv;
 } gql_runtime_vm_materialize_response_callback_ctx_t;
 
+typedef struct {
+  SV *state_sv;
+  IV block_index;
+  IV next_op_index;
+  SV *source_sv;
+  gql_runtime_vm_path_frame_t *base_path_ptr;
+  gql_runtime_vm_block_frame_t *frame;
+  gql_runtime_vm_field_frame_t *saved_field_frame;
+  gql_runtime_vm_cursor_t cursor_snapshot;
+} gql_runtime_vm_serial_mutation_ctx_t;
+
 static SV *gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *block, IV block_index, SV *source, SV *base_path);
 static gql_runtime_vm_outcome_t *gql_runtime_vm_exec_state_execute_current_op_sync_now(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s);
 static SV *gql_runtime_vm_state_type_by_name_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *type_name_sv);
@@ -228,6 +239,10 @@ static void gql_runtime_vm_async_scheduler_enqueue_frame(gql_runtime_vm_exec_sta
 static void gql_runtime_vm_async_scheduler_arm_frame(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_block_frame_t *frame);
 static void gql_runtime_vm_async_scheduler_drain(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s);
 static void gql_runtime_vm_async_scheduler_resolve_frame(pTHX_ gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_block_frame_t *frame);
+static SV *gql_runtime_vm_exec_state_execute_block_serial_mutation_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, gql_runtime_vm_path_frame_t *base_path_ptr);
+static void gql_runtime_vm_execute_serial_mutation_steps(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_serial_mutation_ctx_t *ctx, U8 *all_sync_out, SV **sync_result_out);
+static SV *gql_runtime_vm_new_serial_mutation_step_callback_sv(pTHX_ gql_runtime_vm_serial_mutation_ctx_t *ctx);
+static XS(gql_runtime_vm_xs_serial_mutation_step_callback);
 static void gql_runtime_vm_push_pending_block_frame(pTHX_ gql_runtime_vm_block_frame_t *frame, const char *result_name_pv, STRLEN result_name_len, gql_runtime_vm_path_frame_t *path_frame, gql_runtime_vm_block_frame_t *child_frame);
 static void gql_runtime_vm_push_pending_list_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, const char *result_name_pv, STRLEN result_name_len, gql_runtime_vm_path_frame_t *path_frame, gql_runtime_vm_list_pending_t *list_pending);
 static void gql_runtime_vm_native_list_store_at(pTHX_ gql_runtime_vm_native_value_t *value, IV index, gql_runtime_vm_native_value_t *child);
@@ -559,6 +574,50 @@ static MGVTBL gql_runtime_vm_materialize_response_callback_ctx_vtbl = {
   NULL,
   NULL,
   gql_runtime_vm_materialize_response_callback_ctx_free
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
+
+static int
+gql_runtime_vm_serial_mutation_ctx_free(pTHX_ SV *sv, MAGIC *mg)
+{
+  gql_runtime_vm_serial_mutation_ctx_t *ctx = mg && mg->mg_ptr
+    ? INT2PTR(gql_runtime_vm_serial_mutation_ctx_t *, mg->mg_ptr)
+    : NULL;
+  PERL_UNUSED_VAR(sv);
+  if (!ctx) {
+    return 0;
+  }
+  if (ctx->state_sv) {
+    SvREFCNT_dec(ctx->state_sv);
+    ctx->state_sv = NULL;
+  }
+  if (ctx->source_sv) {
+    SvREFCNT_dec(ctx->source_sv);
+    ctx->source_sv = NULL;
+  }
+  if (ctx->base_path_ptr) {
+    gql_runtime_vm_path_frame_decref(ctx->base_path_ptr);
+    ctx->base_path_ptr = NULL;
+  }
+  if (ctx->frame) {
+    gql_runtime_vm_free_block_frame(aTHX_ ctx->frame);
+    ctx->frame = NULL;
+  }
+  gql_runtime_vm_cursor_destroy_copy(aTHX_ &ctx->cursor_snapshot);
+  Safefree(ctx);
+  return 0;
+}
+
+static MGVTBL gql_runtime_vm_serial_mutation_ctx_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gql_runtime_vm_serial_mutation_ctx_free
 #if PERL_VERSION_GE(5, 15, 0)
   ,NULL
   ,NULL
@@ -3943,6 +4002,283 @@ gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_
 }
 
 static SV *
+gql_runtime_vm_new_serial_mutation_step_callback_sv(pTHX_ gql_runtime_vm_serial_mutation_ctx_t *ctx)
+{
+  CV *cv;
+  SV *rv;
+
+  cv = newXS(NULL, gql_runtime_vm_xs_serial_mutation_step_callback, __FILE__);
+  CvXSUBANY(cv).any_ptr = ctx;
+  gql_runtime_vm_attach_callback_magic_ptr(aTHX_ (SV *)cv, &gql_runtime_vm_serial_mutation_ctx_vtbl, ctx);
+  rv = newRV_noinc((SV *)cv);
+  return rv;
+}
+
+/*
+ * Execute mutation root field ops from ctx->next_op_index in serial order.
+ *
+ * For each op: if the resolver returns a Promise, chain the next step via
+ * .then() and return immediately (*all_sync_out = 0).  If all ops are sync,
+ * finalize the block and set *sync_result_out to the materialized data value
+ * (*all_sync_out = 1).
+ *
+ * Caller must push ctx->frame onto s->frame_stack before calling and must
+ * NOT pop it on serial break (the continuation callback re-pushes it).
+ */
+static void
+gql_runtime_vm_execute_serial_mutation_steps(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_exec_state_handle_t *s,
+  gql_runtime_vm_serial_mutation_ctx_t *ctx,
+  U8 *all_sync_out,
+  SV **sync_result_out
+)
+{
+  const gql_runtime_vm_native_block_t *block_ptr = NULL;
+  const gql_runtime_vm_native_runtime_t *runtime;
+  gql_runtime_vm_field_frame_t stack_field_frame;
+
+  *all_sync_out = 1;
+  *sync_result_out = NULL;
+
+  Zero(&stack_field_frame, 1, gql_runtime_vm_field_frame_t);
+  runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+
+  if (s->cursor) {
+    s->cursor->block_index = ctx->block_index;
+    block_ptr = gql_runtime_vm_cursor_current_native_block(s->cursor);
+  }
+  if (!block_ptr) {
+    goto done_all_sync;
+  }
+
+  while (ctx->next_op_index < block_ptr->op_count) {
+    IV op_index = ctx->next_op_index;
+    const gql_runtime_vm_native_slot_t *slot;
+    gql_runtime_vm_path_frame_t *path_frame;
+    gql_runtime_vm_outcome_t *outcome = NULL;
+    SV *result_sv;
+    U8 result_is_promise;
+
+    s->cursor->op_index = op_index;
+    s->cursor->slot_index = block_ptr->ops[op_index].slot_index;
+    slot = gql_runtime_vm_cursor_current_native_slot(s->cursor);
+    slot = gql_runtime_vm_effective_slot(runtime, slot);
+
+    if (!gql_runtime_vm_should_execute_op_now(aTHX_ s, NULL)) {
+      ctx->next_op_index++;
+      continue;
+    }
+
+    path_frame = gql_runtime_vm_new_result_path_frame(aTHX_ ctx->base_path_ptr, slot);
+    if (s->field_frame && s->field_frame != ctx->saved_field_frame) {
+      gql_runtime_vm_free_field_frame(aTHX_ s->field_frame);
+    }
+    s->field_frame = gql_runtime_vm_init_stack_field_frame(
+      aTHX_ &stack_field_frame, ctx->source_sv, path_frame
+    );
+    gql_runtime_vm_path_frame_decref(path_frame);
+
+    result_sv = gql_runtime_vm_exec_state_execute_current_op_async_sv(
+      aTHX_ state_sv, s, &outcome
+    );
+
+    if (outcome) {
+      gql_runtime_vm_consume_current_outcome_now(aTHX_ s, outcome);
+      gql_runtime_vm_outcome_decref(aTHX_ outcome);
+      ctx->next_op_index++;
+      continue;
+    }
+
+    result_is_promise = gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, result_sv);
+    gql_runtime_vm_consume_current_result_now(aTHX_ state_sv, s, result_sv);
+
+    if (result_is_promise) {
+      IV last_entry = ctx->frame->pending_count - 1;
+      SV *pending_promise = NULL;
+
+      if (last_entry >= 0
+          && (ctx->frame->pending_entries[last_entry].payload_kind == GQL_VM_PENDING_PROMISE_SV
+              || ctx->frame->pending_entries[last_entry].payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV)) {
+        pending_promise = ctx->frame->pending_entries[last_entry].payload.promise_sv;
+      }
+
+      ctx->next_op_index = op_index + 1;
+      *all_sync_out = 0;
+
+      /* Lazily create the outer deferred on first async result */
+      if (!ctx->frame->deferred_sv) {
+        ctx->frame->deferred_sv = gql_runtime_vm_promise_xs_new_deferred_sv(aTHX);
+        ctx->frame->promise_sv  = gql_runtime_vm_promise_xs_deferred_promise_sv(aTHX_ ctx->frame->deferred_sv);
+        ctx->frame->deferred_resolves_response = 1;
+      }
+
+      if (pending_promise && SvOK(pending_promise)) {
+        SV *continuation = gql_runtime_vm_new_serial_mutation_step_callback_sv(aTHX_ ctx);
+        SV *chain = gql_runtime_vm_call_then_promise_for_state_sv(
+          aTHX_ s, pending_promise, continuation, NULL, NULL
+        );
+        SvREFCNT_dec(continuation);
+        if (chain) {
+          SvREFCNT_dec(chain);
+        }
+      }
+
+      SvREFCNT_dec(result_sv);
+
+      /* Pop ctx->frame from frame_stack; continuation re-pushes it */
+      if (s->frame_stack_count > 0
+          && s->frame_stack[s->frame_stack_count - 1] == ctx->frame) {
+        s->frame_stack[s->frame_stack_count - 1] = NULL;
+        s->frame_stack_count--;
+        s->frame = s->frame_stack_count > 0
+          ? s->frame_stack[s->frame_stack_count - 1] : NULL;
+      }
+      return;
+    }
+
+    SvREFCNT_dec(result_sv);
+    ctx->next_op_index++;
+  }
+
+done_all_sync:
+  {
+    SV *result = gql_runtime_vm_finalize_current_block_now(
+      aTHX_ state_sv, s, &PL_sv_undef, 0
+    );
+    if (s->cursor) {
+      gql_runtime_vm_cursor_restore_copy(aTHX_ s->cursor, &ctx->cursor_snapshot);
+    }
+    gql_runtime_vm_cursor_destroy_copy(aTHX_ &ctx->cursor_snapshot);
+    Zero(&ctx->cursor_snapshot, 1, gql_runtime_vm_cursor_t);
+    if (s->field_frame && s->field_frame != ctx->saved_field_frame) {
+      gql_runtime_vm_free_field_frame(aTHX_ s->field_frame);
+    }
+    s->field_frame = ctx->saved_field_frame;
+    *sync_result_out = result;
+  }
+}
+
+static XS(gql_runtime_vm_xs_serial_mutation_step_callback)
+{
+  dVAR;
+  dXSARGS;
+  gql_runtime_vm_serial_mutation_ctx_t *ctx = INT2PTR(
+    gql_runtime_vm_serial_mutation_ctx_t *,
+    CvXSUBANY(cv).any_ptr
+  );
+  gql_runtime_vm_exec_state_handle_t *s;
+  U8 all_sync;
+  SV *sync_result = NULL;
+
+  PERL_UNUSED_VAR(items);
+
+  if (!ctx || !ctx->state_sv) {
+    XSRETURN_UNDEF;
+  }
+
+  s = gql_runtime_vm_expect_exec_state_handle(aTHX_ ctx->state_sv);
+
+  /* Re-push ctx->frame onto frame_stack so s->frame is correct */
+  if (ctx->frame) {
+    if (s->frame_stack_count == s->frame_stack_capacity) {
+      IV new_cap = s->frame_stack_capacity ? s->frame_stack_capacity * 2 : 4;
+      Renew(s->frame_stack, new_cap, gql_runtime_vm_block_frame_t *);
+      s->frame_stack_capacity = new_cap;
+    }
+    s->frame_stack[s->frame_stack_count++] = ctx->frame;
+    s->frame = ctx->frame;
+  }
+
+  gql_runtime_vm_execute_serial_mutation_steps(
+    aTHX_ ctx->state_sv, s, ctx, &all_sync, &sync_result
+  );
+
+  if (all_sync && sync_result) {
+    /* All remaining ops were sync; deferred was pre-created, resolve it now */
+    if (ctx->frame && ctx->frame->deferred_sv && SvOK(ctx->frame->deferred_sv)) {
+      SV *response = gql_runtime_vm_fast_response_sv(aTHX_ sync_result, s->writer);
+      gql_runtime_vm_promise_xs_deferred_resolve_sv(
+        aTHX_ ctx->frame->deferred_sv, response
+      );
+      SvREFCNT_dec(response);
+    }
+    SvREFCNT_dec(sync_result);
+  }
+
+  XSRETURN_UNDEF;
+}
+
+static SV *
+gql_runtime_vm_exec_state_execute_block_serial_mutation_sv(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_exec_state_handle_t *s,
+  IV block_index,
+  SV *source,
+  gql_runtime_vm_path_frame_t *base_path_ptr
+)
+{
+  gql_runtime_vm_serial_mutation_ctx_t *ctx;
+  gql_runtime_vm_block_frame_t *frame;
+  SV *outer_promise;
+  U8 all_sync;
+  SV *sync_result = NULL;
+
+  /* Build the serial context */
+  Newxz(ctx, 1, gql_runtime_vm_serial_mutation_ctx_t);
+  ctx->state_sv       = SvREFCNT_inc_simple_NN(state_sv);
+  ctx->block_index    = block_index;
+  ctx->next_op_index  = 0;
+  ctx->source_sv      = source ? SvREFCNT_inc_simple_NN(source) : NULL;
+  ctx->base_path_ptr  = base_path_ptr;
+  if (ctx->base_path_ptr) {
+    ctx->base_path_ptr->refcount++;
+  }
+  ctx->saved_field_frame = s->field_frame;
+  gql_runtime_vm_cursor_snapshot_copy(aTHX_ &ctx->cursor_snapshot,
+    (s && s->cursor) ? s->cursor : NULL);
+
+  /* Create the accumulator frame; deferred is created lazily on first async result */
+  frame = gql_runtime_vm_new_block_frame_struct(aTHX);
+  ctx->frame = frame;
+  ctx->frame->refcount++; /* ctx holds an extra ref */
+
+  /* Push the frame onto the exec-state frame stack */
+  if (s->frame_stack_count == s->frame_stack_capacity) {
+    IV new_cap = s->frame_stack_capacity ? s->frame_stack_capacity * 2 : 4;
+    Renew(s->frame_stack, new_cap, gql_runtime_vm_block_frame_t *);
+    s->frame_stack_capacity = new_cap;
+  }
+  s->frame_stack[s->frame_stack_count++] = frame;
+  s->frame = frame;
+
+  /* Run the first batch of serial steps */
+  gql_runtime_vm_execute_serial_mutation_steps(
+    aTHX_ state_sv, s, ctx, &all_sync, &sync_result
+  );
+
+  /* Release the ctx ref held by this scope */
+  if (all_sync) {
+    /* No callbacks were created – free ctx manually */
+    if (ctx->state_sv) { SvREFCNT_dec(ctx->state_sv); }
+    if (ctx->source_sv) { SvREFCNT_dec(ctx->source_sv); }
+    if (ctx->base_path_ptr) { gql_runtime_vm_path_frame_decref(ctx->base_path_ptr); }
+    if (ctx->frame) { gql_runtime_vm_free_block_frame(aTHX_ ctx->frame); }
+    gql_runtime_vm_cursor_destroy_copy(aTHX_ &ctx->cursor_snapshot);
+    Safefree(ctx);
+    /* Return data SV directly; caller wraps with materialize_response_sv */
+    return sync_result ? sync_result : newSVsv(&PL_sv_undef);
+  }
+  /* else: ctx is owned by the continuation callback CVs via magic */
+
+  /* Return the deferred's promise (created lazily in execute_serial_mutation_steps) */
+  outer_promise = frame->promise_sv ? newSVsv(frame->promise_sv) : newSVsv(&PL_sv_undef);
+  return outer_promise;
+}
+
+static SV *
 gql_runtime_vm_exec_state_execute_block_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, SV *base_path)
 {
   gql_runtime_vm_path_frame_t *base_path_ptr = NULL;
@@ -3971,6 +4307,17 @@ gql_runtime_vm_exec_state_execute_block_async_path_sv(
   gql_runtime_vm_field_frame_t *saved_field_frame;
   gql_runtime_vm_field_frame_t stack_field_frame;
   const gql_runtime_vm_native_block_t *block_ptr = NULL;
+
+  /* Dispatch to serial executor for mutation root blocks */
+  if (s && s->cursor && s->cursor->native_program
+      && s->cursor->native_program->operation_type_code == GQL_VM_OPTYPE_MUTATION
+      && block_index == s->cursor->native_program->root_block_index
+      && s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS
+      && return_pending_handle == 0) {
+    return gql_runtime_vm_exec_state_execute_block_serial_mutation_sv(
+      aTHX_ state_sv, s, block_index, source, base_path_ptr
+    );
+  }
 
   Zero(&snapshot, 1, gql_runtime_vm_cursor_t);
   Zero(&stack_field_frame, 1, gql_runtime_vm_field_frame_t);

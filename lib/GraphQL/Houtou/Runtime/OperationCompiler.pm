@@ -32,7 +32,7 @@ sub compile_operation {
   my %fragments = map { (($_->{name} || '') => $_) }
     grep { ($_->{kind} || '') eq 'fragment' } @{ $ast || [] };
 
-  my $operation_type = $operation->{operation} || 'query';
+  my $operation_type = $operation->{operation} || $operation->{operationType} || 'query';
   my $schema_block = $runtime_schema->root_block($operation_type)
     or die "No root block for operation type '$operation_type'.\n";
 
@@ -71,7 +71,7 @@ sub compile_operation_native_compact {
   my %fragments = map { (($_->{name} || '') => $_) }
     grep { ($_->{kind} || '') eq 'fragment' } @{ $ast || [] };
 
-  my $operation_type = $operation->{operation} || 'query';
+  my $operation_type = $operation->{operation} || $operation->{operationType} || 'query';
   my $schema_block = $runtime_schema->root_block($operation_type)
     or die "No root block for operation type '$operation_type'.\n";
 

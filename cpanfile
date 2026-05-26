@@ -1,4 +1,4 @@
-requires 'perl', '5.014000';
+requires 'perl', '5.024000';
 requires 'GraphQL', '0.54';
 requires 'Promise::XS', '0.21',
 requires 'XSLoader';

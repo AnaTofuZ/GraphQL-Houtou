@@ -43,6 +43,7 @@ our $QUERY = '
       directives {
         name
         description
+        isRepeatable
         locations
         args {
           ...InputValue
@@ -81,6 +82,7 @@ our $QUERY = '
     possibleTypes {
       ...TypeRef
     }
+    specifiedByURL
   }
   fragment InputValue on __InputValue {
     name
@@ -327,6 +329,10 @@ our $DIRECTIVE_META_TYPE = GraphQL::Houtou::Type::Object->new(
   fields => {
     _make_moo_field(name => $String->non_null),
     _make_moo_field(description => $String),
+    isRepeatable => {
+      type => $Boolean->non_null,
+      resolve => sub { $_[0]->can('repeatable') ? !!$_[0]->repeatable : 0 },
+    },
     _make_moo_field(locations => $DIRECTIVE_LOCATION_META_TYPE->non_null->list->non_null),
     args => {
       type => $INPUT_VALUE_META_TYPE->non_null->list->non_null,
@@ -451,6 +457,13 @@ $TYPE_META_TYPE = GraphQL::Houtou::Type::Object->new(
       resolve => sub {
         return unless $_[0]->can('of');
         return $_[0]->of;
+      },
+    },
+    specifiedByURL => {
+      type => $String,
+      resolve => sub {
+        return unless $_[0]->can('specified_by_url');
+        return $_[0]->specified_by_url;
       },
     },
   } },

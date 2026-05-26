@@ -44,6 +44,8 @@ sub new {
   $self->{description} = $args{description};
   $self->{locations} = $args{locations} || [];
   $self->{args} = $args{args} || {};
+  $self->{repeatable} = $args{repeatable} ? 1 : 0;
+  $self->{resolve_field} = $args{resolve_field};
   return bless $self, $class;
 }
 
@@ -51,7 +53,21 @@ sub name { $_[0]->{name} }
 sub description { $_[0]->{description} }
 sub locations { $_[0]->{locations} }
 sub args { $_[0]->{args} }
+sub repeatable { $_[0]->{repeatable} }
+sub resolve_field { $_[0]->{resolve_field} }
 sub to_string { $_[0]->{to_string} ||= $_[0]->name }
+
+sub has_executable_location {
+  my ($self) = @_;
+  return !!grep {
+    $_ eq 'FIELD' || $_ eq 'FRAGMENT_SPREAD' || $_ eq 'INLINE_FRAGMENT'
+  } @{ $self->locations || [] };
+}
+
+sub has_runtime_hook {
+  my ($self) = @_;
+  return $self->resolve_field ? 1 : 0;
+}
 
 sub to_doc {
   my ($self) = @_;
@@ -61,7 +77,9 @@ sub to_doc {
       "directive \@@{[$self->name]}(",
     );
     my @argtuples = make_fieldtuples($self->args);
-    my $end = ") on " . join(' | ', @{ $self->locations });
+    my $end = ')';
+    $end .= ' repeatable' if $self->repeatable;
+    $end .= ' on ' . join(' | ', @{ $self->locations });
     return join("\n", @start) . join(', ', map $_->[0], @argtuples) . $end . "\n"
       if !grep $_->[1], @argtuples;
     join '', map "$_\n",
@@ -119,10 +137,23 @@ our $SKIP = __PACKAGE__->new(
   },
 );
 
+our $SPECIFIED_BY = __PACKAGE__->new(
+  name => 'specifiedBy',
+  description => 'Exposes a URL that specifies the behavior of this scalar.',
+  locations => [ qw(SCALAR) ],
+  args => {
+    url => {
+      type => $String->non_null,
+      description => 'The URL that specifies the behavior of this scalar.',
+    },
+  },
+);
+
 our @SPECIFIED_DIRECTIVES = (
   $INCLUDE,
   $SKIP,
   $DEPRECATED,
+  $SPECIFIED_BY,
 );
 
 1;

@@ -147,6 +147,9 @@ sub _lower_instruction {
     directives_payload => $instruction->directives_payload,
     directives_payload_index => undef,
     has_directives => $instruction->has_directives,
+    runtime_directives_mode => $instruction->runtime_directives_mode,
+    runtime_directives_payload => $instruction->runtime_directives_payload,
+    has_runtime_directives => $instruction->has_runtime_directives,
     bound_slot => $instruction->bound_slot,
   );
 }
@@ -175,6 +178,9 @@ sub _inflate_op {
     directives_payload => $struct->{directives_payload},
     directives_payload_index => $struct->{directives_payload_index},
     has_directives => $struct->{has_directives},
+    runtime_directives_mode => $struct->{runtime_directives_mode} || 'NONE',
+    runtime_directives_payload => $struct->{runtime_directives_payload},
+    has_runtime_directives => $struct->{has_runtime_directives},
   );
 }
 
@@ -200,7 +206,7 @@ sub _inflate_native_block {
 sub _inflate_native_op {
   my ($struct) = @_;
   if (ref($struct) eq 'ARRAY') {
-    my ($opcode_code, $resolve_code, $complete_code, $dispatch_family_code, $slot_index, $child_block_index, $abstract_child_block_indexes, $args_mode_code, $args_payload_index, $args_payload, $has_args, $directives_mode_code, $directives_payload_index, $directives_payload, $has_directives, $field_name, $result_name, $return_type_name) = @$struct;
+    my ($opcode_code, $resolve_code, $complete_code, $dispatch_family_code, $slot_index, $child_block_index, $abstract_child_block_indexes, $args_mode_code, $args_payload_index, $args_payload, $has_args, $directives_mode_code, $directives_payload_index, $directives_payload, $has_directives, $field_name, $result_name, $return_type_name, $runtime_directives_mode_code, $runtime_directives_payload, $has_runtime_directives) = @$struct;
     my $resolve_family = _resolve_family_from_code($resolve_code);
     my $complete_family = _complete_family_from_code($complete_code);
     my $op = GraphQL::Houtou::Runtime::VMOp->new(
@@ -223,6 +229,9 @@ sub _inflate_native_op {
       directives_payload => $directives_payload,
       directives_payload_index => $directives_payload_index,
       has_directives => $has_directives,
+      runtime_directives_mode => _directives_mode_from_code($runtime_directives_mode_code),
+      runtime_directives_payload => $runtime_directives_payload,
+      has_runtime_directives => $has_runtime_directives,
     );
     $op->set_native_slot_index($slot_index);
     $op->set_native_child_block_index($child_block_index);
@@ -248,6 +257,9 @@ sub _inflate_native_op {
     directives_payload => $struct->{directives_payload},
     directives_payload_index => $struct->{directives_payload_index},
     has_directives => $struct->{has_directives},
+    runtime_directives_mode => $struct->{runtime_directives_mode} || _directives_mode_from_code($struct->{runtime_directives_mode_code}),
+    runtime_directives_payload => $struct->{runtime_directives_payload},
+    has_runtime_directives => $struct->{has_runtime_directives},
     abstract_child_blocks_index => $struct->{abstract_child_blocks_index},
   );
   $op->set_native_slot_index($struct->{slot_index});

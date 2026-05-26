@@ -4,6 +4,7 @@ use warnings;
 use Test::More 0.98;
 
 use GraphQL::Houtou::Schema;
+use GraphQL::Houtou::Directive;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
@@ -80,6 +81,24 @@ my $schema = GraphQL::Houtou::Schema->new(
   mutation => $Mutation,
   subscription => $Subscription,
   types => [ $User, $Node ],
+  directives => [
+    @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES,
+    GraphQL::Houtou::Directive->new(
+      name => 'mask',
+      locations => [ qw(FIELD) ],
+      args => {
+        enabled => { type => $Boolean->non_null },
+      },
+    ),
+    GraphQL::Houtou::Directive->new(
+      name => 'tag',
+      repeatable => 1,
+      locations => [ qw(FIELD) ],
+      args => {
+        name => { type => $String->non_null },
+      },
+    ),
+  ],
 );
 
 sub messages {
@@ -241,6 +260,66 @@ subtest 'subscription must have a single top-level field' => sub {
 
   is_deeply messages($errors), [
     'Subscription needs to have only one field; got (importantUser otherUser)',
+  ];
+};
+
+subtest 'directive validation rejects unknown directives and invalid locations' => sub {
+  my $errors = validate($schema, q|
+    query Q @skip(if: true) {
+      viewer {
+        id @unknown
+      }
+    }
+  |);
+
+  is_deeply messages($errors), [
+    "Directive '\@skip' may not be used on QUERY.",
+    "Unknown directive '\@unknown'.",
+  ];
+};
+
+subtest 'directive validation rejects duplicate non-repeatable directives' => sub {
+  my $errors = validate($schema, q|
+    {
+      viewer {
+        id @mask(enabled: true) @mask(enabled: false)
+        name @tag(name: "a") @tag(name: "b")
+      }
+    }
+  |);
+
+  is_deeply messages($errors), [
+    "Directive '\@mask' is not repeatable and cannot be used more than once at this location.",
+  ];
+};
+
+subtest 'directive validation checks required and unknown arguments' => sub {
+  my $errors = validate($schema, q|
+    {
+      viewer {
+        id @skip
+        name @mask(enabled: true, extra: false)
+      }
+    }
+  |);
+
+  is_deeply messages($errors), [
+    "Required argument 'if' was not provided to directive '\@skip'.",
+    "Unknown argument 'extra' on directive '\@mask'.",
+  ];
+};
+
+subtest 'directive validation checks literal argument types' => sub {
+  my $errors = validate($schema, q|
+    {
+      viewer {
+        id @skip(if: "nope")
+      }
+    }
+  |);
+
+  is_deeply messages($errors), [
+    q{Argument 'if' on directive '@skip' has invalid value: Not a Boolean.},
   ];
 };
 

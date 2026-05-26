@@ -43,6 +43,7 @@ sub new {
   $self->{serialize} = $args{serialize};
   $self->{parse_value} = $args{parse_value};
   $self->{_builtin_kind} = $args{_builtin_kind};
+  $self->{specified_by_url} = $args{specified_by_url};
   return bless $self, $class;
 }
 
@@ -52,6 +53,7 @@ sub to_string { $_[0]->{to_string} ||= $_[0]->name }
 sub serialize { $_[0]->{serialize} }
 sub parse_value { $_[0]->{parse_value} }
 sub _builtin_kind { $_[0]->{_builtin_kind} }
+sub specified_by_url { $_[0]->{specified_by_url} }
 
 sub _fast_is_nonref_defined {
   defined $_[0] && !ref($_[0]);

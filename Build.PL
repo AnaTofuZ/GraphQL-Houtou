@@ -25,7 +25,7 @@ my %args = (
         'GraphQL' => '0.54',
         'Promise::XS' => '0',
         'XSLoader' => '0',
-        'perl' => '5.014',
+        'perl' => '5.024000',
     },
 
     recommends => {

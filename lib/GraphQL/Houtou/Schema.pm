@@ -66,11 +66,14 @@ sub compile_runtime {
 
 sub build_native_runtime {
   my ($self, %opts) = @_;
-  if (%opts) {
-    my $runtime_schema = $self->compile_runtime(%opts);
+  my $cache_max = delete $opts{program_cache_max};
+  my %runtime_args = defined $cache_max ? (program_cache_max => $cache_max) : ();
+  if (%opts || %runtime_args) {
+    my $runtime_schema = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
     require GraphQL::Houtou::Runtime::NativeRuntime;
     return GraphQL::Houtou::Runtime::NativeRuntime->new(
       runtime_schema => $runtime_schema,
+      %runtime_args,
     );
   }
   return $self->{_compiled_native_runtime} if $self->{_compiled_native_runtime};

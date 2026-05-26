@@ -6,6 +6,7 @@ use warnings;
 
 use Exporter 'import';
 use JSON::MaybeXS qw(is_bool);
+use Scalar::Util qw(refaddr);
 
 our @EXPORT_OK = qw(
   has_runtime_directives
@@ -15,6 +16,29 @@ our @EXPORT_OK = qw(
   materialize_runtime_directives
   materialize_program_runtime_directives
 );
+
+my %RUNTIME_DIRECTIVE_ENTRIES_CACHE;
+our $CURRENT_DIRECTIVE_FRAME;
+our $NEXT_DIRECTIVE_VALUE;
+our $CURRENT_SINGLE_DIRECTIVE_VALUE;
+our $NEXT_SINGLE_DIRECTIVE_VALUE = sub { return $CURRENT_SINGLE_DIRECTIVE_VALUE };
+$NEXT_DIRECTIVE_VALUE = sub {
+  my $frame = $CURRENT_DIRECTIVE_FRAME || return undef;
+  my $index = $frame->{index}++;
+  return $frame->{final_cb}->() if $index >= @{ $frame->{entries} };
+
+  my ($middleware, $directive_args, $directive) = @{ $frame->{entries}[$index] };
+  return $middleware->(
+    $NEXT_DIRECTIVE_VALUE,
+    $frame->{source},
+    $frame->{field_args},
+    $frame->{context},
+    $frame->{info},
+    $frame->{return_type},
+    $directive_args,
+    $directive,
+  );
+};
 
 sub has_runtime_directives {
   my ($schema) = @_;
@@ -44,40 +68,27 @@ sub wrap_field_resolver {
 
   my $directive_defs = $schema ? ($schema->name2directive || {}) : {};
   my $schema_directives = $field->{directives} || [];
+  my $compiled_schema_directives = _compile_directive_entries($directive_defs, $schema_directives);
 
   return sub {
     my ($source, $field_args, $context, $info, $return_type) = @_;
-    my $resolver = sub {
+    my $final_cb = sub {
       return _default_field_resolver($source, $field_name, $info)
         if !$base_resolver;
       return $base_resolver->($source, $field_args, $context, $info, $return_type);
     };
 
-    return $resolver->() if !@$schema_directives && !$is_typename;
+    return $final_cb->() if !@$compiled_schema_directives && !$is_typename;
 
-    for my $instance (reverse @$schema_directives) {
-      next if !$instance || ref($instance) ne 'HASH';
-      my $name = $instance->{name} || next;
-      my $directive = $directive_defs->{$name} || next;
-      next if !$directive->can('resolve_field');
-      my $middleware = $directive->resolve_field || next;
-      my $directive_args = $instance->{arguments} || {};
-      my $next = $resolver;
-      $resolver = sub {
-        return $middleware->(
-          $next,
-          $source,
-          $field_args,
-          $context,
-          $info,
-          $return_type,
-          $directive_args,
-          $directive,
-        );
-      };
-    }
-
-    return $resolver->();
+    return _apply_compiled_directive_entries(
+      $compiled_schema_directives,
+      $source,
+      $field_args,
+      $context,
+      $info,
+      $return_type,
+      $final_cb,
+    );
   };
 }
 
@@ -86,34 +97,20 @@ sub apply_runtime_directives {
   my $schema = _resolve_schema($runtime_schema);
   return $resolved_value if !$schema;
 
-  my $directive_defs = $schema->name2directive || {};
   my $runtime_directives = _runtime_directives_from_info($info);
   return $resolved_value if !@$runtime_directives;
+  my $compiled_runtime_directives = _compiled_runtime_directive_entries($schema, $runtime_directives);
+  return $resolved_value if !@$compiled_runtime_directives;
 
-  my $resolver = sub { $resolved_value };
-  for my $instance (reverse @$runtime_directives) {
-    next if !$instance || ref($instance) ne 'HASH';
-    my $name = $instance->{name} || next;
-    my $directive = $directive_defs->{$name} || next;
-    next if !$directive->can('resolve_field');
-    my $middleware = $directive->resolve_field || next;
-    my $directive_args = $instance->{arguments} || {};
-    my $next = $resolver;
-    $resolver = sub {
-      return $middleware->(
-        $next,
-        $source,
-        $field_args,
-        $context,
-        $info,
-        $return_type,
-        $directive_args,
-        $directive,
-      );
-    };
-  }
-
-  return $resolver->();
+  return _apply_compiled_directive_entries(
+    $compiled_runtime_directives,
+    $source,
+    $field_args,
+    $context,
+    $info,
+    $return_type,
+    sub { $resolved_value },
+  );
 }
 
 sub _runtime_directives_from_info {
@@ -198,6 +195,75 @@ sub _resolve_schema {
     && ref($runtime_schema->{schema})
     && eval { $runtime_schema->{schema}->can('name2directive') };
   return;
+}
+
+sub _compiled_runtime_directive_entries {
+  my ($schema, $runtime_directives) = @_;
+  return [] if !$schema || !$runtime_directives || !@$runtime_directives;
+
+  my $schema_key = refaddr($schema);
+  my $directives_key = refaddr($runtime_directives);
+  if ($schema_key && $directives_key) {
+    my $cached = $RUNTIME_DIRECTIVE_ENTRIES_CACHE{$schema_key}{$directives_key};
+    return $cached if $cached;
+  }
+
+  my $compiled = _compile_directive_entries($schema->name2directive || {}, $runtime_directives);
+  if ($schema_key && $directives_key) {
+    $RUNTIME_DIRECTIVE_ENTRIES_CACHE{$schema_key}{$directives_key} = $compiled;
+  }
+  return $compiled;
+}
+
+sub _compile_directive_entries {
+  my ($directive_defs, $instances) = @_;
+  return [] if !$instances || !@$instances;
+
+  my @entries;
+  for my $instance (reverse @$instances) {
+    next if !$instance || ref($instance) ne 'HASH';
+    my $name = $instance->{name} || next;
+    my $directive = $directive_defs->{$name} || next;
+    next if !$directive->can('resolve_field');
+    my $middleware = $directive->resolve_field || next;
+    push @entries, [
+      $middleware,
+      ($instance->{arguments} || {}),
+      $directive,
+    ];
+  }
+  return \@entries;
+}
+
+sub _apply_compiled_directive_entries {
+  my ($entries, $source, $field_args, $context, $info, $return_type, $final_cb) = @_;
+  return $final_cb->() if !$entries || !@$entries;
+  if (@$entries == 1) {
+    my ($middleware, $directive_args, $directive) = @{ $entries->[0] };
+    local $CURRENT_SINGLE_DIRECTIVE_VALUE = $final_cb->();
+    return $middleware->(
+      $NEXT_SINGLE_DIRECTIVE_VALUE,
+      $source,
+      $field_args,
+      $context,
+      $info,
+      $return_type,
+      $directive_args,
+      $directive,
+    );
+  }
+
+  local $CURRENT_DIRECTIVE_FRAME = {
+    entries => $entries,
+    index => 0,
+    source => $source,
+    field_args => $field_args,
+    context => $context,
+    info => $info,
+    return_type => $return_type,
+    final_cb => $final_cb,
+  };
+  return $NEXT_DIRECTIVE_VALUE->();
 }
 
 sub _materialize_value {

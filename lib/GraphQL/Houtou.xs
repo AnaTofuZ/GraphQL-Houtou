@@ -208,6 +208,9 @@ static SV *gql_runtime_vm_exec_state_complete_async_sv(pTHX_ SV *state_sv, gql_r
 static SV *gql_runtime_vm_exec_state_complete_current_native_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame, const gql_runtime_vm_native_op_t *op, const gql_runtime_vm_native_slot_t *slot, SV *resolved_sv);
 static SV *gql_runtime_vm_exec_state_execute_current_op_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_outcome_t **outcome_out);
 static SV *gql_runtime_vm_apply_runtime_directives_nonfatal(pTHX_ gql_runtime_vm_exec_state_t *state, SV *source, SV *resolved, SV **error_out);
+static CV *gql_runtime_vm_directive_runtime_apply_cv(pTHX);
+static CV *gql_runtime_vm_directive_runtime_materialize_cv(pTHX);
+static CV *gql_runtime_vm_directive_runtime_program_materialize_cv(pTHX);
 static SV *gql_runtime_vm_new_lazy_info_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *path_frame);
 static SV *gql_runtime_vm_new_lazy_info_for_path_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_new_outcome_handle_sv(pTHX_ U8 kind_code, SV *value, SV *error_records);
@@ -5551,6 +5554,43 @@ gql_runtime_vm_call_cb5_nonfatal(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV 
 }
 
 static SV *
+gql_runtime_vm_cached_cv(pTHX_ const char *name)
+{
+  STRLEN len = name ? strlen(name) : 0;
+  return name ? (SV *)get_cvn_flags(name, len, 0) : NULL;
+}
+
+static CV *
+gql_runtime_vm_directive_runtime_apply_cv(pTHX)
+{
+  static CV *cv = NULL;
+  if (!cv) {
+    cv = (CV *)gql_runtime_vm_cached_cv(aTHX_ "GraphQL::Houtou::Runtime::DirectiveRuntime::apply_runtime_directives");
+  }
+  return cv;
+}
+
+static CV *
+gql_runtime_vm_directive_runtime_materialize_cv(pTHX)
+{
+  static CV *cv = NULL;
+  if (!cv) {
+    cv = (CV *)gql_runtime_vm_cached_cv(aTHX_ "GraphQL::Houtou::Runtime::DirectiveRuntime::materialize_runtime_directives");
+  }
+  return cv;
+}
+
+static CV *
+gql_runtime_vm_directive_runtime_program_materialize_cv(pTHX)
+{
+  static CV *cv = NULL;
+  if (!cv) {
+    cv = (CV *)gql_runtime_vm_cached_cv(aTHX_ "GraphQL::Houtou::Runtime::DirectiveRuntime::materialize_program_runtime_directives");
+  }
+  return cv;
+}
+
+static SV *
 gql_runtime_vm_materialize_runtime_directives_sv(pTHX_ SV *payload, SV *variables)
 {
   dSP;
@@ -5567,10 +5607,7 @@ gql_runtime_vm_materialize_runtime_directives_sv(pTHX_ SV *payload, SV *variable
   XPUSHs(payload);
   XPUSHs(variables ? variables : &PL_sv_undef);
   PUTBACK;
-  count = call_pv(
-    "GraphQL::Houtou::Runtime::DirectiveRuntime::materialize_runtime_directives",
-    G_SCALAR | G_EVAL
-  );
+  count = call_sv((SV *)gql_runtime_vm_directive_runtime_materialize_cv(aTHX), G_SCALAR | G_EVAL);
   SPAGAIN;
   if (SvTRUE(ERRSV)) {
     SV *err = newSVsv(ERRSV);
@@ -5613,10 +5650,7 @@ gql_runtime_vm_program_runtime_directives_sv(
   XPUSHs(sv_2mortal(newSViv(op_index)));
   XPUSHs(variables ? variables : &PL_sv_undef);
   PUTBACK;
-  count = call_pv(
-    "GraphQL::Houtou::Runtime::DirectiveRuntime::materialize_program_runtime_directives",
-    G_SCALAR | G_EVAL
-  );
+  count = call_sv((SV *)gql_runtime_vm_directive_runtime_program_materialize_cv(aTHX), G_SCALAR | G_EVAL);
   SPAGAIN;
   if (SvTRUE(ERRSV)) {
     SV *err = newSVsv(ERRSV);
@@ -5696,10 +5730,7 @@ gql_runtime_vm_apply_runtime_directives_nonfatal(
   XPUSHs(return_type_sv ? return_type_sv : &PL_sv_undef);
   XPUSHs(resolved ? resolved : &PL_sv_undef);
   PUTBACK;
-  count = call_pv(
-    "GraphQL::Houtou::Runtime::DirectiveRuntime::apply_runtime_directives",
-    G_SCALAR | G_EVAL
-  );
+  count = call_sv((SV *)gql_runtime_vm_directive_runtime_apply_cv(aTHX), G_SCALAR | G_EVAL);
   SPAGAIN;
   if (SvTRUE(ERRSV)) {
     SV *err = newSVsv(ERRSV);

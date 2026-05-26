@@ -10,7 +10,7 @@ use GraphQL::Houtou::Runtime::InputCoercion ();
 use GraphQL::Houtou::Runtime::DirectiveRuntime ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Schema ();
-use JSON::MaybeXS qw(decode_json encode_json);
+use JSON::MaybeXS qw(decode_json encode_json is_bool);
 
 sub new {
   my ($class, %args) = @_;
@@ -340,7 +340,7 @@ sub _cached_specialized_program {
 
   my $key = join q(|),
     refaddr($native_program),
-    JSON::MaybeXS->new(canonical => 1)->encode($variables);
+    _specialized_variables_cache_key($variables);
 
   if (my $cached = $self->{_specialized_program_cache}{$key}) {
     return $cached;
@@ -356,6 +356,24 @@ sub _cached_specialized_program {
   $cache->{$key} = $specialized;
   push @$order, $key;
   return $specialized;
+}
+
+sub _specialized_variables_cache_key {
+  my ($value) = @_;
+  my $ref = ref($value);
+  return 'u' if !defined $value;
+  return $value ? 'b1' : 'b0' if is_bool($value);
+  return 's:' . $value if !$ref;
+  if ($ref eq 'ARRAY') {
+    return 'a:[' . join(',', map { _specialized_variables_cache_key($_) } @$value) . ']';
+  }
+  if ($ref eq 'HASH') {
+    return 'h:{' . join(',', map {
+      my $k = $_;
+      $k . '=>' . _specialized_variables_cache_key($value->{$k})
+    } sort keys %$value) . '}';
+  }
+  return $ref . ':' . "$value";
 }
 
 sub _specialize_runtime_directives_payloads {

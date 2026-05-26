@@ -1,5 +1,6 @@
 requires 'perl', '5.024000';
 requires 'GraphQL', '0.54';
+requires 'JSON::MaybeXS', '0';
 requires 'Promise::XS', '0.21',
 requires 'XSLoader';
 

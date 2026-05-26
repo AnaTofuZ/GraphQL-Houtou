@@ -82,7 +82,7 @@ sub _get_directive_values {
 our $DEPRECATED = __PACKAGE__->new(
   name => 'deprecated',
   description => 'Marks an element of a GraphQL schema as no longer supported.',
-  locations => [ qw(FIELD_DEFINITION ENUM_VALUE) ],
+  locations => [ qw(FIELD_DEFINITION ENUM_VALUE ARGUMENT_DEFINITION INPUT_FIELD_DEFINITION) ],
   args => {
     reason => {
       type => $String,

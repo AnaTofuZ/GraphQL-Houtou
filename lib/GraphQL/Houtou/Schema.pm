@@ -5,7 +5,7 @@ use strict;
 use warnings;
 
 use Exporter 'import';
-use JSON::PP ();
+use JSON::MaybeXS ();
 
 use GraphQL::Houtou::Directive ();
 use GraphQL::Houtou::Runtime::SchemaGraph ();
@@ -13,6 +13,7 @@ use GraphQL::Houtou::Type::Scalar qw($Int $Float $String $Boolean $ID);
 use GraphQL::Houtou::Introspection qw($SCHEMA_META_TYPE);
 
 our @EXPORT_OK = qw(lookup_type);
+my $JSON = JSON::MaybeXS->new->canonical;
 
 sub new {
   my ($class, %args) = @_;
@@ -370,7 +371,7 @@ sub _build_name2type {
 sub _write_json_descriptor {
   my ($path, $descriptor) = @_;
   open my $fh, '>', $path or die "Cannot write descriptor '$path': $!";
-  print {$fh} JSON::PP->new->canonical->encode($descriptor);
+  print {$fh} $JSON->encode($descriptor);
   close $fh or die "Cannot close descriptor '$path': $!";
   return;
 }
@@ -381,7 +382,7 @@ sub _read_json_descriptor {
   local $/;
   my $json = <$fh>;
   close $fh or die "Cannot close descriptor '$path': $!";
-  return JSON::PP->new->decode($json);
+  return $JSON->decode($json);
 }
 
 sub _does_any_role {

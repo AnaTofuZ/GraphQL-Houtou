@@ -7,7 +7,7 @@ use warnings;
 use GraphQL::Houtou::Runtime::InputCoercion ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Schema ();
-use JSON::PP ();
+use JSON::MaybeXS qw(decode_json encode_json);
 
 sub new {
   my ($class, %args) = @_;
@@ -194,7 +194,7 @@ sub dump_bundle_descriptor {
   my ($self, $program, $path, %opts) = @_;
   my $descriptor = $self->compile_bundle_descriptor($program, %opts);
   open my $fh, '>', $path or die "Cannot open $path for write: $!";
-  print {$fh} JSON::PP::encode_json($descriptor);
+  print {$fh} encode_json($descriptor);
   close $fh;
   return $descriptor;
 }
@@ -203,7 +203,7 @@ sub dump_bundle_descriptor_for_document {
   my ($self, $document, $path, %opts) = @_;
   my $descriptor = $self->compile_bundle_descriptor_for_document($document, %opts);
   open my $fh, '>', $path or die "Cannot open $path for write: $!";
-  print {$fh} JSON::PP::encode_json($descriptor);
+  print {$fh} encode_json($descriptor);
   close $fh;
   return $descriptor;
 }
@@ -214,7 +214,7 @@ sub load_bundle_descriptor_file {
   local $/;
   my $json = <$fh>;
   close $fh;
-  my $descriptor = JSON::PP::decode_json($json);
+  my $descriptor = decode_json($json);
   return $self->load_bundle_descriptor($descriptor);
 }
 

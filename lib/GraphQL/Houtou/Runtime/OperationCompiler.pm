@@ -4,6 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 use Scalar::Util qw(refaddr);
+use JSON::MaybeXS qw(is_bool);
 
 use GraphQL::Houtou ();
 use GraphQL::Houtou::Runtime::Slot ();
@@ -707,6 +708,7 @@ sub _materialize_static_value {
   my ($value) = @_;
   my $ref = ref($value);
   return $value if !$ref;
+  return $value ? 1 : 0 if is_bool($value);
   return $$$value if $ref eq 'REF';
   return [ map { _materialize_static_value($_) } @$value ] if $ref eq 'ARRAY';
   return { map { $_ => _materialize_static_value($value->{$_}) } keys %$value } if $ref eq 'HASH';

@@ -1,6 +1,7 @@
 use strict;
 use warnings;
 
+use JSON::MaybeXS qw(decode_json encode_json);
 use Test::More 0.98;
 use File::Temp qw(tempfile);
 
@@ -164,11 +165,11 @@ subtest 'operation descriptor can round-trip through JSON file helpers' => sub {
 
   my $descriptor = $schema->compile_program_descriptor('{ viewer { id } }');
   open my $out, '>', $path or die $!;
-  print {$out} JSON::PP::encode_json($descriptor);
+  print {$out} encode_json($descriptor);
   close $out;
   open my $in, '<', $path or die $!;
   local $/;
-  my $loaded = JSON::PP::decode_json(<$in>);
+  my $loaded = decode_json(<$in>);
   close $in;
   my $inflated = $schema->inflate_program($loaded);
   my $summary = GraphQL::Houtou::XS::VM::native_program_summary_xs($inflated);

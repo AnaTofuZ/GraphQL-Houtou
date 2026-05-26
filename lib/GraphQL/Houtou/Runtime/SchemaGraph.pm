@@ -219,6 +219,7 @@ sub to_native_exec_struct {
   $struct->{slot_catalog_exec} = [ map { $_->to_native_exec_struct } @{ $self->{slot_catalog} || [] } ];
   $struct->{slot_resolvers} = [ map { _slot_resolver($self, $_) } @{ $self->{slot_catalog} || [] } ];
   $struct->{runtime_cache} = $self->{runtime_cache};
+  $struct->{schema} = $self->{schema};
   return $struct;
 }
 
@@ -232,6 +233,13 @@ sub _slot_resolver {
 
   my ($type_name, $field_name) = $key =~ /\A(.+)\.([^.]+)\z/;
   return undef if !defined $type_name || !defined $field_name;
+
+  if ($field_name eq '__schema' || $field_name eq '__type') {
+    require GraphQL::Houtou::Introspection;
+    return $field_name eq '__schema'
+      ? $GraphQL::Houtou::Introspection::SCHEMA_META_FIELD_DEF->{resolve}
+      : $GraphQL::Houtou::Introspection::TYPE_META_FIELD_DEF->{resolve};
+  }
 
   my $type = ($self->{runtime_cache}{name2type} || {})->{$type_name};
   return undef if !$type || !$type->can('fields');
@@ -329,6 +337,7 @@ sub _build_blocks {
     my $block = $blocks_by_type{ $root_type->name } or next;
     $root_blocks{$root_name} = $block;
     $root_types{$root_name} = $root_type->name;
+    _add_introspection_meta_slots($block, $root_type) if $root_name eq 'query';
   }
 
   return (\@blocks, \%root_blocks, \%root_types);
@@ -421,6 +430,32 @@ sub _build_slots_for_object {
   }
 
   return \@slots;
+}
+
+sub _add_introspection_meta_slots {
+  my ($block, $root_type) = @_;
+  require GraphQL::Houtou::Introspection;
+
+  for my $meta_def (
+    $GraphQL::Houtou::Introspection::SCHEMA_META_FIELD_DEF,
+    $GraphQL::Houtou::Introspection::TYPE_META_FIELD_DEF,
+  ) {
+    my $return_type = $meta_def->{type};
+    push @{ $block->{slots} }, GraphQL::Houtou::Runtime::Slot->new(
+      schema_slot_key  => join(q(.), $root_type->name, $meta_def->{name}),
+      field_name       => $meta_def->{name},
+      result_name      => $meta_def->{name},
+      return_type_name => _type_name($return_type),
+      resolver_shape   => 'EXPLICIT',
+      resolver_mode    => 'DEFAULT',
+      completion_family    => _completion_family_for_type($return_type),
+      dispatch_family      => _dispatch_family_for_type($return_type),
+      arg_defs_compact     => _build_input_defs_compact($meta_def->{args} || {}),
+      return_type_kind_code => _type_kind_code($return_type),
+      has_args         => ($meta_def->{args} && keys %{ $meta_def->{args} }) ? 1 : 0,
+      has_directives   => 0,
+    );
+  }
 }
 
 sub _build_slot_catalog {

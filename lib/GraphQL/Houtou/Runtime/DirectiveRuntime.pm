@@ -27,8 +27,20 @@ $NEXT_DIRECTIVE_VALUE = sub {
   my $index = $frame->{index}++;
   return $frame->{final_cb}->() if $index >= @{ $frame->{entries} };
 
-  my ($middleware, $directive_args, $directive) = @{ $frame->{entries}[$index] };
-  return $middleware->(
+  my ($mode, $code, $directive_args, $directive) = @{ $frame->{entries}[$index] };
+  if ($mode eq 'transform') {
+    return $code->(
+      scalar($NEXT_DIRECTIVE_VALUE->()),
+      $frame->{source},
+      $frame->{field_args},
+      $frame->{context},
+      $frame->{info},
+      $frame->{return_type},
+      $directive_args,
+      $directive,
+    );
+  }
+  return $code->(
     $NEXT_DIRECTIVE_VALUE,
     $frame->{source},
     $frame->{field_args},
@@ -220,14 +232,23 @@ sub _compile_directive_entries {
   return [] if !$instances || !@$instances;
 
   my @entries;
-  for my $instance (reverse @$instances) {
+  for my $instance (@$instances) {
     next if !$instance || ref($instance) ne 'HASH';
     my $name = $instance->{name} || next;
     my $directive = $directive_defs->{$name} || next;
-    next if !$directive->can('resolve_field');
-    my $middleware = $directive->resolve_field || next;
+    my ($mode, $code);
+    if ($directive->can('apply_field_result') && $directive->apply_field_result) {
+      $mode = 'transform';
+      $code = $directive->apply_field_result;
+    } elsif ($directive->can('resolve_field') && $directive->resolve_field) {
+      $mode = 'middleware';
+      $code = $directive->resolve_field;
+    } else {
+      next;
+    }
     push @entries, [
-      $middleware,
+      $mode,
+      $code,
       ($instance->{arguments} || {}),
       $directive,
     ];
@@ -239,9 +260,21 @@ sub _apply_compiled_directive_entries {
   my ($entries, $source, $field_args, $context, $info, $return_type, $final_cb) = @_;
   return $final_cb->() if !$entries || !@$entries;
   if (@$entries == 1) {
-    my ($middleware, $directive_args, $directive) = @{ $entries->[0] };
+    my ($mode, $code, $directive_args, $directive) = @{ $entries->[0] };
+    if ($mode eq 'transform') {
+      return $code->(
+        scalar($final_cb->()),
+        $source,
+        $field_args,
+        $context,
+        $info,
+        $return_type,
+        $directive_args,
+        $directive,
+      );
+    }
     local $CURRENT_SINGLE_DIRECTIVE_VALUE = $final_cb->();
-    return $middleware->(
+    return $code->(
       $NEXT_SINGLE_DIRECTIVE_VALUE,
       $source,
       $field_args,

@@ -28,9 +28,8 @@ my $Mask = GraphQL::Houtou::Directive->new(
   args => {
     enabled => { type => $Boolean->non_null },
   },
-  resolve_field => sub {
-    my ($next, $source, $field_args, $context, $info, $return_type, $directive_args) = @_;
-    my $value = $next->();
+  apply_field_result => sub {
+    my ($value, $source, $field_args, $context, $info, $return_type, $directive_args) = @_;
     return $directive_args->{enabled} ? '***' : $value;
   },
 );
@@ -56,6 +55,26 @@ my $Auth = GraphQL::Houtou::Directive->new(
     my ($next, $source, $field_args, $context, $info, $return_type, $directive_args) = @_;
     die "forbidden\n" if (($context || {})->{role} || '') ne ($directive_args->{role} || '');
     return $next->();
+  },
+);
+
+my $Bracket = GraphQL::Houtou::Directive->new(
+  name => 'bracket',
+  locations => [ qw(FIELD FRAGMENT_SPREAD INLINE_FRAGMENT) ],
+  apply_field_result => sub {
+    my ($value) = @_;
+    return undef if !defined $value;
+    return '[' . $value . ']';
+  },
+);
+
+my $Bang = GraphQL::Houtou::Directive->new(
+  name => 'bang',
+  locations => [ qw(FIELD FRAGMENT_SPREAD INLINE_FRAGMENT) ],
+  apply_field_result => sub {
+    my ($value) = @_;
+    return undef if !defined $value;
+    return $value . '!';
   },
 );
 
@@ -99,6 +118,8 @@ my $schema = GraphQL::Houtou::Schema->new(
     $Mask,
     $Upper,
     $Auth,
+    $Bracket,
+    $Bang,
   ],
 );
 
@@ -137,6 +158,15 @@ subtest 'custom executable field directive materializes variable arguments on na
     data => { hello => '***' },
     errors => [],
   }, 'FIELD directive middleware sees materialized variable args';
+};
+
+subtest 'post-resolve directive API preserves directive order' => sub {
+  my $result = $schema->execute('{ hello @bracket @bang }');
+
+  is_deeply $result, {
+    data => { hello => '[hello!]' },
+    errors => [],
+  }, 'post-resolve directives compose in source order';
 };
 
 subtest 'native specialization freezes runtime directive payloads for variable-driven directives' => sub {

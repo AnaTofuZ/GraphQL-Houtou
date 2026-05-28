@@ -46,6 +46,7 @@ sub new {
   $self->{args} = $args{args} || {};
   $self->{repeatable} = $args{repeatable} ? 1 : 0;
   $self->{resolve_field} = $args{resolve_field};
+  $self->{apply_field_result} = $args{apply_field_result};
   return bless $self, $class;
 }
 
@@ -55,6 +56,7 @@ sub locations { $_[0]->{locations} }
 sub args { $_[0]->{args} }
 sub repeatable { $_[0]->{repeatable} }
 sub resolve_field { $_[0]->{resolve_field} }
+sub apply_field_result { $_[0]->{apply_field_result} }
 sub to_string { $_[0]->{to_string} ||= $_[0]->name }
 
 sub has_executable_location {
@@ -66,7 +68,7 @@ sub has_executable_location {
 
 sub has_runtime_hook {
   my ($self) = @_;
-  return $self->resolve_field ? 1 : 0;
+  return ($self->resolve_field || $self->apply_field_result) ? 1 : 0;
 }
 
 sub to_doc {

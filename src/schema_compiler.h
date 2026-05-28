@@ -566,6 +566,7 @@ gql_schema_compile_directive(pTHX_ SV *directive_sv) {
   gql_store_sv(compiled_hv, "name", gql_schema_call_method0(aTHX_ directive_sv, "name"));
   gql_store_sv(compiled_hv, "class", newSVpv(gql_schema_class_name(directive_sv), 0));
   gql_store_sv(compiled_hv, "description", gql_schema_call_method0(aTHX_ directive_sv, "description"));
+  gql_store_sv(compiled_hv, "repeatable", gql_schema_call_method0(aTHX_ directive_sv, "repeatable"));
 
   locations_sv = gql_schema_call_method0(aTHX_ directive_sv, "locations");
   gql_store_sv(compiled_hv, "locations", gql_schema_clone_arrayref_shallow(aTHX_ locations_sv));
@@ -667,6 +668,7 @@ gql_schema_compile_named_type(pTHX_ SV *type_sv) {
   } else if (strEQ(kind, "SCALAR")) {
     SV *serialize_sv = gql_schema_call_method0(aTHX_ type_sv, "serialize");
     SV *parse_value_sv = gql_schema_call_method0(aTHX_ type_sv, "parse_value");
+    SV *specified_by_url_sv = gql_schema_call_method0(aTHX_ type_sv, "specified_by_url");
     if (SvOK(serialize_sv)) {
       gql_store_sv(compiled_hv, "serialize", serialize_sv);
     } else {
@@ -676,6 +678,11 @@ gql_schema_compile_named_type(pTHX_ SV *type_sv) {
       gql_store_sv(compiled_hv, "parse_value", parse_value_sv);
     } else {
       SvREFCNT_dec(parse_value_sv);
+    }
+    if (SvOK(specified_by_url_sv)) {
+      gql_store_sv(compiled_hv, "specified_by_url", specified_by_url_sv);
+    } else {
+      SvREFCNT_dec(specified_by_url_sv);
     }
   }
 

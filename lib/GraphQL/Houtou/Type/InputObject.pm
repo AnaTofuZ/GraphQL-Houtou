@@ -6,7 +6,7 @@ use warnings;
 
 use parent 'GraphQL::Houtou::Type';
 use Role::Tiny::With;
-use GraphQL::Houtou::Internal::TypeSupport qw(description_doc_lines named_from_ast);
+use GraphQL::Houtou::Internal::TypeSupport qw(description_doc_lines named_from_ast apply_fields_deprecation);
 use GraphQL::Houtou::Type::List ();
 use GraphQL::Houtou::Type::NonNull ();
 
@@ -46,7 +46,11 @@ sub fields {
     $fields = $fields->();
     $self->{fields} = $fields;
   }
-  return $fields;
+  if (!$self->{_fields_deprecation_applied}) {
+    $self->{fields} = apply_fields_deprecation($self->{fields});
+    $self->{_fields_deprecation_applied} = 1;
+  }
+  return $self->{fields};
 }
 
 sub is_valid {

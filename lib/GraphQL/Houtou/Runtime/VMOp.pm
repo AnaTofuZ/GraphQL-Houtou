@@ -35,6 +35,9 @@ use constant {
   DIRECTIVES_PAYLOAD_INDEX_SLOT              => 25,
   BLOCK_SLOT                                 => 26,
   ABSTRACT_CHILD_BLOCKS_INDEX_SLOT           => 27,
+  RUNTIME_DIRECTIVES_MODE_SLOT               => 28,
+  RUNTIME_DIRECTIVES_PAYLOAD_SLOT            => 29,
+  HAS_RUNTIME_DIRECTIVES_SLOT                => 30,
 };
 
 sub new {
@@ -68,6 +71,9 @@ sub new {
     $args{directives_payload_index},
     undef,
     $args{abstract_child_blocks_index},
+    $args{runtime_directives_mode} || 'NONE',
+    $args{runtime_directives_payload},
+    $args{has_runtime_directives} ? 1 : 0,
   ], $class;
 }
 
@@ -101,6 +107,9 @@ sub native_child_block_index { return $_[0][NATIVE_CHILD_BLOCK_INDEX_SLOT] }
 sub native_abstract_child_block_indexes { return $_[0][NATIVE_ABSTRACT_CHILD_BLOCK_INDEXES_SLOT] }
 sub args_payload_index { return $_[0][ARGS_PAYLOAD_INDEX_SLOT] }
 sub directives_payload_index { return $_[0][DIRECTIVES_PAYLOAD_INDEX_SLOT] }
+sub runtime_directives_mode { return $_[0][RUNTIME_DIRECTIVES_MODE_SLOT] }
+sub runtime_directives_payload { return $_[0][RUNTIME_DIRECTIVES_PAYLOAD_SLOT] }
+sub has_runtime_directives { return $_[0][HAS_RUNTIME_DIRECTIVES_SLOT] }
 sub block { return $_[0][BLOCK_SLOT] }
 
 sub set_field_name { $_[0][FIELD_NAME_SLOT] = $_[1]; return $_[1] }
@@ -116,6 +125,9 @@ sub set_native_abstract_child_block_indexes { $_[0][NATIVE_ABSTRACT_CHILD_BLOCK_
 sub set_abstract_child_blocks_index { $_[0][ABSTRACT_CHILD_BLOCKS_INDEX_SLOT] = $_[1]; return $_[1] }
 sub set_args_payload_index { $_[0][ARGS_PAYLOAD_INDEX_SLOT] = $_[1]; return $_[1] }
 sub set_directives_payload_index { $_[0][DIRECTIVES_PAYLOAD_INDEX_SLOT] = $_[1]; return $_[1] }
+sub set_runtime_directives_mode { $_[0][RUNTIME_DIRECTIVES_MODE_SLOT] = $_[1] || 'NONE'; return $_[0][RUNTIME_DIRECTIVES_MODE_SLOT] }
+sub set_runtime_directives_payload { $_[0][RUNTIME_DIRECTIVES_PAYLOAD_SLOT] = $_[1]; return $_[1] }
+sub set_has_runtime_directives { $_[0][HAS_RUNTIME_DIRECTIVES_SLOT] = $_[1] ? 1 : 0; return $_[0][HAS_RUNTIME_DIRECTIVES_SLOT] }
 sub set_has_args { $_[0][HAS_ARGS_SLOT] = $_[1] ? 1 : 0; return $_[0][HAS_ARGS_SLOT] }
 sub set_args_mode { $_[0][ARGS_MODE_SLOT] = $_[1] || 'NONE'; return $_[0][ARGS_MODE_SLOT] }
 sub set_args_payload { $_[0][ARGS_PAYLOAD_SLOT] = $_[1]; return $_[1] }
@@ -153,6 +165,9 @@ sub to_struct {
     directives_payload => _clone_value($self->directives_payload),
     directives_payload_index => $self->directives_payload_index,
     has_directives => $self->has_directives,
+    runtime_directives_mode => $self->runtime_directives_mode,
+    runtime_directives_payload => _clone_value($self->runtime_directives_payload),
+    has_runtime_directives => $self->has_runtime_directives,
   };
 }
 
@@ -189,6 +204,10 @@ sub to_native_struct {
     directives_payload_index => $directives_payload_index,
     directives_payload => defined $directives_payload_index ? undef : _clone_value($self->directives_payload),
     has_directives => $self->has_directives,
+    runtime_directives_mode => $self->runtime_directives_mode,
+    runtime_directives_mode_code => _directives_mode_code($self->runtime_directives_mode),
+    runtime_directives_payload => _clone_value($self->runtime_directives_payload),
+    has_runtime_directives => $self->has_runtime_directives,
     child_block_index => defined $self->child_block_name && exists $block_index->{ $self->child_block_name }
       ? $block_index->{ $self->child_block_name }
       : undef,
@@ -227,6 +246,9 @@ sub to_native_compact_struct {
     $self->field_name,
     $self->result_name,
     $self->return_type_name,
+    $struct->{runtime_directives_mode_code},
+    $struct->{runtime_directives_payload},
+    $struct->{has_runtime_directives},
   ];
 }
 

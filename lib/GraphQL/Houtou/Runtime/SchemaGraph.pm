@@ -5,6 +5,10 @@ use strict;
 use warnings;
 
 use GraphQL::Houtou ();
+use GraphQL::Houtou::Runtime::DirectiveRuntime qw(
+  slot_needs_runtime_wrapper
+  wrap_field_resolver
+);
 use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::SchemaBlock ();
 use GraphQL::Houtou::Runtime::Slot ();
@@ -219,6 +223,7 @@ sub to_native_exec_struct {
   $struct->{slot_catalog_exec} = [ map { $_->to_native_exec_struct } @{ $self->{slot_catalog} || [] } ];
   $struct->{slot_resolvers} = [ map { _slot_resolver($self, $_) } @{ $self->{slot_catalog} || [] } ];
   $struct->{runtime_cache} = $self->{runtime_cache};
+  $struct->{schema} = $self->{schema};
   return $struct;
 }
 
@@ -233,13 +238,45 @@ sub _slot_resolver {
   my ($type_name, $field_name) = $key =~ /\A(.+)\.([^.]+)\z/;
   return undef if !defined $type_name || !defined $field_name;
 
+  if ($field_name eq '__schema' || $field_name eq '__type') {
+    require GraphQL::Houtou::Introspection;
+    return $field_name eq '__schema'
+      ? wrap_field_resolver(
+          schema => $self->{schema},
+          field_name => '__schema',
+          field => $GraphQL::Houtou::Introspection::SCHEMA_META_FIELD_DEF,
+          resolver => $GraphQL::Houtou::Introspection::SCHEMA_META_FIELD_DEF->{resolve},
+        )
+      : wrap_field_resolver(
+          schema => $self->{schema},
+          field_name => '__type',
+          field => $GraphQL::Houtou::Introspection::TYPE_META_FIELD_DEF,
+          resolver => $GraphQL::Houtou::Introspection::TYPE_META_FIELD_DEF->{resolve},
+        );
+  }
+
+  if ($field_name eq '__typename') {
+    return undef;
+  }
+
   my $type = ($self->{runtime_cache}{name2type} || {})->{$type_name};
   return undef if !$type || !$type->can('fields');
 
   my $field = ($type->fields || {})->{$field_name};
   return undef if ref($field) ne 'HASH';
 
-  return $field->{resolve};
+  my $wrapped = slot_needs_runtime_wrapper(
+    schema => $self->{schema},
+    field => $field,
+  );
+  return $field->{resolve} if !$wrapped;
+
+  return wrap_field_resolver(
+    schema => $self->{schema},
+    field_name => $field_name,
+    field => $field,
+    resolver => $field->{resolve},
+  );
 }
 
 sub _type_kind_name_code {
@@ -318,7 +355,7 @@ sub _build_blocks {
       name => uc($type_name),
       family => 'OBJECT',
       root_type_name => $type->name,
-      slots => _build_slots_for_object($type),
+      slots => _build_slots_for_object($schema, $type),
     );
     push @blocks, $block;
     $blocks_by_type{ $type->name } = $block;
@@ -329,6 +366,8 @@ sub _build_blocks {
     my $block = $blocks_by_type{ $root_type->name } or next;
     $root_blocks{$root_name} = $block;
     $root_types{$root_name} = $root_type->name;
+    _add_introspection_meta_slots($block, $root_type)
+      if $root_name eq 'query';
   }
 
   return (\@blocks, \%root_blocks, \%root_types);
@@ -382,7 +421,7 @@ sub _inflate_slot {
 }
 
 sub _build_slots_for_object {
-  my ($type) = @_;
+  my ($schema, $type) = @_;
   my $fields = $type->fields || {};
   my @slots = (
     GraphQL::Houtou::Runtime::Slot->new(
@@ -404,13 +443,19 @@ sub _build_slots_for_object {
   for my $field_name (sort keys %$fields) {
     my $field = $fields->{$field_name} || {};
     my $return_type = $field->{type};
+    my $wrapped = slot_needs_runtime_wrapper(
+      schema => $schema,
+      field => $field,
+    );
     push @slots, GraphQL::Houtou::Runtime::Slot->new(
       schema_slot_key => join(q(.), $type->name, $field_name),
       field_name => $field_name,
       result_name => $field_name,
       return_type_name => _type_name($return_type),
-      resolver_shape => ($field->{resolve} ? 'EXPLICIT' : 'DEFAULT'),
-      resolver_mode => (($field->{resolver_mode} || q()) eq 'native' ? 'NATIVE' : 'DEFAULT'),
+      resolver_shape => ($field->{resolve} || $wrapped) ? 'EXPLICIT' : 'DEFAULT',
+      resolver_mode => $wrapped
+        ? 'DEFAULT'
+        : (($field->{resolver_mode} || q()) eq 'native' ? 'NATIVE' : 'DEFAULT'),
       completion_family => _completion_family_for_type($return_type),
       dispatch_family => _dispatch_family_for_type($return_type),
       arg_defs_compact => _build_input_defs_compact($field->{args} || {}),
@@ -421,6 +466,32 @@ sub _build_slots_for_object {
   }
 
   return \@slots;
+}
+
+sub _add_introspection_meta_slots {
+  my ($block, $root_type) = @_;
+  require GraphQL::Houtou::Introspection;
+
+  for my $meta_def (
+    $GraphQL::Houtou::Introspection::SCHEMA_META_FIELD_DEF,
+    $GraphQL::Houtou::Introspection::TYPE_META_FIELD_DEF,
+  ) {
+    my $return_type = $meta_def->{type};
+    push @{ $block->{slots} }, GraphQL::Houtou::Runtime::Slot->new(
+      schema_slot_key  => join(q(.), $root_type->name, $meta_def->{name}),
+      field_name       => $meta_def->{name},
+      result_name      => $meta_def->{name},
+      return_type_name => _type_name($return_type),
+      resolver_shape   => 'EXPLICIT',
+      resolver_mode    => 'DEFAULT',
+      completion_family    => _completion_family_for_type($return_type),
+      dispatch_family      => _dispatch_family_for_type($return_type),
+      arg_defs_compact     => _build_input_defs_compact($meta_def->{args} || {}),
+      return_type_kind_code => _type_kind_code($return_type),
+      has_args         => ($meta_def->{args} && keys %{ $meta_def->{args} }) ? 1 : 0,
+      has_directives   => 0,
+    );
+  }
 }
 
 sub _build_slot_catalog {

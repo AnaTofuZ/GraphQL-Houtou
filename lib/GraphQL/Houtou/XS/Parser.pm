@@ -6,7 +6,7 @@ use warnings;
 use GraphQL::Error;
 use GraphQL::Houtou ();
 use GraphQL::Language::Receiver ();
-use JSON::PP ();
+use JSON::MaybeXS ();
 
 our $VERSION = '0.01';
 
@@ -21,10 +21,10 @@ use strict;
 use warnings;
 use GraphQL::Error;
 use GraphQL::Language::Receiver ();
-use JSON::PP ();
+use JSON::MaybeXS ();
 
 sub _make_bool {
-  return $_[0] ? JSON::PP::true : JSON::PP::false;
+  return $_[0] ? JSON::MaybeXS::true() : JSON::MaybeXS::false();
 }
 
 sub _string_value {

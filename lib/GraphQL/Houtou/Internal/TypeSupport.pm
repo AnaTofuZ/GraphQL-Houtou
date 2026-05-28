@@ -49,8 +49,11 @@ sub apply_fields_deprecation {
   my ($values) = @_;
   my $copy = { %{$values || {}} };
   for my $name (keys %$copy) {
-    next if !defined $copy->{$name}{deprecation_reason};
-    $copy->{$name} = { %{ $copy->{$name} }, is_deprecated => 1 };
+    my $field = $copy->{$name};
+    my %new = %$field;
+    $new{is_deprecated} = 1 if defined $field->{deprecation_reason};
+    $new{args} = apply_fields_deprecation($field->{args}) if $field->{args};
+    $copy->{$name} = \%new;
   }
   return $copy;
 }

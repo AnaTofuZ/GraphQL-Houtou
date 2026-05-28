@@ -165,6 +165,9 @@ typedef struct {
   gql_runtime_vm_native_directives_payload_t *directives_payload_native;
   U8 has_args;
   U8 has_directives;
+  IV runtime_directives_mode_code;
+  SV *runtime_directives_sv;
+  U8 has_runtime_directives;
 } gql_runtime_vm_native_op_t;
 
 typedef struct {
@@ -443,6 +446,9 @@ struct gql_runtime_vm_lazy_info {
   SV *variable_values;
   SV *operation;
   SV *runtime_schema;
+  SV *directives;
+  IV block_index;
+  IV op_index;
   SV *materialized_sv;
 };
 
@@ -1598,6 +1604,9 @@ gql_runtime_vm_native_op_to_compact_sv(
   av_push(av, newSVpv((slot && slot->field_name) ? slot->field_name : "", 0));
   av_push(av, newSVpv((slot && slot->result_name) ? slot->result_name : "", 0));
   av_push(av, newSVpv((slot && slot->return_type_name) ? slot->return_type_name : "", 0));
+  av_push(av, newSViv(op->runtime_directives_mode_code));
+  av_push(av, op->runtime_directives_sv ? newSVsv(op->runtime_directives_sv) : newSV(0));
+  av_push(av, newSViv(op->has_runtime_directives ? 1 : 0));
 
   return newRV_noinc((SV *)av);
 }
@@ -3182,6 +3191,7 @@ gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
           Safefree(bundle->blocks[i].ops[j].abstract_child_indexes);
           gql_runtime_vm_native_args_payload_destroy(aTHX_ bundle->blocks[i].ops[j].args_payload_native);
           gql_runtime_vm_native_directives_payload_destroy(aTHX_ bundle->blocks[i].ops[j].directives_payload_native);
+          SvREFCNT_dec(bundle->blocks[i].ops[j].runtime_directives_sv);
         }
       }
       Safefree(bundle->blocks[i].slots);
@@ -3221,6 +3231,7 @@ gql_runtime_vm_native_program_destroy(gql_runtime_vm_native_program_t *program)
           Safefree(program->blocks[i].ops[j].abstract_child_indexes);
           gql_runtime_vm_native_args_payload_destroy(aTHX_ program->blocks[i].ops[j].args_payload_native);
           gql_runtime_vm_native_directives_payload_destroy(aTHX_ program->blocks[i].ops[j].directives_payload_native);
+          SvREFCNT_dec(program->blocks[i].ops[j].runtime_directives_sv);
         }
       }
       Safefree(program->blocks[i].slots);
@@ -3703,6 +3714,9 @@ gql_runtime_vm_clone_native_op(
   if (src->directives_payload_native) {
     dst->directives_payload_native = gql_runtime_vm_native_directives_payload_clone(aTHX_ src->directives_payload_native);
   }
+  if (src->runtime_directives_sv) {
+    dst->runtime_directives_sv = newSVsv(src->runtime_directives_sv);
+  }
 }
 
 static void
@@ -3805,6 +3819,12 @@ gql_runtime_vm_parse_native_op(pTHX_ SV *sv, gql_runtime_vm_native_op_t *out)
       : NULL;
     svp = av_fetch(av, 14, 0);
     out->has_directives = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
+    svp = av_fetch(av, 18, 0);
+    out->runtime_directives_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : GQL_VM_ARGS_NONE;
+    svp = av_fetch(av, 19, 0);
+    out->runtime_directives_sv = (svp && SvOK(*svp)) ? newSVsv(*svp) : NULL;
+    svp = av_fetch(av, 20, 0);
+    out->has_runtime_directives = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
     return 1;
   }
   if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &hv)) {
@@ -3832,6 +3852,12 @@ gql_runtime_vm_parse_native_op(pTHX_ SV *sv, gql_runtime_vm_native_op_t *out)
   if (!gql_runtime_vm_fetch_hv_bool(aTHX_ hv, "has_directives", 14, &out->has_directives)) {
     croak("native VM op entry is missing has_directives");
   }
+  svp = hv_fetch(hv, "runtime_directives_mode_code", 28, 0);
+  out->runtime_directives_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : GQL_VM_ARGS_NONE;
+  svp = hv_fetch(hv, "runtime_directives_payload", 26, 0);
+  out->runtime_directives_sv = (svp && SvOK(*svp)) ? newSVsv(*svp) : NULL;
+  svp = hv_fetch(hv, "has_runtime_directives", 22, 0);
+  out->has_runtime_directives = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
   svp = hv_fetch(hv, "directives_mode_code", 20, 0);
   out->directives_mode_code = (svp && SvOK(*svp)) ? SvIV(*svp) : GQL_VM_ARGS_NONE;
   svp = hv_fetch(hv, "abstract_child_block_indexes", 28, 0);
@@ -4477,6 +4503,8 @@ gql_runtime_vm_prepare_cached_bundle_in_place(
         op->args_payload_native = NULL;
         gql_runtime_vm_native_directives_payload_destroy(aTHX_ op->directives_payload_native);
         op->directives_payload_native = NULL;
+        SvREFCNT_dec(op->runtime_directives_sv);
+        op->runtime_directives_sv = NULL;
         continue;
       }
 
@@ -5124,6 +5152,8 @@ gql_runtime_vm_specialize_native_program_in_place(
         op->args_payload_native = NULL;
         gql_runtime_vm_native_directives_payload_destroy(aTHX_ op->directives_payload_native);
         op->directives_payload_native = NULL;
+        SvREFCNT_dec(op->runtime_directives_sv);
+        op->runtime_directives_sv = NULL;
         Zero(op, 1, gql_runtime_vm_native_op_t);
         continue;
       }

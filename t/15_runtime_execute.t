@@ -1,7 +1,7 @@
 use strict;
 use warnings;
 
-use JSON::PP ();
+use JSON::MaybeXS ();
 use Test::More 0.98;
 
 use GraphQL::Houtou ();
@@ -514,7 +514,7 @@ GRAPHQL
 subtest 'dynamic include directives execute through lowered runtime guards' => sub {
   my $result = $schema->execute(
     'query Q($show: Boolean) { viewer { id name @include(if: $show) } }',
-    variables => { show => JSON::PP::true },
+    variables => { show => JSON::MaybeXS::true() },
   );
 
   is_deeply $result, {

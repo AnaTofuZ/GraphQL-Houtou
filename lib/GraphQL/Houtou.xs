@@ -207,14 +207,20 @@ static SV *gql_runtime_vm_exec_state_resolve_current_value_sv(pTHX_ SV *state_sv
 static SV *gql_runtime_vm_exec_state_complete_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame, IV block_index, IV slot_index, IV op_index, SV *resolved_sv);
 static SV *gql_runtime_vm_exec_state_complete_current_native_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame, const gql_runtime_vm_native_op_t *op, const gql_runtime_vm_native_slot_t *slot, SV *resolved_sv);
 static SV *gql_runtime_vm_exec_state_execute_current_op_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_outcome_t **outcome_out);
+static SV *gql_runtime_vm_apply_runtime_directives_nonfatal(pTHX_ gql_runtime_vm_exec_state_t *state, SV *source, SV *resolved, SV **error_out);
+static CV *gql_runtime_vm_directive_runtime_apply_cv(pTHX);
+static CV *gql_runtime_vm_directive_runtime_materialize_cv(pTHX);
+static CV *gql_runtime_vm_directive_runtime_program_materialize_cv(pTHX);
 static SV *gql_runtime_vm_new_lazy_info_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *path_frame);
 static SV *gql_runtime_vm_new_lazy_info_for_path_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_new_outcome_handle_sv(pTHX_ U8 kind_code, SV *value, SV *error_records);
 static SV *gql_runtime_vm_lookup_type_object_by_name_sv(pTHX_ SV *runtime_schema, const char *type_name);
+static SV *gql_runtime_vm_lookup_slot_type_object_sv(pTHX_ const gql_runtime_vm_native_runtime_t *runtime, SV *runtime_schema, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_direct_slot_type_object_sv(const gql_runtime_vm_native_runtime_t *runtime, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_state_current_return_type_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *op_sv, SV *slot_sv);
 static SV *gql_runtime_vm_state_return_type_for_slot_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_exec_state_resolve_runtime_type_for_slot_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, const gql_runtime_vm_native_slot_t *slot, SV *resolved_sv, gql_runtime_vm_path_frame_t *path_frame, SV **error_out);
+static SV *gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state);
 static IV gql_runtime_vm_find_abstract_child_block_index(const gql_runtime_vm_native_op_t *op, const char *type_name);
 static const char *gql_runtime_vm_type_name_from_sv(pTHX_ SV *type_sv);
 static SV *gql_runtime_vm_snapshot_scalarish_value_sv(pTHX_ SV *value);
@@ -3567,6 +3573,9 @@ gql_runtime_vm_lazy_info_materialize_hash_sv(pTHX_ gql_runtime_vm_lazy_info_t *i
   hv_store(info_hv, "variable_values", 15, newSVsv(info->variable_values ? info->variable_values : &PL_sv_undef), 0);
   hv_store(info_hv, "operation", 9, newSVsv(info->operation ? info->operation : &PL_sv_undef), 0);
   hv_store(info_hv, "runtime_schema", 14, newSVsv(info->runtime_schema ? info->runtime_schema : &PL_sv_undef), 0);
+  hv_store(info_hv, "directives", 10, newSVsv(info->directives ? info->directives : &PL_sv_undef), 0);
+  hv_store(info_hv, "block_index", 11, newSViv(info->block_index), 0);
+  hv_store(info_hv, "op_index", 8, newSViv(info->op_index), 0);
 
   if (info->runtime_schema
       && SvROK(info->runtime_schema)
@@ -3613,6 +3622,7 @@ gql_runtime_vm_lazy_info_decref(pTHX_ gql_runtime_vm_lazy_info_t *info)
   SvREFCNT_dec(info->variable_values);
   SvREFCNT_dec(info->operation);
   SvREFCNT_dec(info->runtime_schema);
+  SvREFCNT_dec(info->directives);
   SvREFCNT_dec(info->materialized_sv);
   Safefree(info);
 }
@@ -3631,7 +3641,10 @@ gql_runtime_vm_new_lazy_info_handle_sv(
   SV *root_value,
   SV *variable_values,
   SV *operation,
-  SV *runtime_schema
+  SV *runtime_schema,
+  SV *directives,
+  IV block_index,
+  IV op_index
 )
 {
   gql_runtime_vm_lazy_info_t *info;
@@ -3653,6 +3666,9 @@ gql_runtime_vm_new_lazy_info_handle_sv(
   info->variable_values = variable_values ? SvREFCNT_inc_simple_NN(variable_values) : NULL;
   info->operation = operation ? SvREFCNT_inc_simple_NN(operation) : NULL;
   info->runtime_schema = runtime_schema ? SvREFCNT_inc_simple_NN(runtime_schema) : NULL;
+  info->directives = directives ? SvREFCNT_inc_simple_NN(directives) : NULL;
+  info->block_index = block_index;
+  info->op_index = op_index;
 
   return gql_runtime_vm_new_handle_sv(aTHX_ "GraphQL::Houtou::Runtime::LazyInfo", info);
 }
@@ -3706,7 +3722,10 @@ gql_runtime_vm_new_lazy_info_for_path_sv(
     s ? s->root_value : &PL_sv_undef,
     s ? s->variables : &PL_sv_undef,
     s ? s->program : &PL_sv_undef,
-    s ? s->runtime_schema : &PL_sv_undef
+    s ? s->runtime_schema : &PL_sv_undef,
+    &PL_sv_undef,
+    (s && s->cursor) ? s->cursor->block_index : -1,
+    (s && s->cursor) ? s->cursor->op_index : -1
   );
 }
 
@@ -4923,6 +4942,54 @@ gql_runtime_vm_exec_state_execute_current_op_async_sv(
     goto done_async_current_op;
   }
 
+  if (s->cursor) {
+    const gql_runtime_vm_native_block_t *block = gql_runtime_vm_cursor_current_native_block(s->cursor);
+    const gql_runtime_vm_native_op_t *op = gql_runtime_vm_cursor_current_native_op(s->cursor);
+    if (block && op && (op->has_runtime_directives || op->runtime_directives_sv)) {
+      SV *applied_sv = gql_runtime_vm_apply_runtime_directives_nonfatal(
+        aTHX_
+        &(gql_runtime_vm_exec_state_t) {
+          .runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s),
+          .bundle = s->native_program ? gql_runtime_vm_native_program_cached_bundle(aTHX_ gql_runtime_vm_exec_state_native_runtime(aTHX_ s), s->native_program) : NULL,
+          .callback_ctx = &(gql_runtime_vm_callback_context_t) {
+            .runtime_schema = s->runtime_schema,
+            .program = s->program,
+            .context = s->context,
+            .variables = s->variables,
+            .root_value = s->root_value,
+          },
+          .path_frame = path_frame,
+          .empty_args_sv = s->empty_args,
+          .writer = s->writer,
+          .block = block,
+          .op = op,
+          .slot = gql_runtime_vm_effective_slot(gql_runtime_vm_exec_state_native_runtime(aTHX_ s), gql_runtime_vm_cursor_current_native_slot(s->cursor)),
+          .block_index = s->cursor->block_index,
+          .op_index = s->cursor->op_index,
+        },
+        s->field_frame->source,
+        resolved_sv,
+        &error_sv
+      );
+      if (error_sv && SvOK(error_sv)) {
+        SvREFCNT_dec(applied_sv);
+        if (outcome_out) {
+          *outcome_out = gql_runtime_vm_new_error_outcome_struct_for_path(
+            aTHX_
+            error_sv,
+            path_frame
+          );
+        } else {
+          result_sv = gql_runtime_vm_new_error_outcome_for_path_sv(aTHX_ error_sv, path_frame);
+        }
+        SvREFCNT_dec(error_sv);
+        goto done_async_current_op;
+      }
+      SvREFCNT_dec(resolved_sv);
+      resolved_sv = applied_sv;
+    }
+  }
+
   result_sv = gql_runtime_vm_exec_state_complete_async_sv(
     aTHX_
     state_sv,
@@ -5486,6 +5553,205 @@ gql_runtime_vm_call_cb5_nonfatal(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV 
   return ret ? ret : newSVsv(&PL_sv_undef);
 }
 
+static SV *
+gql_runtime_vm_cached_cv(pTHX_ const char *name)
+{
+  STRLEN len = name ? strlen(name) : 0;
+  return name ? (SV *)get_cvn_flags(name, len, 0) : NULL;
+}
+
+static CV *
+gql_runtime_vm_directive_runtime_apply_cv(pTHX)
+{
+  static CV *cv = NULL;
+  if (!cv) {
+    cv = (CV *)gql_runtime_vm_cached_cv(aTHX_ "GraphQL::Houtou::Runtime::DirectiveRuntime::apply_runtime_directives");
+  }
+  return cv;
+}
+
+static CV *
+gql_runtime_vm_directive_runtime_materialize_cv(pTHX)
+{
+  static CV *cv = NULL;
+  if (!cv) {
+    cv = (CV *)gql_runtime_vm_cached_cv(aTHX_ "GraphQL::Houtou::Runtime::DirectiveRuntime::materialize_runtime_directives");
+  }
+  return cv;
+}
+
+static CV *
+gql_runtime_vm_directive_runtime_program_materialize_cv(pTHX)
+{
+  static CV *cv = NULL;
+  if (!cv) {
+    cv = (CV *)gql_runtime_vm_cached_cv(aTHX_ "GraphQL::Houtou::Runtime::DirectiveRuntime::materialize_program_runtime_directives");
+  }
+  return cv;
+}
+
+static SV *
+gql_runtime_vm_materialize_runtime_directives_sv(pTHX_ SV *payload, SV *variables)
+{
+  dSP;
+  SV *ret = NULL;
+  int count;
+
+  if (!payload || !SvOK(payload)) {
+    return newRV_noinc((SV *)newAV());
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(payload);
+  XPUSHs(variables ? variables : &PL_sv_undef);
+  PUTBACK;
+  count = call_sv((SV *)gql_runtime_vm_directive_runtime_materialize_cv(aTHX), G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV)) {
+    SV *err = newSVsv(ERRSV);
+    sv_setsv(ERRSV, &PL_sv_undef);
+    FREETMPS;
+    LEAVE;
+    croak_sv(err);
+  }
+  if (count > 0) {
+    ret = newSVsv(POPs);
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret ? ret : newRV_noinc((SV *)newAV());
+}
+
+static SV *
+gql_runtime_vm_program_runtime_directives_sv(
+  pTHX_
+  SV *program,
+  IV block_index,
+  IV op_index,
+  SV *variables
+)
+{
+  dSP;
+  SV *ret = NULL;
+  int count;
+
+  if (!program || !SvOK(program) || block_index < 0 || op_index < 0) {
+    return newRV_noinc((SV *)newAV());
+  }
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(program);
+  XPUSHs(sv_2mortal(newSViv(block_index)));
+  XPUSHs(sv_2mortal(newSViv(op_index)));
+  XPUSHs(variables ? variables : &PL_sv_undef);
+  PUTBACK;
+  count = call_sv((SV *)gql_runtime_vm_directive_runtime_program_materialize_cv(aTHX), G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV)) {
+    SV *err = newSVsv(ERRSV);
+    sv_setsv(ERRSV, &PL_sv_undef);
+    FREETMPS;
+    LEAVE;
+    croak_sv(err);
+  }
+  if (count > 0) {
+    ret = newSVsv(POPs);
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret ? ret : newRV_noinc((SV *)newAV());
+}
+
+static SV *
+gql_runtime_vm_apply_runtime_directives_nonfatal(
+  pTHX_
+  gql_runtime_vm_exec_state_t *state,
+  SV *source,
+  SV *resolved,
+  SV **error_out
+)
+{
+  dSP;
+  SV *ret = NULL;
+  SV *runtime_schema_sv = &PL_sv_undef;
+  SV *context_sv = &PL_sv_undef;
+  SV *return_type_sv = NULL;
+  SV *args_sv = NULL;
+  SV *info_sv = NULL;
+  int count;
+
+  if (!state || !state->op || (!state->op->has_runtime_directives && !state->op->runtime_directives_sv)) {
+    return newSVsv(resolved ? resolved : &PL_sv_undef);
+  }
+
+  if (state->callback_ctx) {
+    if (state->callback_ctx->runtime_schema && SvOK(state->callback_ctx->runtime_schema)) {
+      runtime_schema_sv = state->callback_ctx->runtime_schema;
+    }
+    if (state->callback_ctx->context && SvOK(state->callback_ctx->context)) {
+      context_sv = state->callback_ctx->context;
+    }
+  }
+  if (runtime_schema_sv == &PL_sv_undef
+      && state->runtime
+      && state->runtime->callback_catalog
+      && state->runtime->callback_catalog->runtime_schema
+      && SvOK(state->runtime->callback_catalog->runtime_schema)) {
+    runtime_schema_sv = state->runtime->callback_catalog->runtime_schema;
+  }
+
+  return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(state->runtime, state->slot);
+  if (!return_type_sv) {
+    return_type_sv = gql_runtime_vm_lookup_slot_type_object_sv(
+      aTHX_
+      state->runtime,
+      runtime_schema_sv,
+      state->slot
+    );
+  }
+
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  args_sv = sv_2mortal(gql_runtime_vm_build_current_args_sv(aTHX_ state));
+  info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+  PUSHMARK(SP);
+  XPUSHs(runtime_schema_sv);
+  XPUSHs(source ? source : &PL_sv_undef);
+  XPUSHs(args_sv);
+  XPUSHs(context_sv);
+  XPUSHs(info_sv);
+  XPUSHs(return_type_sv ? return_type_sv : &PL_sv_undef);
+  XPUSHs(resolved ? resolved : &PL_sv_undef);
+  PUTBACK;
+  count = call_sv((SV *)gql_runtime_vm_directive_runtime_apply_cv(aTHX), G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV)) {
+    SV *err = newSVsv(ERRSV);
+    sv_setsv(ERRSV, &PL_sv_undef);
+    if (error_out) {
+      *error_out = err;
+      err = NULL;
+    }
+    if (err) {
+      croak_sv(err);
+    }
+  }
+  if (count > 0) {
+    ret = newSVsv(POPs);
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret ? ret : newSVsv(&PL_sv_undef);
+}
+
 static int
 gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slot)
 {
@@ -5737,8 +6003,10 @@ static SV *
 gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_state_t *state)
 {
   SV *return_type_sv;
+  SV *directives_sv = NULL;
   const gql_runtime_vm_callback_context_t *ctx = state ? state->callback_ctx : NULL;
   const gql_runtime_vm_native_slot_t *slot = state ? state->slot : NULL;
+  const gql_runtime_vm_native_op_t *op = state ? state->op : NULL;
   const gql_runtime_vm_native_block_t *block = state ? state->block : NULL;
   gql_runtime_vm_native_callback_catalog_t *catalog =
     (state && state->runtime) ? state->runtime->callback_catalog : NULL;
@@ -5764,6 +6032,25 @@ gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_state_t *sta
       && slot->schema_slot_index < state->runtime->runtime_slot_count) {
     field_name_sv = catalog->slot_field_names[slot->schema_slot_index];
   }
+  if (op
+      && op->runtime_directives_sv
+      && op->runtime_directives_mode_code == GQL_VM_ARGS_STATIC) {
+    directives_sv = newSVsv(op->runtime_directives_sv);
+  } else if (ctx && ctx->program && state->block_index >= 0 && state->op_index >= 0) {
+    directives_sv = gql_runtime_vm_program_runtime_directives_sv(
+      aTHX_
+      ctx->program,
+      state->block_index,
+      state->op_index,
+      (ctx && ctx->variables) ? ctx->variables : &PL_sv_undef
+    );
+  } else if (op && op->runtime_directives_sv) {
+    directives_sv = gql_runtime_vm_materialize_runtime_directives_sv(
+      aTHX_
+      op->runtime_directives_sv,
+      (ctx && ctx->variables) ? ctx->variables : &PL_sv_undef
+    );
+  }
 
   return gql_runtime_vm_new_lazy_info_handle_sv(
     aTHX_
@@ -5778,7 +6065,10 @@ gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_state_t *sta
     (ctx && ctx->root_value) ? ctx->root_value : &PL_sv_undef,
     (ctx && ctx->variables) ? ctx->variables : &PL_sv_undef,
     (ctx && ctx->program) ? ctx->program : &PL_sv_undef,
-    (ctx && ctx->runtime_schema) ? ctx->runtime_schema : &PL_sv_undef
+    (ctx && ctx->runtime_schema) ? ctx->runtime_schema : &PL_sv_undef,
+    directives_sv ? sv_2mortal(directives_sv) : &PL_sv_undef,
+    state->block_index,
+    state->op_index
   );
 }
 
@@ -6399,42 +6689,90 @@ gql_runtime_vm_execute_current_op_sv(pTHX_ gql_runtime_vm_exec_state_t *state, S
 OP_DEFAULT_GENERIC:
   resolved = gql_runtime_vm_resolve_current_field_default(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_generic(aTHX_ state, resolved);
   goto DISPATCH_DONE;
 OP_DEFAULT_OBJECT:
   resolved = gql_runtime_vm_resolve_current_field_default(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_object(aTHX_ state, resolved);
   goto DISPATCH_DONE;
 OP_DEFAULT_LIST:
   resolved = gql_runtime_vm_resolve_current_field_default(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_list(aTHX_ state, resolved);
   goto DISPATCH_DONE;
 OP_DEFAULT_ABSTRACT:
   resolved = gql_runtime_vm_resolve_current_field_default(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_abstract(aTHX_ state, resolved, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
   goto DISPATCH_DONE;
 OP_EXPLICIT_GENERIC:
   resolved = gql_runtime_vm_resolve_current_field_explicit(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_generic(aTHX_ state, resolved);
   goto DISPATCH_DONE;
 OP_EXPLICIT_OBJECT:
   resolved = gql_runtime_vm_resolve_current_field_explicit(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_object(aTHX_ state, resolved);
   goto DISPATCH_DONE;
 OP_EXPLICIT_LIST:
   resolved = gql_runtime_vm_resolve_current_field_explicit(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_list(aTHX_ state, resolved);
   goto DISPATCH_DONE;
 OP_EXPLICIT_ABSTRACT:
   resolved = gql_runtime_vm_resolve_current_field_explicit(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_abstract(aTHX_ state, resolved, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
   goto DISPATCH_DONE;
@@ -6444,41 +6782,89 @@ DISPATCH_DONE:
     case 0:
       resolved = gql_runtime_vm_resolve_current_field_default(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_generic(aTHX_ state, resolved);
       break;
     case 1:
       resolved = gql_runtime_vm_resolve_current_field_default(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_object(aTHX_ state, resolved);
       break;
     case 2:
       resolved = gql_runtime_vm_resolve_current_field_default(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_list(aTHX_ state, resolved);
       break;
     case 3:
       resolved = gql_runtime_vm_resolve_current_field_default(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_abstract(aTHX_ state, resolved, &error_sv);
       break;
     case 4:
       resolved = gql_runtime_vm_resolve_current_field_explicit(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_generic(aTHX_ state, resolved);
       break;
     case 5:
       resolved = gql_runtime_vm_resolve_current_field_explicit(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_object(aTHX_ state, resolved);
       break;
     case 6:
       resolved = gql_runtime_vm_resolve_current_field_explicit(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_list(aTHX_ state, resolved);
       break;
     case 7:
       resolved = gql_runtime_vm_resolve_current_field_explicit(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_abstract(aTHX_ state, resolved, &error_sv);
       break;
   }
@@ -6882,42 +7268,90 @@ gql_runtime_vm_execute_current_op_fast_sv(
 OP_DEFAULT_GENERIC:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved);
   goto DISPATCH_DONE;
 OP_DEFAULT_OBJECT:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_object_fast_sv(aTHX_ state, resolved);
   goto DISPATCH_DONE;
 OP_DEFAULT_LIST:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_list_fast_sv(aTHX_ state, resolved);
   goto DISPATCH_DONE;
 OP_DEFAULT_ABSTRACT:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_abstract_fast_sv(aTHX_ state, resolved, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
   goto DISPATCH_DONE;
 OP_EXPLICIT_GENERIC:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved);
   goto DISPATCH_DONE;
 OP_EXPLICIT_OBJECT:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_object_fast_sv(aTHX_ state, resolved);
   goto DISPATCH_DONE;
 OP_EXPLICIT_LIST:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_list_fast_sv(aTHX_ state, resolved);
   goto DISPATCH_DONE;
 OP_EXPLICIT_ABSTRACT:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
+  if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+    SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+    if (error_sv) goto DISPATCH_ERROR;
+    SvREFCNT_dec(resolved);
+    resolved = applied;
+  }
   completed = gql_runtime_vm_complete_current_abstract_fast_sv(aTHX_ state, resolved, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
   goto DISPATCH_DONE;
@@ -6927,41 +7361,89 @@ DISPATCH_DONE:
     case 0:
       resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved);
       break;
     case 1:
       resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_object_fast_sv(aTHX_ state, resolved);
       break;
     case 2:
       resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_list_fast_sv(aTHX_ state, resolved);
       break;
     case 3:
       resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_abstract_fast_sv(aTHX_ state, resolved, &error_sv);
       break;
     case 4:
       resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved);
       break;
     case 5:
       resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_object_fast_sv(aTHX_ state, resolved);
       break;
     case 6:
       resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_list_fast_sv(aTHX_ state, resolved);
       break;
     case 7:
       resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
       if (error_sv) break;
+      if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
+        SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+        if (error_sv) break;
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      }
       completed = gql_runtime_vm_complete_current_abstract_fast_sv(aTHX_ state, resolved, &error_sv);
       break;
   }

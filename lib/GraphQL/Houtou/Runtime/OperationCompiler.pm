@@ -4,6 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 use Scalar::Util qw(refaddr);
+use JSON::MaybeXS qw(is_bool);
 
 use GraphQL::Houtou ();
 use GraphQL::Houtou::Runtime::Slot ();
@@ -142,6 +143,8 @@ sub _lower_selection_block {
     my $abstract_child_blocks;
     my ($args_mode, $args_payload) = _lower_arguments($selection->{arguments});
     my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
+    my ($runtime_directives_mode, $runtime_directives_payload) =
+      _lower_directives($selection->{_runtime_directives});
 
     if ($selection->{selections} && @{ $selection->{selections} }) {
       my $child_type_name = $slot->return_type_name;
@@ -183,6 +186,9 @@ sub _lower_selection_block {
       has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
       directives_mode => $directives_mode,
       directives_payload => $directives_payload,
+      has_runtime_directives => (($runtime_directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
+      runtime_directives_mode => $runtime_directives_mode,
+      runtime_directives_payload => $runtime_directives_payload,
       child_block_name => $child_block ? $child_block->name : undef,
       abstract_child_blocks => $abstract_child_blocks,
       abstract_child_blocks_index => undef,
@@ -214,6 +220,8 @@ sub _lower_selection_block_compact {
 
     if (($field_name || q()) eq '__typename') {
       my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
+      my ($runtime_directives_mode, $runtime_directives_payload) =
+        _lower_directives($selection->{_runtime_directives});
       my $directives_payload_index = _intern_compact_payload(
         $state->{directives_payloads_compact},
         $state->{directives_payload_index},
@@ -238,6 +246,9 @@ sub _lower_selection_block_compact {
         directives_payload_index => $directives_payload_index,
         directives_payload => defined $directives_payload_index ? undef : $directives_payload,
         has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
+        runtime_directives_mode => $runtime_directives_mode,
+        runtime_directives_payload => $runtime_directives_payload,
+        has_runtime_directives => (($runtime_directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
         child_block_index => undef,
         abstract_child_block_indexes => {},
       );
@@ -249,6 +260,8 @@ sub _lower_selection_block_compact {
     my $abstract_child_block_indexes = {};
     my ($args_mode, $args_payload) = _lower_arguments($selection->{arguments});
     my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
+    my ($runtime_directives_mode, $runtime_directives_payload) =
+      _lower_directives($selection->{_runtime_directives});
     my $args_payload_index = _intern_compact_payload(
       $state->{args_payloads_compact},
       $state->{args_payload_index},
@@ -302,6 +315,9 @@ sub _lower_selection_block_compact {
       directives_payload_index => $directives_payload_index,
       directives_payload => defined $directives_payload_index ? undef : $directives_payload,
       has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
+      runtime_directives_mode => $runtime_directives_mode,
+      runtime_directives_payload => $runtime_directives_payload,
+      has_runtime_directives => (($runtime_directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
       child_block_index => $child_block_index,
       abstract_child_block_indexes => $abstract_child_block_indexes,
     );
@@ -356,6 +372,9 @@ sub _inflate_instruction {
     has_directives => $struct->{has_directives},
     directives_mode => $struct->{directives_mode} || 'NONE',
     directives_payload => _clone_argument_value($struct->{directives_payload}),
+    has_runtime_directives => $struct->{has_runtime_directives},
+    runtime_directives_mode => $struct->{runtime_directives_mode} || 'NONE',
+    runtime_directives_payload => _clone_argument_value($struct->{runtime_directives_payload}),
     child_block_name => $struct->{child_block_name},
     abstract_child_blocks => _clone_argument_value($struct->{abstract_child_blocks} || {}),
     abstract_child_blocks_index => $struct->{abstract_child_blocks_index},
@@ -478,6 +497,9 @@ sub _build_compact_op {
     $args{field_name},
     $args{result_name},
     $args{return_type_name},
+    _directives_mode_code($args{runtime_directives_mode}),
+    $args{runtime_directives_payload},
+    $args{has_runtime_directives} ? 1 : 0,
   ];
 }
 
@@ -511,27 +533,37 @@ sub _operation_type_code {
 }
 
 sub _normalize_selections {
-  my ($state, $selections, $type_name, $visited, $inherited_guards) = @_;
+  my ($state, $selections, $type_name, $visited, $inherited_guards, $inherited_runtime_directives) = @_;
   $visited ||= {};
   $inherited_guards ||= [];
+  $inherited_runtime_directives ||= [];
   my @normalized;
 
   for my $selection (@{ $selections || [] }) {
     next if !$selection;
     my $kind = $selection->{kind} || '';
-    my ($allowed, $dynamic_guards) = _partition_runtime_guards($selection->{directives});
+    my ($allowed, $dynamic_guards, $runtime_directives) = _partition_runtime_guards($selection->{directives});
     next if !$allowed;
     my $combined_guards = [ @$inherited_guards, @$dynamic_guards ];
+    my $combined_runtime_directives = [ @$inherited_runtime_directives, @$runtime_directives ];
     if ($kind eq 'field') {
       my %copy = %$selection;
       $copy{_runtime_guards} = $combined_guards if @$combined_guards;
+      $copy{_runtime_directives} = $combined_runtime_directives if @$combined_runtime_directives;
       push @normalized, \%copy;
       next;
     }
     if ($kind eq 'inline_fragment') {
       my $on = $selection->{on};
       next if defined($on) && defined($type_name) && $on ne $type_name;
-      push @normalized, @{ _normalize_selections($state, $selection->{selections} || [], $type_name, $visited, $combined_guards) };
+      push @normalized, @{ _normalize_selections(
+        $state,
+        $selection->{selections} || [],
+        $type_name,
+        $visited,
+        $combined_guards,
+        $combined_runtime_directives,
+      ) };
       next;
     }
     if ($kind eq 'fragment_spread') {
@@ -541,7 +573,14 @@ sub _normalize_selections {
       my $on = $fragment->{on};
       next if defined($on) && defined($type_name) && $on ne $type_name;
       local $visited->{$name} = 1;
-      push @normalized, @{ _normalize_selections($state, $fragment->{selections} || [], $type_name, $visited, $combined_guards) };
+      push @normalized, @{ _normalize_selections(
+        $state,
+        $fragment->{selections} || [],
+        $type_name,
+        $visited,
+        $combined_guards,
+        $combined_runtime_directives,
+      ) };
       next;
     }
   }
@@ -552,6 +591,8 @@ sub _normalize_selections {
 sub _build_typename_instruction {
   my ($state, $type_name, $selection) = @_;
   my ($directives_mode, $directives_payload) = _lower_directives($selection->{_runtime_guards});
+  my ($runtime_directives_mode, $runtime_directives_payload) =
+    _lower_directives($selection->{_runtime_directives});
   my $result_name = ($selection->{alias} || '__typename');
   my $slot = _lookup_typename_slot($state->{runtime_schema}, $type_name, $result_name, $directives_mode);
   my $resolve_family = 'RESOLVE_DEFAULT';
@@ -573,6 +614,9 @@ sub _build_typename_instruction {
     has_directives => (($directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
     directives_mode => $directives_mode,
     directives_payload => $directives_payload,
+    has_runtime_directives => (($runtime_directives_mode || 'NONE') ne 'NONE') ? 1 : 0,
+    runtime_directives_mode => $runtime_directives_mode,
+    runtime_directives_payload => $runtime_directives_payload,
     bound_slot => $slot,
   );
 }
@@ -647,18 +691,25 @@ sub _lower_directives {
 
 sub _partition_runtime_guards {
   my ($directives) = @_;
-  return (1, []) if !$directives || !@$directives;
+  return (1, [], []) if !$directives || !@$directives;
   my @dynamic;
+  my @runtime_directives;
   for my $directive (@$directives) {
     next if !$directive;
     my $name = $directive->{name} || '';
-    next if $name ne 'include' && $name ne 'skip';
+    if ($name ne 'include' && $name ne 'skip') {
+      push @runtime_directives, {
+        name => $name,
+        arguments => _clone_argument_value($directive->{arguments} || {}),
+      };
+      next;
+    }
     my $arguments = $directive->{arguments} || {};
     my $if_value = $arguments->{if};
     if (!_contains_variable_refs($if_value)) {
       my $bool = _directive_truthy(_materialize_static_value($if_value));
-      return (0, []) if $name eq 'skip' && $bool;
-      return (0, []) if $name eq 'include' && !$bool;
+      return (0, [], []) if $name eq 'skip' && $bool;
+      return (0, [], []) if $name eq 'include' && !$bool;
       next;
     }
     push @dynamic, {
@@ -666,7 +717,7 @@ sub _partition_runtime_guards {
       arguments => _clone_argument_value($arguments),
     };
   }
-  return (1, \@dynamic);
+  return (1, \@dynamic, \@runtime_directives);
 }
 
 sub _directive_truthy {
@@ -707,6 +758,7 @@ sub _materialize_static_value {
   my ($value) = @_;
   my $ref = ref($value);
   return $value if !$ref;
+  return $value ? 1 : 0 if is_bool($value);
   return $$$value if $ref eq 'REF';
   return [ map { _materialize_static_value($_) } @$value ] if $ref eq 'ARRAY';
   return { map { $_ => _materialize_static_value($value->{$_}) } keys %$value } if $ref eq 'HASH';

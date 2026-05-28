@@ -159,3 +159,122 @@ our @SPECIFIED_DIRECTIVES = (
 );
 
 1;
+
+=head1 NAME
+
+GraphQL::Houtou::Directive - Directive definitions for GraphQL::Houtou
+
+=head1 SYNOPSIS
+
+  use GraphQL::Houtou::Directive;
+  use GraphQL::Houtou::Schema;
+  use GraphQL::Houtou::Type::Object;
+  use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
+
+  my $Upper = GraphQL::Houtou::Directive->new(
+    name => 'upper',
+    locations => [qw(FIELD FRAGMENT_SPREAD INLINE_FRAGMENT)],
+    apply_field_result => sub {
+      my ($value) = @_;
+      return undef if !defined $value;
+      return uc $value;
+    },
+  );
+
+  my $Mask = GraphQL::Houtou::Directive->new(
+    name => 'mask',
+    locations => [qw(FIELD FRAGMENT_SPREAD INLINE_FRAGMENT)],
+    args => {
+      enabled => { type => $Boolean->non_null },
+    },
+    apply_field_result => sub {
+      my ($value, $source, $field_args, $context, $info, $return_type, $directive_args) = @_;
+      return $directive_args->{enabled} ? '***' : $value;
+    },
+  );
+
+  my $RequireRole = GraphQL::Houtou::Directive->new(
+    name => 'requireRole',
+    locations => [qw(FIELD_DEFINITION)],
+    args => {
+      role => { type => $String->non_null },
+    },
+    resolve_field => sub {
+      my ($next, $source, $field_args, $context, $info, $return_type, $directive_args) = @_;
+      die "forbidden\n" if (($context || {})->{role} || '') ne ($directive_args->{role} || '');
+      return $next->();
+    },
+  );
+
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'ExampleQuery',
+      fields => {
+        hello => {
+          type => $String,
+          resolver_mode => 'native',
+          resolve => sub { 'hello' },
+        },
+        secret => {
+          type => $String,
+          directives => [
+            { name => 'requireRole', arguments => { role => 'admin' } },
+          ],
+        },
+      },
+    ),
+    directives => [
+      @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES,
+      $Upper,
+      $Mask,
+      $RequireRole,
+    ],
+  );
+
+  my $result = $schema->execute(
+    'query Q($enabled: Boolean!) { hello @upper @mask(enabled: $enabled) secret }',
+    root_value => { secret => 'classified' },
+    context => { role => 'admin' },
+    variables => { enabled => 0 },
+  );
+
+=head1 DESCRIPTION
+
+L<GraphQL::Houtou::Directive> represents a directive definition that can be
+registered in C<< GraphQL::Houtou::Schema->new(directives => [...]) >>.
+
+Executable directives can be implemented in two ways.
+
+=over 4
+
+=item * C<apply_field_result>
+
+Use this for directives that transform an already-resolved field value.
+This is the lighter-weight hook for query directives such as formatting,
+masking, or string rewriting.
+
+The callback receives:
+
+  ($value, $source, $field_args, $context, $info, $return_type, $directive_args, $directive)
+
+=item * C<resolve_field>
+
+Use this for middleware-style directives that need to control whether the
+field resolver runs at all, wrap the default resolver, or short-circuit
+execution. This is the right hook for C<FIELD_DEFINITION> directives such as
+authorization checks.
+
+The callback receives:
+
+  ($next, $source, $field_args, $context, $info, $return_type, $directive_args, $directive)
+
+=back
+
+If both are present, C<apply_field_result> is preferred for executable runtime
+directives. In practice, C<apply_field_result> should be the default choice
+for query/fragment directives, and C<resolve_field> should be reserved for
+true resolver middleware.
+
+For a runnable reference, see F<examples/custom-directives.pl>.
+
+=cut

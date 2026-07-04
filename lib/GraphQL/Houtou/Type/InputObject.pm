@@ -32,11 +32,13 @@ sub new {
   $self->{name} = $args{name};
   $self->{description} = $args{description};
   $self->{fields} = $args{fields};
+  $self->{is_one_of} = $args{is_one_of} ? 1 : 0;
   return bless $self, $class;
 }
 
 sub name { $_[0]->{name} }
 sub description { $_[0]->{description} }
+sub is_one_of { $_[0]->{is_one_of} }
 sub to_string { $_[0]->{to_string} ||= $_[0]->name }
 
 sub fields {

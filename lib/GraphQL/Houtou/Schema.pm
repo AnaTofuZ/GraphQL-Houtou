@@ -22,12 +22,14 @@ sub new {
     query => $args{query},
     mutation => $args{mutation},
     subscription => $args{subscription},
+    description => $args{description},
     types => $args{types} || [ $Int, $Float, $String, $Boolean, $ID ],
     directives => $args{directives} || \@GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES,
   }, $class;
   return $self;
 }
 
+sub description { return $_[0]->{description} }
 sub query { return $_[0]->{query} }
 sub mutation { return $_[0]->{mutation} }
 sub subscription { return $_[0]->{subscription} }

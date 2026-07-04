@@ -34,6 +34,7 @@ my $JSON_noutf8 = JSON::MaybeXS->new->utf8(0)->allow_nonref;
 our $QUERY = '
   query IntrospectionQuery {
     __schema {
+      description
       queryType { name }
       mutationType { name }
       subscriptionType { name }
@@ -45,7 +46,7 @@ our $QUERY = '
         description
         isRepeatable
         locations
-        args {
+        args(includeDeprecated: true) {
           ...InputValue
         }
       }
@@ -58,7 +59,7 @@ our $QUERY = '
     fields(includeDeprecated: true) {
       name
       description
-      args {
+      args(includeDeprecated: true) {
         ...InputValue
       }
       type {
@@ -67,7 +68,7 @@ our $QUERY = '
       isDeprecated
       deprecationReason
     }
-    inputFields {
+    inputFields(includeDeprecated: true) {
       ...InputValue
     }
     interfaces {
@@ -83,12 +84,15 @@ our $QUERY = '
       ...TypeRef
     }
     specifiedByURL
+    isOneOf
   }
   fragment InputValue on __InputValue {
     name
     description
     type { ...TypeRef }
     defaultValue
+    isDeprecated
+    deprecationReason
   }
   fragment TypeRef on __Type {
     kind
@@ -229,6 +233,7 @@ our $DIRECTIVE_LOCATION_META_TYPE = GraphQL::Houtou::Type::Enum->new(
     FRAGMENT_DEFINITION => { description => 'Location adjacent to a fragment definition.' },
     FRAGMENT_SPREAD => { description => 'Location adjacent to a fragment spread.' },
     INLINE_FRAGMENT => { description => 'Location adjacent to an inline fragment.' },
+    VARIABLE_DEFINITION => { description => 'Location adjacent to a variable definition.' },
     SCHEMA => { description => 'Location adjacent to a schema definition.' },
     SCALAR => { description => 'Location adjacent to a scalar definition.' },
     OBJECT => { description => 'Location adjacent to an object type definition.' },
@@ -336,7 +341,16 @@ our $DIRECTIVE_META_TYPE = GraphQL::Houtou::Type::Object->new(
     _make_moo_field(locations => $DIRECTIVE_LOCATION_META_TYPE->non_null->list->non_null),
     args => {
       type => $INPUT_VALUE_META_TYPE->non_null->list->non_null,
-      resolve => sub { _hash2array($_[0]->args) },
+      args => { includeDeprecated => { type => $Boolean, default_value => 0 } },
+      resolve => sub {
+        my ($directive, $args) = @_;
+        my $directive_args = $directive->args || {};
+        if (!$args->{includeDeprecated}) {
+          $directive_args = { map { ($_ => $directive_args->{$_}) }
+            grep { !$directive_args->{$_}{is_deprecated} } keys %$directive_args };
+        }
+        return _hash2array($directive_args);
+      },
     },
   },
 );
@@ -466,6 +480,13 @@ $TYPE_META_TYPE = GraphQL::Houtou::Type::Object->new(
         return $_[0]->specified_by_url;
       },
     },
+    isOneOf => {
+      type => $Boolean,
+      resolve => sub {
+        return if !_isa_any($_[0], 'GraphQL::Houtou::Type::InputObject', 'GraphQL::Type::InputObject');
+        return $_[0]->can('is_one_of') ? !!$_[0]->is_one_of : 0;
+      },
+    },
   } },
 );
 
@@ -477,6 +498,7 @@ our $SCHEMA_META_TYPE = GraphQL::Houtou::Type::Object->new(
     'exposes all available types and directives on the server, as well as ' .
     'the entry points for query, mutation, and subscription operations.',
   fields => {
+    _make_moo_field(description => $String),
     types => {
       description => 'A list of all types supported by this server.',
       type => $TYPE_META_TYPE->non_null->list->non_null,

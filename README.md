@@ -104,6 +104,18 @@ SDL are reflected on the built types. The same functionality is available as
 `->from_ast($ast, %opts)`. Type extensions (`extend type`) are not
 supported yet.
 
+The inverse direction is `print_schema()` (also available as
+`$schema->to_doc`), which renders any schema back to SDL — including
+schemas assembled from Perl type objects:
+
+    use GraphQL::Houtou qw(print_schema);
+    my $sdl = print_schema($schema);
+
+Built-in scalars, introspection meta types, and the specified directives
+(`@include`, `@skip`, `@deprecated`, `@specifiedBy`) are omitted from
+the output, matching graphql-js `printSchema`. Types are emitted sorted by
+name, so the output is stable and diff-friendly.
+
 ## API Selection Guide
 
 Choose the execution API that fits your use case.

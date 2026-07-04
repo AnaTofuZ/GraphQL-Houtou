@@ -6,7 +6,13 @@ use warnings;
 
 use parent 'GraphQL::Houtou::Type';
 use Role::Tiny::With;
-use GraphQL::Houtou::Internal::TypeSupport qw(apply_fields_deprecation from_ast_field_deprecate named_from_ast);
+use GraphQL::Houtou::Internal::TypeSupport qw(
+  apply_fields_deprecation
+  description_doc_lines
+  from_ast_field_deprecate
+  named_from_ast
+  to_doc_field_deprecate
+);
 use GraphQL::Houtou::Type::List ();
 use GraphQL::Houtou::Type::NonNull ();
 
@@ -52,6 +58,23 @@ sub from_ast {
     named_from_ast($ast_node),
     values => $values,
   );
+}
+
+sub to_doc {
+  my ($self) = @_;
+  return $self->{to_doc} if exists $self->{to_doc};
+  my $values = $self->values;
+  my @valuelines = map {
+    (
+      description_doc_lines($values->{$_}{description}),
+      to_doc_field_deprecate($_, $values->{$_}),
+    )
+  } sort keys %$values;
+  return $self->{to_doc} = join '', map "$_\n",
+    description_doc_lines($self->description),
+    "enum @{[$self->name]} {",
+    (map length() ? "  $_" : "", @valuelines),
+    "}";
 }
 
 sub _name2value {

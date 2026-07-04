@@ -86,23 +86,33 @@ sub has_runtime_hook {
 sub to_doc {
   my ($self) = @_;
   return $self->{to_doc} ||= do {
-    my @start = (
-      description_doc_lines($self->description),
-      "directive \@@{[$self->name]}(",
-    );
     my @argtuples = make_fieldtuples($self->args);
-    my $end = ')';
+    my $end = @argtuples ? ')' : '';
     $end .= ' repeatable' if $self->repeatable;
     $end .= ' on ' . join(' | ', @{ $self->locations });
-    return join("\n", @start) . join(', ', map $_->[0], @argtuples) . $end . "\n"
-      if !grep $_->[1], @argtuples;
-    join '', map "$_\n",
-      @start,
-      (map {
-        my ($main, @description) = @$_;
-        (map length() ? "  $_" : "", @description, $main)
-      } @argtuples),
-      $end;
+    if (!@argtuples) {
+      join '', map "$_\n",
+        description_doc_lines($self->description),
+        "directive \@@{[$self->name]}$end";
+    }
+    else {
+      my @start = (
+        description_doc_lines($self->description),
+        "directive \@@{[$self->name]}(",
+      );
+      if (!grep $_->[1], @argtuples) {
+        join("\n", @start) . join(', ', map $_->[0], @argtuples) . $end . "\n";
+      }
+      else {
+        join '', map "$_\n",
+          @start,
+          (map {
+            my ($main, @description) = @$_;
+            (map length() ? "  $_" : "", @description, $main)
+          } @argtuples),
+          $end;
+      }
+    }
   };
 }
 

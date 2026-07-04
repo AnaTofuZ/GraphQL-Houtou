@@ -6,7 +6,7 @@ use warnings;
 
 use parent 'GraphQL::Houtou::Type';
 use Role::Tiny::With;
-use GraphQL::Houtou::Internal::TypeSupport qw(description_doc_lines named_from_ast apply_fields_deprecation from_ast_fields);
+use GraphQL::Houtou::Internal::TypeSupport qw(description_doc_lines named_from_ast apply_fields_deprecation from_ast_fields make_fieldtuples);
 use GraphQL::Houtou::Type::List ();
 use GraphQL::Houtou::Type::NonNull ();
 
@@ -49,6 +49,21 @@ sub from_ast {
     from_ast_fields($name2type, $ast_node, 'fields'),
     ($one_of ? (is_one_of => 1) : ()),
   );
+}
+
+sub to_doc {
+  my ($self) = @_;
+  return $self->{to_doc} if exists $self->{to_doc};
+  my @fieldlines = map {
+    my ($main, @description) = @$_;
+    (@description, $main);
+  } make_fieldtuples($self->fields);
+  my $one_of = $self->is_one_of ? ' @oneOf' : '';
+  return $self->{to_doc} = join '', map "$_\n",
+    description_doc_lines($self->description),
+    "input @{[$self->name]}$one_of {",
+    (map length() ? "  $_" : "", @fieldlines),
+    "}";
 }
 
 sub fields {

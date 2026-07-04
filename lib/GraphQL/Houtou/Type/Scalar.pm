@@ -52,6 +52,22 @@ sub description { $_[0]->{description} }
 sub to_string { $_[0]->{to_string} ||= $_[0]->name }
 sub serialize { $_[0]->{serialize} }
 sub parse_value { $_[0]->{parse_value} }
+
+sub from_ast {
+  my ($class, $name2type, $ast_node) = @_;
+  my ($specified_by) = grep { ($_->{name} || q()) eq 'specifiedBy' }
+    @{ $ast_node->{directives} || [] };
+  return $class->new(
+    named_from_ast($ast_node),
+    # SDL-built custom scalars default to pass-through coercion; override
+    # via the resolvers option of Schema->from_doc or by replacing these.
+    serialize => sub { $_[0] },
+    parse_value => sub { $_[0] },
+    ($specified_by && defined $specified_by->{arguments}{url}
+      ? (specified_by_url => $specified_by->{arguments}{url})
+      : ()),
+  );
+}
 sub _builtin_kind { $_[0]->{_builtin_kind} }
 sub specified_by_url { $_[0]->{specified_by_url} }
 

@@ -12,6 +12,7 @@ our $XS_BUNDLE_LOADED = 0;
 our @EXPORT_OK = qw(
   parse
   parse_with_options
+  build_schema
   execute
   execute_native
   compile_runtime
@@ -44,6 +45,12 @@ sub parse_with_options {
   my $no_location = $options->{no_location};
   require GraphQL::Houtou::XS::Parser;
   return GraphQL::Houtou::XS::Parser::parse_xs($source, $no_location);
+}
+
+sub build_schema {
+  my ($doc, %opts) = @_;
+  require GraphQL::Houtou::Schema;
+  return GraphQL::Houtou::Schema->from_doc($doc, %opts);
 }
 
 sub compile_runtime {
@@ -210,6 +217,43 @@ C<no_location =E<gt> 1> is still recommended.
     my $doc = parse_with_options($source, {
       no_location => 1,
     });
+
+=head2 Building a schema from SDL
+
+C<build_schema()> turns a Schema Definition Language document into an
+executable L<GraphQL::Houtou::Schema>. Field resolvers, abstract type
+dispatch, and custom scalar coercion can be attached through the
+C<resolvers> option:
+
+    use GraphQL::Houtou qw(build_schema execute);
+
+    my $schema = build_schema(<<'SDL',
+    type Query {
+      dog(id: ID = "1"): Dog
+      pets: [Pet!]
+    }
+    interface Pet { name: String! }
+    type Dog implements Pet { name: String! }
+    SDL
+      resolvers => {
+        Query => {
+          dog  => sub { my (undef, $args) = @_; load_dog($args->{id}) },
+          pets => sub { all_pets() },
+        },
+        Pet => { resolve_type => sub { 'Dog' } },
+      },
+    );
+
+    my $result = execute($schema, '{ dog { name } }');
+
+Fields without an explicit resolver use the default hash/method resolver.
+Custom scalars default to pass-through C<serialize> / C<parse_value>; supply
+your own through C<resolvers> when coercion matters. C<@deprecated>,
+C<@specifiedBy>, C<@oneOf>, and C<repeatable> directive definitions in the
+SDL are reflected on the built types. The same functionality is available as
+C<< GraphQL::Houtou::Schema->from_doc($sdl, %opts) >> and
+C<< ->from_ast($ast, %opts) >>. Type extensions (C<extend type>) are not
+supported yet.
 
 =head2 API Selection Guide
 

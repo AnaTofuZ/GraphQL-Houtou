@@ -6,7 +6,7 @@ use warnings;
 
 use parent 'GraphQL::Houtou::Type';
 use Role::Tiny::With;
-use GraphQL::Houtou::Internal::TypeSupport qw(description_doc_lines named_from_ast apply_fields_deprecation);
+use GraphQL::Houtou::Internal::TypeSupport qw(description_doc_lines named_from_ast apply_fields_deprecation from_ast_fields);
 use GraphQL::Houtou::Type::List ();
 use GraphQL::Houtou::Type::NonNull ();
 
@@ -38,6 +38,16 @@ sub new {
 sub name { $_[0]->{name} }
 sub description { $_[0]->{description} }
 sub to_string { $_[0]->{to_string} ||= $_[0]->name }
+
+sub from_ast {
+  my ($class, $name2type, $ast_node) = @_;
+  my $one_of = grep { ($_->{name} || q()) eq 'oneOf' } @{ $ast_node->{directives} || [] };
+  return $class->new(
+    named_from_ast($ast_node),
+    from_ast_fields($name2type, $ast_node, 'fields'),
+    ($one_of ? (is_one_of => 1) : ()),
+  );
+}
 
 sub fields {
   my ($self) = @_;

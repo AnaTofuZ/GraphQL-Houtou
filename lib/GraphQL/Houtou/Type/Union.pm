@@ -112,8 +112,9 @@ sub get_types {
 sub to_doc {
   my ($self) = @_;
   return $self->{to_doc} if exists $self->{to_doc};
+  require GraphQL::Houtou::Internal::TypeSupport;
   return $self->{to_doc} = join '', map "$_\n",
-    ($self->description ? (map "# $_", split /\n/, $self->description) : ()),
+    GraphQL::Houtou::Internal::TypeSupport::description_doc_lines($self->description),
     "union @{[$self->name]} = " . join(' | ', map $_->name, @{ $self->types });
 }
 

@@ -9,7 +9,7 @@ use Exporter 'import';
 use JSON::MaybeXS qw(JSON is_bool);
 use Role::Tiny::With;
 use Scalar::Util qw(looks_like_number);
-use GraphQL::Houtou::Internal::TypeSupport qw(named_from_ast);
+use GraphQL::Houtou::Internal::TypeSupport qw(description_doc_lines named_from_ast);
 use GraphQL::Houtou::Type::List ();
 use GraphQL::Houtou::Type::NonNull ();
 
@@ -67,6 +67,19 @@ sub from_ast {
       ? (specified_by_url => $specified_by->{arguments}{url})
       : ()),
   );
+}
+
+sub to_doc {
+  my ($self) = @_;
+  return $self->{to_doc} if exists $self->{to_doc};
+  my $line = "scalar @{[$self->name]}";
+  if (defined(my $url = $self->specified_by_url)) {
+    $line .= ' @specifiedBy(url: '
+      . JSON::MaybeXS->new->utf8(0)->allow_nonref->encode($url) . ')';
+  }
+  return $self->{to_doc} = join '', map "$_\n",
+    description_doc_lines($self->description),
+    $line;
 }
 sub _builtin_kind { $_[0]->{_builtin_kind} }
 sub specified_by_url { $_[0]->{specified_by_url} }

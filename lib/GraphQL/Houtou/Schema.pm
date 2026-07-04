@@ -127,6 +127,42 @@ sub _apply_resolvers {
   return $self;
 }
 
+my %BUILTIN_SCALARS = map { ($_ => 1) } qw(Int Float String Boolean ID);
+
+sub to_doc {
+  my ($self) = @_;
+  require GraphQL::Houtou::Internal::TypeSupport;
+  my @sections;
+
+  my $default_roots = !grep {
+    $self->$_ && $self->$_->name ne ucfirst $_
+  } @ROOT_ATTRS;
+  if ($self->description || !$default_roots) {
+    push @sections, join '', map "$_\n",
+      GraphQL::Houtou::Internal::TypeSupport::description_doc_lines($self->description),
+      'schema {',
+      (map { $self->$_ ? "  $_: @{[$self->$_->name]}" : () } @ROOT_ATTRS),
+      '}';
+  }
+
+  my %specified = map { ($_->name => 1) } @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES;
+  for my $directive (sort { $a->name cmp $b->name } @{ $self->directives || [] }) {
+    next if $specified{ $directive->name };
+    push @sections, $directive->to_doc;
+  }
+
+  my $name2type = $self->name2type;
+  for my $name (sort keys %$name2type) {
+    my $type = $name2type->{$name} or next;
+    next if $BUILTIN_SCALARS{$name};
+    next if $name =~ /\A__/;
+    next if $type->can('is_introspection') && $type->is_introspection;
+    push @sections, $type->to_doc;
+  }
+
+  return join "\n", @sections;
+}
+
 sub name2type {
   my ($self) = @_;
   return $self->{name2type} ||= $self->_build_name2type;

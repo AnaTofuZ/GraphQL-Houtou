@@ -13,6 +13,7 @@ our @EXPORT_OK = qw(
   parse
   parse_with_options
   build_schema
+  print_schema
   execute
   execute_native
   compile_runtime
@@ -51,6 +52,11 @@ sub build_schema {
   my ($doc, %opts) = @_;
   require GraphQL::Houtou::Schema;
   return GraphQL::Houtou::Schema->from_doc($doc, %opts);
+}
+
+sub print_schema {
+  my ($schema) = @_;
+  return $schema->to_doc;
 }
 
 sub compile_runtime {
@@ -254,6 +260,18 @@ SDL are reflected on the built types. The same functionality is available as
 C<< GraphQL::Houtou::Schema->from_doc($sdl, %opts) >> and
 C<< ->from_ast($ast, %opts) >>. Type extensions (C<extend type>) are not
 supported yet.
+
+The inverse direction is C<print_schema()> (also available as
+C<< $schema->to_doc >>), which renders any schema back to SDL — including
+schemas assembled from Perl type objects:
+
+    use GraphQL::Houtou qw(print_schema);
+    my $sdl = print_schema($schema);
+
+Built-in scalars, introspection meta types, and the specified directives
+(C<@include>, C<@skip>, C<@deprecated>, C<@specifiedBy>) are omitted from
+the output, matching graphql-js C<printSchema>. Types are emitted sorted by
+name, so the output is stable and diff-friendly.
 
 =head2 API Selection Guide
 

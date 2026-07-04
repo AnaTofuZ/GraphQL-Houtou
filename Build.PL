@@ -22,9 +22,9 @@ my %args = (
     },
 
     requires => {
-        'GraphQL' => '0.54',
         'JSON::MaybeXS' => '0',
-        'Promise::XS' => '0',
+        'Promise::XS' => '0.21',
+        'Role::Tiny' => '0',
         'XSLoader' => '0',
         'perl' => '5.024000',
     },

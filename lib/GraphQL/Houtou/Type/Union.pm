@@ -95,6 +95,13 @@ sub get_types {
   return \@types if $self->_types_validated;
 
   $self->_types_validated(1);
+  my @non_object = grep {
+    !ref($_)
+      || !($_->isa('GraphQL::Houtou::Type::Object') || $_->isa('GraphQL::Type::Object'))
+  } @types;
+  die "Union type @{[$self->name]} can only include Object types, found "
+    . join(', ', map { ref($_) ? $_->to_string : "'$_'" } @non_object) . ".\n"
+    if @non_object;
   if (!$self->resolve_type && !$self->tag_resolver) {
     my @bad = map $_->name, grep !$_->is_type_of, @types;
     die $self->name . " no resolve_type and no is_type_of for @bad" if @bad;

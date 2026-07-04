@@ -6,6 +6,8 @@ use warnings;
 
 use Role::Tiny;
 
+use GraphQL::Houtou::Error ();
+
 # Runtime completion helpers for interfaces and unions.
 
 sub _complete_value {
@@ -19,7 +21,7 @@ sub _ensure_valid_runtime_type {
     ? $runtime_type_or_name
     : $context->{schema}->name2type->{$runtime_type_or_name};
 
-  die GraphQL::Error->new(
+  die GraphQL::Houtou::Error->new(
     message => "Abstract type @{[$self->name]} must resolve to an " .
       "Object type at runtime for field @{[$info->{parent_type}->name]}." .
       "@{[$info->{field_name}]} with value $result, received '" .
@@ -29,7 +31,7 @@ sub _ensure_valid_runtime_type {
       || !($runtime_type->isa('GraphQL::Houtou::Type::Object')
         || $runtime_type->isa('GraphQL::Type::Object'));
 
-  die GraphQL::Error->new(
+  die GraphQL::Houtou::Error->new(
     message => "Runtime Object type '@{[$runtime_type->name]}' is not a possible type for " .
       "'@{[$self->name]}'.",
     nodes => [ $nodes ],

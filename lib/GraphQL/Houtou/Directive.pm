@@ -6,7 +6,7 @@ use warnings;
 
 use parent 'GraphQL::Houtou::Type';
 use Role::Tiny::With;
-use GraphQL::Houtou::Internal::TypeSupport qw(description_doc_lines from_ast_fields make_fieldtuples named_from_ast);
+use GraphQL::Houtou::Internal::TypeSupport qw(apply_fields_deprecation description_doc_lines from_ast_fields make_fieldtuples named_from_ast);
 
 use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 
@@ -24,6 +24,7 @@ my @LOCATIONS = qw(
   FRAGMENT_DEFINITION
   FRAGMENT_SPREAD
   INLINE_FRAGMENT
+  VARIABLE_DEFINITION
   SCHEMA
   SCALAR
   OBJECT
@@ -43,7 +44,7 @@ sub new {
   $self->{name} = $args{name};
   $self->{description} = $args{description};
   $self->{locations} = $args{locations} || [];
-  $self->{args} = $args{args} || {};
+  $self->{args} = apply_fields_deprecation($args{args} || {});
   $self->{repeatable} = $args{repeatable} ? 1 : 0;
   $self->{resolve_field} = $args{resolve_field};
   $self->{apply_field_result} = $args{apply_field_result};

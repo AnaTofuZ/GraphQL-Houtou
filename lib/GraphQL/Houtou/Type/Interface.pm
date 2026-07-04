@@ -6,7 +6,7 @@ use warnings;
 
 use parent 'GraphQL::Houtou::Type';
 use Role::Tiny::With;
-use GraphQL::Error;
+use GraphQL::Houtou::Error ();
 use GraphQL::Houtou::Internal::TypeSupport qw(
   apply_fields_deprecation
   description_doc_lines
@@ -101,7 +101,7 @@ sub _ensure_valid_runtime_type {
     ? $runtime_type_or_name
     : $name2type->{$runtime_type_or_name};
 
-  die GraphQL::Error->new(
+  die GraphQL::Houtou::Error->new(
     message => "Abstract type @{[$self->name]} must resolve to an " .
       "Object type at runtime for field @{[$info->{parent_type}->name]}." .
       "@{[$info->{field_name}]} with value $result, received '@{[$runtime_type->name]}'.",
@@ -109,7 +109,7 @@ sub _ensure_valid_runtime_type {
   ) if !$runtime_type
       || !($runtime_type->isa('GraphQL::Type::Object') || $runtime_type->isa('GraphQL::Houtou::Type::Object'));
 
-  die GraphQL::Error->new(
+  die GraphQL::Houtou::Error->new(
     message => "Runtime Object type '@{[$runtime_type->name]}' is not a possible type for " .
       "'@{[$self->name]}'.",
     nodes => [ $nodes ],

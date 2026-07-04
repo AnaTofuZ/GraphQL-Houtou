@@ -36,6 +36,29 @@ bridge has been removed from the mainline.
 
 These rules now execute directly in `src/validation.h`.
 
+## Schema Build-Time Validation (2026-07-04)
+
+Query validation above is separate from schema validation. Schema-level
+checks now run once per schema in `GraphQL::Houtou::Schema`:
+
+- public surface: `$schema->validation_errors` (arrayref of messages) and
+  `$schema->assert_valid` (dies with all messages joined)
+- `compile_runtime` calls `assert_valid` once (memoized), so
+  `build_runtime` / `build_native_runtime` / `execute` all fail fast on an
+  invalid schema
+
+Implemented rules:
+
+- object/interface fields must be Output types; arguments and input object
+  fields must be Input types
+- objects must implement each declared interface: field presence, covariant
+  field types (spec IsValidImplementationFieldType), invariant argument
+  types, no extra required arguments
+- union member types must be Object types (also enforced with a clear
+  message in `Union->get_types`); unions and enums must be non-empty
+
+Coverage: `t/30_schema_build_validation.t`.
+
 ## Integration Strategy
 
 The current validation path is:

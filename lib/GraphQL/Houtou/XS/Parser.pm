@@ -3,9 +3,8 @@ package GraphQL::Houtou::XS::Parser;
 use 5.014;
 use strict;
 use warnings;
-use GraphQL::Error;
 use GraphQL::Houtou ();
-use GraphQL::Language::Receiver ();
+use GraphQL::Houtou::Error ();
 use JSON::MaybeXS ();
 
 our $VERSION = '0.01';
@@ -19,8 +18,7 @@ package GraphQL::Houtou::Parser::Internal;
 use 5.014;
 use strict;
 use warnings;
-use GraphQL::Error;
-use GraphQL::Language::Receiver ();
+use GraphQL::Houtou::Error ();
 use JSON::MaybeXS ();
 
 sub _make_bool {
@@ -28,11 +26,38 @@ sub _make_bool {
 }
 
 sub _string_value {
-  return GraphQL::Language::Receiver::_unescape($_[0]);
+  my ($str) = @_;
+  # https://spec.graphql.org/October2021/#EscapedCharacter
+  $str =~ s|\\(["\\/bfnrt])|"qq!\\$1!"|gee;
+  return $str;
 }
 
 sub _block_string_value {
-  return GraphQL::Language::Receiver::_blockstring_value($_[0]);
+  my ($str) = @_;
+  # https://spec.graphql.org/October2021/#BlockStringValue()
+  my @lines = split(/(?:\n|\r(?!\n)|\r\n)/s, $str);
+  if (1 < @lines) {
+    my $common_indent;
+    for my $line (@lines[1..$#lines]) {
+      my $length = length($line);
+      my $indent = length(($line =~ /^([\t ]*)/)[0] || '');
+      if ($indent < $length && (!defined($common_indent) || $indent < $common_indent)) {
+        $common_indent = $indent;
+      }
+    }
+    if (defined $common_indent) {
+      for my $line (@lines[1..$#lines]) {
+        $line =~ s/^[\t ]{0,$common_indent}//;
+      }
+    }
+  }
+  my ($start, $end);
+  for ($start = 0; $start < @lines && $lines[$start] =~ /^[\t ]*$/; ++$start) {}
+  for ($end = $#lines; $end >= 0 && $lines[$end] =~ /^[\t ]*$/; --$end) {}
+  @lines = $start <= $end ? @lines[$start..$end] : ();
+  my $formatted = join("\n", @lines);
+  $formatted =~ s/\\"""/"""/g;
+  return $formatted;
 }
 
 sub _format_error {
@@ -46,7 +71,7 @@ sub _format_error {
   my $context = substr($source, $position, 50);
   $pretext =~ s/.*\n//gs;
   $context =~ s/\n/\\n/g;
-  return GraphQL::Error->new(
+  return GraphQL::Houtou::Error->new(
     locations => [ { line => $line, column => $column } ],
     message => <<EOF,
 Error parsing Pegex document:

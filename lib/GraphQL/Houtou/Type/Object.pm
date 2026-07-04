@@ -7,7 +7,7 @@ use warnings;
 use parent 'GraphQL::Houtou::Type';
 use Role::Tiny::With;
 use GraphQL::Houtou::Directive ();
-use GraphQL::Error;
+use GraphQL::Houtou::Error ();
 use GraphQL::Houtou::Internal::TypeSupport qw(
   apply_fields_deprecation
   description_doc_lines
@@ -159,7 +159,7 @@ sub _fragment_condition_match {
   return 1 if !$node->{on};
   return 1 if $node->{on} eq $self->name;
   $condition_type = $name2type->{ $node->{on} }
-    // die GraphQL::Error->new(
+    // die GraphQL::Houtou::Error->new(
       message => "Unknown type for fragment condition '$node->{on}'."
     );
   return '' if !$condition_type->DOES('GraphQL::Houtou::Role::Abstract')

@@ -38,4 +38,27 @@ subtest 'parse_with_options exposes only parser-local options' => sub {
   like($error, qr/Unknown parser option/, 'legacy dialect option is no longer exposed');
 };
 
+subtest 'block string values follow the spec BlockStringValue algorithm' => sub {
+  my $ast = parse(qq<{ f(s: """\n    hello\n      world\n  """) }>);
+  is $ast->[0]{selections}[0]{arguments}{s}, "hello\n  world",
+    'common indent is stripped and blank first/last lines are removed';
+
+  my $escaped = parse(qq<{ f(s: """quote \\""" here""") }>);
+  is $escaped->[0]{selections}[0]{arguments}{s}, 'quote """ here',
+    'escaped triple quote is unescaped';
+
+  my $crlf = parse(qq<{ f(s: """\r\n  a\r\n  b\r\n""") }>);
+  is $crlf->[0]{selections}[0]{arguments}{s}, "a\nb",
+    'CRLF line terminators are treated as single line breaks';
+};
+
+subtest 'parse errors die with a GraphQL::Houtou::Error object' => sub {
+  eval { parse('{ broken ') };
+  my $error = $@;
+  isa_ok $error, 'GraphQL::Houtou::Error';
+  like "$error", qr/Expected name but got EOF/, 'stringifies to the parse message';
+  is $error->locations->[0]{line}, 1, 'error carries a line location';
+  ok $error->locations->[0]{column}, 'error carries a column location';
+};
+
 done_testing;

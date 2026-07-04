@@ -33,6 +33,7 @@
       },
       "develop" : {
          "requires" : {
+            "GraphQL" : "0.54",
             "Test::CPAN::Meta" : "0",
             "Test::MinimumVersion::Fast" : "0.04",
             "Test::PAUSE::Permissions" : "0.07",
@@ -42,9 +43,9 @@
       },
       "runtime" : {
          "requires" : {
-            "GraphQL" : "0.54",
             "JSON::MaybeXS" : "0",
-            "Promise::XS" : "0",
+            "Promise::XS" : "0.21",
+            "Role::Tiny" : "0",
             "XSLoader" : "0",
             "perl" : "5.024000"
          }

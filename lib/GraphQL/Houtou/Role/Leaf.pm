@@ -6,7 +6,7 @@ use warnings;
 
 use Role::Tiny;
 
-use GraphQL::Error ();
+use GraphQL::Houtou::Error ();
 
 # Runtime completion helpers for scalar-like leaf values.
 
@@ -15,7 +15,7 @@ sub _complete_value {
   my $serialised = eval { $self->perl_to_graphql($result) };
   my $error = $@;
 
-  die GraphQL::Error->new(
+  die GraphQL::Houtou::Error->new(
     message => "Expected a value of type '@{[$self->to_string]}' but received: '$result'.\n$error"
   ) if $error;
 

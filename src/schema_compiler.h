@@ -661,6 +661,13 @@ gql_schema_compile_named_type(pTHX_ SV *type_sv) {
     fields_sv = gql_schema_call_method0(aTHX_ type_sv, "fields");
     gql_store_sv(compiled_hv, "fields", gql_schema_compile_input_fields(aTHX_ fields_sv));
     SvREFCNT_dec(fields_sv);
+    {
+      SV *one_of_sv = gql_schema_call_method0(aTHX_ type_sv, "is_one_of");
+      if (SvTRUE(one_of_sv)) {
+        gql_store_sv(compiled_hv, "is_one_of", newSViv(1));
+      }
+      SvREFCNT_dec(one_of_sv);
+    }
   } else if (strEQ(kind, "ENUM")) {
     SV *values_sv = gql_schema_call_method0(aTHX_ type_sv, "values");
     gql_store_sv(compiled_hv, "values", gql_schema_compile_enum_values(aTHX_ values_sv));

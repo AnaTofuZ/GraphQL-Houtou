@@ -64,7 +64,209 @@ sub prepare_runtime {
 
 sub compile_runtime {
   my ($self, %opts) = @_;
+  $self->assert_valid;
   return GraphQL::Houtou::Runtime::SchemaGraph->compile_schema($self, %opts);
+}
+
+sub assert_valid {
+  my ($self) = @_;
+  return $self if $self->{_schema_validated};
+  my $errors = $self->validation_errors;
+  die join("\n", 'Schema validation failed:', map { "  - $_" } @$errors) . "\n"
+    if @$errors;
+  $self->{_schema_validated} = 1;
+  return $self;
+}
+
+sub validation_errors {
+  my ($self) = @_;
+  my @errors;
+  my $name2type = eval { $self->name2type };
+  if (!$name2type) {
+    my $error = $@ || 'unknown error';
+    $error =~ s/\s+\z//;
+    $error =~ s/ at \S+ line \d+\.?\z//;
+    return [ $error ];
+  }
+
+  for my $type_name (sort keys %$name2type) {
+    my $type = $name2type->{$type_name} or next;
+    next if $type->can('is_introspection') && $type->{is_introspection};
+    next if $type_name =~ /\A__/;
+
+    if (_is_object_type($type)) {
+      push @errors, $self->_object_field_errors($type);
+      for my $interface (@{ $type->interfaces || [] }) {
+        if (!ref($interface) || !_is_interface_type($interface)) {
+          push @errors, "Type @{[$type->name]} must only implement Interface types, "
+            . 'found ' . (ref($interface) ? $interface->to_string : "'$interface'") . '.';
+          next;
+        }
+        push @errors, $self->_interface_conformance_errors($type, $interface);
+      }
+    }
+    elsif (_is_interface_type($type)) {
+      push @errors, $self->_object_field_errors($type);
+    }
+    elsif ($type->isa('GraphQL::Houtou::Type::Union')) {
+      my $members = $type->types || [];
+      push @errors, "Union type @{[$type->name]} must define one or more member types."
+        if !@$members;
+      for my $member (@$members) {
+        push @errors, "Union type @{[$type->name]} can only include Object types, "
+          . 'found ' . (ref($member) ? $member->to_string : "'$member'") . '.'
+          if !ref($member) || !_is_object_type($member);
+      }
+    }
+    elsif ($type->isa('GraphQL::Houtou::Type::Enum')) {
+      push @errors, "Enum type @{[$type->name]} must define one or more values."
+        if !keys %{ $type->values || {} };
+    }
+    elsif ($type->isa('GraphQL::Houtou::Type::InputObject')) {
+      my $fields = $type->fields || {};
+      for my $field_name (sort keys %$fields) {
+        my $field_type = $fields->{$field_name}{type};
+        push @errors, "The type of @{[$type->name]}.$field_name must be Input Type"
+          . (ref($field_type) ? ' but got: ' . $field_type->to_string . '.' : '.')
+          if !_is_input_type($field_type);
+      }
+    }
+  }
+
+  return \@errors;
+}
+
+sub _object_field_errors {
+  my ($self, $type) = @_;
+  my @errors;
+  my $fields = $type->fields || {};
+  for my $field_name (sort keys %$fields) {
+    my $field = $fields->{$field_name};
+    my $field_type = $field->{type};
+    push @errors, "The type of @{[$type->name]}.$field_name must be Output Type"
+      . (ref($field_type) ? ' but got: ' . $field_type->to_string . '.' : '.')
+      if !_is_output_type($field_type);
+    for my $arg_name (sort keys %{ $field->{args} || {} }) {
+      my $arg_type = $field->{args}{$arg_name}{type};
+      push @errors, "The type of @{[$type->name]}.$field_name($arg_name:) must be Input Type"
+        . (ref($arg_type) ? ' but got: ' . $arg_type->to_string . '.' : '.')
+        if !_is_input_type($arg_type);
+    }
+  }
+  return @errors;
+}
+
+sub _interface_conformance_errors {
+  my ($self, $object, $interface) = @_;
+  my @errors;
+  my $interface_fields = $interface->fields || {};
+  my $object_fields = $object->fields || {};
+
+  for my $field_name (sort keys %$interface_fields) {
+    my $interface_field = $interface_fields->{$field_name};
+    my $object_field = $object_fields->{$field_name};
+
+    if (!$object_field) {
+      push @errors, "Interface field @{[$interface->name]}.$field_name expected "
+        . "but @{[$object->name]} does not provide it.";
+      next;
+    }
+
+    if (ref($interface_field->{type}) && ref($object_field->{type})
+        && !$self->_is_sub_type($object_field->{type}, $interface_field->{type})) {
+      push @errors, "Interface field @{[$interface->name]}.$field_name expects type "
+        . "@{[$interface_field->{type}->to_string]} but @{[$object->name]}.$field_name "
+        . "is type @{[$object_field->{type}->to_string]}.";
+    }
+
+    my $interface_args = $interface_field->{args} || {};
+    my $object_args = $object_field->{args} || {};
+    for my $arg_name (sort keys %$interface_args) {
+      my $interface_arg = $interface_args->{$arg_name};
+      my $object_arg = $object_args->{$arg_name};
+      if (!$object_arg) {
+        push @errors, "Interface field argument "
+          . "@{[$interface->name]}.$field_name($arg_name:) expected "
+          . "but @{[$object->name]}.$field_name does not provide it.";
+        next;
+      }
+      if (ref($interface_arg->{type}) && ref($object_arg->{type})
+          && $interface_arg->{type}->to_string ne $object_arg->{type}->to_string) {
+        push @errors, "Interface field argument "
+          . "@{[$interface->name]}.$field_name($arg_name:) expects type "
+          . "@{[$interface_arg->{type}->to_string]} but "
+          . "@{[$object->name]}.$field_name($arg_name:) is type "
+          . "@{[$object_arg->{type}->to_string]}.";
+      }
+    }
+    for my $arg_name (sort keys %$object_args) {
+      next if $interface_args->{$arg_name};
+      my $arg = $object_args->{$arg_name};
+      my $arg_type = $arg->{type};
+      if (ref($arg_type) && $arg_type->isa('GraphQL::Houtou::Type::NonNull')
+          && !exists $arg->{default_value}) {
+        push @errors, "Object field @{[$object->name]}.$field_name includes required "
+          . "argument $arg_name that is missing from the Interface field "
+          . "@{[$interface->name]}.$field_name.";
+      }
+    }
+  }
+
+  return @errors;
+}
+
+# Spec IsValidImplementationFieldType: object field types are covariant
+# against the interface field type.
+sub _is_sub_type {
+  my ($self, $maybe, $super) = @_;
+  return 0 if !ref($maybe) || !ref($super);
+  if ($super->isa('GraphQL::Houtou::Type::NonNull')) {
+    return 0 if !$maybe->isa('GraphQL::Houtou::Type::NonNull');
+    return $self->_is_sub_type($maybe->of, $super->of);
+  }
+  return $self->_is_sub_type($maybe->of, $super)
+    if $maybe->isa('GraphQL::Houtou::Type::NonNull');
+  if ($super->isa('GraphQL::Houtou::Type::List')) {
+    return 0 if !$maybe->isa('GraphQL::Houtou::Type::List');
+    return $self->_is_sub_type($maybe->of, $super->of);
+  }
+  return 0 if $maybe->isa('GraphQL::Houtou::Type::List');
+  return 1 if $maybe->name eq $super->name;
+  if (_is_object_type($maybe)) {
+    return 1 if _is_interface_type($super)
+      && grep { ref($_) && $_->name eq $super->name } @{ $maybe->interfaces || [] };
+    return 1 if $super->isa('GraphQL::Houtou::Type::Union')
+      && grep { ref($_) && $_->name eq $maybe->name } @{ $super->types || [] };
+  }
+  return 0;
+}
+
+sub _is_object_type {
+  my ($type) = @_;
+  return ref($type)
+    && ($type->isa('GraphQL::Houtou::Type::Object') || $type->isa('GraphQL::Type::Object'));
+}
+
+sub _is_interface_type {
+  my ($type) = @_;
+  return ref($type)
+    && ($type->isa('GraphQL::Houtou::Type::Interface') || $type->isa('GraphQL::Type::Interface'));
+}
+
+sub _is_output_type {
+  my ($type) = @_;
+  return ref($type) && _does_any_role($type, qw(
+    GraphQL::Houtou::Role::Output
+    GraphQL::Role::Output
+  ));
+}
+
+sub _is_input_type {
+  my ($type) = @_;
+  return ref($type) && _does_any_role($type, qw(
+    GraphQL::Houtou::Role::Input
+    GraphQL::Role::Input
+  ));
 }
 
 sub build_native_runtime {

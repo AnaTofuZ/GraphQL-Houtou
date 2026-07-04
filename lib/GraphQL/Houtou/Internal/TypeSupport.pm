@@ -15,6 +15,7 @@ our @EXPORT_OK = qw(
   to_doc_field_deprecate
   make_field_def
   from_ast_fields
+  from_ast_maptype
   make_fieldtuples
 );
 
@@ -111,9 +112,19 @@ sub make_field_def {
   );
 }
 
+sub from_ast_maptype {
+  my ($name2type, $ast_node, $key) = @_;
+  my $names = $ast_node->{$key} || [];
+  return (
+    $key => sub { [
+      map { $name2type->{$_} // die "Unknown type '$_' in $key.\n" } @$names
+    ] },
+  );
+}
+
 sub from_ast_fields {
   my ($name2type, $ast_node, $key) = @_;
-  my $fields = $ast_node->{$key};
+  my $fields = $ast_node->{$key} || {};
   $fields = from_ast_field_deprecate($_, $fields) for keys %$fields;
 
   return (

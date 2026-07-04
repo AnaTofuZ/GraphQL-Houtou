@@ -10,7 +10,9 @@ use GraphQL::Houtou::Error ();
 use GraphQL::Houtou::Internal::TypeSupport qw(
   apply_fields_deprecation
   description_doc_lines
+  from_ast_fields
   make_fieldtuples
+  named_from_ast
 );
 use GraphQL::Houtou::Type::List ();
 use GraphQL::Houtou::Type::NonNull ();
@@ -54,6 +56,14 @@ sub to_string { return $_[0]->{to_string} ||= $_[0]->name }
 sub resolve_type { return $_[0]->{resolve_type} }
 sub tag_resolver { return $_[0]->{tag_resolver} }
 sub tag_map { return $_[0]->{tag_map} }
+
+sub from_ast {
+  my ($class, $name2type, $ast_node) = @_;
+  return $class->new(
+    named_from_ast($ast_node),
+    from_ast_fields($name2type, $ast_node, 'fields'),
+  );
+}
 
 sub fields {
   my ($self) = @_;

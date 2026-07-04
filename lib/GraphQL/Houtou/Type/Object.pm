@@ -11,7 +11,10 @@ use GraphQL::Houtou::Error ();
 use GraphQL::Houtou::Internal::TypeSupport qw(
   apply_fields_deprecation
   description_doc_lines
+  from_ast_fields
+  from_ast_maptype
   make_fieldtuples
+  named_from_ast
 );
 use GraphQL::Houtou::Type::List ();
 use GraphQL::Houtou::Type::NonNull ();
@@ -51,9 +54,25 @@ sub new {
 sub name { return $_[0]->{name} }
 sub description { return $_[0]->{description} }
 sub to_string { return $_[0]->{to_string} ||= $_[0]->name }
-sub interfaces { return $_[0]->{interfaces} }
 sub is_type_of { return $_[0]->{is_type_of} }
 sub runtime_tag { return $_[0]->{runtime_tag} }
+
+sub interfaces {
+  my ($self) = @_;
+  if (ref($self->{interfaces}) eq 'CODE') {
+    $self->{interfaces} = $self->{interfaces}->();
+  }
+  return $self->{interfaces};
+}
+
+sub from_ast {
+  my ($class, $name2type, $ast_node) = @_;
+  return $class->new(
+    named_from_ast($ast_node),
+    from_ast_maptype($name2type, $ast_node, 'interfaces'),
+    from_ast_fields($name2type, $ast_node, 'fields'),
+  );
+}
 
 sub fields {
   my ($self) = @_;

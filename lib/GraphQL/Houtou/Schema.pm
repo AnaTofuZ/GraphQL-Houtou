@@ -36,6 +36,97 @@ sub subscription { return $_[0]->{subscription} }
 sub types { return $_[0]->{types} }
 sub directives { return $_[0]->{directives} }
 
+our %KIND2CLASS = (
+  type => 'GraphQL::Houtou::Type::Object',
+  interface => 'GraphQL::Houtou::Type::Interface',
+  union => 'GraphQL::Houtou::Type::Union',
+  enum => 'GraphQL::Houtou::Type::Enum',
+  input => 'GraphQL::Houtou::Type::InputObject',
+  scalar => 'GraphQL::Houtou::Type::Scalar',
+);
+my @ROOT_ATTRS = qw(query mutation subscription);
+
+sub from_doc {
+  my ($class, $doc, %opts) = @_;
+  require GraphQL::Houtou;
+  return $class->from_ast(GraphQL::Houtou::parse($doc), %opts);
+}
+
+sub from_ast {
+  my ($class, $ast, %opts) = @_;
+  my $kind2class = $opts{kind2class} || \%KIND2CLASS;
+
+  my @type_nodes = grep { $kind2class->{$_->{kind} || q()} } @$ast;
+  my ($schema_node, $extra_schema_node) = grep { ($_->{kind} || q()) eq 'schema' } @$ast;
+  die "Must provide only one schema definition.\n" if $extra_schema_node;
+
+  my %name2type;
+  for my $node (@type_nodes) {
+    die "Type '$node->{name}' was defined more than once.\n"
+      if $name2type{ $node->{name} };
+    my $type_class = $kind2class->{ $node->{kind} };
+    (my $module_file = $type_class) =~ s{::}{/}g;
+    require "$module_file.pm";
+    $name2type{ $node->{name} } = $type_class->from_ast(\%name2type, $node);
+  }
+  for my $builtin ($Int, $Float, $String, $Boolean, $ID) {
+    $name2type{ $builtin->name } ||= $builtin;
+  }
+
+  if (!$schema_node) {
+    $schema_node = +{
+      map { $name2type{ ucfirst $_ } ? ($_ => ucfirst $_) : () } @ROOT_ATTRS
+    };
+  }
+  die "Must provide schema definition with query type or a type named Query.\n"
+    if !$schema_node->{query};
+
+  my @directives = map { GraphQL::Houtou::Directive->from_ast(\%name2type, $_) }
+    grep { ($_->{kind} || q()) eq 'directive' } @$ast;
+
+  my $schema = $class->new(
+    (map {
+      $schema_node->{$_}
+        ? ($_ => $name2type{ $schema_node->{$_} }
+          // die "Specified $_ type '$schema_node->{$_}' not found.\n")
+        : ()
+    } @ROOT_ATTRS),
+    ($schema_node->{description} ? (description => $schema_node->{description}) : ()),
+    (@directives
+      ? (directives => [ @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES, @directives ])
+      : ()),
+    types => [ values %name2type ],
+  );
+  $schema->_apply_resolvers($opts{resolvers}) if $opts{resolvers};
+  $schema->name2type;
+  return $schema;
+}
+
+sub _apply_resolvers {
+  my ($self, $resolvers) = @_;
+  my $name2type = $self->name2type;
+  for my $type_name (sort keys %$resolvers) {
+    my $type = $name2type->{$type_name}
+      // die "Cannot attach resolvers to unknown type '$type_name'.\n";
+    my $spec = $resolvers->{$type_name};
+    die "Resolvers for '$type_name' must be a hash reference.\n"
+      if ref($spec) ne 'HASH';
+    for my $key (sort keys %$spec) {
+      if ($key eq 'resolve_type' || $key eq 'tag_resolver' || $key eq 'is_type_of'
+          || $key eq 'serialize' || $key eq 'parse_value') {
+        die "Type '$type_name' does not support '$key'.\n" if !$type->can($key);
+        $type->{$key} = $spec->{$key};
+        next;
+      }
+      my $fields = $type->can('fields') ? $type->fields : undef;
+      die "Cannot attach a field resolver to '$type_name.$key': no such field.\n"
+        if !$fields || !$fields->{$key};
+      $fields->{$key}{resolve} = $spec->{$key};
+    }
+  }
+  return $self;
+}
+
 sub name2type {
   my ($self) = @_;
   return $self->{name2type} ||= $self->_build_name2type;
@@ -494,7 +585,7 @@ sub _runtime_cache {
     }
 
     if ($type->isa('GraphQL::Type::Union') || $type->isa('GraphQL::Houtou::Type::Union')) {
-      my $types = $type->{types} || $type->types || [];
+      my $types = $type->types || [];
       my $resolve_type = $type->resolve_type;
       my $tag_resolver = $type->can('tag_resolver') ? $type->tag_resolver : undef;
       $resolve_type_map{ $type->name } = $resolve_type if $resolve_type;

@@ -67,6 +67,43 @@ For throughput-sensitive parsing where you do not need location data, passing
       no_location => 1,
     });
 
+## Building a schema from SDL
+
+`build_schema()` turns a Schema Definition Language document into an
+executable [GraphQL::Houtou::Schema](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3ASchema). Field resolvers, abstract type
+dispatch, and custom scalar coercion can be attached through the
+`resolvers` option:
+
+    use GraphQL::Houtou qw(build_schema execute);
+
+    my $schema = build_schema(<<'SDL',
+    type Query {
+      dog(id: ID = "1"): Dog
+      pets: [Pet!]
+    }
+    interface Pet { name: String! }
+    type Dog implements Pet { name: String! }
+    SDL
+      resolvers => {
+        Query => {
+          dog  => sub { my (undef, $args) = @_; load_dog($args->{id}) },
+          pets => sub { all_pets() },
+        },
+        Pet => { resolve_type => sub { 'Dog' } },
+      },
+    );
+
+    my $result = execute($schema, '{ dog { name } }');
+
+Fields without an explicit resolver use the default hash/method resolver.
+Custom scalars default to pass-through `serialize` / `parse_value`; supply
+your own through `resolvers` when coercion matters. `@deprecated`,
+`@specifiedBy`, `@oneOf`, and `repeatable` directive definitions in the
+SDL are reflected on the built types. The same functionality is available as
+`GraphQL::Houtou::Schema->from_doc($sdl, %opts)` and
+`->from_ast($ast, %opts)`. Type extensions (`extend type`) are not
+supported yet.
+
 ## API Selection Guide
 
 Choose the execution API that fits your use case.

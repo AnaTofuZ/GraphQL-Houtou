@@ -1288,6 +1288,10 @@ gql_parse_directive_definition(pTHX_ gql_parser_t *p) {
     gql_store_sv(hv, "args", newSVsv(*svp));
     SvREFCNT_dec(args);
   }
+  if (gql_peek_name(p, "repeatable")) {
+    gql_store_sv(hv, "repeatable", newSViv(1));
+    gql_advance(aTHX_ p);
+  }
   if (!gql_peek_name(p, "on")) {
     gql_throw(aTHX_ p, p->tok_start, "Expected \"on\"");
   }

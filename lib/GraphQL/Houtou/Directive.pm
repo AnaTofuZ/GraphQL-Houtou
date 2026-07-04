@@ -6,7 +6,7 @@ use warnings;
 
 use parent 'GraphQL::Houtou::Type';
 use Role::Tiny::With;
-use GraphQL::Houtou::Internal::TypeSupport qw(apply_fields_deprecation description_doc_lines make_fieldtuples named_from_ast);
+use GraphQL::Houtou::Internal::TypeSupport qw(apply_fields_deprecation description_doc_lines from_ast_fields make_fieldtuples named_from_ast);
 
 use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 
@@ -59,6 +59,17 @@ sub repeatable { $_[0]->{repeatable} }
 sub resolve_field { $_[0]->{resolve_field} }
 sub apply_field_result { $_[0]->{apply_field_result} }
 sub to_string { $_[0]->{to_string} ||= $_[0]->name }
+
+sub from_ast {
+  my ($class, $name2type, $ast_node) = @_;
+  my (undef, $lazy_args) = from_ast_fields($name2type, $ast_node, 'args');
+  return $class->new(
+    named_from_ast($ast_node),
+    locations => $ast_node->{locations} || [],
+    ($ast_node->{repeatable} ? (repeatable => 1) : ()),
+    args => $lazy_args->(),
+  );
+}
 
 sub has_executable_location {
   my ($self) = @_;

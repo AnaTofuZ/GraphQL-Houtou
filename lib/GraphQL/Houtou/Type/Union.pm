@@ -31,13 +31,7 @@ sub new {
   die "GraphQL::Houtou::Type::Union requires name" if !defined $args{name};
   die "GraphQL::Houtou::Type::Union requires types" if !exists $args{types};
   my $types = $args{types};
-  die "GraphQL::Houtou::Type::Union requires a non-empty types array"
-    if ref($types) ne 'ARRAY' || !@$types;
-  my %seen;
-  for my $type (@$types) {
-    die "GraphQL::Houtou::Type::Union requires object types" if !ref($type);
-    die "Duplicate union member " . $type->name if $seen{$type->name}++;
-  }
+  _validate_member_types($types) if ref($types) ne 'CODE';
   my $self = $class->SUPER::new(%args);
   $self->{name} = $args{name};
   $self->{description} = $args{description};
@@ -52,7 +46,40 @@ sub new {
 sub name { return $_[0]->{name} }
 sub description { return $_[0]->{description} }
 sub to_string { return $_[0]->{to_string} ||= $_[0]->name }
-sub types { return $_[0]->{types} }
+sub _validate_member_types {
+  my ($types) = @_;
+  die "GraphQL::Houtou::Type::Union requires a non-empty types array"
+    if ref($types) ne 'ARRAY' || !@$types;
+  my %seen;
+  for my $type (@$types) {
+    die "GraphQL::Houtou::Type::Union requires object types" if !ref($type);
+    die "Duplicate union member " . $type->name if $seen{$type->name}++;
+  }
+  return;
+}
+
+sub types {
+  my ($self) = @_;
+  if (ref($self->{types}) eq 'CODE') {
+    my $types = $self->{types}->();
+    _validate_member_types($types);
+    $self->{types} = $types;
+  }
+  return $self->{types};
+}
+
+sub from_ast {
+  my ($class, $name2type, $ast_node) = @_;
+  require GraphQL::Houtou::Internal::TypeSupport;
+  return $class->new(
+    GraphQL::Houtou::Internal::TypeSupport::named_from_ast($ast_node),
+    GraphQL::Houtou::Internal::TypeSupport::from_ast_maptype($name2type, $ast_node, 'types'),
+    # SDL carries no dispatch logic; replace via the resolvers option of
+    # Schema->from_doc (resolve_type / tag_resolver) before executing
+    # queries that hit this union.
+    resolve_type => sub { return },
+  );
+}
 sub resolve_type { return $_[0]->{resolve_type} }
 sub tag_resolver { return $_[0]->{tag_resolver} }
 sub tag_map { return $_[0]->{tag_map} }
@@ -87,7 +114,7 @@ sub to_doc {
   return $self->{to_doc} if exists $self->{to_doc};
   return $self->{to_doc} = join '', map "$_\n",
     ($self->description ? (map "# $_", split /\n/, $self->description) : ()),
-    "union @{[$self->name]} = " . join(' | ', map $_->name, @{ $self->{types} });
+    "union @{[$self->name]} = " . join(' | ', map $_->name, @{ $self->types });
 }
 
 1;

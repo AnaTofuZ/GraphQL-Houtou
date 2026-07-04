@@ -6,7 +6,7 @@ use warnings;
 
 use parent 'GraphQL::Houtou::Type';
 use Role::Tiny::With;
-use GraphQL::Houtou::Internal::TypeSupport qw(apply_fields_deprecation);
+use GraphQL::Houtou::Internal::TypeSupport qw(apply_fields_deprecation from_ast_field_deprecate named_from_ast);
 use GraphQL::Houtou::Type::List ();
 use GraphQL::Houtou::Type::NonNull ();
 
@@ -43,6 +43,16 @@ sub name { $_[0]->{name} }
 sub description { $_[0]->{description} }
 sub to_string { $_[0]->{to_string} ||= $_[0]->name }
 sub values { $_[0]->{values} }
+
+sub from_ast {
+  my ($class, $name2type, $ast_node) = @_;
+  my $values = +{ %{ $ast_node->{values} || {} } };
+  $values = from_ast_field_deprecate($_, $values) for keys %$values;
+  return $class->new(
+    named_from_ast($ast_node),
+    values => $values,
+  );
+}
 
 sub _name2value {
   my ($self) = @_;

@@ -1,0 +1,197 @@
+use strict;
+use warnings;
+
+use Test::More;
+
+use GraphQL::Houtou qw(build_schema execute);
+use GraphQL::Houtou::Schema;
+
+my $SDL = <<'SDL';
+"""A pet"""
+interface Pet {
+  name: String!
+}
+
+type Dog implements Pet {
+  name: String!
+  barkVolume: Int
+}
+
+type Query {
+  dog(id: ID = "1"): Dog
+  pets: [Pet!]
+  now: DateTime
+  color: Color
+}
+
+enum Color {
+  RED @deprecated(reason: "no red")
+  GREEN
+}
+
+union Thing = Dog
+
+input LookupBy @oneOf {
+  id: ID
+  email: String
+}
+
+"""A point in time"""
+scalar DateTime @specifiedBy(url: "https://example.com/dt")
+
+directive @slow(ms: Int) repeatable on FIELD | VARIABLE_DEFINITION
+SDL
+
+subtest 'build_schema constructs an executable schema' => sub {
+  my $schema = build_schema($SDL, resolvers => {
+    Query => {
+      dog => sub {
+        my (undef, $args) = @_;
+        return { name => "Rex-$args->{id}", barkVolume => 3 };
+      },
+      now => sub { '2026-07-04T00:00:00Z' },
+    },
+  });
+  isa_ok $schema, 'GraphQL::Houtou::Schema';
+
+  my $result = execute($schema, '{ dog { name barkVolume } now }');
+  is_deeply $result->{errors}, [], 'no execution errors';
+  is_deeply $result->{data}, {
+    dog => { name => 'Rex-1', barkVolume => 3 },
+    now => '2026-07-04T00:00:00Z',
+  }, 'resolvers and argument default values work';
+};
+
+subtest 'type registry round trip' => sub {
+  my $schema = GraphQL::Houtou::Schema->from_doc($SDL);
+  my $name2type = $schema->name2type;
+
+  isa_ok $name2type->{Dog}, 'GraphQL::Houtou::Type::Object';
+  isa_ok $name2type->{Pet}, 'GraphQL::Houtou::Type::Interface';
+  isa_ok $name2type->{Color}, 'GraphQL::Houtou::Type::Enum';
+  isa_ok $name2type->{Thing}, 'GraphQL::Houtou::Type::Union';
+  isa_ok $name2type->{LookupBy}, 'GraphQL::Houtou::Type::InputObject';
+  isa_ok $name2type->{DateTime}, 'GraphQL::Houtou::Type::Scalar';
+
+  is $name2type->{Pet}{description}, 'A pet', 'type description preserved';
+  is_deeply [ map { $_->name } @{ $name2type->{Dog}->interfaces } ], ['Pet'],
+    'implements list resolved to type objects';
+  is_deeply [ map { $_->name } @{ $name2type->{Thing}->types } ], ['Dog'],
+    'union members resolved to type objects';
+
+  my $dog_fields = $name2type->{Dog}->fields;
+  is $dog_fields->{name}{type}->to_string, 'String!', 'non-null wrapper resolved';
+
+  my $values = $name2type->{Color}->values;
+  is $values->{RED}{deprecation_reason}, 'no red',
+    '@deprecated on enum value mapped to deprecation_reason';
+  ok !$values->{GREEN}{deprecation_reason}, 'GREEN not deprecated';
+
+  is $name2type->{DateTime}->specified_by_url, 'https://example.com/dt',
+    '@specifiedBy mapped to specified_by_url';
+
+  my %directives = map { $_->name => $_ } @{ $schema->directives };
+  ok $directives{slow}, 'custom directive registered';
+  ok $directives{slow}->repeatable, 'repeatable keyword parsed';
+  is_deeply $directives{slow}->locations, [qw(FIELD VARIABLE_DEFINITION)],
+    'directive locations preserved';
+  is $directives{slow}->args->{ms}{type}->to_string, 'Int',
+    'directive argument type resolved';
+  ok $directives{skip}, 'specified directives are kept alongside custom ones';
+};
+
+subtest 'root operation types come from the schema definition' => sub {
+  my $schema = GraphQL::Houtou::Schema->from_doc('
+    schema { query: RootQ mutation: RootM }
+    type RootQ { ping: String }
+    type RootM { bump: String }
+  ');
+  is $schema->query->name, 'RootQ', 'explicit query root respected';
+  is $schema->mutation->name, 'RootM', 'explicit mutation root respected';
+};
+
+subtest 'root operation types are inferred by name' => sub {
+  my $schema = GraphQL::Houtou::Schema->from_doc('
+    type Query { ping: String }
+    type Mutation { bump: String }
+  ');
+  is $schema->query->name, 'Query', 'Query inferred';
+  is $schema->mutation->name, 'Mutation', 'Mutation inferred';
+};
+
+subtest 'forward references across definitions work' => sub {
+  my $schema = GraphQL::Houtou::Schema->from_doc('
+    type Query { user: User }
+    type User { name: String friends: [User] }
+  ');
+  my $result = $schema->execute(
+    '{ user { name friends { name } } }',
+    root_value => {
+      user => { name => 'a', friends => [ { name => 'b' } ] },
+    },
+  );
+  is_deeply $result->{errors}, [], 'no errors';
+  is $result->{data}{user}{friends}[0]{name}, 'b',
+    'self-referencing type resolves lazily';
+};
+
+subtest 'abstract dispatch via resolvers option' => sub {
+  my $schema = build_schema('
+    type Query { pets: [Pet!] }
+    interface Pet { name: String! }
+    type Dog implements Pet { name: String! }
+  ', resolvers => {
+    Query => { pets => sub { [ { name => 'Rex' } ] } },
+    Pet => { resolve_type => sub { 'Dog' } },
+  });
+  my $result = execute($schema, '{ pets { name } }');
+  is_deeply $result->{errors}, [], 'no errors';
+  is $result->{data}{pets}[0]{name}, 'Rex', 'interface dispatch works';
+};
+
+subtest 'build errors' => sub {
+  eval { GraphQL::Houtou::Schema->from_doc('type Query { a: String } type Query { b: String }') };
+  like $@, qr/Type 'Query' was defined more than once/, 'duplicate type';
+
+  eval { GraphQL::Houtou::Schema->from_doc('type Foo { a: String }') };
+  like $@, qr/Must provide schema definition with query type or a type named Query/,
+    'missing query root';
+
+  eval { GraphQL::Houtou::Schema->from_doc('schema { query: Nope } type Query { a: String }') };
+  like $@, qr/Specified query type 'Nope' not found/, 'unknown root type';
+
+  eval {
+    my $schema = GraphQL::Houtou::Schema->from_doc('type Query { a: Missing }');
+    $schema->query->fields;
+  };
+  like $@, qr/Unknown type 'Missing'/, 'unknown field type reference';
+
+  eval {
+    GraphQL::Houtou::Schema->from_doc('
+      schema { query: Query }
+      schema { query: Query }
+      type Query { a: String }
+    ');
+  };
+  like $@, qr/Must provide only one schema definition/, 'duplicate schema definition';
+
+  eval { build_schema('type Query { a: String }', resolvers => { Nope => {} }) };
+  like $@, qr/Cannot attach resolvers to unknown type 'Nope'/, 'unknown resolver type';
+
+  eval { build_schema('type Query { a: String }', resolvers => { Query => { nope => sub {} } }) };
+  like $@, qr/Cannot attach a field resolver to 'Query\.nope'/, 'unknown resolver field';
+};
+
+subtest 'custom scalars pass values through by default' => sub {
+  my $schema = build_schema('
+    type Query { when: DateTime }
+    scalar DateTime
+  ', resolvers => {
+    Query => { when => sub { '2026-07-04' } },
+  });
+  my $result = execute($schema, '{ when }');
+  is_deeply $result->{errors}, [], 'no errors';
+  is $result->{data}{when}, '2026-07-04', 'identity serialize';
+};
+
+done_testing;

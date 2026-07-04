@@ -1025,7 +1025,6 @@ gql_runtime_vm_new_field_frame_handle(pTHX_ SV *source, SV *path_frame)
 static void
 gql_runtime_vm_enter_field_now(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *source, SV *base_path)
 {
-  const gql_runtime_vm_native_runtime_t *runtime;
   const gql_runtime_vm_native_slot_t *native_slot;
   const char *result_name_pv = NULL;
   STRLEN result_name_len = 0;
@@ -1036,9 +1035,10 @@ gql_runtime_vm_enter_field_now(pTHX_ gql_runtime_vm_exec_state_handle_t *s, SV *
     return;
   }
 
-  runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+  /* Response keys must come from the program slot, which carries the
+   * per-op result name (field alias). The canonical runtime slot from
+   * gql_runtime_vm_effective_slot() only knows the plain field name. */
   native_slot = gql_runtime_vm_cursor_current_native_slot(s->cursor);
-  native_slot = gql_runtime_vm_effective_slot(runtime, native_slot);
   if (native_slot && native_slot->result_name && *native_slot->result_name) {
     result_name_pv = native_slot->result_name;
     result_name_len = (STRLEN)strlen(result_name_pv);
@@ -1123,7 +1123,6 @@ gql_runtime_vm_consume_current_outcome_now(pTHX_ gql_runtime_vm_exec_state_handl
 {
   gql_runtime_vm_block_frame_t *frame;
   gql_runtime_vm_writer_t *writer;
-  const gql_runtime_vm_native_runtime_t *runtime;
   const gql_runtime_vm_native_slot_t *native_slot;
   STRLEN result_name_len = 0;
   const char *result_name_pv = NULL;
@@ -1135,9 +1134,8 @@ gql_runtime_vm_consume_current_outcome_now(pTHX_ gql_runtime_vm_exec_state_handl
 
   frame = s->frame;
   writer = s->writer;
-  runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+  /* Program slot, not effective slot: response keys carry the alias. */
   native_slot = s->cursor ? gql_runtime_vm_cursor_current_native_slot(s->cursor) : NULL;
-  native_slot = gql_runtime_vm_effective_slot(runtime, native_slot);
   if (native_slot && native_slot->result_name && *native_slot->result_name) {
     result_name_pv = native_slot->result_name;
     result_name_len = (STRLEN)strlen(result_name_pv);
@@ -1163,7 +1161,6 @@ gql_runtime_vm_consume_current_result_now(pTHX_ SV *state_sv, gql_runtime_vm_exe
 {
   gql_runtime_vm_block_frame_t *frame;
   gql_runtime_vm_list_pending_t *list_pending = NULL;
-  const gql_runtime_vm_native_runtime_t *runtime;
   const gql_runtime_vm_native_slot_t *native_slot;
   gql_runtime_vm_block_frame_t *child_frame = NULL;
   const char *result_name_pv = NULL;
@@ -1179,9 +1176,8 @@ gql_runtime_vm_consume_current_result_now(pTHX_ SV *state_sv, gql_runtime_vm_exe
   }
 
   frame = s->frame;
-  runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+  /* Program slot, not effective slot: pending entry keys carry the alias. */
   native_slot = s->cursor ? gql_runtime_vm_cursor_current_native_slot(s->cursor) : NULL;
-  native_slot = gql_runtime_vm_effective_slot(runtime, native_slot);
   if (native_slot && native_slot->result_name && *native_slot->result_name) {
     result_name_pv = native_slot->result_name;
     result_name_len = (STRLEN)strlen(result_name_pv);
@@ -3968,8 +3964,9 @@ gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_
     }
     dst->op_index = next_index;
     dst->slot_index = block_ptr->ops[next_index].slot_index;
+    /* Program slot, not effective slot: the result path frame below
+     * must carry the per-op result name (field alias). */
     slot = gql_runtime_vm_cursor_current_native_slot(dst);
-    slot = gql_runtime_vm_effective_slot(gql_runtime_vm_exec_state_native_runtime(aTHX_ s), slot);
 
     if (!gql_runtime_vm_should_execute_op_now(aTHX_ s, NULL)) {
       continue;
@@ -4082,8 +4079,9 @@ gql_runtime_vm_execute_serial_mutation_steps(
 
     s->cursor->op_index = op_index;
     s->cursor->slot_index = block_ptr->ops[op_index].slot_index;
+    /* Program slot, not effective slot: the result path frame below
+     * must carry the per-op result name (field alias). */
     slot = gql_runtime_vm_cursor_current_native_slot(s->cursor);
-    slot = gql_runtime_vm_effective_slot(runtime, slot);
 
     if (!gql_runtime_vm_should_execute_op_now(aTHX_ s, NULL)) {
       ctx->next_op_index++;
@@ -4380,8 +4378,9 @@ gql_runtime_vm_exec_state_execute_block_async_path_sv(
     }
     dst->op_index = next_index;
     dst->slot_index = block_ptr->ops[next_index].slot_index;
+    /* Program slot, not effective slot: the result path frame below
+     * must carry the per-op result name (field alias). */
     slot = gql_runtime_vm_cursor_current_native_slot(dst);
-    slot = gql_runtime_vm_effective_slot(gql_runtime_vm_exec_state_native_runtime(aTHX_ s), slot);
 
     if (!gql_runtime_vm_should_execute_op_now(aTHX_ s, NULL)) {
       continue;
@@ -4796,9 +4795,9 @@ gql_runtime_vm_then_complete_current_sv(
   dSP;
   const gql_runtime_vm_native_op_t *op =
     (s && s->cursor) ? gql_runtime_vm_cursor_current_native_op(s->cursor) : NULL;
-  const gql_runtime_vm_native_runtime_t *runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+  /* Program slot, not effective slot: pending entry keys carry the alias. */
   const gql_runtime_vm_native_slot_t *slot =
-    gql_runtime_vm_effective_slot(runtime, (s && s->cursor) ? gql_runtime_vm_cursor_current_native_slot(s->cursor) : NULL);
+    (s && s->cursor) ? gql_runtime_vm_cursor_current_native_slot(s->cursor) : NULL;
   const char *result_name_pv = (slot && slot->result_name && *slot->result_name) ? slot->result_name : NULL;
   STRLEN result_name_len = result_name_pv ? (STRLEN)strlen(result_name_pv) : 0;
   IV complete_code = op ? op->complete_code : GQL_VM_COMPLETE_GENERIC;

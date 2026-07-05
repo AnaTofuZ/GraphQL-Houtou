@@ -2309,10 +2309,25 @@ gql_runtime_vm_cursor_destroy_copy(pTHX_ gql_runtime_vm_cursor_t *cursor)
 static void
 gql_runtime_vm_cursor_restore_copy(pTHX_ gql_runtime_vm_cursor_t *dst, const gql_runtime_vm_cursor_t *src)
 {
+  /* Unlike snapshot_copy this restores into a LIVE cursor, so it must only
+   * touch the navigation fields. Reusing snapshot_copy here used to
+   * Zero(dst) first, wiping the live refcount; the next decref then
+   * underflowed the unsigned count and the cursor struct leaked on every
+   * exec-state request. */
   if (!dst) {
     return;
   }
-  gql_runtime_vm_cursor_snapshot_copy(aTHX_ dst, src);
+  if (!src) {
+    dst->native_program = NULL;
+    dst->block_index = -1;
+    dst->slot_index = 0;
+    dst->op_index = 0;
+    return;
+  }
+  dst->native_program = src->native_program;
+  dst->block_index = src->block_index;
+  dst->slot_index = src->slot_index;
+  dst->op_index = src->op_index;
 }
 
 static void

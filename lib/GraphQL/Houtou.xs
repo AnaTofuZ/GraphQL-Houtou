@@ -1009,6 +1009,52 @@ gql_runtime_vm_init_stack_field_frame(
   return frame;
 }
 
+/*
+ * Croak-safety net for the stack-allocated field frames used by the block
+ * execution loops. A die() escaping from resolver or input-coercion code
+ * longjmps past the loops' normal restore, which would leave
+ * state->field_frame pointing into a dead C stack frame; ExecState DESTROY
+ * would later free garbage read from that dead stack (observed as
+ * "Attempt to free unreferenced scalar ... during global destruction"
+ * followed by SIGSEGV). The guard is registered on Perl's save stack, so it
+ * fires during die unwinding while this C stack is still live: it releases
+ * the in-flight frame and restores the saved one. The loops disarm it on
+ * their normal exits.
+ */
+typedef struct {
+  gql_runtime_vm_exec_state_handle_t *state;
+  gql_runtime_vm_field_frame_t *saved_field_frame;
+} gql_runtime_vm_field_frame_guard_t;
+
+static void
+gql_runtime_vm_field_frame_guard_fire(pTHX_ void *ptr)
+{
+  gql_runtime_vm_field_frame_guard_t *guard = (gql_runtime_vm_field_frame_guard_t *)ptr;
+  gql_runtime_vm_exec_state_handle_t *state = guard ? guard->state : NULL;
+  if (state) {
+    if (state->field_frame && state->field_frame != guard->saved_field_frame) {
+      gql_runtime_vm_free_field_frame(aTHX_ state->field_frame);
+    }
+    state->field_frame = guard->saved_field_frame;
+  }
+  Safefree(guard);
+}
+
+static gql_runtime_vm_field_frame_guard_t *
+gql_runtime_vm_arm_field_frame_guard(
+  pTHX_
+  gql_runtime_vm_exec_state_handle_t *state,
+  gql_runtime_vm_field_frame_t *saved_field_frame
+)
+{
+  gql_runtime_vm_field_frame_guard_t *guard;
+  Newxz(guard, 1, gql_runtime_vm_field_frame_guard_t);
+  guard->state = state;
+  guard->saved_field_frame = saved_field_frame;
+  SAVEDESTRUCTOR_X(gql_runtime_vm_field_frame_guard_fire, guard);
+  return guard;
+}
+
 static SV *
 gql_runtime_vm_new_field_frame_handle(pTHX_ SV *source, SV *path_frame)
 {
@@ -3915,6 +3961,7 @@ gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_
   gql_runtime_vm_cursor_t snapshot;
   gql_runtime_vm_field_frame_t *saved_field_frame;
   gql_runtime_vm_field_frame_t stack_field_frame;
+  gql_runtime_vm_field_frame_guard_t *field_frame_guard;
   gql_runtime_vm_path_frame_t *base_path_ptr = NULL;
   const gql_runtime_vm_native_block_t *block_ptr = NULL;
 
@@ -3935,6 +3982,7 @@ gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_
   if (!block_ptr) {
     return newSVsv(&PL_sv_undef);
   }
+  field_frame_guard = gql_runtime_vm_arm_field_frame_guard(aTHX_ s, saved_field_frame);
 
   if (s->frame_stack_count == s->frame_stack_capacity) {
     IV new_cap = s->frame_stack_capacity ? s->frame_stack_capacity * 2 : 4;
@@ -4013,6 +4061,7 @@ gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_
       gql_runtime_vm_free_field_frame(aTHX_ s->field_frame);
     }
     s->field_frame = saved_field_frame;
+    field_frame_guard->state = NULL;
     return result;
   }
 }
@@ -4054,12 +4103,14 @@ gql_runtime_vm_execute_serial_mutation_steps(
   const gql_runtime_vm_native_block_t *block_ptr = NULL;
   const gql_runtime_vm_native_runtime_t *runtime;
   gql_runtime_vm_field_frame_t stack_field_frame;
+  gql_runtime_vm_field_frame_guard_t *field_frame_guard;
 
   *all_sync_out = 1;
   *sync_result_out = NULL;
 
   Zero(&stack_field_frame, 1, gql_runtime_vm_field_frame_t);
   runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+  field_frame_guard = gql_runtime_vm_arm_field_frame_guard(aTHX_ s, ctx->saved_field_frame);
 
   if (s->cursor) {
     s->cursor->block_index = ctx->block_index;
@@ -4152,6 +4203,7 @@ gql_runtime_vm_execute_serial_mutation_steps(
         s->frame = s->frame_stack_count > 0
           ? s->frame_stack[s->frame_stack_count - 1] : NULL;
       }
+      field_frame_guard->state = NULL;
       return;
     }
 
@@ -4173,6 +4225,7 @@ done_all_sync:
       gql_runtime_vm_free_field_frame(aTHX_ s->field_frame);
     }
     s->field_frame = ctx->saved_field_frame;
+    field_frame_guard->state = NULL;
     *sync_result_out = result;
   }
 }
@@ -4323,6 +4376,7 @@ gql_runtime_vm_exec_state_execute_block_async_path_sv(
   gql_runtime_vm_cursor_t snapshot;
   gql_runtime_vm_field_frame_t *saved_field_frame;
   gql_runtime_vm_field_frame_t stack_field_frame;
+  gql_runtime_vm_field_frame_guard_t *field_frame_guard;
   const gql_runtime_vm_native_block_t *block_ptr = NULL;
 
   /* Dispatch to serial executor for mutation root blocks */
@@ -4350,6 +4404,7 @@ gql_runtime_vm_exec_state_execute_block_async_path_sv(
   if (!block_ptr) {
     return newSVsv(&PL_sv_undef);
   }
+  field_frame_guard = gql_runtime_vm_arm_field_frame_guard(aTHX_ s, saved_field_frame);
 
   if (s->frame_stack_count == s->frame_stack_capacity) {
     IV new_cap = s->frame_stack_capacity ? s->frame_stack_capacity * 2 : 4;
@@ -4434,6 +4489,7 @@ gql_runtime_vm_exec_state_execute_block_async_path_sv(
       gql_runtime_vm_free_field_frame(aTHX_ s->field_frame);
     }
     s->field_frame = saved_field_frame;
+    field_frame_guard->state = NULL;
     return result;
   }
 }

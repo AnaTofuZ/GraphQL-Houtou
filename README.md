@@ -292,6 +292,17 @@ For detailed methodology, see `docs/execution-benchmark.md`. For the current
 implementation assumptions, see `docs/current-context.md` and
 `docs/runtime-vm-architecture.md`.
 
+# CAVEATS
+
+## Perl ithreads are not supported
+
+The runtime keeps request and schema state in C structures referenced by
+opaque XS handles. Duplicating those raw pointers across `ithreads` would
+lead to double frees, so every handle class defines `CLONE_SKIP`, making
+thread clones drop them (they become `undef` in the child thread) instead
+of crashing. Use process-based concurrency (prefork PSGI servers or fork)
+for parallelism.
+
 # NAME ORIGIN
 
 The name `Houtou` comes from several overlapping references:

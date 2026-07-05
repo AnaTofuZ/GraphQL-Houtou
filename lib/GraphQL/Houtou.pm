@@ -468,6 +468,17 @@ For detailed methodology, see C<docs/execution-benchmark.md>. For the current
 implementation assumptions, see C<docs/current-context.md> and
 C<docs/runtime-vm-architecture.md>.
 
+=head1 CAVEATS
+
+=head2 Perl ithreads are not supported
+
+The runtime keeps request and schema state in C structures referenced by
+opaque XS handles. Duplicating those raw pointers across C<ithreads> would
+lead to double frees, so every handle class defines C<CLONE_SKIP>, making
+thread clones drop them (they become C<undef> in the child thread) instead
+of crashing. Use process-based concurrency (prefork PSGI servers or fork)
+for parallelism.
+
 =head1 NAME ORIGIN
 
 The name C<Houtou> comes from several overlapping references:

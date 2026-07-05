@@ -27,25 +27,47 @@ usage(0) if $help;
 
 my $repo_root = abs_path(File::Spec->catdir(dirname(abs_path($0)), File::Spec->updir));
 my %cases = (
-  parser_graphqljs => {
-    description => 'graphql-js parser and compatibility surface',
-    command => [ qw(perl -Iblib/lib -Iblib/arch t/03_parser_graphqljs.t) ],
-  },
-  xs_smoke => {
-    description => 'XS parser and graphql-js smoke coverage',
-    command => [ qw(perl -Iblib/lib -Iblib/arch t/04_xs_smoke.t) ],
+  parser_public => {
+    description => 'public parser surface (canonical AST, block strings, errors)',
+    command => [ qw(perl -Iblib/lib -Iblib/arch t/21_public_parser_api.t) ],
   },
   execution => {
-    description => 'sync execution and abstract completion coverage',
-    command => [ qw(perl -Iblib/lib -Iblib/arch t/11_execution.t) ],
+    description => 'sync runtime execution coverage',
+    command => [ qw(perl -Iblib/lib -Iblib/arch t/15_runtime_execute.t) ],
+  },
+  vm_execute => {
+    description => 'native VM execution coverage',
+    command => [ qw(perl -Iblib/lib -Iblib/arch t/19_vm_execute.t) ],
   },
   promise => {
-    description => 'promise execution and merge coverage',
-    command => [ qw(perl -Iblib/lib -Iblib/arch t/12_promise.t) ],
+    description => 'Promise::XS async execution coverage',
+    command => [ qw(perl -Iblib/lib -Iblib/arch t/16_runtime_promise.t) ],
+  },
+  aliases => {
+    description => 'field alias handling across execution lanes',
+    command => [ qw(perl -Iblib/lib -Iblib/arch t/29_field_aliases.t) ],
+  },
+  persisted => {
+    description => 'persisted program / bundle round trips',
+    command => [ qw(perl -Iblib/lib -Iblib/arch t/22_persisted_queries.t) ],
+  },
+  oneof => {
+    description => 'oneOf coercion including croaking error paths',
+    command => [ qw(perl -Iblib/lib -Iblib/arch t/33_oneof_input_objects.t) ],
+  },
+  croak_safety => {
+    description => 'escaped die recovery on the exec-state lane',
+    command => [ qw(perl -Iblib/lib -Iblib/arch t/34_exec_state_croak_safety.t) ],
+  },
+  soak => {
+    description => 'long-running worker RSS soak (short profile)',
+    command => [ qw(perl -Iblib/lib -Iblib/arch util/soak-test.pl --iterations 3000 --warmup 1000) ],
   },
 );
 
-my @case_names = @requested_cases ? @requested_cases : qw(parser_graphqljs xs_smoke execution promise);
+my @case_names = @requested_cases
+  ? @requested_cases
+  : qw(parser_public execution vm_execute promise aliases persisted oneof croak_safety soak);
 for my $name (@case_names) {
   die "Unknown leak-check case: $name\n" unless exists $cases{$name};
 }

@@ -5464,12 +5464,15 @@ gql_runtime_vm_execute_native_program_auto_sv(
   if (runtime->callback_catalog && runtime->callback_catalog->runtime_schema) {
     runtime_schema_sv = runtime->callback_catalog->runtime_schema;
   }
-  prepared_variables_sv = gql_runtime_vm_prepare_program_variables_sv(
+  /* Everything owned before execution is mortal (or dropped once the exec
+   * state holds its own reference) so a die() escaping from resolvers or
+   * input coercion cannot leak the request state. */
+  prepared_variables_sv = sv_2mortal(gql_runtime_vm_prepare_program_variables_sv(
     aTHX_
     runtime_schema_sv,
     program,
     provided_hv
-  );
+  ));
 
   cursor = gql_runtime_vm_new_cursor_struct_for_program(
     aTHX_
@@ -5479,7 +5482,7 @@ gql_runtime_vm_execute_native_program_auto_sv(
     0
   );
   writer = gql_runtime_vm_new_writer_struct(aTHX);
-  state_sv = gql_runtime_vm_new_exec_state_handle_sv(
+  state_sv = sv_2mortal(gql_runtime_vm_new_exec_state_handle_sv(
     aTHX_
     "GraphQL::Houtou::Runtime::ExecState",
     runtime_schema_sv,
@@ -5490,10 +5493,15 @@ gql_runtime_vm_execute_native_program_auto_sv(
     prepared_variables_sv,
     root_value,
     NULL
-  );
+  ));
   state = gql_runtime_vm_expect_exec_state_handle(aTHX_ state_sv);
   state->native_runtime = runtime;
   state->native_runtime_is_borrowed = 1;
+  /* The exec state holds its own cursor/writer references now. */
+  gql_runtime_vm_cursor_decref(aTHX_ cursor);
+  cursor = NULL;
+  gql_runtime_vm_writer_decref(aTHX_ writer);
+  writer = NULL;
 
   if (!effective_root || !SvOK(effective_root)) {
     effective_root = state->root_value;
@@ -5513,10 +5521,8 @@ gql_runtime_vm_execute_native_program_auto_sv(
     SvREFCNT_dec(data_sv);
   }
 
-  SvREFCNT_dec(state_sv);
-  SvREFCNT_dec(prepared_variables_sv);
-  gql_runtime_vm_cursor_decref(aTHX_ cursor);
-  gql_runtime_vm_writer_decref(aTHX_ writer);
+  /* state_sv / prepared_variables_sv are mortal; cursor and writer refs
+   * were handed to the exec state above. */
   return ret ? ret : newSVsv(&PL_sv_undef);
 }
 
@@ -7749,6 +7755,35 @@ validate_xs(schema, document, options = NULL)
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::VM
 
 BOOT:
+    {
+      /* XS handle classes wrap raw C pointers; duplicating them across
+       * ithreads would double-free. CLONE_SKIP makes ithread clones drop
+       * them (become undef) instead. ithreads are otherwise unsupported. */
+      static const char *const gql_handle_classes[] = {
+        "GraphQL::Houtou::Runtime::ExecState",
+        "GraphQL::Houtou::Runtime::Cursor",
+        "GraphQL::Houtou::Runtime::Writer",
+        "GraphQL::Houtou::Runtime::Outcome",
+        "GraphQL::Houtou::Runtime::FieldFrame",
+        "GraphQL::Houtou::Runtime::BlockFrame",
+        "GraphQL::Houtou::Runtime::PathFrame",
+        "GraphQL::Houtou::Runtime::ErrorRecord",
+        "GraphQL::Houtou::Runtime::LazyInfo",
+        "GraphQL::Houtou::Runtime::ListPending",
+        "GraphQL::Houtou::Runtime::PendingMerge",
+        "GraphQL::Houtou::Runtime::NativeProgram",
+        "GraphQL::Houtou::Runtime::NativeBundle",
+        "GraphQL::Houtou::Runtime::NativeRuntime",
+        "GraphQL::Houtou::XS::LazyState",
+      };
+      size_t gql_handle_class_index;
+      for (gql_handle_class_index = 0;
+           gql_handle_class_index < sizeof(gql_handle_classes) / sizeof(gql_handle_classes[0]);
+           gql_handle_class_index++) {
+        HV *stash = gv_stashpv(gql_handle_classes[gql_handle_class_index], GV_ADD);
+        newCONSTSUB(stash, "CLONE_SKIP", newSViv(1));
+      }
+    }
     if (!gql_runtime_vm_global_empty_args_sv) {
       gql_runtime_vm_global_empty_args_sv = newRV_noinc((SV *)newHV());
     }

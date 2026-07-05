@@ -4888,7 +4888,9 @@ gql_runtime_vm_coerce_input_value_sv(pTHX_ SV *type_sv, SV *value_sv)
     PUTBACK;
     FREETMPS;
     LEAVE;
-    croak_sv(err);
+    /* Mortalize onto the caller's tmps so the copy is reclaimed during
+     * die unwinding instead of leaking once per coercion failure. */
+    croak_sv(sv_2mortal(err));
   }
   if (count > 0) {
     result = newSVsv(POPs);
@@ -4921,13 +4923,12 @@ gql_runtime_vm_finalize_native_arg_def(
       && arg_def->default_value_sv
       && arg_def->input_type_sv
       && !arg_def->default_native_value) {
-    SV *default_raw_sv = newSVsv(arg_def->default_value_sv);
-    SV *default_coerced_sv = gql_runtime_vm_coerce_input_value_sv(
+    /* Mortal so a croak from coercion cannot leak the copies. */
+    SV *default_raw_sv = sv_2mortal(newSVsv(arg_def->default_value_sv));
+    SV *default_coerced_sv = sv_2mortal(gql_runtime_vm_coerce_input_value_sv(
       aTHX_ arg_def->input_type_sv, default_raw_sv
-    );
-    SvREFCNT_dec(default_raw_sv);
+    ));
     arg_def->default_native_value = gql_runtime_vm_native_value_from_sv(aTHX_ default_coerced_sv);
-    SvREFCNT_dec(default_coerced_sv);
   }
 }
 
@@ -4940,9 +4941,13 @@ gql_runtime_vm_prepare_program_variables_sv(
 )
 {
   HV *coerced_hv;
+  SV *coerced_rv;
   IV i;
 
   coerced_hv = newHV();
+  /* Owned by a mortal wrapper so a croak from coercion below reclaims the
+   * hash (and everything stored so far) during die unwinding. */
+  coerced_rv = sv_2mortal(newRV_noinc((SV *)coerced_hv));
 
   for (i = 0; program && i < program->variable_def_count; i++) {
     gql_runtime_vm_native_arg_def_t *arg_def = &program->variable_defs[i];
@@ -4960,12 +4965,12 @@ gql_runtime_vm_prepare_program_variables_sv(
 
     if (provided_hv && hv_exists(provided_hv, arg_def->name, (I32)name_len)) {
       SV **provided_svp = hv_fetch(provided_hv, arg_def->name, (I32)name_len, 0);
-      raw_sv = provided_svp ? newSVsv(*provided_svp) : newSV(0);
+      raw_sv = sv_2mortal(provided_svp ? newSVsv(*provided_svp) : newSV(0));
       has_value = 1;
     } else if (arg_def->has_default && arg_def->default_native_value) {
       coerced_sv = gql_runtime_vm_native_value_materialize_sv(aTHX_ arg_def->default_native_value);
     } else if (arg_def->has_default && arg_def->default_value_sv) {
-      raw_sv = newSVsv(arg_def->default_value_sv);
+      raw_sv = sv_2mortal(newSVsv(arg_def->default_value_sv));
     }
 
     if (!has_value && !raw_sv && !coerced_sv) {
@@ -4974,7 +4979,6 @@ gql_runtime_vm_prepare_program_variables_sv(
 
     if (!coerced_sv) {
       coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv);
-      SvREFCNT_dec(raw_sv);
     }
     hv_store(coerced_hv, arg_def->name, (I32)name_len, coerced_sv, 0);
   }
@@ -4999,7 +5003,7 @@ gql_runtime_vm_prepare_program_variables_sv(
     }
   }
 
-  return newRV_noinc((SV *)coerced_hv);
+  return SvREFCNT_inc_simple_NN(coerced_rv);
 }
 
 static SV *
@@ -5012,11 +5016,15 @@ gql_runtime_vm_specialize_arg_payload_sv(
 )
 {
   HV *coerced_hv;
+  SV *coerced_rv;
   const gql_runtime_vm_native_args_payload_t *payload = op->args_payload_native;
   const gql_runtime_vm_native_slot_t *effective_slot = gql_runtime_vm_effective_slot(runtime, slot);
   IV i;
 
   coerced_hv = newHV();
+  /* Owned by a mortal wrapper so a croak from coercion below reclaims the
+   * hash during die unwinding. */
+  coerced_rv = sv_2mortal(newRV_noinc((SV *)coerced_hv));
   for (i = 0; effective_slot && i < effective_slot->arg_def_count; i++) {
     const gql_runtime_vm_native_arg_def_t *arg_def = &effective_slot->arg_defs[i];
     SV *raw_sv = NULL;
@@ -5027,30 +5035,47 @@ gql_runtime_vm_specialize_arg_payload_sv(
 
     if (raw_value) {
       if (op->args_mode_code == GQL_VM_ARGS_DYNAMIC) {
-        raw_sv = gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, variables_hv);
+        raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, variables_hv));
       } else {
-        raw_sv = gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, NULL);
+        raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, NULL));
       }
     } else if (arg_def->has_default && arg_def->default_native_value) {
       coerced_sv = gql_runtime_vm_native_value_materialize_sv(aTHX_ arg_def->default_native_value);
       hv_store(coerced_hv, arg_def->name, (I32)strlen(arg_def->name), coerced_sv, 0);
       continue;
     } else if (arg_def->has_default && arg_def->default_value_sv) {
-      raw_sv = newSVsv(arg_def->default_value_sv);
+      raw_sv = sv_2mortal(newSVsv(arg_def->default_value_sv));
     } else {
       continue;
     }
 
     coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv);
-    SvREFCNT_dec(raw_sv);
     hv_store(coerced_hv, arg_def->name, (I32)strlen(arg_def->name), coerced_sv, 0);
   }
 
   if (HvUSEDKEYS(coerced_hv) == 0) {
-    SvREFCNT_dec((SV *)coerced_hv);
     return NULL;
   }
-  return newRV_noinc((SV *)coerced_hv);
+  return SvREFCNT_inc_simple_NN(coerced_rv);
+}
+
+/*
+ * Croak-safety net for a partially built native args payload: coercion can
+ * die mid-loop, and the longjmp would otherwise leak the payload skeleton
+ * plus everything specialized so far. Registered on Perl's save stack; the
+ * builder disarms it by clearing the payload slot on its normal exits.
+ */
+static void
+gql_runtime_vm_args_payload_guard_fire(pTHX_ void *ptr)
+{
+  gql_runtime_vm_native_args_payload_t **payload_slot =
+    (gql_runtime_vm_native_args_payload_t **)ptr;
+  if (payload_slot) {
+    if (*payload_slot) {
+      gql_runtime_vm_native_args_payload_destroy(aTHX_ *payload_slot);
+    }
+    Safefree(payload_slot);
+  }
 }
 
 static gql_runtime_vm_native_args_payload_t *
@@ -5065,6 +5090,7 @@ gql_runtime_vm_specialize_arg_payload_native(
   const gql_runtime_vm_native_args_payload_t *payload = op ? op->args_payload_native : NULL;
   const gql_runtime_vm_native_slot_t *effective_slot = gql_runtime_vm_effective_slot(runtime, slot);
   gql_runtime_vm_native_args_payload_t *ret;
+  gql_runtime_vm_native_args_payload_t **payload_guard;
   IV i;
 
   if (!effective_slot || effective_slot->arg_def_count <= 0) {
@@ -5074,6 +5100,9 @@ gql_runtime_vm_specialize_arg_payload_native(
   Newxz(ret, 1, gql_runtime_vm_native_args_payload_t);
   Newxz(ret->names, effective_slot->arg_def_count, char *);
   Newxz(ret->values, effective_slot->arg_def_count, gql_runtime_vm_native_dynamic_value_t *);
+  Newxz(payload_guard, 1, gql_runtime_vm_native_args_payload_t *);
+  *payload_guard = ret;
+  SAVEDESTRUCTOR_X(gql_runtime_vm_args_payload_guard_fire, payload_guard);
 
   for (i = 0; i < effective_slot->arg_def_count; i++) {
     const gql_runtime_vm_native_arg_def_t *arg_def = &effective_slot->arg_defs[i];
@@ -5085,24 +5114,20 @@ gql_runtime_vm_specialize_arg_payload_native(
       SV *raw_sv = NULL;
       SV *coerced_sv;
       if (op && op->args_mode_code == GQL_VM_ARGS_DYNAMIC) {
-        raw_sv = gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, variables_hv);
+        raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, variables_hv));
       } else {
-        raw_sv = gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, NULL);
+        raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, NULL));
       }
-      coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv);
-      SvREFCNT_dec(raw_sv);
+      coerced_sv = sv_2mortal(gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv));
       coerced_value = gql_runtime_vm_native_dynamic_value_from_sv(aTHX_ coerced_sv);
-      SvREFCNT_dec(coerced_sv);
     } else if (arg_def->has_default && arg_def->default_native_value) {
       coerced_value = gql_runtime_vm_native_dynamic_value_from_native_value(
         aTHX_ arg_def->default_native_value
       );
     } else if (arg_def->has_default && arg_def->default_value_sv) {
-      SV *raw_sv = newSVsv(arg_def->default_value_sv);
-      SV *coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv);
-      SvREFCNT_dec(raw_sv);
+      SV *raw_sv = sv_2mortal(newSVsv(arg_def->default_value_sv));
+      SV *coerced_sv = sv_2mortal(gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv));
       coerced_value = gql_runtime_vm_native_dynamic_value_from_sv(aTHX_ coerced_sv);
-      SvREFCNT_dec(coerced_sv);
     } else {
       continue;
     }
@@ -5111,6 +5136,8 @@ gql_runtime_vm_specialize_arg_payload_native(
     ret->values[ret->count] = coerced_value;
     ret->count++;
   }
+
+  *payload_guard = NULL;
 
   if (ret->count == 0) {
     gql_runtime_vm_native_args_payload_destroy(aTHX_ ret);

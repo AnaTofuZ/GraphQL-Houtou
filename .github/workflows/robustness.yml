@@ -1,0 +1,51 @@
+name: robustness
+on: [push, pull_request]
+jobs:
+  asan:
+    name: ASan test suite
+    runs-on: ubuntu-latest
+    container:
+      image: perldocker/perl-tester:5.42
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install dependencies
+        run: cpm install -g --with-all --show-build-log-on-failure -v
+      - name: Build with ASan
+        run: |
+          perl Build.PL --config optimize="-O2 -g -fsanitize=address -fno-omit-frame-pointer" --config lddlflags="-shared -fsanitize=address"
+          ./Build build
+      - name: Run test suite under ASan
+        run: |
+          LIBASAN=$(gcc -print-file-name=libasan.so)
+          # detect_leaks stays off: the perl interpreter's own arena
+          # bookkeeping drowns LSan; RSS-slope leak detection is the soak
+          # job's responsibility. detect_stack_use_after_return covers the
+          # class of bug fixed in PR #22.
+          export LD_PRELOAD=$LIBASAN
+          export ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=1:abort_on_error=1:malloc_context_size=20
+          export PERL_DESTRUCT_LEVEL=2
+          prove -b -Iblib/lib -Iblib/arch t/
+  soak:
+    name: RSS soak
+    runs-on: ubuntu-latest
+    container:
+      image: perldocker/perl-tester:5.42
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install dependencies
+        run: cpm install -g --with-all --show-build-log-on-failure -v
+      - name: Build
+        run: |
+          perl Build.PL
+          ./Build build
+      - name: Soak (mixed request patterns, RSS growth gate)
+        run: perl -Iblib/lib -Iblib/arch util/soak-test.pl --iterations 20000 --warmup 5000 --max-growth-kb 8192
+  lint-xs-ownership:
+    name: XS ownership lint
+    runs-on: ubuntu-latest
+    container:
+      image: perldocker/perl-tester:5.42
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run lint
+        run: perl util/lint-xs-ownership.pl

@@ -460,18 +460,13 @@ gql_store_location(pTHX_ gql_parser_t *p, HV *hv) {
 
 static SV *
 gql_make_current_location(pTHX_ gql_parser_t *p) {
-  HV *hv = newHV();
+  HV *hv;
   IV line;
   IV column;
-  if (p->kind == TOK_EOF) {
-    if (p->tok_start > p->last_pos + 1) {
-      gql_line_column_from_pos(p, p->tok_start, &line, &column, 1);
-      gql_store_sv(hv, "line", newSViv(line));
-      gql_store_sv(hv, "column", newSViv(column));
-      return newRV_noinc((SV *)hv);
-    }
+  if (p->kind == TOK_EOF && p->tok_start <= p->last_pos + 1) {
     return gql_make_location(aTHX_ p);
   }
+  hv = newHV();
   gql_line_column_from_pos(p, p->tok_start, &line, &column, 1);
   gql_store_sv(hv, "line", newSViv(line));
   gql_store_sv(hv, "column", newSViv(column));

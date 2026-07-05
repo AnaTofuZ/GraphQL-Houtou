@@ -43,13 +43,23 @@ requests, assert RSS growth stays under the gate. Scenarios:
 
 | scenario | growth | status |
 |---|---|---|
-| varying_variables | ~0 | clean |
+| varying_variables | +16 KB | clean |
 | specialized_directives | +32 KB | clean |
 | persisted_bundle | +16 KB | clean |
-| escaped_die | +16 KB | fixed in the Phase B batch (was +5472 KB) |
-| resolver_error | +672 KB (~170 B/req) | open — tracked follow-up |
-| async_promise | +1872 KB (~480 B/req) | open — tracked follow-up |
-| program_cache_eviction | +1008 KB (~258 B/req) | open — tracked follow-up |
+| escaped_die | +0 KB | fixed in the Phase B batch (was +5472 KB) |
+| resolver_error | +496 KB (~125 B/req) | open — tracked follow-up |
+| async_promise | +1696 KB (~425 B/req) | open — tracked follow-up |
+| program_cache_eviction | +432 KB (~110 B/req) | open — was +1008 KB; parser location fix removed the per-parse component |
+
+Two cross-cutting leaks were found and fixed while attributing the table
+above (both pre-existing on main):
+
+- the parser leaked one empty location hash per parse
+  (`gql_make_current_location` abandoned a fresh HV on its EOF fallthrough)
+- `cursor_restore_copy` zeroed the live cursor's refcount at every block
+  exit (it delegated to `snapshot_copy`, whose `Zero(dst)` wiped it); the
+  next unsigned decrement underflowed and the 48-byte cursor struct leaked
+  on every exec-state request across all scenarios
 
 The CI gate (`--max-growth-kb 8192` over 20k mixed iterations) is
 calibrated to fail on regressions from this baseline while the three open

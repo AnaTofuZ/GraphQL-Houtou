@@ -353,13 +353,18 @@ sub benchmark_case {
   my $query = $spec->{query};
   my $vars = $spec->{vars};
   my $op = $spec->{op};
+  # Real web traffic sends different variable values on every request; a
+  # generator case measures that instead of the 100%-cache-hit shape the
+  # fixed-vars cases produce.
+  my $vars_generator = $spec->{vars_generator};
+  my $json_codec = $spec->{json} ? do { require JSON::MaybeXS; JSON::MaybeXS->new->utf8 } : undef;
   my $promise = $spec->{promise} ? promise_backend($promise_backend) : undef;
   my $upstream_promise_code = $promise ? $promise->{upstream_code} : undef;
   my $up_ast = parse($query);
   my $runtime = $houtou_schema->build_runtime;
   my $program = $runtime->compile_program($query);
   my $native_runtime = !$promise ? $houtou_schema->build_native_runtime : undef;
-  my $native_bundle = $native_runtime
+  my $native_bundle = ($native_runtime && !$vars_generator)
     ? $native_runtime->compile_bundle(
         $program,
         (defined($vars) ? (variables => $vars) : ()),
@@ -385,26 +390,31 @@ sub benchmark_case {
       )
   ));
 
+  my $call_vars = $vars_generator
+    ? sub { $vars_generator->() }
+    : sub { $vars };
+
   my @checks;
   if (!$promise) {
     push @checks,
       [ 'upstream_ast', sub {
         return maybe_get_promise_xs(
-          execute($up_schema, $up_ast, undef, undef, $vars, $op, undef, $upstream_promise_code)
+          execute($up_schema, $up_ast, undef, undef, $call_vars->(), $op, undef, $upstream_promise_code)
         );
       } ],
       [ 'upstream_string', sub {
         return maybe_get_promise_xs(
-          execute($up_schema, $query, undef, undef, $vars, $op, undef, $upstream_promise_code)
+          execute($up_schema, $query, undef, undef, $call_vars->(), $op, undef, $upstream_promise_code)
         );
       } ];
   }
 
   push @checks, [ 'houtou_runtime_program', sub {
+    my $request_vars = $call_vars->();
     return ($promise ? $promise->{maybe_get} : \&maybe_get_promise_xs)->(
       $runtime->execute_program(
         $program,
-        (defined($vars) ? (variables => $vars) : ()),
+        (defined($request_vars) ? (variables => $request_vars) : ()),
       )
     );
   } ];
@@ -421,14 +431,30 @@ sub benchmark_case {
     my ($label, $code) = @$check;
     my $got = _normalize_result($code->());
     die "Sanity check failed for $name/$label\n" if !$got;
+    if ($vars_generator) {
+      # Values differ per generated variable set; assert shape only.
+      die "Sanity check failed for $name/$label (errors present)\n"
+        if !defined $got->{data} || @{ $got->{errors} || [] };
+      next;
+    }
     require Data::Dumper;
     die "Result mismatch for $name/$label\nExpected: " . Data::Dumper::Dumper($expected) . "Got: " . Data::Dumper::Dumper($got)
       if _dump($got) ne _dump($expected);
   }
 
+  if ($json_codec) {
+    @checks = map {
+      my ($label, $code) = @$_;
+      [ $label, sub { return $json_codec->encode($code->()) } ];
+    } @checks;
+  }
+
   print "\n=== $name ===\n";
   print "Query: $query\n";
-  print "Mode: " . ($spec->{promise} ? "promise-backed execute ($promise_backend)\n" : "sync execute\n");
+  print "Mode: " . ($spec->{promise} ? "promise-backed execute ($promise_backend)" : "sync execute")
+    . ($vars_generator ? ' (fresh variables per request)' : '')
+    . ($json_codec ? ' (+ JSON encode)' : '')
+    . "\n";
   cmpthese($count, { map { $_->[0] => $_->[1] } @checks });
 }
 
@@ -468,6 +494,18 @@ my @cases = (
   {
     name => 'abstract_with_fragment',
     query => '{ searchResult { __typename ... on User { id name } } }',
+  },
+  {
+    name => 'varying_variables',
+    query => 'query q($id: ID!) { user(id: $id) { id name } }',
+    vars => { id => '42' },
+    vars_generator => do { my $n = 0; sub { return { id => 'v' . (++$n) } } },
+    op => 'q',
+  },
+  {
+    name => 'list_of_objects_json',
+    query => '{ users { id name } }',
+    json => 1,
   },
 );
 

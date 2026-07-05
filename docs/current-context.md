@@ -1143,3 +1143,29 @@ perl -Ilib t/19_vm_execute.t
     - ownership provenance を持たせて safe な clone を削ること
     - object / abstract completion の internal result representation を raw/native 寄りにすること
     になる
+
+## 2026-07-05 benchmark gate: real-traffic cases
+
+- `util/execution-benchmark.pl` に 2 ケースを追加した
+  - `varying_variables`: 毎リクエスト異なる variables を渡す
+    (`vars_generator`)。実 Web トラフィックの形で、specialized program
+    cache が毎回ミスする経路を測る。native_bundle mode は固定 variables
+    前提のため対象外
+  - `list_of_objects_json`: execute 結果を JSON::MaybeXS で encode する
+    実効スループット(`json` flag)
+- `util/execution-benchmark-checkpoint.pl` の sync 既定ケースにも追加した
+- baseline median (repeat=3, count=-1):
+  - `varying_variables`
+    - `houtou_runtime_program`: `55351/s`
+  - `list_of_objects_json`
+    - `houtou_runtime_program`: `223417/s`
+    - `houtou_runtime_native_bundle`: `490119/s`
+  - 比較: 同一クエリ固定 variables の `nested_variable_object`
+    `houtou_runtime_program` は `208524/s`
+- 解釈:
+  - 変数が毎回異なると public program path は固定比で約 `3.8x` 遅い。
+    毎リクエストの variables 全体シリアライズによる cache key 生成と、
+    ミス時の program clone/specialize/evict が原因
+    (`docs/performance-and-robustness-plan.md` Phase A-2 の対象)
+  - JSON encode は native_bundle 実行の実効値を大きく削る。
+    Phase C (`execute_to_json`) のゲートとして使う

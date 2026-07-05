@@ -213,6 +213,11 @@ typedef struct {
   gql_runtime_vm_native_directives_payload_t **directives_payloads;
   gql_runtime_vm_native_runtime_t *cached_bundle_runtime;
   gql_runtime_vm_native_bundle_t *cached_bundle;
+  /* 0 = not computed yet, 1 = no, 2 = yes: whether any op carries runtime
+   * directives or variable-dependent directive guards, i.e. whether
+   * per-request program specialization is required at all. Zero-init via
+   * Newxz means "not computed". */
+  IV needs_variable_specialization;
 } gql_runtime_vm_native_program_t;
 
 typedef struct gql_runtime_vm_path_frame gql_runtime_vm_path_frame_t;
@@ -3201,6 +3206,35 @@ gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
   Safefree(bundle->blocks);
   SvREFCNT_dec(bundle->prepared_runtime_schema);
   Safefree(bundle);
+}
+
+static IV
+gql_runtime_vm_program_needs_variable_specialization(gql_runtime_vm_native_program_t *program)
+{
+  IV i;
+  IV j;
+  if (!program) {
+    return 0;
+  }
+  if (program->needs_variable_specialization) {
+    return program->needs_variable_specialization == 2 ? 1 : 0;
+  }
+  program->needs_variable_specialization = 1;
+  for (i = 0; i < program->block_count; i++) {
+    gql_runtime_vm_native_block_t *block = &program->blocks[i];
+    if (!block->ops) {
+      continue;
+    }
+    for (j = 0; j < block->op_count; j++) {
+      gql_runtime_vm_native_op_t *op = &block->ops[j];
+      if (op->has_runtime_directives
+          || (op->has_directives && op->directives_mode_code == GQL_VM_ARGS_DYNAMIC)) {
+        program->needs_variable_specialization = 2;
+        return 1;
+      }
+    }
+  }
+  return 0;
 }
 
 static void

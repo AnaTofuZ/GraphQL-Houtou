@@ -1169,3 +1169,34 @@ perl -Ilib t/19_vm_execute.t
     (`docs/performance-and-robustness-plan.md` Phase A-2 の対象)
   - JSON encode は native_bundle 実行の実効値を大きく削る。
     Phase C (`execute_to_json`) のゲートとして使う
+
+## 2026-07-05 variable-invariant execute_program (Phase A-2)
+
+- `execute_program` の variables あり経路が、runtime directive を持たない
+  program でも毎リクエスト
+  - 変数ハッシュ全体の Perl 文字列シリアライズ(cache key)
+  - miss 時の program clone / specialize / FIFO evict
+  を払っていた問題を修正した
+- `gql_runtime_vm_program_needs_variable_specialization(...)` を追加し、
+  「op が runtime directive または variables 依存の directive guard
+  (`directives_mode == DYNAMIC`)を持つか」を program 構造体に memoize した
+  (`native_program_needs_variable_specialization_xs`)
+- フラグが立たない program(大多数)は specialize せず、
+  variable-invariant な cached bundle + request-local prepared variables で
+  直接実行する。フラグが立つ program のみ従来の specialized cache を使う
+- specialized cache の key は 2048 bytes を上限とし、超える場合は
+  cache せず specialize する(巨大 variables による key の無制限成長を防ぐ)
+- latest median (repeat=3, count=-1):
+  - `varying_variables`
+    - `houtou_runtime_program`: `55351/s` → `202867/s`(約 `3.7x`)
+  - `nested_variable_object`(固定 variables)
+    - `houtou_runtime_program`: `210437/s`(横ばい)
+    - `houtou_runtime_native_bundle`: `703248/s`(横ばい)
+  - `list_of_objects`
+    - `houtou_runtime_program`: `249683/s` / `native_bundle`: `619934/s`(横ばい)
+- 解釈:
+  - 実 Web トラフィック相当(毎回異なる variables)が固定 variables と
+    同水準になった
+  - runtime directive 使用時の per-variables specialization は維持
+    (`t/24` に skip / still-specialize 両方の回帰テストを追加、
+    `t/27` の directive 動作も全て通過)

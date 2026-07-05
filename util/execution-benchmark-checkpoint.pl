@@ -24,7 +24,7 @@ GetOptions(
 
 @cases = $include_async
   ? qw(async_scalar async_list async_object async_abstract)
-  : qw(nested_variable_object list_of_objects abstract_with_fragment)
+  : qw(nested_variable_object list_of_objects abstract_with_fragment varying_variables list_of_objects_json)
   if !@cases;
 if ($include_async && $promise_backend eq 'promise_xs') {
   @modes = grep { $_ eq 'houtou_runtime_program' } @modes;

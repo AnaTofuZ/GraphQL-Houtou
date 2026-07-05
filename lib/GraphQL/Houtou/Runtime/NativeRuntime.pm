@@ -266,24 +266,19 @@ sub execute_program {
   if (!defined $engine && exists $opts{vm_engine}) {
     $engine = delete $opts{vm_engine};
   }
-  if (defined $engine && $engine eq 'native') {
+  if ((defined $engine && $engine eq 'native') || (!defined $engine && $has_variables)) {
     my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
       $self->runtime_schema,
       $native_program,
       $variables || {},
     );
-    my $specialized = $self->_cached_specialized_program(
-      $native_program,
-      $prepared_variables,
-    );
-    return $self->execute_compact_program($specialized, %opts, variables => $prepared_variables);
-  }
-  if (!defined $engine && $has_variables) {
-    my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
-      $self->runtime_schema,
-      $native_program,
-      $variables || {},
-    );
+    # Programs without runtime directives or variable-dependent directive
+    # guards are variable-invariant: the fast lanes evaluate dynamic
+    # arguments against the prepared variables at request time, so no
+    # per-request clone/specialize (or variables-keyed cache) is needed.
+    if (!GraphQL::Houtou::XS::VM::native_program_needs_variable_specialization_xs($native_program)) {
+      return $self->execute_compact_program($native_program, %opts, variables => $prepared_variables);
+    }
     my $specialized = $self->_cached_specialized_program(
       $native_program,
       $prepared_variables,
@@ -360,9 +355,13 @@ sub _cached_specialized_program {
   my ($self, $native_program, $variables) = @_;
   return $native_program if !$variables || !keys %$variables;
 
-  my $key = join q(|),
-    refaddr($native_program),
-    _specialized_variables_cache_key($variables);
+  my $variables_key = _specialized_variables_cache_key($variables);
+  if (length($variables_key) > 2048) {
+    # Unbounded variable payloads would otherwise become unbounded cache
+    # keys; specialize without caching instead.
+    return $self->_specialize_program_descriptor($native_program, $variables);
+  }
+  my $key = join q(|), refaddr($native_program), $variables_key;
 
   if (my $cached = $self->{_specialized_program_cache}{$key}) {
     return $cached;

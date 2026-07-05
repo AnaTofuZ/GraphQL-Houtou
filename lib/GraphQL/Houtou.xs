@@ -7949,6 +7949,18 @@ native_program_root_block_index_xs(program_sv)
   OUTPUT:
     RETVAL
 
+IV
+native_program_needs_variable_specialization_xs(program_sv)
+    SV *program_sv
+  CODE:
+    {
+      gql_runtime_vm_native_program_t *program =
+        gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
+      RETVAL = gql_runtime_vm_program_needs_variable_specialization(program);
+    }
+  OUTPUT:
+    RETVAL
+
 SV *
 specialize_native_program_xs(runtime_sv, program_descriptor, variables = &PL_sv_undef)
     SV *runtime_sv

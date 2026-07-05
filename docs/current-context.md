@@ -1143,3 +1143,60 @@ perl -Ilib t/19_vm_execute.t
     - ownership provenance を持たせて safe な clone を削ること
     - object / abstract completion の internal result representation を raw/native 寄りにすること
     になる
+
+## 2026-07-05 benchmark gate: real-traffic cases
+
+- `util/execution-benchmark.pl` に 2 ケースを追加した
+  - `varying_variables`: 毎リクエスト異なる variables を渡す
+    (`vars_generator`)。実 Web トラフィックの形で、specialized program
+    cache が毎回ミスする経路を測る。native_bundle mode は固定 variables
+    前提のため対象外
+  - `list_of_objects_json`: execute 結果を JSON::MaybeXS で encode する
+    実効スループット(`json` flag)
+- `util/execution-benchmark-checkpoint.pl` の sync 既定ケースにも追加した
+- baseline median (repeat=3, count=-1):
+  - `varying_variables`
+    - `houtou_runtime_program`: `55351/s`
+  - `list_of_objects_json`
+    - `houtou_runtime_program`: `223417/s`
+    - `houtou_runtime_native_bundle`: `490119/s`
+  - 比較: 同一クエリ固定 variables の `nested_variable_object`
+    `houtou_runtime_program` は `208524/s`
+- 解釈:
+  - 変数が毎回異なると public program path は固定比で約 `3.8x` 遅い。
+    毎リクエストの variables 全体シリアライズによる cache key 生成と、
+    ミス時の program clone/specialize/evict が原因
+    (`docs/performance-and-robustness-plan.md` Phase A-2 の対象)
+  - JSON encode は native_bundle 実行の実効値を大きく削る。
+    Phase C (`execute_to_json`) のゲートとして使う
+
+## 2026-07-05 variable-invariant execute_program (Phase A-2)
+
+- `execute_program` の variables あり経路が、runtime directive を持たない
+  program でも毎リクエスト
+  - 変数ハッシュ全体の Perl 文字列シリアライズ(cache key)
+  - miss 時の program clone / specialize / FIFO evict
+  を払っていた問題を修正した
+- `gql_runtime_vm_program_needs_variable_specialization(...)` を追加し、
+  「op が runtime directive または variables 依存の directive guard
+  (`directives_mode == DYNAMIC`)を持つか」を program 構造体に memoize した
+  (`native_program_needs_variable_specialization_xs`)
+- フラグが立たない program(大多数)は specialize せず、
+  variable-invariant な cached bundle + request-local prepared variables で
+  直接実行する。フラグが立つ program のみ従来の specialized cache を使う
+- specialized cache の key は 2048 bytes を上限とし、超える場合は
+  cache せず specialize する(巨大 variables による key の無制限成長を防ぐ)
+- latest median (repeat=3, count=-1):
+  - `varying_variables`
+    - `houtou_runtime_program`: `55351/s` → `202867/s`(約 `3.7x`)
+  - `nested_variable_object`(固定 variables)
+    - `houtou_runtime_program`: `210437/s`(横ばい)
+    - `houtou_runtime_native_bundle`: `703248/s`(横ばい)
+  - `list_of_objects`
+    - `houtou_runtime_program`: `249683/s` / `native_bundle`: `619934/s`(横ばい)
+- 解釈:
+  - 実 Web トラフィック相当(毎回異なる variables)が固定 variables と
+    同水準になった
+  - runtime directive 使用時の per-variables specialization は維持
+    (`t/24` に skip / still-specialize 両方の回帰テストを追加、
+    `t/27` の directive 動作も全て通過)

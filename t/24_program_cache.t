@@ -130,4 +130,51 @@ subtest 'schema->build_native_runtime passes program_cache_max' => sub {
   is $runtime->{_program_cache_max}, 5, 'program_cache_max forwarded from Schema';
 };
 
+subtest 'variable-invariant programs skip the specialized program cache' => sub {
+  my $runtime = $schema->build_native_runtime;
+  my $query = 'query Q($name: String) { greet(name: $name) }';
+
+  for my $name (qw(alice bob carol)) {
+    my $result = $runtime->execute_document($query, variables => { name => $name });
+    is_deeply $result, { data => { greet => "hi $name" }, errors => [] },
+      "fresh variables ($name) execute correctly";
+  }
+
+  is scalar(keys %{ $runtime->{_specialized_program_cache} || {} }), 0,
+    'no per-variables specialized programs were cached';
+};
+
+subtest 'runtime-directive programs still use the specialized cache' => sub {
+  require GraphQL::Houtou::Directive;
+  my $mask = GraphQL::Houtou::Directive->new(
+    name => 'mask',
+    locations => [qw(FIELD)],
+    args => { enabled => { type => $Int } },
+    apply_field_result => sub {
+      my ($value, undef, undef, undef, undef, undef, $directive_args) = @_;
+      return $directive_args->{enabled} ? '***' : $value;
+    },
+  );
+  my $directive_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'MaskQuery',
+      fields => {
+        secret => { type => $String, resolve => sub { 'classified' } },
+      },
+    ),
+    directives => [ @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES, $mask ],
+  );
+  my $runtime = $directive_schema->build_native_runtime;
+  my $query = 'query Q($on: String) { secret @mask(enabled: $on) }';
+
+  my $masked = $runtime->execute_document($query, variables => { on => 1 });
+  is $masked->{data}{secret}, '***', 'runtime directive applied with variables';
+
+  my $plain = $runtime->execute_document($query, variables => { on => 0 });
+  is $plain->{data}{secret}, 'classified', 'runtime directive respects falsy variable';
+
+  cmp_ok scalar(keys %{ $runtime->{_specialized_program_cache} || {} }), '>', 0,
+    'variable-dependent runtime directives still specialize per variables';
+};
+
 done_testing;

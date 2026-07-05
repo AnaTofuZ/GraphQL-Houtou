@@ -251,11 +251,19 @@ sub validation_errors {
     }
     elsif ($type->isa('GraphQL::Houtou::Type::InputObject')) {
       my $fields = $type->fields || {};
+      my $is_one_of = $type->can('is_one_of') && $type->is_one_of;
       for my $field_name (sort keys %$fields) {
-        my $field_type = $fields->{$field_name}{type};
+        my $field = $fields->{$field_name};
+        my $field_type = $field->{type};
         push @errors, "The type of @{[$type->name]}.$field_name must be Input Type"
           . (ref($field_type) ? ' but got: ' . $field_type->to_string . '.' : '.')
           if !_is_input_type($field_type);
+        if ($is_one_of) {
+          push @errors, "OneOf input field @{[$type->name]}.$field_name must be nullable."
+            if ref($field_type) && $field_type->isa('GraphQL::Houtou::Type::NonNull');
+          push @errors, "OneOf input field @{[$type->name]}.$field_name cannot have a default value."
+            if exists $field->{default_value};
+        }
       }
     }
   }

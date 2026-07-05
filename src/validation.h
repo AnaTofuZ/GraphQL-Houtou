@@ -786,6 +786,32 @@ gql_validation_validate_value(
       return;
     }
     {
+      SV **one_of_svp = hv_fetch(named_type_hv, "is_one_of", 9, 0);
+      if (one_of_svp && SvOK(*one_of_svp) && SvTRUE(*one_of_svp)) {
+        if ((I32)HvUSEDKEYS(value_hv) != 1) {
+          SV *message = newSVpvf(
+            "OneOf Input Object '%s' must specify exactly one key.",
+            named_type_name_sv ? SvPV_nolen(named_type_name_sv) : ""
+          );
+          av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+          SvREFCNT_dec(message);
+        } else {
+          HE *entry;
+          hv_iterinit(value_hv);
+          entry = hv_iternext(value_hv);
+          if (entry && (!HeVAL(entry) || !SvOK(HeVAL(entry)))) {
+            SV *message = newSVpvf(
+              "OneOf Input Object '%s' field '%s' must be non-null.",
+              named_type_name_sv ? SvPV_nolen(named_type_name_sv) : "",
+              HePV(entry, PL_na)
+            );
+            av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+            SvREFCNT_dec(message);
+          }
+        }
+      }
+    }
+    {
       SV **fields_svp = hv_fetch(named_type_hv, "fields", 6, 0);
       HV *fields_hv = (fields_svp && SvROK(*fields_svp) && SvTYPE(SvRV(*fields_svp)) == SVt_PVHV) ? (HV *)SvRV(*fields_svp) : NULL;
       I32 count = 0;

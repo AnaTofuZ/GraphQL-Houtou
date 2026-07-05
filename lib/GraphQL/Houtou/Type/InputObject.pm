@@ -105,12 +105,24 @@ sub uplift {
   return \%uplifted;
 }
 
+sub _assert_one_of {
+  my ($self, $item) = @_;
+  return if !$self->{is_one_of};
+  my @keys = keys %$item;
+  die "OneOf Input Object '@{[$self->name]}' must specify exactly one key.\n"
+    if @keys != 1;
+  die "OneOf Input Object '@{[$self->name]}' field '$keys[0]' must be non-null.\n"
+    if !defined $item->{ $keys[0] };
+  return;
+}
+
 sub graphql_to_perl {
   my ($self, $item) = @_;
   my $fields = $self->fields;
 
   return $item if !defined $item;
   die "found not an object" if ref($item) ne 'HASH';
+  $self->_assert_one_of($item);
   $item = $self->uplift($item);
   my %value;
   for my $key (sort keys %$fields) {

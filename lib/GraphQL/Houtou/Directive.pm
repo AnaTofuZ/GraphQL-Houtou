@@ -173,11 +173,19 @@ our $SPECIFIED_BY = __PACKAGE__->new(
   },
 );
 
+our $ONE_OF = __PACKAGE__->new(
+  name => 'oneOf',
+  description => 'Indicates exactly one field must be supplied and this field must not be `null`.',
+  locations => [ qw(INPUT_OBJECT) ],
+  args => {},
+);
+
 our @SPECIFIED_DIRECTIVES = (
   $INCLUDE,
   $SKIP,
   $DEPRECATED,
   $SPECIFIED_BY,
+  $ONE_OF,
 );
 
 1;

@@ -351,6 +351,70 @@ sub execute_bundle {
   );
 }
 
+# Direct-JSON siblings of the sync native lane: the response is rendered as
+# UTF-8 JSON bytes in XS without materializing the Perl envelope. Sync only;
+# resolvers returning Promise::XS promises croak.
+
+sub execute_bundle_to_json {
+  my ($self, $bundle, %opts) = @_;
+  return GraphQL::Houtou::XS::VM::execute_native_bundle_to_json_xs(
+    $self->_native_runtime_handle,
+    $bundle,
+    $opts{root_value},
+    $opts{context},
+    $opts{variables},
+  );
+}
+
+sub execute_program_to_json {
+  my ($self, $program, %opts) = @_;
+  my $native_program = _require_native_program($program);
+  my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
+    $self->runtime_schema,
+    $native_program,
+    $opts{variables} || {},
+  );
+  my $effective_program = $native_program;
+  if (GraphQL::Houtou::XS::VM::native_program_needs_variable_specialization_xs($native_program)) {
+    $effective_program = $self->_cached_specialized_program(
+      $native_program,
+      $prepared_variables,
+    );
+  }
+  return GraphQL::Houtou::XS::VM::execute_native_program_to_json_xs(
+    $self->_native_runtime_handle,
+    $effective_program,
+    $opts{root_value},
+    $opts{context},
+    $prepared_variables,
+  );
+}
+
+sub execute_document_to_json {
+  my ($self, $document, %opts) = @_;
+  my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
+
+  if (defined $max_depth) {
+    my $is_string = !ref($document);
+    my $already_cached = $is_string
+      && $self->{_program_cache_max}
+      && $self->{_program_cache}{$document};
+    if (!$already_cached) {
+      my $ast = $is_string ? GraphQL::Houtou::parse($document) : $document;
+      my @errors = GraphQL::Houtou::Validation::DepthLimit::check_query_depth(
+        $ast, max_depth => $max_depth,
+      );
+      if (@errors) {
+        require JSON::MaybeXS;
+        return JSON::MaybeXS->new->utf8->encode({ data => undef, errors => \@errors });
+      }
+    }
+  }
+
+  my $program = $self->compile_program($document, %opts);
+  return $self->execute_program_to_json($program, %opts);
+}
+
 sub _cached_specialized_program {
   my ($self, $native_program, $variables) = @_;
   return $native_program if !$variables || !keys %$variables;

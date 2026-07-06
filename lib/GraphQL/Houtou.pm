@@ -16,6 +16,7 @@ our @EXPORT_OK = qw(
   print_schema
   execute
   execute_native
+  execute_to_json
   compile_runtime
   build_runtime
   build_native_runtime
@@ -92,6 +93,13 @@ sub compile_native_bundle_descriptor {
 sub execute_native {
   my ($schema, $document, %opts) = @_;
   return $schema->execute_native($document, %opts);
+}
+
+sub execute_to_json {
+  my ($schema, $document, $variables, %opts) = @_;
+  $opts{variables} = $variables if defined $variables;
+  my $runtime = $schema->build_native_runtime;
+  return $runtime->execute_document_to_json($document, %opts);
 }
 
 sub execute {
@@ -272,6 +280,42 @@ Built-in scalars, introspection meta types, and the specified directives
 (C<@include>, C<@skip>, C<@deprecated>, C<@specifiedBy>) are omitted from
 the output, matching graphql-js C<printSchema>. Types are emitted sorted by
 name, so the output is stable and diff-friendly.
+
+=head2 Serving JSON responses directly
+
+When the response is going straight onto the wire (PSGI handlers and other
+HTTP servers), C<execute_to_json()> renders the GraphQL response as UTF-8
+JSON bytes entirely inside the XS fast lane - the Perl response hash is
+never materialized and no JSON module runs:
+
+    use GraphQL::Houtou qw(execute_to_json);
+    my $bytes = execute_to_json($schema, '{ users { id name } }');
+    # => {"data":{"users":[...]},"errors":[]}
+
+The same lane is available on a reusable runtime:
+
+    my $runtime = build_native_runtime($schema);
+    my $bytes = $runtime->execute_document_to_json($query, variables => \%vars);
+    my $bytes = $runtime->execute_bundle_to_json($bundle);   # persisted queries
+
+Properties:
+
+=over 4
+
+=item * roughly twice the effective throughput of C<execute()> followed by
+a JSON module, since response hashes and arrays are never built
+
+=item * response keys appear in query field order, as the GraphQL spec
+recommends (plain C<execute()> returns Perl hashes, which cannot preserve
+order)
+
+=item * the envelope matches C<execute()>: C<"data"> plus C<"errors">
+(message and path), with C<"errors":[]> when the request succeeded
+
+=item * synchronous only - a resolver returning a Promise::XS promise
+croaks; use C<execute()> for async schemas
+
+=back
 
 =head2 API Selection Guide
 

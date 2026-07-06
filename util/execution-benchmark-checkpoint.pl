@@ -9,7 +9,7 @@ use Getopt::Long qw(GetOptions);
 my $count = -3;
 my $repeat = 5;
 my @cases;
-my @modes = qw(houtou_runtime_program houtou_runtime_native_bundle);
+my @modes = qw(houtou_runtime_program houtou_runtime_native_bundle houtou_bundle_to_json houtou_document_to_json);
 my $include_async = 0;
 my $promise_backend = 'promise_xs';
 

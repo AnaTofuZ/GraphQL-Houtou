@@ -1200,3 +1200,29 @@ perl -Ilib t/19_vm_execute.t
   - runtime directive 使用時の per-variables specialization は維持
     (`t/24` に skip / still-specialize 両方の回帰テストを追加、
     `t/27` の directive 動作も全て通過)
+
+## 2026-07-06 execute_to_json direct-JSON fast lane (Phase C)
+
+- sync fast lane の JSON シンク版を追加した
+  - `gql_runtime_vm_execute_block_fast_json(...)` が Perl hash/array を
+    materialize せず、出力 SV へ直接 JSON バイト列を書く
+  - abstract dispatch は `gql_runtime_vm_select_abstract_child_block_fast(...)`
+    として SV 版から分離し、両レーンで共有する
+  - envelope は `execute()` と同一(`data` + `errors`(message/path)、
+    成功時は `"errors":[]`)
+  - response key は query の field 順で出力される(SV 版は Perl hash のため
+    順序を保持できない)
+  - Boolean 型の leaf は resolver が 0/1 を返しても JSON boolean で出す
+  - 出力は UTF-8 octets。async(Promise::XS)resolver は croak
+- 公開面:
+  - `NativeRuntime->execute_bundle_to_json / execute_program_to_json /
+    execute_document_to_json`
+  - top-level `execute_to_json($schema, $doc, $vars?)`
+- latest median (repeat=3, count=-1, `list_of_objects_json`):
+  - `houtou_runtime_native_bundle`(execute + JSON::MaybeXS encode): `438856/s`
+  - `houtou_bundle_to_json`: `918729/s`(約 `2.1x`)
+  - `houtou_runtime_program` + encode: `220553/s`
+  - `houtou_document_to_json`: `485623/s`(約 `2.2x`)
+- 解釈:
+  - envelope の SV 化を丸ごと省くため、JSON なしの素の execute より速い
+  - PSGI アダプタ(ロードマップ第2段)はこの lane を既定にする

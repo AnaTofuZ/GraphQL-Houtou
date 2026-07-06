@@ -31,17 +31,34 @@
 
 ## Track 1: DataLoader ファースト(最優先)
 
-### L1: DataLoader API + スケジューラ stall-flush フック
+### L1: バッチング基盤(2層設計)
 
-- `GraphQL::Houtou::DataLoader`: `load` / `load_many` / `prime`、
-  per-request キャッシュ、batch 関数(keys → values/errors)
-- runtime / exec-state に loader registry を持たせ、
-  `async_scheduler_drain` が停滞したら登録済み loader の flush を呼ぶ。
-  flush 後も進展がなければ deadlock として明確なエラー
-- 上位 API: flush は同期呼び出しなので、`execute_document` は内部で
-  完了までループでき、**利用者には同期的に完成 envelope を返せる**
-  (promise を利用者に見せない選択肢を既定にできる)
+設計判断(2026-07-06): flush タイミングを知っているのは executor だけ
+なので **フックはコア**、loader 本体は **公開フック API の上だけに書いた
+薄い同梱リファレンス実装**とし、executor 内部とは疎結合に保つ。
+graphql-ruby 型の「executor と不可分な組み込み」は採らない。
+第三者 loader / ORM 固有バッチャは同じフックで一級市民として書ける。
+
+**L1-a: コア — stall-flush フック + run-to-completion(公開契約)**
+
+- exec-state / runtime に flush コールバック registry(`on_stall` 登録)
+- `async_scheduler_drain` が停滞(ready queue 空 & 未解決 pending 残)
+  したら登録コールバックを順に呼ぶ。flush 後も進展がなければ
+  deadlock として明確なエラー
+- flush は同期呼び出しなので `execute_document` は内部で完了まで
+  ループでき、**利用者には同期的に完成 envelope を返せる**
+- この契約(フック順序・呼び出しタイミング・deadlock 条件)を
+  POD で安定 API として明文化する
 - 併せて async リーク残差(タスク #11、~425B/req)をここで解消する
+
+**L1-b: 同梱リファレンス — `GraphQL::Houtou::DataLoader`**
+
+- `load` / `load_many` / `prime`、per-request キャッシュ、
+  batch 関数(keys → values / per-key error)。dataloader(JS)の
+  セマンティクスを踏襲
+- 実装は L1-a の公開フック API のみに依存する(規律)。
+  将来 L4 で flush モデルが進化しても loader は無傷、
+  必要になれば別ディストリへの切り出しも自由
 - 検証: SQLite バッチングの example、soak の dataloader シナリオ追加、
   「N+1 が 1+levels 回のクエリになる」ことのテスト
 
@@ -102,7 +119,8 @@
 ## 実施順序
 
 ```
-L1 (DataLoader + stall-flush, #11 込み)
+L1-a (stall-flush フック + run-to-completion, #11 込み)
+  → L1-b (同梱 DataLoader)
   → W1 (PSGI) + L2 (async to_json)   ← 並行可
   → R1 (0.01 リリース)
   → L3 (async hot path)

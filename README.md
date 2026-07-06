@@ -116,6 +116,35 @@ Built-in scalars, introspection meta types, and the specified directives
 the output, matching graphql-js `printSchema`. Types are emitted sorted by
 name, so the output is stable and diff-friendly.
 
+## Serving JSON responses directly
+
+When the response is going straight onto the wire (PSGI handlers and other
+HTTP servers), `execute_to_json()` renders the GraphQL response as UTF-8
+JSON bytes entirely inside the XS fast lane - the Perl response hash is
+never materialized and no JSON module runs:
+
+    use GraphQL::Houtou qw(execute_to_json);
+    my $bytes = execute_to_json($schema, '{ users { id name } }');
+    # => {"data":{"users":[...]},"errors":[]}
+
+The same lane is available on a reusable runtime:
+
+    my $runtime = build_native_runtime($schema);
+    my $bytes = $runtime->execute_document_to_json($query, variables => \%vars);
+    my $bytes = $runtime->execute_bundle_to_json($bundle);   # persisted queries
+
+Properties:
+
+- roughly twice the effective throughput of `execute()` followed by
+a JSON module, since response hashes and arrays are never built
+- response keys appear in query field order, as the GraphQL spec
+recommends (plain `execute()` returns Perl hashes, which cannot preserve
+order)
+- the envelope matches `execute()`: `"data"` plus `"errors"`
+(message and path), with `"errors":[]` when the request succeeded
+- synchronous only - a resolver returning a Promise::XS promise
+croaks; use `execute()` for async schemas
+
 ## API Selection Guide
 
 Choose the execution API that fits your use case.

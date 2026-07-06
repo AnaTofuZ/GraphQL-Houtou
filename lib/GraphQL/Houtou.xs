@@ -7058,8 +7058,13 @@ gql_runtime_vm_execute_child_block_fast_sv(
   return ret;
 }
 
-static SV *
-gql_runtime_vm_complete_current_abstract_fast_sv(
+/*
+ * Shared abstract dispatch for the sync fast lanes: resolve the concrete
+ * runtime type for `value` (tag resolver / resolve_type / possible types)
+ * and return the matching abstract child block index, or -1.
+ */
+static IV
+gql_runtime_vm_select_abstract_child_block_fast(
   pTHX_
   gql_runtime_vm_exec_state_t *state,
   SV *value,
@@ -7077,11 +7082,11 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
   int use_native_fast_abi = gql_runtime_vm_slot_uses_native_fast_abi(slot);
 
   if (!runtime) {
-    return newSVsv(&PL_sv_undef);
+    return -1;
   }
   slot_index = slot->schema_slot_index;
   if (slot_index < 0 || slot_index >= runtime->runtime_slot_count) {
-    return newSVsv(&PL_sv_undef);
+    return -1;
   }
 
   if (op->dispatch_family_code == GQL_VM_DISPATCH_TAG) {
@@ -7130,7 +7135,7 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
         );
       }
       if (error_out && *error_out) {
-        return NULL;
+        return -1;
       }
       type_name = gql_runtime_vm_find_tagged_type_name(runtime, slot_index, tag_sv);
       child_block_index = gql_runtime_vm_find_abstract_child_block_index(op, type_name);
@@ -7148,7 +7153,7 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
     const char *type_name = NULL;
 
     if (!resolve_type) {
-      return newSVsv(&PL_sv_undef);
+      return -1;
     }
     if (!abstract_type) {
       abstract_type = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
@@ -7186,7 +7191,7 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
       );
     }
     if (error_out && *error_out) {
-      return NULL;
+      return -1;
     }
     type_name = gql_runtime_vm_type_name_from_sv(aTHX_ type_sv);
     child_block_index = gql_runtime_vm_find_abstract_child_block_index(op, type_name);
@@ -7208,7 +7213,7 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
         error_out
       );
     if (error_out && *error_out) {
-      return NULL;
+      return -1;
     }
     if (entry) {
       if (op->abstract_child_count == 1
@@ -7223,6 +7228,23 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
     }
   }
 
+  return child_block_index;
+}
+
+static SV *
+gql_runtime_vm_complete_current_abstract_fast_sv(
+  pTHX_
+  gql_runtime_vm_exec_state_t *state,
+  SV *value,
+  SV **error_out
+)
+{
+  IV child_block_index = gql_runtime_vm_select_abstract_child_block_fast(
+    aTHX_ state, value, error_out
+  );
+  if (error_out && *error_out) {
+    return NULL;
+  }
   if (child_block_index < 0) {
     return newSVsv(&PL_sv_undef);
   }
@@ -7641,6 +7663,470 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
 
   return newRV_noinc((SV *)data_hv);
 }
+
+/*
+ * Direct-JSON variant of the sync fast lane. Instead of materializing the
+ * response as Perl hashes/arrays and encoding afterwards, the block loop
+ * appends JSON bytes straight into an output SV. Field order follows op
+ * order, i.e. the query's field order. Output is UTF-8 encoded octets.
+ */
+
+static void gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source, SV *out);
+
+static void
+gql_runtime_vm_json_cat_string(pTHX_ SV *out, const char *pv, STRLEN len)
+{
+  STRLEN i;
+  STRLEN run_start = 0;
+
+  sv_catpvs(out, "\"");
+  for (i = 0; i < len; i++) {
+    const unsigned char c = (unsigned char)pv[i];
+    const char *escape = NULL;
+    char ubuf[8];
+
+    switch (c) {
+      case '"': escape = "\\\""; break;
+      case '\\': escape = "\\\\"; break;
+      case '\b': escape = "\\b"; break;
+      case '\f': escape = "\\f"; break;
+      case '\n': escape = "\\n"; break;
+      case '\r': escape = "\\r"; break;
+      case '\t': escape = "\\t"; break;
+      default:
+        if (c < 0x20) {
+          my_snprintf(ubuf, sizeof(ubuf), "\\u%04x", (unsigned int)c);
+          escape = ubuf;
+        }
+        break;
+    }
+    if (escape) {
+      if (i > run_start) {
+        sv_catpvn(out, pv + run_start, i - run_start);
+      }
+      sv_catpv(out, escape);
+      run_start = i + 1;
+    }
+  }
+  if (len > run_start) {
+    sv_catpvn(out, pv + run_start, len - run_start);
+  }
+  sv_catpvs(out, "\"");
+}
+
+static void
+gql_runtime_vm_json_cat_scalar(pTHX_ SV *out, SV *value)
+{
+  if (!value || !SvOK(value)) {
+    sv_catpvs(out, "null");
+    return;
+  }
+  if (SvROK(value)) {
+    SV *inner = SvRV(value);
+    if (sv_isobject(value)
+        && (sv_derived_from(value, "JSON::PP::Boolean")
+          || sv_derived_from(value, "Types::Serialiser::Boolean"))) {
+      sv_catpv(out, SvTRUE(inner) ? "true" : "false");
+      return;
+    }
+    if (!SvOBJECT(inner) && SvIOK(inner) && (SvIV(inner) == 0 || SvIV(inner) == 1)) {
+      /* \0 / \1 boolean convention */
+      sv_catpv(out, SvIV(inner) ? "true" : "false");
+      return;
+    }
+    if (sv_isobject(value) && sv_derived_from(value, "Promise::XS::Promise")) {
+      croak("execute_to_json is a synchronous fast lane; a resolver returned a Promise::XS promise");
+    }
+    /* Unexpected reference in a leaf position: stringify. */
+    {
+      STRLEN len;
+      const char *pv = SvPVutf8(value, len);
+      gql_runtime_vm_json_cat_string(aTHX_ out, pv, len);
+    }
+    return;
+  }
+  if (SvPOKp(value) && !SvIOKp(value) && !SvNOKp(value)) {
+    STRLEN len;
+    const char *pv = SvPVutf8(value, len);
+    gql_runtime_vm_json_cat_string(aTHX_ out, pv, len);
+    return;
+  }
+  if (SvIOKp(value)) {
+    if (SvIsUV(value)) {
+      sv_catpvf(out, "%" UVuf, (UV)SvUV(value));
+    } else {
+      sv_catpvf(out, "%" IVdf, (IV)SvIV(value));
+    }
+    return;
+  }
+  if (SvNOKp(value)) {
+    NV nv = SvNV(value);
+    if (Perl_isnan(nv) || Perl_isinf(nv)) {
+      sv_catpvs(out, "null");
+      return;
+    }
+    {
+      char nbuf[NV_DIG + 32];
+      Gconvert(nv, NV_DIG, 0, nbuf);
+      sv_catpv(out, nbuf);
+    }
+    return;
+  }
+  {
+    STRLEN len;
+    const char *pv = SvPVutf8(value, len);
+    gql_runtime_vm_json_cat_string(aTHX_ out, pv, len);
+  }
+}
+
+static void
+gql_runtime_vm_execute_child_block_fast_json(
+  pTHX_
+  gql_runtime_vm_exec_state_t *state,
+  IV block_index,
+  SV *source,
+  SV *out
+)
+{
+  gql_runtime_vm_path_frame_t *saved_path_frame = state ? state->path_frame : NULL;
+  int saved_path_is_current_field = state ? state->path_frame_is_current_field : 0;
+  gql_runtime_vm_path_frame_t *field_path;
+
+  if (!state) {
+    sv_catpvs(out, "null");
+    return;
+  }
+
+  if (state->path_frame_is_current_field) {
+    field_path = NULL;
+  } else {
+    field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
+    state->path_frame = field_path;
+    state->path_frame_is_current_field = 1;
+  }
+  gql_runtime_vm_execute_block_fast_json(aTHX_ state, block_index, source, out);
+  state->path_frame = saved_path_frame;
+  state->path_frame_is_current_field = saved_path_is_current_field;
+  if (field_path) {
+    gql_runtime_vm_path_frame_decref(field_path);
+  }
+}
+
+static void
+gql_runtime_vm_complete_current_list_fast_json(
+  pTHX_
+  gql_runtime_vm_exec_state_t *state,
+  SV *value,
+  SV *out
+)
+{
+  const gql_runtime_vm_native_op_t *op = state->op;
+
+  if (op->complete_code != GQL_VM_COMPLETE_LIST) {
+    gql_runtime_vm_json_cat_scalar(aTHX_ out, value);
+    return;
+  }
+  if (!value || !SvOK(value)) {
+    sv_catpvs(out, "null");
+    return;
+  }
+  {
+    AV *in_av = gql_runtime_vm_expect_arrayref(aTHX_ value, "list value");
+    gql_runtime_vm_path_frame_t *saved_path_frame = state ? state->path_frame : NULL;
+    gql_runtime_vm_path_frame_t *field_path = NULL;
+    int has_child_block = op->child_block_index >= 0;
+    IV i;
+
+    if (has_child_block) {
+      field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
+      state->path_frame = field_path;
+    }
+    sv_catpvs(out, "[");
+    for (i = 0; i < av_count(in_av); i++) {
+      SV **item_svp = av_fetch(in_av, i, 0);
+      SV *item = (item_svp && SvOK(*item_svp)) ? *item_svp : &PL_sv_undef;
+      if (i) {
+        sv_catpvs(out, ",");
+      }
+      if (has_child_block && SvOK(item)) {
+        gql_runtime_vm_execute_block_fast_json(aTHX_ state, op->child_block_index, item, out);
+      } else if (has_child_block) {
+        sv_catpvs(out, "null");
+      } else if (SvOK(item) && !SvROK(item)
+          && state->slot && state->slot->return_type_name
+          && strEQ(state->slot->return_type_name, "Boolean")) {
+        sv_catpv(out, SvTRUE(item) ? "true" : "false");
+      } else {
+        gql_runtime_vm_json_cat_scalar(aTHX_ out, item);
+      }
+    }
+    sv_catpvs(out, "]");
+    if (field_path) {
+      state->path_frame = saved_path_frame;
+      gql_runtime_vm_path_frame_decref(field_path);
+    }
+  }
+}
+
+static void
+gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source, SV *out)
+{
+  gql_runtime_vm_native_block_t *block;
+  IV i;
+  gql_runtime_vm_native_block_t *saved_block = (gql_runtime_vm_native_block_t *)state->block;
+  const gql_runtime_vm_native_op_t *saved_op = state->op;
+  const gql_runtime_vm_native_slot_t *saved_slot = state->slot;
+  gql_runtime_vm_path_frame_t *saved_path_frame = state->path_frame;
+  int saved_path_is_current_field = state->path_frame_is_current_field;
+  IV saved_block_index = state->block_index;
+  IV saved_op_index = state->op_index;
+
+  if (!state->bundle || block_index < 0 || block_index >= state->bundle->block_count) {
+    croak("native VM block index %ld is invalid", (long)block_index);
+  }
+
+  block = &state->bundle->blocks[block_index];
+  state->block = block;
+  state->block_index = block_index;
+  sv_catpvs(out, "{");
+
+  for (i = 0; i < block->op_count; i++) {
+    gql_runtime_vm_native_op_t *op = &block->ops[i];
+    gql_runtime_vm_native_slot_t *slot;
+    SV *resolved = NULL;
+    SV *error_sv = NULL;
+    gql_runtime_vm_outcome_t *error_outcome = NULL;
+    gql_runtime_vm_path_frame_t *field_path = NULL;
+    int eager_path_frame;
+    IV dispatch_index;
+    IV family;
+
+    if (op->slot_index < 0 || op->slot_index >= block->slot_count) {
+      croak("native VM op slot_index %ld is invalid in block %ld", (long)op->slot_index, (long)block_index);
+    }
+    slot = &block->slots[op->slot_index];
+    state->op = op;
+    state->slot = slot;
+    state->op_index = i;
+
+    dispatch_index = gql_runtime_vm_dispatch_index_from_opcode(op->opcode_code);
+    if (dispatch_index < 0) {
+      croak("native VM opcode_code %ld is unsupported", (long)op->opcode_code);
+    }
+    family = dispatch_index % 4;
+
+    if (i) {
+      sv_catpvs(out, ",");
+    }
+    sv_catpvs(out, "\"");
+    sv_catpvn(out, slot->result_name, slot->result_name_len);
+    sv_catpvs(out, "\":");
+
+    eager_path_frame = !gql_runtime_vm_slot_can_delay_field_path(state->runtime, slot, op);
+    if (eager_path_frame) {
+      field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, slot);
+      state->path_frame = field_path;
+      state->path_frame_is_current_field = 1;
+    } else {
+      state->path_frame = saved_path_frame;
+      state->path_frame_is_current_field = 0;
+    }
+
+    resolved = (dispatch_index >= 4)
+      ? gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv)
+      : gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
+    if (!error_sv && (op->has_runtime_directives || op->runtime_directives_sv)) {
+      SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
+      if (!error_sv) {
+        SvREFCNT_dec(resolved);
+        resolved = applied;
+      } else if (applied) {
+        SvREFCNT_dec(applied);
+      }
+    }
+
+    if (!error_sv) {
+      switch (family) {
+        case 0: /* GENERIC */
+          if (resolved && SvOK(resolved) && !SvROK(resolved)
+              && slot->return_type_name && strEQ(slot->return_type_name, "Boolean")) {
+            /* Boolean-typed leaves serialize as JSON booleans even when the
+             * resolver returned a plain 0/1. */
+            sv_catpv(out, SvTRUE(resolved) ? "true" : "false");
+          } else {
+            gql_runtime_vm_json_cat_scalar(aTHX_ out, resolved);
+          }
+          break;
+        case 1: /* OBJECT */
+          if (resolved && SvOK(resolved) && op->complete_code == GQL_VM_COMPLETE_OBJECT && op->child_block_index >= 0) {
+            gql_runtime_vm_execute_child_block_fast_json(aTHX_ state, op->child_block_index, resolved, out);
+          } else if (resolved && SvOK(resolved)) {
+            gql_runtime_vm_json_cat_scalar(aTHX_ out, resolved);
+          } else {
+            sv_catpvs(out, "null");
+          }
+          break;
+        case 2: /* LIST */
+          gql_runtime_vm_complete_current_list_fast_json(aTHX_ state, resolved, out);
+          break;
+        case 3: /* ABSTRACT */
+        default:
+          if (!resolved || !SvOK(resolved)) {
+            sv_catpvs(out, "null");
+          } else {
+            IV abstract_child_block_index = gql_runtime_vm_select_abstract_child_block_fast(
+              aTHX_ state, resolved, &error_sv
+            );
+            if (!error_sv) {
+              if (abstract_child_block_index >= 0) {
+                gql_runtime_vm_execute_child_block_fast_json(aTHX_ state, abstract_child_block_index, resolved, out);
+              } else {
+                sv_catpvs(out, "null");
+              }
+            }
+          }
+          break;
+      }
+    }
+
+    state->path_frame = saved_path_frame;
+    state->path_frame_is_current_field = saved_path_is_current_field;
+
+    if (error_sv) {
+      if (!eager_path_frame && !field_path) {
+        field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, slot);
+      }
+      error_outcome = gql_runtime_vm_new_error_outcome_struct_for_path(aTHX_ error_sv, field_path);
+      SvREFCNT_dec(error_sv);
+      error_sv = NULL;
+    }
+    if (field_path) {
+      gql_runtime_vm_path_frame_decref(field_path);
+      field_path = NULL;
+    }
+    if (error_outcome) {
+      if (state->writer) {
+        IV j;
+        for (j = 0; j < error_outcome->error_record_count; j++) {
+          gql_runtime_vm_writer_push_error_record(state->writer, error_outcome->error_records[j]);
+        }
+      }
+      gql_runtime_vm_outcome_decref(aTHX_ error_outcome);
+      sv_catpvs(out, "null");
+    }
+    if (resolved) {
+      SvREFCNT_dec(resolved);
+    }
+  }
+
+  sv_catpvs(out, "}");
+
+  state->block = saved_block;
+  state->op = saved_op;
+  state->slot = saved_slot;
+  state->path_frame = saved_path_frame;
+  state->path_frame_is_current_field = saved_path_is_current_field;
+  state->block_index = saved_block_index;
+  state->op_index = saved_op_index;
+}
+
+static void
+gql_runtime_vm_json_cat_errors(pTHX_ SV *out, const gql_runtime_vm_writer_t *writer)
+{
+  IV i;
+
+  sv_catpvs(out, "[");
+  for (i = 0; writer && i < writer->error_record_count; i++) {
+    const gql_runtime_vm_error_record_t *record = writer->error_records[i];
+    if (i) {
+      sv_catpvs(out, ",");
+    }
+    sv_catpvs(out, "{\"message\":");
+    if (record && record->message_pv) {
+      gql_runtime_vm_json_cat_string(aTHX_ out, record->message_pv, strlen(record->message_pv));
+    } else {
+      sv_catpvs(out, "null");
+    }
+    if (record && record->path_frame) {
+      SV *path_sv = gql_runtime_vm_path_frame_to_path_sv(aTHX_ record->path_frame);
+      if (path_sv && SvOK(path_sv) && SvROK(path_sv) && SvTYPE(SvRV(path_sv)) == SVt_PVAV
+          && av_count((AV *)SvRV(path_sv)) > 0) {
+        AV *path_av = (AV *)SvRV(path_sv);
+        IV j;
+        sv_catpvs(out, ",\"path\":[");
+        for (j = 0; j < av_count(path_av); j++) {
+          SV **item_svp = av_fetch(path_av, j, 0);
+          if (j) {
+            sv_catpvs(out, ",");
+          }
+          gql_runtime_vm_json_cat_scalar(aTHX_ out, item_svp ? *item_svp : NULL);
+        }
+        sv_catpvs(out, "]");
+      }
+      if (path_sv) {
+        SvREFCNT_dec(path_sv);
+      }
+    }
+    sv_catpvs(out, "}");
+  }
+  sv_catpvs(out, "]");
+}
+
+static SV *
+gql_runtime_vm_execute_bundle_fast_response_json(
+  pTHX_
+  gql_runtime_vm_native_runtime_t *runtime,
+  SV *runtime_schema,
+  gql_runtime_vm_native_bundle_t *bundle,
+  SV *root_value,
+  SV *context_value,
+  SV *variables
+)
+{
+  gql_runtime_vm_exec_state_t state;
+  gql_runtime_vm_callback_context_t callback_ctx;
+  gql_runtime_vm_writer_t writer_storage;
+  SV *empty_args_sv;
+  SV *out;
+
+  Zero(&state, 1, gql_runtime_vm_exec_state_t);
+  Zero(&callback_ctx, 1, gql_runtime_vm_callback_context_t);
+
+  state.runtime = runtime;
+  state.bundle = bundle;
+  callback_ctx.runtime_schema = runtime_schema ? runtime_schema : &PL_sv_undef;
+  callback_ctx.root_value = root_value;
+  callback_ctx.context = context_value;
+  callback_ctx.variables = variables;
+  state.callback_ctx = &callback_ctx;
+  gql_runtime_vm_prepare_bundle_block_type_objects(aTHX_ callback_ctx.runtime_schema, bundle);
+
+  gql_runtime_vm_init_writer_struct(&writer_storage);
+  state.writer = &writer_storage;
+  state.path_frame = NULL;
+  empty_args_sv = gql_runtime_vm_empty_args_sv(aTHX);
+  state.empty_args_sv = empty_args_sv;
+
+  out = newSV(1024);
+  sv_setpvs(out, "{\"data\":");
+
+  gql_runtime_vm_execute_block_fast_json(
+    aTHX_
+    &state,
+    bundle->root_block_index,
+    root_value,
+    out
+  );
+
+  sv_catpvs(out, ",\"errors\":");
+  gql_runtime_vm_json_cat_errors(aTHX_ out, &writer_storage);
+  sv_catpvs(out, "}");
+
+  SvREFCNT_dec(empty_args_sv);
+  gql_runtime_vm_clear_writer_struct(aTHX_ &writer_storage);
+  return out;
+}
+
 
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::Parser
 
@@ -9125,6 +9611,88 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
         ? runtime->callback_catalog->runtime_schema
         : &PL_sv_undef;
       RETVAL = gql_runtime_vm_execute_bundle_fast_response_sv(
+        aTHX_
+        runtime,
+        runtime_schema_sv,
+        bundle,
+        root_value,
+        context_value,
+        variables
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+execute_native_program_to_json_xs(runtime_sv, program_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
+    SV *runtime_sv
+    SV *program_sv
+    SV *root_value
+    SV *context_value
+    SV *variables
+  CODE:
+    {
+      gql_runtime_vm_native_runtime_t *runtime;
+      gql_runtime_vm_native_program_t *program;
+      gql_runtime_vm_native_bundle_t *bundle;
+      SV *runtime_schema_sv;
+
+      if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
+      }
+      runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
+      if (!runtime) {
+        croak("native VM runtime handle is no longer valid");
+      }
+      program = gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
+      bundle = gql_runtime_vm_native_program_cached_bundle(aTHX_ runtime, program);
+      runtime_schema_sv = (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema)
+        ? runtime->callback_catalog->runtime_schema
+        : &PL_sv_undef;
+      RETVAL = gql_runtime_vm_execute_bundle_fast_response_json(
+        aTHX_
+        runtime,
+        runtime_schema_sv,
+        bundle,
+        root_value,
+        context_value,
+        variables
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+execute_native_bundle_to_json_xs(runtime_sv, bundle_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
+    SV *runtime_sv
+    SV *bundle_sv
+    SV *root_value
+    SV *context_value
+    SV *variables
+  CODE:
+    {
+      gql_runtime_vm_native_bundle_t *bundle;
+      gql_runtime_vm_native_runtime_t *runtime;
+      SV *runtime_schema_sv;
+
+      if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
+      }
+      runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
+      if (!runtime) {
+        croak("native VM runtime handle is no longer valid");
+      }
+      if (!bundle_sv || !SvROK(bundle_sv) || !sv_derived_from(bundle_sv, "GraphQL::Houtou::Runtime::NativeBundle")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeBundle");
+      }
+      bundle = INT2PTR(gql_runtime_vm_native_bundle_t *, SvUV(SvRV(bundle_sv)));
+      if (!bundle) {
+        croak("native VM bundle handle is no longer valid");
+      }
+      runtime_schema_sv = (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema)
+        ? runtime->callback_catalog->runtime_schema
+        : &PL_sv_undef;
+      RETVAL = gql_runtime_vm_execute_bundle_fast_response_json(
         aTHX_
         runtime,
         runtime_schema_sv,

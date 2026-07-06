@@ -447,6 +447,14 @@ sub benchmark_case {
       my ($label, $code) = @$_;
       [ $label, sub { return $json_codec->encode($code->()) } ];
     } @checks;
+    if ($native_bundle) {
+      push @checks, [ 'houtou_bundle_to_json', sub {
+        return $native_runtime->execute_bundle_to_json($native_bundle);
+      } ];
+    }
+    push @checks, [ 'houtou_document_to_json', sub {
+      return $native_runtime ? $native_runtime->execute_document_to_json($query) : undef;
+    } ] if $native_runtime;
   }
 
   print "\n=== $name ===\n";

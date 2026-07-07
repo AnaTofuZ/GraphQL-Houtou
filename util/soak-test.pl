@@ -187,6 +187,20 @@ my %scenarios = (
     );
     die "dataloader query failed\n" if @{ $r->{errors} || [] };
   },
+  dataloader_json => sub {
+    my ($i) = @_;
+    my $users = GraphQL::Houtou::DataLoader->new(batch => sub {
+      my ($ids) = @_;
+      return [ map { { name => "user-$_" } } @$ids ];
+    });
+    my $json = $runtime->execute_document_to_json(
+      'query Q($id: ID) { loadedUser(id: $id) { name } }',
+      variables => { id => "u$i" },
+      context => { users => $users },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users),
+    );
+    die "dataloader_json query failed\n" if $json !~ /"user-u\Q$i\E"/;
+  },
 );
 
 my @names = @requested ? @requested : sort keys %scenarios;

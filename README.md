@@ -174,8 +174,31 @@ recommends (plain `execute()` returns Perl hashes, which cannot preserve
 order)
 - the envelope matches `execute()`: `"data"` plus `"errors"`
 (message and path), with `"errors":[]` when the request succeeded
-- synchronous only - a resolver returning a Promise::XS promise
-croaks; use `execute()` for async schemas
+- without `on_stall`, the lane is synchronous - a resolver returning
+a Promise::XS promise croaks
+
+### Batching resolvers and JSON output
+
+`execute_to_json()` and `execute_document_to_json()` accept the same
+`on_stall` option as `execute()`. The request then runs on the
+async-capable lane and the completed response is serialized to JSON bytes
+directly from the native result tree when it resolves - the Perl envelope
+hash is still never built:
+
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => \&batch_users);
+    my $bytes = execute_to_json(
+      $schema, $query, \%vars,
+      context  => { users => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+
+Two properties differ from the synchronous JSON lane: response keys appear
+in completion order (synchronously resolved fields first, batched fields
+as they settle) rather than query order, and Boolean-typed leaves render
+as the resolver returned them (`0`/`1`) rather than JSON booleans,
+matching what `execute()` plus a JSON module produces for the same async
+request. JSON object member order carries no meaning, and both points are
+slated to converge with the sync lane as the async hot path work lands.
 
 ## API Selection Guide
 

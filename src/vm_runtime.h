@@ -335,6 +335,10 @@ typedef struct {
    * late promise continuations may momentarily be the only stack entry,
    * so frame_stack_count is not a safe root signal. */
   gql_runtime_vm_block_frame_t *response_frame;
+  /* When set, the response frame resolves its deferred with UTF-8 JSON
+   * bytes (rendered from the native value tree) instead of the Perl
+   * envelope hash. */
+  U8 response_json_mode;
 } gql_runtime_vm_exec_state_handle_t;
 
 struct gql_runtime_vm_cursor_t {

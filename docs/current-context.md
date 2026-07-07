@@ -1226,3 +1226,53 @@ perl -Ilib t/19_vm_execute.t
 - 解釈:
   - envelope の SV 化を丸ごと省くため、JSON なしの素の execute より速い
   - PSGI アダプタ(ロードマップ第2段)はこの lane を既定にする
+
+## 2026-07-07 L1: DataLoader batching(on_stall フック + 同梱 DataLoader)
+
+- コア公開契約(L1-a):
+  - `execute(..., on_stall => sub { ... })` / `NativeRuntime->execute_document(..., on_stall => ...)`
+  - resolver が Promise::XS promise を返すと async lane で実行し、
+    executor がストール(ready queue 空 + pending 残)するたびに
+    `on_stall` を呼ぶ。戻り値は「進捗数」で、pending が残ったまま
+    進捗 0 を返すと deadlock を検出して die する
+  - `_settle_result` が response promise を run-to-completion で駆動
+    (Promise::XS の resolve は同期でコールバックが走るため、
+    Perl 側ループでスケジューラが前進する)
+- 同梱リファレンス実装(L1-b): `GraphQL::Houtou::DataLoader`
+  - `new(batch =>, max_batch_size =>, cache =>, cache_key =>)` /
+    `load` / `load_many` / `prime` / `clear` / `dispatch` /
+    class method `on_stall_for(@loaders)`
+  - 公開フック API のみで実装(XS 非依存)。N+1 が level ごとの
+    1 バッチに畳まれることを `t/36` で検証
+- async lane の既存バグ 2 件を修正(真の late-resolution で初めて顕在化):
+  - `deferred_resolves_response` の判定を `frame_stack_count == 1` から
+    exec state の `response_frame` ポインタ比較に変更(late continuation の
+    子フレーム単独スタック時に envelope が二重に巻かれる誤り)
+  - `complete_current_native_async` OBJECT/ABSTRACT の
+    `return_pending_handle` を 1→0(親接続前提のハンドル返却が
+    late continuation では親不在のため BlockFrame ハンドルが
+    マージ値として漏れる)
+- メモリリーク 2 件を修正:
+  - `async_scheduler_resolve_frame` が deferred へ resolve した
+    `resolved_sv`(response envelope)を decref していなかった
+    (リクエストごとに envelope + data 一式を保持。タスク #11 の正体)
+  - `expect_error_records_av` が error_records 未指定時に owned な
+    `newAV()` を返し、`new_outcome_struct` が借用扱いでリーク
+    (エラーなし Outcome 1 個につき空 AV 1 個。async の OBJECT 完了で
+    子ブロック分と合わせて 2 個/フィールド)
+  - 調査メモ: Perl 側 census(walk_arena)はスナップショット間の
+    アリーナ攪乱でアドレス再利用の偽陰性が出る。C 側で SV を確保しない
+    アリーナ走査 + 二分 snap が有効だった。`perl Build` はヘッダのみの
+    変更では .o を再コンパイルしない(検証時は .o を消すこと)
+- soak(修正後): `dataloader` +304KB/12000 iters(~26B/req、修正前 ~750B/req)、
+  `async_promise` +48KB/8000(~6B/req、#11 解消)、mixed +128KB/8000
+- 既知の未修正バグ(main 由来、別 issue 化):
+  - variables あり + resolver が promise を返す + `on_stall` なしの場合、
+    fast lane(`execute_native_program_handle_xs`)が promise を検出せず
+    data に promise オブジェクトがそのまま入る(OBJECT 型では子ブロックが
+    promise を source として実行され `undef` になる)。variables なしは
+    auto lane のため正しく promise が返る
+- latest median (repeat=3): `abstract_with_fragment` program `234113/s` /
+  bundle `660591/s`、`varying_variables` `188543/s`、
+  `list_of_objects_json` bundle_to_json `876861/s` / document_to_json
+  `475976/s`(いずれも前回チェックポイントと同水準、リグレッションなし)

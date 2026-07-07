@@ -111,6 +111,7 @@ sub execute {
     root_value
     context
     operation_name
+    on_stall
     promise_code
     engine
     vm_engine
@@ -118,7 +119,15 @@ sub execute {
   );
 
   if (@rest) {
-    %opts = ($variables_or_opts ? (%{$variables_or_opts}) : (), @rest);
+    my $third_is_hash = ref($variables_or_opts) eq 'HASH';
+    if ($third_is_hash && !grep { $known_option{$_} } keys %{$variables_or_opts}) {
+      # execute($schema, $query, \%variables, %opts): the positional hash
+      # is the variables payload, not part of the options.
+      %opts = @rest;
+      $opts{variables} = $variables_or_opts if !exists $opts{variables};
+    } else {
+      %opts = ($third_is_hash ? (%{$variables_or_opts}) : (), @rest);
+    }
   } elsif (ref($variables_or_opts) eq 'HASH') {
     if (grep { $known_option{$_} } keys %{$variables_or_opts}) {
       %opts = %{$variables_or_opts};
@@ -280,6 +289,38 @@ Built-in scalars, introspection meta types, and the specified directives
 (C<@include>, C<@skip>, C<@deprecated>, C<@specifiedBy>) are omitted from
 the output, matching graphql-js C<printSchema>. Types are emitted sorted by
 name, so the output is stable and diff-friendly.
+
+=head2 Batching resolvers (DataLoader / the on_stall hook)
+
+SQL-backed schemas avoid the N+1 problem by batching: resolvers return
+promises from a loader, and the queued keys are fetched in one query when
+execution cannot proceed any further. Pass an C<on_stall> callback to
+C<execute()> (or C<execute_document> / C<execute_program>) to drive this:
+
+    use GraphQL::Houtou::DataLoader;
+
+    my $users = GraphQL::Houtou::DataLoader->new(batch => sub {
+      my ($ids) = @_;
+      my %row = map { $_->{id} => $_ } $db->select_users_in(@$ids);
+      return [ map { $row{$_} } @$ids ];
+    });
+
+    my $result = execute($schema, $query, $variables,
+      context => { users => $users },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users),
+    );
+
+With C<on_stall> the request runs on the async-capable lane and is driven
+to completion internally: whenever every remaining field is waiting on a
+promise, the callback is invoked and must make progress (return its
+dispatch count) by resolving promises - flushing loaders, typically. The
+finished response is returned synchronously; callers never see promises.
+If the callback reports no progress while promises remain pending, the
+request fails with a deadlock error instead of hanging.
+
+The contract is loader-agnostic: anything that can resolve the pending
+promises may implement C<on_stall>. L<GraphQL::Houtou::DataLoader> is the
+bundled reference implementation.
 
 =head2 Serving JSON responses directly
 

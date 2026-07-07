@@ -116,6 +116,38 @@ Built-in scalars, introspection meta types, and the specified directives
 the output, matching graphql-js `printSchema`. Types are emitted sorted by
 name, so the output is stable and diff-friendly.
 
+## Batching resolvers (DataLoader / the on\_stall hook)
+
+SQL-backed schemas avoid the N+1 problem by batching: resolvers return
+promises from a loader, and the queued keys are fetched in one query when
+execution cannot proceed any further. Pass an `on_stall` callback to
+`execute()` (or `execute_document` / `execute_program`) to drive this:
+
+    use GraphQL::Houtou::DataLoader;
+
+    my $users = GraphQL::Houtou::DataLoader->new(batch => sub {
+      my ($ids) = @_;
+      my %row = map { $_->{id} => $_ } $db->select_users_in(@$ids);
+      return [ map { $row{$_} } @$ids ];
+    });
+
+    my $result = execute($schema, $query, $variables,
+      context => { users => $users },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users),
+    );
+
+With `on_stall` the request runs on the async-capable lane and is driven
+to completion internally: whenever every remaining field is waiting on a
+promise, the callback is invoked and must make progress (return its
+dispatch count) by resolving promises - flushing loaders, typically. The
+finished response is returned synchronously; callers never see promises.
+If the callback reports no progress while promises remain pending, the
+request fails with a deadlock error instead of hanging.
+
+The contract is loader-agnostic: anything that can resolve the pending
+promises may implement `on_stall`. [GraphQL::Houtou::DataLoader](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3ADataLoader) is the
+bundled reference implementation.
+
 ## Serving JSON responses directly
 
 When the response is going straight onto the wire (PSGI handlers and other

@@ -39,7 +39,7 @@
 graphql-ruby 型の「executor と不可分な組み込み」は採らない。
 第三者 loader / ORM 固有バッチャは同じフックで一級市民として書ける。
 
-**L1-a: コア — stall-flush フック + run-to-completion(公開契約)**
+**L1-a: コア — stall-flush フック + run-to-completion(公開契約)** — 済 (2026-07-07, feat/dataloader-batching)
 
 - exec-state / runtime に flush コールバック registry(`on_stall` 登録)
 - `async_scheduler_drain` が停滞(ready queue 空 & 未解決 pending 残)
@@ -51,7 +51,7 @@ graphql-ruby 型の「executor と不可分な組み込み」は採らない。
   POD で安定 API として明文化する
 - 併せて async リーク残差(タスク #11、~425B/req)をここで解消する
 
-**L1-b: 同梱リファレンス — `GraphQL::Houtou::DataLoader`**
+**L1-b: 同梱リファレンス — `GraphQL::Houtou::DataLoader`** — 済 (2026-07-07。SQLite example のみ残)
 
 - `load` / `load_many` / `prime`、per-request キャッシュ、
   batch 関数(keys → values / per-key error)。dataloader(JS)の

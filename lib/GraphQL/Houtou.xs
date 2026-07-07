@@ -1309,7 +1309,7 @@ gql_runtime_vm_finalize_current_block_now(pTHX_ SV *state_sv, gql_runtime_vm_exe
   completed_frame = frame;
   if (s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
     if (frame->pending_count > 0) {
-      frame->deferred_resolves_response = (s->frame_stack_count == 1) ? 1 : 0;
+      frame->deferred_resolves_response = (frame == s->response_frame) ? 1 : 0;
       scheduler_owned = 1;
     }
     result = gql_runtime_vm_block_frame_finalize_sv(
@@ -1894,9 +1894,13 @@ gql_runtime_vm_async_scheduler_resolve_frame(
   if (frame->deferred_sv && SvOK(frame->deferred_sv)) {
     gql_runtime_vm_promise_xs_deferred_resolve_sv(aTHX_ frame->deferred_sv, resolved_sv);
   }
+  SvREFCNT_dec(resolved_sv);
   if (frame->deferred_sv) {
     SvREFCNT_dec(frame->deferred_sv);
     frame->deferred_sv = NULL;
+  }
+  if (s->response_frame == frame) {
+    s->response_frame = NULL;
   }
   if (frame->promise_sv) {
     SvREFCNT_dec(frame->promise_sv);
@@ -3174,7 +3178,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         child_block_index,
         resolved_sv,
         path_frame,
-        1
+        0
       );
       if (gql_runtime_vm_is_block_frame_value_sv(child_value)) {
         return child_value;
@@ -3321,7 +3325,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
           child_block_index,
           resolved_sv,
           path_frame,
-          1
+          0
         );
         if (gql_runtime_vm_is_block_frame_value_sv(child_value)) {
           return child_value;
@@ -3991,6 +3995,9 @@ gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_
   }
   s->frame_stack[s->frame_stack_count++] = gql_runtime_vm_new_block_frame_struct(aTHX);
   s->frame = s->frame_stack[s->frame_stack_count - 1];
+  if (!s->response_frame) {
+    s->response_frame = s->frame;
+  }
 
   while (1) {
     gql_runtime_vm_cursor_t *dst;
@@ -4179,7 +4186,7 @@ gql_runtime_vm_execute_serial_mutation_steps(
       if (!ctx->frame->deferred_sv) {
         ctx->frame->deferred_sv = gql_runtime_vm_promise_xs_new_deferred_sv(aTHX);
         ctx->frame->promise_sv  = gql_runtime_vm_promise_xs_deferred_promise_sv(aTHX_ ctx->frame->deferred_sv);
-        ctx->frame->deferred_resolves_response = 1;
+        ctx->frame->deferred_resolves_response = (ctx->frame == s->response_frame) ? 1 : 0;
       }
 
       if (pending_promise && SvOK(pending_promise)) {
@@ -4258,6 +4265,9 @@ static XS(gql_runtime_vm_xs_serial_mutation_step_callback)
       s->frame_stack_capacity = new_cap;
     }
     s->frame_stack[s->frame_stack_count++] = ctx->frame;
+  if (!s->response_frame) {
+    s->response_frame = ctx->frame;
+  }
     s->frame = ctx->frame;
   }
 
@@ -4322,6 +4332,9 @@ gql_runtime_vm_exec_state_execute_block_serial_mutation_sv(
     s->frame_stack_capacity = new_cap;
   }
   s->frame_stack[s->frame_stack_count++] = frame;
+  if (!s->response_frame) {
+    s->response_frame = frame;
+  }
   s->frame = frame;
 
   /* Run the first batch of serial steps */
@@ -4413,6 +4426,9 @@ gql_runtime_vm_exec_state_execute_block_async_path_sv(
   }
   s->frame_stack[s->frame_stack_count++] = gql_runtime_vm_new_block_frame_struct(aTHX);
   s->frame = s->frame_stack[s->frame_stack_count - 1];
+  if (!s->response_frame) {
+    s->response_frame = s->frame;
+  }
 
   while (1) {
     gql_runtime_vm_cursor_t *dst;

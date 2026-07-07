@@ -330,6 +330,11 @@ typedef struct {
   IV async_ready_frame_capacity;
   gql_runtime_vm_block_frame_t **async_ready_frames;
   U8 async_scheduler_draining;
+  /* The first block frame pushed for the request. Only this frame's
+   * deferred resolves the response envelope; child frames finalized during
+   * late promise continuations may momentarily be the only stack entry,
+   * so frame_stack_count is not a safe root signal. */
+  gql_runtime_vm_block_frame_t *response_frame;
 } gql_runtime_vm_exec_state_handle_t;
 
 struct gql_runtime_vm_cursor_t {
@@ -2343,13 +2348,14 @@ gql_runtime_vm_cursor_restore_sv(pTHX_ gql_runtime_vm_cursor_t *dst, SV *snapsho
   gql_runtime_vm_cursor_snapshot_copy(aTHX_ dst, src);
 }
 
+/* Returns a borrowed AV, or NULL when no error records were provided. */
 static AV *
 gql_runtime_vm_expect_error_records_av(pTHX_ SV *error_records)
 {
   if (error_records && SvOK(error_records) && SvROK(error_records) && SvTYPE(SvRV(error_records)) == SVt_PVAV) {
     return (AV *)SvRV(error_records);
   }
-  return newAV();
+  return NULL;
 }
 
 static gql_runtime_vm_error_record_t *
@@ -2535,7 +2541,7 @@ gql_runtime_vm_new_outcome_struct(pTHX_ U8 kind_code, SV *value, SV *error_recor
       outcome->value = gql_runtime_vm_new_native_value_scalar(aTHX_ value ? value : &PL_sv_undef);
       break;
   }
-  outcome->error_record_count = av_count(errors_av);
+  outcome->error_record_count = errors_av ? av_count(errors_av) : 0;
   if (outcome->error_record_count > 0) {
     Newxz(outcome->error_records, outcome->error_record_count, gql_runtime_vm_error_record_t *);
     for (i = 0; i < outcome->error_record_count; i++) {

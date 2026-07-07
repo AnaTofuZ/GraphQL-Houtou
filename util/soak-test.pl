@@ -33,6 +33,7 @@ BEGIN {
 }
 
 use GraphQL::Houtou qw(build_native_runtime compile_native_bundle);
+use GraphQL::Houtou::DataLoader;
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::InputObject;
@@ -111,6 +112,17 @@ my $schema = do {
           type => $String,
           resolve => sub { require Promise::XS; Promise::XS::resolved('async world') },
         },
+        loadedUser => {
+          type => GraphQL::Houtou::Type::Object->new(
+            name => 'LoadedUser',
+            fields => { name => { type => $String } },
+          ),
+          args => { id => { type => $ID } },
+          resolve => sub {
+            my (undef, $args, $context) = @_;
+            return $context->{users}->load($args->{id});
+          },
+        },
       },
     ),
     directives => [ @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES, $mask ],
@@ -160,6 +172,20 @@ my %scenarios = (
   persisted_bundle => sub {
     my $r = $runtime->execute_bundle($bundle);
     die "bundle execute failed\n" if @{ $r->{errors} || [] };
+  },
+  dataloader => sub {
+    my ($i) = @_;
+    my $users = GraphQL::Houtou::DataLoader->new(batch => sub {
+      my ($ids) = @_;
+      return [ map { { name => "user-$_" } } @$ids ];
+    });
+    my $r = $runtime->execute_document(
+      'query Q($id: ID) { loadedUser(id: $id) { name } }',
+      variables => { id => "u$i" },
+      context => { users => $users },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users),
+    );
+    die "dataloader query failed\n" if @{ $r->{errors} || [] };
   },
 );
 

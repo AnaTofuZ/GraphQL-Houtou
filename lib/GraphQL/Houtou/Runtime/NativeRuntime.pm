@@ -4,7 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 
-use Scalar::Util qw(refaddr);
+use Scalar::Util qw(blessed refaddr);
 
 use GraphQL::Houtou::Runtime::InputCoercion ();
 use GraphQL::Houtou::Runtime::DirectiveRuntime ();
@@ -249,6 +249,7 @@ sub execute_program {
   my ($self, $program, %opts) = @_;
   my $native_program = _require_native_program($program);
   my $runtime_handle = $self->_native_runtime_handle;
+  my $on_stall = delete $opts{on_stall};
   my $has_root_value = exists $opts{root_value};
   my $has_context_value = exists $opts{context};
   my $has_variables = exists $opts{variables};
@@ -265,6 +266,22 @@ sub execute_program {
 
   if (!defined $engine && exists $opts{vm_engine}) {
     $engine = delete $opts{vm_engine};
+  }
+  if ($on_stall && !defined $engine) {
+    require GraphQL::Houtou::Promise::PromiseXS;
+    # Batching resolvers return promises, so the request must run on the
+    # async-capable lane regardless of variables, and the returned promise
+    # is driven to completion here: Promise::XS resolutions run their
+    # callbacks synchronously, so each flush advances the XS scheduler
+    # until the next stall.
+    my $result = GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(
+      $runtime_handle,
+      $native_program,
+      $root_value,
+      $context_value,
+      $variables,
+    );
+    return _settle_result($result, $on_stall);
   }
   if ((defined $engine && $engine eq 'native') || (!defined $engine && $has_variables)) {
     my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
@@ -310,6 +327,38 @@ sub execute_compact_program {
     $opts{context},
     $opts{variables},
   );
+}
+
+# Drive a possibly-pending async result to completion using the caller's
+# on_stall callback. This is the core batching contract: execution runs
+# until every field either completed or is waiting on a promise ("stall"),
+# then on_stall is invoked and must make progress (return a true dispatch
+# count) by resolving promises - typically by flushing data loaders. Each
+# resolution runs its continuations synchronously, advancing the scheduler
+# to the next stall. No progress while promises remain pending is reported
+# as a deadlock.
+sub _settle_result {
+  my ($result, $on_stall) = @_;
+  return $result
+    if !(blessed($result) && $result->isa('Promise::XS::Promise'));
+
+  my ($settled, $value) = (0, undef);
+  $result->then(
+    sub { ($settled, $value) = (1, $_[0]) },
+    sub { ($settled, $value) = (-1, $_[0]) },
+  );
+  while (!$settled) {
+    my $progressed = $on_stall->();
+    if (!$settled && !$progressed) {
+      die "GraphQL execution stalled: promises are pending but on_stall made no progress"
+        . " (a resolver returned a promise that no registered loader will resolve)\n";
+    }
+  }
+  if ($settled < 0) {
+    die $value if ref $value || ($value // '') ne '';
+    die "GraphQL execution failed with an unknown async rejection\n";
+  }
+  return $value;
 }
 
 sub execute_bundle_descriptor {

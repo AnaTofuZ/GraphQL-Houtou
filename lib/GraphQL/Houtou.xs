@@ -234,6 +234,8 @@ static SV *gql_runtime_vm_call_then_promise_xs_sv(pTHX_ SV *promise_sv, SV *call
 static SV *gql_runtime_vm_call_all_promise_xs_sv(pTHX_ AV *values_av, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_callback_scalar_sv(pTHX_ SV *callback_sv, SV *arg_sv, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_then_promise_for_state_sv(pTHX_ const gql_runtime_vm_exec_state_handle_t *s, SV *promise_sv, SV *callback_sv, SV *error_callback_sv, gql_runtime_vm_path_frame_t *path_frame);
+static SV *gql_runtime_vm_response_json_from_native_sv(pTHX_ const gql_runtime_vm_writer_t *writer, const gql_runtime_vm_native_value_t *value);
+static SV *gql_runtime_vm_response_json_from_data_sv(pTHX_ const gql_runtime_vm_writer_t *writer, SV *data_sv);
 static SV *gql_runtime_vm_call_all_promise_for_state_sv(pTHX_ const gql_runtime_vm_exec_state_handle_t *s, AV *values_av, gql_runtime_vm_path_frame_t *path_frame);
 static int gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_explicit_generic_fast_abi(const gql_runtime_vm_native_slot_t *slot);
@@ -1836,7 +1838,7 @@ gql_runtime_vm_async_scheduler_resolve_frame(
   gql_runtime_vm_block_frame_t *frame
 )
 {
-  SV *data_sv;
+  SV *data_sv = NULL;
   SV *resolved_sv;
   IV i;
 
@@ -1884,11 +1886,17 @@ gql_runtime_vm_async_scheduler_resolve_frame(
     return;
   }
 
-  data_sv = gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
-  resolved_sv = data_sv;
-  if (frame->deferred_resolves_response) {
-    resolved_sv = gql_runtime_vm_exec_state_materialize_response_sv(aTHX_ s, data_sv);
-    SvREFCNT_dec(data_sv);
+  if (frame->deferred_resolves_response && s->response_json_mode) {
+    resolved_sv = gql_runtime_vm_response_json_from_native_sv(
+      aTHX_ s->writer, frame->values_value
+    );
+  } else {
+    data_sv = gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
+    resolved_sv = data_sv;
+    if (frame->deferred_resolves_response) {
+      resolved_sv = gql_runtime_vm_exec_state_materialize_response_sv(aTHX_ s, data_sv);
+      SvREFCNT_dec(data_sv);
+    }
   }
 
   if (frame->deferred_sv && SvOK(frame->deferred_sv)) {
@@ -5441,13 +5449,14 @@ gql_runtime_vm_new_exec_state_handle_sv(
 }
 
 static SV *
-gql_runtime_vm_execute_native_program_auto_sv(
+gql_runtime_vm_execute_native_program_auto_impl_sv(
   pTHX_
   SV *runtime_sv,
   SV *program_sv,
   SV *root_value,
   SV *context_value,
-  SV *variables
+  SV *variables,
+  U8 json_mode
 )
 {
   gql_runtime_vm_native_runtime_t *runtime;
@@ -5513,6 +5522,7 @@ gql_runtime_vm_execute_native_program_auto_sv(
   state = gql_runtime_vm_expect_exec_state_handle(aTHX_ state_sv);
   state->native_runtime = runtime;
   state->native_runtime_is_borrowed = 1;
+  state->response_json_mode = json_mode;
   /* The exec state holds its own cursor/writer references now. */
   gql_runtime_vm_cursor_decref(aTHX_ cursor);
   cursor = NULL;
@@ -5532,6 +5542,9 @@ gql_runtime_vm_execute_native_program_auto_sv(
   );
   if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ state, data_sv)) {
     ret = data_sv;
+  } else if (json_mode) {
+    ret = gql_runtime_vm_response_json_from_data_sv(aTHX_ state->writer, data_sv);
+    SvREFCNT_dec(data_sv);
   } else {
     ret = gql_runtime_vm_exec_state_materialize_response_sv(aTHX_ state, data_sv);
     SvREFCNT_dec(data_sv);
@@ -5540,6 +5553,36 @@ gql_runtime_vm_execute_native_program_auto_sv(
   /* state_sv / prepared_variables_sv are mortal; cursor and writer refs
    * were handed to the exec state above. */
   return ret ? ret : newSVsv(&PL_sv_undef);
+}
+
+static SV *
+gql_runtime_vm_execute_native_program_auto_sv(
+  pTHX_
+  SV *runtime_sv,
+  SV *program_sv,
+  SV *root_value,
+  SV *context_value,
+  SV *variables
+)
+{
+  return gql_runtime_vm_execute_native_program_auto_impl_sv(
+    aTHX_ runtime_sv, program_sv, root_value, context_value, variables, 0
+  );
+}
+
+static SV *
+gql_runtime_vm_execute_native_program_auto_json_sv(
+  pTHX_
+  SV *runtime_sv,
+  SV *program_sv,
+  SV *root_value,
+  SV *context_value,
+  SV *variables
+)
+{
+  return gql_runtime_vm_execute_native_program_auto_impl_sv(
+    aTHX_ runtime_sv, program_sv, root_value, context_value, variables, 1
+  );
 }
 
 static SV *
@@ -8088,6 +8131,156 @@ gql_runtime_vm_json_cat_errors(pTHX_ SV *out, const gql_runtime_vm_writer_t *wri
   sv_catpvs(out, "]");
 }
 
+/*
+ * Async direct-JSON tail: serialize a completed native value tree (the
+ * response frame's values at resolve time) straight to JSON bytes. The
+ * native tree preserves insertion order, so sync-resolved fields appear
+ * first and late-resolved fields follow in completion order (JSON object
+ * member order carries no meaning). Scalars carry no GraphQL type info, so
+ * Boolean-typed leaves render as the resolver returned them (0/1),
+ * matching execute() + JSON encode of the async envelope.
+ */
+static void
+gql_runtime_vm_native_value_cat_json(pTHX_ SV *out, const gql_runtime_vm_native_value_t *value)
+{
+  IV i;
+
+  if (!value) {
+    sv_catpvs(out, "null");
+    return;
+  }
+  switch (value->kind_code) {
+    case GQL_VM_NATIVE_VALUE_OBJECT:
+      sv_catpvs(out, "{");
+      for (i = 0; i < value->object.count; i++) {
+        if (i) {
+          sv_catpvs(out, ",");
+        }
+        gql_runtime_vm_json_cat_string(
+          aTHX_ out,
+          value->object.names[i] ? value->object.names[i] : "",
+          value->object.names[i] ? strlen(value->object.names[i]) : 0
+        );
+        sv_catpvs(out, ":");
+        gql_runtime_vm_native_value_cat_json(aTHX_ out, value->object.values[i]);
+      }
+      sv_catpvs(out, "}");
+      return;
+    case GQL_VM_NATIVE_VALUE_LIST:
+      sv_catpvs(out, "[");
+      for (i = 0; i < value->list.count; i++) {
+        if (i) {
+          sv_catpvs(out, ",");
+        }
+        gql_runtime_vm_native_value_cat_json(aTHX_ out, value->list.items[i]);
+      }
+      sv_catpvs(out, "]");
+      return;
+    case GQL_VM_NATIVE_VALUE_SCALAR:
+    default:
+      switch (value->scalar_kind_code) {
+        case GQL_VM_NATIVE_SCALAR_UNDEF:
+          sv_catpvs(out, "null");
+          return;
+        case GQL_VM_NATIVE_SCALAR_IV:
+          sv_catpvf(out, "%" IVdf, value->scalar_iv);
+          return;
+        case GQL_VM_NATIVE_SCALAR_NV:
+          if (Perl_isnan(value->scalar_nv) || Perl_isinf(value->scalar_nv)) {
+            sv_catpvs(out, "null");
+          } else {
+            char nbuf[NV_DIG + 32];
+            Gconvert(value->scalar_nv, NV_DIG, 0, nbuf);
+            sv_catpv(out, nbuf);
+          }
+          return;
+        case GQL_VM_NATIVE_SCALAR_PV:
+          gql_runtime_vm_json_cat_string(
+            aTHX_ out,
+            value->scalar_pv ? value->scalar_pv : "",
+            value->scalar_pv_len
+          );
+          return;
+        case GQL_VM_NATIVE_SCALAR_FALLBACK_SV:
+        default:
+          gql_runtime_vm_json_cat_scalar(aTHX_ out, value->scalar_fallback_sv);
+          return;
+      }
+  }
+}
+
+/* Materialized SV data (hash key order is not preserved, matching the
+ * envelope execute() returns for the same request). */
+static void
+gql_runtime_vm_json_cat_sv_data(pTHX_ SV *out, SV *value)
+{
+  if (value && SvROK(value) && SvTYPE(SvRV(value)) == SVt_PVHV && !SvOBJECT(SvRV(value))) {
+    HV *hv = (HV *)SvRV(value);
+    HE *he;
+    int first = 1;
+
+    sv_catpvs(out, "{");
+    hv_iterinit(hv);
+    while ((he = hv_iternext(hv)) != NULL) {
+      SV *key_sv = hv_iterkeysv(he);
+      STRLEN key_len = 0;
+      const char *key_pv = SvPVutf8(key_sv, key_len);
+
+      if (!first) {
+        sv_catpvs(out, ",");
+      }
+      first = 0;
+      gql_runtime_vm_json_cat_string(aTHX_ out, key_pv, key_len);
+      sv_catpvs(out, ":");
+      gql_runtime_vm_json_cat_sv_data(aTHX_ out, hv_iterval(hv, he));
+    }
+    sv_catpvs(out, "}");
+    return;
+  }
+  if (value && SvROK(value) && SvTYPE(SvRV(value)) == SVt_PVAV && !SvOBJECT(SvRV(value))) {
+    AV *av = (AV *)SvRV(value);
+    SSize_t i;
+
+    sv_catpvs(out, "[");
+    for (i = 0; i < av_count(av); i++) {
+      SV **svp = av_fetch(av, i, 0);
+      if (i) {
+        sv_catpvs(out, ",");
+      }
+      gql_runtime_vm_json_cat_sv_data(aTHX_ out, (svp && *svp) ? *svp : NULL);
+    }
+    sv_catpvs(out, "]");
+    return;
+  }
+  gql_runtime_vm_json_cat_scalar(aTHX_ out, value);
+}
+
+static SV *
+gql_runtime_vm_response_json_from_native_sv(pTHX_ const gql_runtime_vm_writer_t *writer, const gql_runtime_vm_native_value_t *value)
+{
+  SV *out = newSV(1024);
+
+  sv_setpvs(out, "{\"data\":");
+  gql_runtime_vm_native_value_cat_json(aTHX_ out, value);
+  sv_catpvs(out, ",\"errors\":");
+  gql_runtime_vm_json_cat_errors(aTHX_ out, writer);
+  sv_catpvs(out, "}");
+  return out;
+}
+
+static SV *
+gql_runtime_vm_response_json_from_data_sv(pTHX_ const gql_runtime_vm_writer_t *writer, SV *data_sv)
+{
+  SV *out = newSV(1024);
+
+  sv_setpvs(out, "{\"data\":");
+  gql_runtime_vm_json_cat_sv_data(aTHX_ out, data_sv);
+  sv_catpvs(out, ",\"errors\":");
+  gql_runtime_vm_json_cat_errors(aTHX_ out, writer);
+  sv_catpvs(out, "}");
+  return out;
+}
+
 static SV *
 gql_runtime_vm_execute_bundle_fast_response_json(
   pTHX_
@@ -9755,6 +9948,27 @@ execute_native_program_auto_simple_xs(runtime_sv, program_sv)
         &PL_sv_undef,
         &PL_sv_undef,
         &PL_sv_undef
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+execute_native_program_auto_to_json_xs(runtime_sv, program_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
+    SV *runtime_sv
+    SV *program_sv
+    SV *root_value
+    SV *context_value
+    SV *variables
+  CODE:
+    {
+      RETVAL = gql_runtime_vm_execute_native_program_auto_json_sv(
+        aTHX_
+        runtime_sv,
+        program_sv,
+        root_value,
+        context_value,
+        variables
       );
     }
   OUTPUT:

@@ -401,8 +401,11 @@ sub execute_bundle {
 }
 
 # Direct-JSON siblings of the sync native lane: the response is rendered as
-# UTF-8 JSON bytes in XS without materializing the Perl envelope. Sync only;
-# resolvers returning Promise::XS promises croak.
+# UTF-8 JSON bytes in XS without materializing the Perl envelope. Without
+# on_stall the lane is sync-only and resolvers returning Promise::XS
+# promises croak; with on_stall the request runs on the async lane and the
+# response frame serializes its native value tree straight to JSON when it
+# resolves (see execute_program_to_json).
 
 sub execute_bundle_to_json {
   my ($self, $bundle, %opts) = @_;
@@ -418,6 +421,22 @@ sub execute_bundle_to_json {
 sub execute_program_to_json {
   my ($self, $program, %opts) = @_;
   my $native_program = _require_native_program($program);
+  my $on_stall = delete $opts{on_stall};
+  if ($on_stall) {
+    # Batching resolvers return promises, so run on the async lane; the
+    # response frame renders JSON directly from its native value tree at
+    # resolve time (query field order preserved). The auto lane prepares
+    # program variables itself.
+    require GraphQL::Houtou::Promise::PromiseXS;
+    my $result = GraphQL::Houtou::XS::VM::execute_native_program_auto_to_json_xs(
+      $self->_native_runtime_handle,
+      $native_program,
+      $opts{root_value},
+      $opts{context},
+      $opts{variables},
+    );
+    return _settle_result($result, $on_stall);
+  }
   my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
     $self->runtime_schema,
     $native_program,

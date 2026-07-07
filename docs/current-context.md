@@ -1276,3 +1276,34 @@ perl -Ilib t/19_vm_execute.t
   bundle `660591/s`、`varying_variables` `188543/s`、
   `list_of_objects_json` bundle_to_json `876861/s` / document_to_json
   `475976/s`(いずれも前回チェックポイントと同水準、リグレッションなし)
+
+## 2026-07-07 L2: async response の direct-JSON tail
+
+- `execute_to_json` / `execute_document_to_json` が `on_stall` を受け付け、
+  async lane(バッチング resolver)でも JSON バイト列を返せるようになった
+  - exec state に `response_json_mode` を追加。response frame の resolve 時に
+    `gql_runtime_vm_response_json_from_native_sv(...)` が native value tree を
+    直接 JSON 化して deferred に渡す(Perl envelope hash は作らない)
+  - native tree walker `native_value_cat_json`(OBJECT/LIST/SCALAR 各 kind、
+    NV は sync lane と同じ Gconvert、FALLBACK_SV は `json_cat_scalar` に委譲)
+  - auto lane はストールしなかった場合(全 sync 完了)も
+    `response_json_from_data_sv`(SV walker)で JSON を返す
+  - 公開面: `execute_native_program_auto_to_json_xs`、
+    `NativeRuntime::execute_program_to_json` の `on_stall` 分岐
+- 出力仕様(sync JSON lane との差、POD に明記):
+  - キー順は完了順(sync フィールド先、遅延解決フィールドは解決順)。
+    sync lane はクエリ順
+  - Boolean 型 leaf は resolver の戻り値のまま(0/1)。native tree に
+    GraphQL 型情報がないため。どちらも L3 で収斂予定
+  - エラー envelope(message/path)・エスケープ・数値表現は sync lane と共通
+    (json_cat_* を共有)
+- 計測:
+  - dataloader バッチ(20 item list): SV+encode 156k/s → direct 164k/s(+5%)。
+    100 item では +1%。async リクエストは loader/promise 機構が支配的で、
+    serialization tail の寄与は小さい。大きな伸びは L3(hot path)側
+  - soak `dataloader_json` +320KB/12000 iters(~27B/req、SV 版と同水準。
+    リークなし)
+  - sync lane リグレッションなし(bundle_to_json 899k/s、document_to_json 474k/s)
+- t/37_async_to_json.t 追加(6 subtests、計 264 tests)。
+  minilla は git 未追跡のテストを実行しないので新規 t/ ファイルは
+  `git add` してから `minil test` すること

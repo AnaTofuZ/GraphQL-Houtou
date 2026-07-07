@@ -62,7 +62,7 @@ graphql-ruby 型の「executor と不可分な組み込み」は採らない。
 - 検証: SQLite バッチングの example、soak の dataloader シナリオ追加、
   「N+1 が 1+levels 回のクエリになる」ことのテスト
 
-### L2: async response の direct-JSON tail
+### L2: async response の direct-JSON tail — 済 (2026-07-07)
 
 - async レーンの完成 data(SV ツリー)+ writer error records を
   #26 の C シリアライザで直接 JSON 化し、

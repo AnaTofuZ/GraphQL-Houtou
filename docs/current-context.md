@@ -1308,25 +1308,22 @@ perl -Ilib t/19_vm_execute.t
   minilla は git 未追跡のテストを実行しないので新規 t/ ファイルは
   `git add` してから `minil test` すること
 
-## 2026-07-08 #28 修正: fast lane の promise 検出 + async フォールバック
+## 2026-07-08 #28 修正: async ランタイム宣言 + fast lane の promise ガード
 
-- 検出: `gql_runtime_vm_fast_lane_guard_promise_sv` を resolver 呼び出し
-  4 箇所(default/explicit × cb4/cb5、SV/JSON 両 fast lane が共有)に挿入。
-  Promise::XS promise が返ったら sentinel メッセージで croak
-  (非 ref は SvROK で即抜け、unblessed ref も SvOBJECT で抜けるため
-  ホットパス影響なし — varying_variables ベンチ 192k/s で横ばい)
-- ルーティング(NativeRuntime):
-  - sentinel を捕捉したら `native_program_mark_prefers_async_lane_xs` で
-    program に印を付け、以降のリクエストは最初から auto lane
-    (`prefers_async_lane` フィールドを native_program_t に追加)
-  - query: その場で auto lane で再実行(仕様上副作用なし。初回のみ
-    実行済み resolver が二重実行される点を POD に明記)
-  - mutation: 再実行せず 1 回だけ明確なエラー(副作用が部分適用の可能性を
-    説明)。次リクエストからはフラグで auto lane に乗り正常動作
-  - `engine => 'native'` 明示時はフォールバックせず croak を伝播
-- to_json: 同じフォールバックで auto json lane へ。pre-resolved チェーンは
-  settled promise から同期に JSON を取り出す(`maybe_get_promise_xs`)。
-  真のストールは「pass on_stall」を指すエラー。rejection は本来のエラーを
-  伝播。t/35 の「async は croak」テストは新契約に更新
-- soak: varying_variables +16KB/12000(ガードのリークなし)、mixed PASS
-- t/39_fast_lane_promise_fallback.t(7 subtests、計 271 tests)
+- 設計判断: DataLoader/Promise が主経路という運用実態に合わせ、
+  ヒューリスティック(初回 croak→自動再実行、mutation の初回失敗)は不採用。
+  **`build_native_runtime($schema, async => 1)` の宣言 1 箇所**で
+  全リクエストが async lane から開始する(初回の特殊挙動なし)
+  - execute: variables の有無に関わらず auto lane。`on_stall` は従来どおり合成
+  - to_json: async lane + L2 JSON tail。pre-resolved チェーンは settled
+    promise から同期に JSON を取得、真のストールは「pass on_stall」エラー、
+    rejection は本来のエラーを伝播(`_auto_json_or_die`)
+  - `engine => 'native'` 明示時は async 宣言より優先して strict sync
+- ガード: resolver 呼び出し 4 箇所(default/explicit × cb4/cb5、SV/JSON 両
+  fast lane 共有)に `gql_runtime_vm_fast_lane_guard_promise_sv`。
+  promise が返ったら「build the runtime with async => 1 (or pass on_stall)」
+  で即 croak(promise オブジェクトが data に混入しない)。非 ref は SvROK、
+  unblessed ref は SvOBJECT で即抜け → ホットパス影響なし
+  (varying_variables 192k/s 横ばい、soak +16KB/12000)
+- t/39(7 subtests)+ t/35 更新、計 271 tests。
+  PSGI アダプタへの `async` パススルーは #31 マージ後に追加予定

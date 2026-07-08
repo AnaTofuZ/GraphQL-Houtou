@@ -322,19 +322,26 @@ The contract is loader-agnostic: anything that can resolve the pending
 promises may implement C<on_stall>. L<GraphQL::Houtou::DataLoader> is the
 bundled reference implementation.
 
-=head3 Promise resolvers without on_stall
+=head3 Declaring an async schema (async => 1)
 
-Without C<on_stall>, requests with variables start on the synchronous fast
-lane. If a resolver returns a Promise::XS promise there, the engine marks
-the program and re-executes the request on the async lane; subsequent
-requests for the same operation start on the async lane directly. The
-first such request therefore runs its already-executed resolvers twice -
-safe for queries, which the spec defines as side-effect free. A mutation
-in that situation is never re-executed: it fails once with an error
-explaining that its effects may be partially applied, and later requests
-route to the async lane automatically. Passing C<on_stall> (or requesting
-C<engine =E<gt> 'native'> to keep strict sync semantics) avoids the
-detection round-trip entirely.
+Batching is the normal deployment shape, so runtimes accept a single
+declaration instead of per-request plumbing:
+
+    my $runtime = build_native_runtime($schema, async => 1);
+
+An async runtime starts every request on the async-capable lane: promise
+resolvers work with or without variables, C<execute_document> returns the
+settled envelope (or a promise while pending), and
+C<execute_document_to_json> renders JSON as soon as the response settles.
+Per-request C<on_stall> hooks compose with it as usual and remain the way
+DataLoader batches are flushed.
+
+Without the declaration, requests with variables run on the synchronous
+fast lane, which cannot suspend. A resolver returning a Promise::XS
+promise there fails immediately with an error pointing at C<async =E<gt> 1>
+and C<on_stall> - promise objects never leak into response data.
+C<engine =E<gt> 'native'> forces the strict sync lane even on an async
+runtime.
 
 =head2 Serving JSON responses directly
 

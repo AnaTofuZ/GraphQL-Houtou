@@ -6705,16 +6705,16 @@ gql_runtime_vm_resolve_current_field_explicit(pTHX_ gql_runtime_vm_exec_state_t 
 static SV *
 gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ SV *resolved)
 {
-  /* The sync fast lanes cannot suspend; a promise-returning resolver must
-   * run on the async lane. The message is a stable sentinel: the Perl
-   * router matches it, marks the program as async-preferring, and (for
-   * queries) re-executes on the async lane. */
+  /* The sync fast lanes cannot suspend, so a promise-returning resolver
+   * is a routing misconfiguration: async schemas declare themselves with
+   * async => 1 on the runtime (or pass on_stall per request). Failing
+   * loudly here keeps promise objects out of response data. */
   if (resolved
       && SvROK(resolved)
       && SvOBJECT(SvRV(resolved))
       && sv_derived_from(resolved, "Promise::XS::Promise")) {
     sv_2mortal(resolved);
-    croak("a resolver returned a Promise::XS promise in the synchronous fast lane");
+    croak("a resolver returned a Promise::XS promise in the synchronous fast lane; build the runtime with async => 1 (or pass on_stall) so requests start on the async lane");
   }
   return resolved;
 }
@@ -7812,7 +7812,7 @@ gql_runtime_vm_json_cat_scalar(pTHX_ SV *out, SV *value)
       return;
     }
     if (sv_isobject(value) && sv_derived_from(value, "Promise::XS::Promise")) {
-      croak("a resolver returned a Promise::XS promise in the synchronous fast lane");
+      croak("a resolver returned a Promise::XS promise in the synchronous fast lane; build the runtime with async => 1 (or pass on_stall) so requests start on the async lane");
     }
     /* Unexpected reference in a leaf position: stringify. */
     {
@@ -8705,40 +8705,6 @@ native_program_needs_variable_specialization_xs(program_sv)
       gql_runtime_vm_native_program_t *program =
         gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
       RETVAL = gql_runtime_vm_program_needs_variable_specialization(program);
-    }
-  OUTPUT:
-    RETVAL
-
-IV
-native_program_prefers_async_lane_xs(program_sv)
-    SV *program_sv
-  CODE:
-    {
-      gql_runtime_vm_native_program_t *program =
-        gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
-      RETVAL = program->prefers_async_lane ? 1 : 0;
-    }
-  OUTPUT:
-    RETVAL
-
-void
-native_program_mark_prefers_async_lane_xs(program_sv)
-    SV *program_sv
-  CODE:
-    {
-      gql_runtime_vm_native_program_t *program =
-        gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
-      program->prefers_async_lane = 1;
-    }
-
-IV
-native_program_operation_type_xs(program_sv)
-    SV *program_sv
-  CODE:
-    {
-      gql_runtime_vm_native_program_t *program =
-        gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
-      RETVAL = program->operation_type_code;
     }
   OUTPUT:
     RETVAL

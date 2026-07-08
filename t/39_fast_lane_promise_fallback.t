@@ -17,9 +17,9 @@ use GraphQL::Houtou::Promise::PromiseXS qw(maybe_get_promise_xs);
 
 my %calls;
 
-sub new_runtime {
+sub new_schema {
   %calls = ();
-  my $schema = GraphQL::Houtou::Schema->new(
+  return GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
       name => 'Query',
       fields => {
@@ -36,10 +36,6 @@ sub new_runtime {
             $calls{asyncUser}++;
             return Promise::XS::resolved({ name => "n$args->{id}" });
           },
-        },
-        asyncHello => {
-          type => $String,
-          resolve => sub { Promise::XS::resolved('async world') },
         },
         pendingForever => {
           type => $String,
@@ -58,74 +54,39 @@ sub new_runtime {
       },
     ),
   );
-  return build_native_runtime($schema);
 }
 
 my $QUERY = 'query Q($id: ID) { counted asyncUser(id: $id) { name } }';
 
-subtest 'variables + promise resolvers: correct data via async fallback' => sub {
-  my $runtime = new_runtime();
+subtest 'async runtime: variables + promise resolvers execute once, correctly' => sub {
+  my $runtime = build_native_runtime(new_schema(), async => 1);
   my $r = maybe_get_promise_xs(
     $runtime->execute_document($QUERY, variables => { id => 'u1' }));
   is_deeply $r, {
     data => { counted => 'counted', asyncUser => { name => 'nu1' } },
     errors => [],
   }, 'no promise objects or undefs leak into data';
-  is $calls{asyncUser}, 2,
-    'first request re-runs resolvers on the async lane (documented one-time cost)';
-  is $calls{counted}, 2, 'sibling sync resolver re-ran once as well';
-};
-
-subtest 'later requests skip the fast lane (no re-execution)' => sub {
-  my $runtime = new_runtime();
-  maybe_get_promise_xs($runtime->execute_document($QUERY, variables => { id => 'u1' }));
-  %calls = ();
-  my $r = maybe_get_promise_xs(
-    $runtime->execute_document($QUERY, variables => { id => 'u2' }));
-  is $r->{data}{asyncUser}{name}, 'nu2', 'second request correct';
-  is $calls{counted}, 1, 'each resolver ran exactly once';
+  is $calls{counted}, 1, 'sync resolver ran exactly once';
   is $calls{asyncUser}, 1, 'promise resolver ran exactly once';
 };
 
-subtest 'scalar promise with variables returns a promise like the no-variables lane' => sub {
-  my $runtime = new_runtime();
-  my $result = $runtime->execute_document(
-    'query Q($id: ID) { asyncHello }', variables => { id => 'x' });
-  my $r = maybe_get_promise_xs($result);
-  is $r->{data}{asyncHello}, 'async world', 'settled to the resolved value';
+subtest 'async runtime: mutations run once on the async lane' => sub {
+  my $runtime = build_native_runtime(new_schema(), async => 1);
+  my $r = maybe_get_promise_xs($runtime->execute_document(
+    'mutation M($id: ID) { bump(id: $id) }', variables => { id => '1' }));
+  is $r->{data}{bump}, 'bumped', 'mutation resolved';
+  is $calls{bump}, 1, 'mutation resolver ran exactly once';
 };
 
-subtest 'mutations fail once with a clear error, then route to the async lane' => sub {
-  my $runtime = new_runtime();
-  my $m = 'mutation M($id: ID) { bump(id: $id) }';
-  my $err = do {
-    local $@;
-    eval { $runtime->execute_document($m, variables => { id => '1' }) };
-    $@;
-  };
-  like $err, qr/mutation resolver returned a Promise::XS promise/,
-    'first mutation dies with the actionable error';
-  like $err, qr/not re-executed/, 'explains that side effects were not re-run';
-  is $calls{bump}, 1, 'mutation resolver was not re-executed';
-
-  my $r = maybe_get_promise_xs($runtime->execute_document($m, variables => { id => '2' }));
-  is $r->{data}{bump}, 'bumped', 'subsequent mutation runs on the async lane';
-  is $calls{bump}, 2, 'exactly one more execution';
-};
-
-subtest 'to_json without on_stall settles pre-resolved chains' => sub {
-  my $runtime = new_runtime();
+subtest 'async runtime: to_json settles pre-resolved chains to JSON' => sub {
+  my $runtime = build_native_runtime(new_schema(), async => 1);
   my $json = $runtime->execute_document_to_json($QUERY, variables => { id => 'u3' });
-  my $r = JSON::PP::decode_json($json);
-  is $r->{data}{asyncUser}{name}, 'nu3', 'JSON rendered through the async fallback';
-
-  my $json2 = $runtime->execute_document_to_json($QUERY, variables => { id => 'u4' });
-  is JSON::PP::decode_json($json2)->{data}{asyncUser}{name}, 'nu4',
-    'flagged program renders JSON on the async lane directly';
+  is JSON::PP::decode_json($json)->{data}{asyncUser}{name}, 'nu3',
+    'JSON via the async lane without on_stall';
 };
 
-subtest 'to_json with a genuinely pending promise points at on_stall' => sub {
-  my $runtime = new_runtime();
+subtest 'async runtime: a genuine stall points at on_stall' => sub {
+  my $runtime = build_native_runtime(new_schema(), async => 1);
   my $err = do {
     local $@;
     eval {
@@ -137,18 +98,68 @@ subtest 'to_json with a genuinely pending promise points at on_stall' => sub {
   like $err, qr/pass on_stall/, 'error names the missing hook';
 };
 
-subtest 'engine => native stays strict' => sub {
-  my $runtime = new_runtime();
+subtest 'sync runtime: promise on the fast lane fails with an actionable error' => sub {
+  my $runtime = build_native_runtime(new_schema());
+  for my $case (
+    [ execute => sub { $runtime->execute_document($QUERY, variables => { id => 'u5' }) } ],
+    [ to_json => sub { $runtime->execute_document_to_json($QUERY, variables => { id => 'u6' }) } ],
+  ) {
+    my ($name, $run) = @$case;
+    my $err = do { local $@; eval { $run->() }; $@ };
+    like $err, qr/async => 1/, "$name: error tells you to declare async => 1";
+    like $err, qr/on_stall/, "$name: error also offers on_stall";
+  }
+};
+
+subtest 'async runtime with engine => native stays strict' => sub {
+  my $runtime = build_native_runtime(new_schema(), async => 1);
   my $err = do {
     local $@;
     eval {
       $runtime->execute_document($QUERY,
-        variables => { id => 'u5' }, engine => 'native');
+        variables => { id => 'u7' }, engine => 'native');
     };
     $@;
   };
   like $err, qr/synchronous fast lane/,
-    'explicitly requested sync lane propagates the croak instead of falling back';
+    'explicit sync engine request overrides the async default and croaks';
+};
+
+subtest 'async runtime still honors on_stall batching' => sub {
+  require GraphQL::Houtou::DataLoader;
+  my $schema = new_schema();
+  my $runtime = build_native_runtime($schema, async => 1);
+  my @batches;
+  my $users = GraphQL::Houtou::DataLoader->new(batch => sub {
+    push @batches, [ @{ $_[0] } ];
+    return [ map { { name => "loaded-$_" } } @{ $_[0] } ];
+  });
+  # asyncUser resolves through Promise::XS directly here; the loader-backed
+  # request exercises the async runtime + on_stall combination.
+  my $schema2 = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        user => {
+          type => GraphQL::Houtou::Type::Object->new(
+            name => 'LUser', fields => { name => { type => $String } }),
+          args => { id => { type => $ID } },
+          resolve => sub { my (undef,$a,$c)=@_; $c->{users}->load($a->{id}) },
+        },
+      },
+    ),
+  );
+  my $rt2 = build_native_runtime($schema2, async => 1);
+  my $r = $rt2->execute_document(
+    'query Q($id: ID) { a: user(id: $id) { name } b: user(id: "y") { name } }',
+    variables => { id => 'x' },
+    context => { users => $users },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users),
+  );
+  is_deeply $r->{data}, {
+    a => { name => 'loaded-x' }, b => { name => 'loaded-y' },
+  }, 'batched request resolves synchronously via on_stall';
+  is scalar @batches, 1, 'one batch per level';
 };
 
 done_testing;

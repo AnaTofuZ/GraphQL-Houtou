@@ -33,6 +33,7 @@ sub new {
     _specialized_program_cache_order => [],
     _specialized_program_cache_max => $cache_max,
     _max_depth => $max_depth,
+    _async => $args{async} ? 1 : 0,
   }, $class;
 }
 
@@ -283,21 +284,21 @@ sub execute_program {
     );
     return _settle_result($result, $on_stall);
   }
+  # Runtimes built with async => 1 declare that resolvers return promises
+  # (the DataLoader deployment shape); every request starts on the
+  # async-capable lane, exactly like the no-variables path. An explicit
+  # engine request still wins.
+  if ($self->{_async} && !defined $engine) {
+    require GraphQL::Houtou::Promise::PromiseXS;
+    return GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(
+      $runtime_handle,
+      $native_program,
+      $root_value,
+      $context_value,
+      $variables,
+    );
+  }
   if ((defined $engine && $engine eq 'native') || (!defined $engine && $has_variables)) {
-    # Promise-returning resolvers cannot run on the sync fast lane. Once a
-    # program has revealed one (see the sentinel catch below) it starts on
-    # the async lane up front, exactly like the no-variables path.
-    if (!defined $engine
-        && GraphQL::Houtou::XS::VM::native_program_prefers_async_lane_xs($native_program)) {
-      require GraphQL::Houtou::Promise::PromiseXS;
-      return GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(
-        $runtime_handle,
-        $native_program,
-        $root_value,
-        $context_value,
-        $variables,
-      );
-    }
     my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
       $self->runtime_schema,
       $native_program,
@@ -307,30 +308,14 @@ sub execute_program {
     # guards are variable-invariant: the fast lanes evaluate dynamic
     # arguments against the prepared variables at request time, so no
     # per-request clone/specialize (or variables-keyed cache) is needed.
-    my $effective_program = $native_program;
-    if (GraphQL::Houtou::XS::VM::native_program_needs_variable_specialization_xs($native_program)) {
-      $effective_program = $self->_cached_specialized_program(
-        $native_program,
-        $prepared_variables,
-      );
+    if (!GraphQL::Houtou::XS::VM::native_program_needs_variable_specialization_xs($native_program)) {
+      return $self->execute_compact_program($native_program, %opts, variables => $prepared_variables);
     }
-    my $result = eval {
-      $self->execute_compact_program($effective_program, %opts, variables => $prepared_variables);
-    };
-    if (my $err = $@) {
-      die $err if defined $engine
-        || $err !~ /returned a Promise::XS promise in the synchronous fast lane/;
-      return $self->_fast_lane_promise_fallback($native_program, sub {
-        GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(
-          $runtime_handle,
-          $native_program,
-          $root_value,
-          $context_value,
-          $variables,
-        );
-      });
-    }
-    return $result;
+    my $specialized = $self->_cached_specialized_program(
+      $native_program,
+      $prepared_variables,
+    );
+    return $self->execute_compact_program($specialized, %opts, variables => $prepared_variables);
   }
   if (!$has_root_value && !$has_context_value && !$has_variables) {
     return GraphQL::Houtou::XS::VM::execute_native_program_auto_simple_xs(
@@ -345,25 +330,6 @@ sub execute_program {
     $context_value,
     $variables,
   );
-}
-
-# A resolver returned a promise on the sync fast lane. Remember that on the
-# program so subsequent requests start on the async lane, then re-execute
-# there - but only for queries, which the GraphQL spec defines as free of
-# side effects. A mutation may already have applied part of its effects, so
-# re-running it is not safe; it fails once with a clear error and later
-# requests for the same operation route to the async lane automatically.
-sub _fast_lane_promise_fallback {
-  my ($self, $native_program, $retry) = @_;
-  GraphQL::Houtou::XS::VM::native_program_mark_prefers_async_lane_xs($native_program);
-  require GraphQL::Houtou::Promise::PromiseXS;
-  if (GraphQL::Houtou::XS::VM::native_program_operation_type_xs($native_program) != 1) {
-    die "a mutation resolver returned a Promise::XS promise on the synchronous lane;"
-      . " the mutation was not re-executed (its side effects may be partially applied)."
-      . " Pass on_stall to start mutations on the async lane; subsequent requests for"
-      . " this operation will route there automatically.\n";
-  }
-  return $retry->();
 }
 
 sub execute_compact_program {
@@ -486,7 +452,7 @@ sub execute_program_to_json {
     );
     return _settle_result($result, $on_stall);
   }
-  if (GraphQL::Houtou::XS::VM::native_program_prefers_async_lane_xs($native_program)) {
+  if ($self->{_async}) {
     return $self->_auto_json_or_die($native_program, %opts);
   }
   my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
@@ -501,22 +467,13 @@ sub execute_program_to_json {
       $prepared_variables,
     );
   }
-  my $json = eval {
-    GraphQL::Houtou::XS::VM::execute_native_program_to_json_xs(
-      $self->_native_runtime_handle,
-      $effective_program,
-      $opts{root_value},
-      $opts{context},
-      $prepared_variables,
-    );
-  };
-  if (my $err = $@) {
-    die $err if $err !~ /returned a Promise::XS promise in the synchronous fast lane/;
-    return $self->_fast_lane_promise_fallback($native_program, sub {
-      $self->_auto_json_or_die($native_program, %opts);
-    });
-  }
-  return $json;
+  return GraphQL::Houtou::XS::VM::execute_native_program_to_json_xs(
+    $self->_native_runtime_handle,
+    $effective_program,
+    $opts{root_value},
+    $opts{context},
+    $prepared_variables,
+  );
 }
 
 # Async JSON lane without an on_stall hook: promises that resolve during

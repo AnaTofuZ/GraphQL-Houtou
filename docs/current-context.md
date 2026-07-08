@@ -1327,3 +1327,25 @@ perl -Ilib t/19_vm_execute.t
   (varying_variables 192k/s 横ばい、soak +16KB/12000)
 - t/39(7 subtests)+ t/35 更新、計 271 tests。
   PSGI アダプタへの `async` パススルーは #31 マージ後に追加予定
+## 2026-07-08 W1: PSGI アダプタ + SQLite DataLoader example
+
+- `GraphQL::Houtou::PSGI` を追加(Plack 非依存の素の PSGI アプリ)
+  - POST `application/json`(query/variables/operationName)。
+    レスポンスは Accept に応じて `application/graphql-response+json` /
+    `application/json`
+  - 実行は常に `execute_document_to_json`(sync = streaming fast lane、
+    DataLoader = async lane + L2 の JSON tail)。Perl envelope は作らない
+  - 実行前失敗(壊れた JSON、query 欠落、parse エラー、不明な
+    operationName)は 400 + errors-only envelope。フィールドエラーは
+    200 の errors 配列(GraphQL over HTTP 準拠)
+  - `context => sub { my ($env)=@_; ... }` は per-request に呼ばれ、
+    `($context, $on_stall)` ペアを返せる(per-request DataLoader の定石)
+  - `graphiql => 1` で GET + Accept: text/html に GraphiQL(esm.sh CDN)
+  - operationName 指定時は AST を絞って実行(compiler は先頭 operation を
+    取る仕様のため)。この経路は文字列キーの program cache を通らない
+  - GET 実行は未実装(GraphiQL 配信のみ、他は 405)
+- `examples/sqlite-dataloader.psgi`: DBI + SQLite で posts→author の N+1 を
+  `WHERE id IN (...)` 1 本に畳む実例(L1-b の残件消化)。
+  手元で end-to-end 確認済み(200 + 正しい envelope)
+- t/38_psgi.t(8 subtests、計 272 tests)。テストは Plack::Test 不要
+  (env を手組みして app coderef を直接呼ぶ)

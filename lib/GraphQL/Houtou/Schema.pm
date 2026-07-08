@@ -408,9 +408,11 @@ sub build_native_runtime {
   my ($self, %opts) = @_;
   my $cache_max = delete $opts{program_cache_max};
   my $max_depth = delete $opts{max_depth};
+  my $async = delete $opts{async};
   my %runtime_args;
   $runtime_args{program_cache_max} = $cache_max if defined $cache_max;
   $runtime_args{max_depth}         = $max_depth if defined $max_depth;
+  $runtime_args{async}             = $async if defined $async;
   if (%opts || %runtime_args) {
     my $runtime_schema = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
     require GraphQL::Houtou::Runtime::NativeRuntime;

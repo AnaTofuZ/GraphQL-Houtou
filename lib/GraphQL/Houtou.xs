@@ -240,6 +240,7 @@ static SV *gql_runtime_vm_call_all_promise_for_state_sv(pTHX_ const gql_runtime_
 static int gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_explicit_generic_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
+static SV *gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ SV *resolved);
 static SV *gql_runtime_vm_promise_xs_new_deferred_sv(pTHX);
 static SV *gql_runtime_vm_promise_xs_deferred_promise_sv(pTHX_ SV *deferred_sv);
 static void gql_runtime_vm_promise_xs_deferred_resolve_sv(pTHX_ SV *deferred_sv, SV *value_sv);
@@ -6426,7 +6427,7 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
 
     if (gql_runtime_vm_slot_uses_native_fast_abi(slot)) {
       return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
-      return gql_runtime_vm_call_cb4_nonfatal(
+      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ gql_runtime_vm_call_cb4_nonfatal(
         aTHX_
         resolver_sv,
         source,
@@ -6434,7 +6435,7 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
         state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
         return_type_sv ? return_type_sv : &PL_sv_undef,
         error_out
-      );
+      ));
     }
 
     return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
@@ -6449,7 +6450,7 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
       croak("native VM slot type object is missing for explicit generic callback");
     }
 
-    return gql_runtime_vm_call_cb5_nonfatal(
+    return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ gql_runtime_vm_call_cb5_nonfatal(
       aTHX_
       resolver_sv,
       source,
@@ -6458,7 +6459,7 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
       sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state)),
       return_type_sv ? return_type_sv : &PL_sv_undef,
       error_out
-    );
+    ));
   }
 
   if (slot->field_name
@@ -6702,6 +6703,23 @@ gql_runtime_vm_resolve_current_field_explicit(pTHX_ gql_runtime_vm_exec_state_t 
 }
 
 static SV *
+gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ SV *resolved)
+{
+  /* The sync fast lanes cannot suspend, so a promise-returning resolver
+   * is a routing misconfiguration: async schemas declare themselves with
+   * async => 1 on the runtime (or pass on_stall per request). Failing
+   * loudly here keeps promise objects out of response data. */
+  if (resolved
+      && SvROK(resolved)
+      && SvOBJECT(SvRV(resolved))
+      && sv_derived_from(resolved, "Promise::XS::Promise")) {
+    sv_2mortal(resolved);
+    croak("a resolver returned a Promise::XS promise in the synchronous fast lane; build the runtime with async => 1 (or pass on_stall) so requests start on the async lane");
+  }
+  return resolved;
+}
+
+static SV *
 gql_runtime_vm_resolve_current_field_explicit_fast_sv(
   pTHX_
   gql_runtime_vm_exec_state_t *state,
@@ -6730,7 +6748,7 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
 
     if (gql_runtime_vm_slot_uses_native_fast_abi(slot)) {
       return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
-      return gql_runtime_vm_call_cb4_nonfatal(
+      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ gql_runtime_vm_call_cb4_nonfatal(
         aTHX_
         resolver_sv,
         source,
@@ -6738,7 +6756,7 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
         state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
         return_type_sv ? return_type_sv : &PL_sv_undef,
         error_out
-      );
+      ));
     }
 
     return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
@@ -6750,7 +6768,7 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
       );
     }
 
-    return gql_runtime_vm_call_cb5_nonfatal(
+    return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ gql_runtime_vm_call_cb5_nonfatal(
       aTHX_
       resolver_sv,
       source,
@@ -6759,7 +6777,7 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
       sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state)),
       return_type_sv ? return_type_sv : &PL_sv_undef,
       error_out
-    );
+    ));
   }
 }
 
@@ -7794,7 +7812,7 @@ gql_runtime_vm_json_cat_scalar(pTHX_ SV *out, SV *value)
       return;
     }
     if (sv_isobject(value) && sv_derived_from(value, "Promise::XS::Promise")) {
-      croak("execute_to_json is a synchronous fast lane; a resolver returned a Promise::XS promise");
+      croak("a resolver returned a Promise::XS promise in the synchronous fast lane; build the runtime with async => 1 (or pass on_stall) so requests start on the async lane");
     }
     /* Unexpected reference in a leaf position: stringify. */
     {

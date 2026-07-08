@@ -148,6 +148,27 @@ The contract is loader-agnostic: anything that can resolve the pending
 promises may implement `on_stall`. [GraphQL::Houtou::DataLoader](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3ADataLoader) is the
 bundled reference implementation.
 
+### Declaring an async schema (async => 1)
+
+Batching is the normal deployment shape, so runtimes accept a single
+declaration instead of per-request plumbing:
+
+    my $runtime = build_native_runtime($schema, async => 1);
+
+An async runtime starts every request on the async-capable lane: promise
+resolvers work with or without variables, `execute_document` returns the
+settled envelope (or a promise while pending), and
+`execute_document_to_json` renders JSON as soon as the response settles.
+Per-request `on_stall` hooks compose with it as usual and remain the way
+DataLoader batches are flushed.
+
+Without the declaration, requests with variables run on the synchronous
+fast lane, which cannot suspend. A resolver returning a Promise::XS
+promise there fails immediately with an error pointing at `async => 1`
+and `on_stall` - promise objects never leak into response data.
+`engine => 'native'` forces the strict sync lane even on an async
+runtime.
+
 ## Serving JSON responses directly
 
 When the response is going straight onto the wire (PSGI handlers and other

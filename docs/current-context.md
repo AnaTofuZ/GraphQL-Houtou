@@ -1308,6 +1308,25 @@ perl -Ilib t/19_vm_execute.t
   minilla は git 未追跡のテストを実行しないので新規 t/ ファイルは
   `git add` してから `minil test` すること
 
+## 2026-07-08 #28 修正: async ランタイム宣言 + fast lane の promise ガード
+
+- 設計判断: DataLoader/Promise が主経路という運用実態に合わせ、
+  ヒューリスティック(初回 croak→自動再実行、mutation の初回失敗)は不採用。
+  **`build_native_runtime($schema, async => 1)` の宣言 1 箇所**で
+  全リクエストが async lane から開始する(初回の特殊挙動なし)
+  - execute: variables の有無に関わらず auto lane。`on_stall` は従来どおり合成
+  - to_json: async lane + L2 JSON tail。pre-resolved チェーンは settled
+    promise から同期に JSON を取得、真のストールは「pass on_stall」エラー、
+    rejection は本来のエラーを伝播(`_auto_json_or_die`)
+  - `engine => 'native'` 明示時は async 宣言より優先して strict sync
+- ガード: resolver 呼び出し 4 箇所(default/explicit × cb4/cb5、SV/JSON 両
+  fast lane 共有)に `gql_runtime_vm_fast_lane_guard_promise_sv`。
+  promise が返ったら「build the runtime with async => 1 (or pass on_stall)」
+  で即 croak(promise オブジェクトが data に混入しない)。非 ref は SvROK、
+  unblessed ref は SvOBJECT で即抜け → ホットパス影響なし
+  (varying_variables 192k/s 横ばい、soak +16KB/12000)
+- t/39(7 subtests)+ t/35 更新、計 271 tests。
+  PSGI アダプタへの `async` パススルーは #31 マージ後に追加予定
 ## 2026-07-08 W1: PSGI アダプタ + SQLite DataLoader example
 
 - `GraphQL::Houtou::PSGI` を追加(Plack 非依存の素の PSGI アプリ)

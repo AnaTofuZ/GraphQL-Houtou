@@ -33,6 +33,7 @@ sub new {
     _specialized_program_cache_order => [],
     _specialized_program_cache_max => $cache_max,
     _max_depth => $max_depth,
+    _async => $args{async} ? 1 : 0,
   }, $class;
 }
 
@@ -283,6 +284,20 @@ sub execute_program {
     );
     return _settle_result($result, $on_stall);
   }
+  # Runtimes built with async => 1 declare that resolvers return promises
+  # (the DataLoader deployment shape); every request starts on the
+  # async-capable lane, exactly like the no-variables path. An explicit
+  # engine request still wins.
+  if ($self->{_async} && !defined $engine) {
+    require GraphQL::Houtou::Promise::PromiseXS;
+    return GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(
+      $runtime_handle,
+      $native_program,
+      $root_value,
+      $context_value,
+      $variables,
+    );
+  }
   if ((defined $engine && $engine eq 'native') || (!defined $engine && $has_variables)) {
     my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
       $self->runtime_schema,
@@ -437,6 +452,9 @@ sub execute_program_to_json {
     );
     return _settle_result($result, $on_stall);
   }
+  if ($self->{_async}) {
+    return $self->_auto_json_or_die($native_program, %opts);
+  }
   my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
     $self->runtime_schema,
     $native_program,
@@ -456,6 +474,38 @@ sub execute_program_to_json {
     $opts{context},
     $prepared_variables,
   );
+}
+
+# Async JSON lane without an on_stall hook: promises that resolve during
+# execution (pre-resolved chains) complete synchronously and yield JSON; a
+# genuine stall has nothing to flush it, so fail with a pointer to on_stall
+# rather than handing a promise to a caller that expected bytes.
+sub _auto_json_or_die {
+  my ($self, $native_program, %opts) = @_;
+  require GraphQL::Houtou::Promise::PromiseXS;
+  my $result = GraphQL::Houtou::XS::VM::execute_native_program_auto_to_json_xs(
+    $self->_native_runtime_handle,
+    $native_program,
+    $opts{root_value},
+    $opts{context},
+    $opts{variables},
+  );
+  if (blessed($result) && $result->isa('Promise::XS::Promise')) {
+    # Pre-resolved promise chains settle during execution, so the response
+    # promise may already hold the JSON; only a genuine stall is an error.
+    my $settled = eval {
+      GraphQL::Houtou::Promise::PromiseXS::maybe_get_promise_xs($result);
+    };
+    if (my $err = $@) {
+      # A rejected response promise carries a real request error; only the
+      # still-pending case earns the on_stall hint.
+      die $err if $err !~ /did not resolve synchronously/;
+      die "resolvers returned pending promises; pass on_stall (see GraphQL::Houtou::DataLoader)"
+        . " so execute_document_to_json can drive them to completion\n";
+    }
+    return $settled;
+  }
+  return $result;
 }
 
 sub execute_document_to_json {

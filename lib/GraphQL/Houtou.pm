@@ -322,6 +322,20 @@ The contract is loader-agnostic: anything that can resolve the pending
 promises may implement C<on_stall>. L<GraphQL::Houtou::DataLoader> is the
 bundled reference implementation.
 
+=head3 Promise resolvers without on_stall
+
+Without C<on_stall>, requests with variables start on the synchronous fast
+lane. If a resolver returns a Promise::XS promise there, the engine marks
+the program and re-executes the request on the async lane; subsequent
+requests for the same operation start on the async lane directly. The
+first such request therefore runs its already-executed resolvers twice -
+safe for queries, which the spec defines as side-effect free. A mutation
+in that situation is never re-executed: it fails once with an error
+explaining that its effects may be partially applied, and later requests
+route to the async lane automatically. Passing C<on_stall> (or requesting
+C<engine =E<gt> 'native'> to keep strict sync semantics) avoids the
+detection round-trip entirely.
+
 =head2 Serving JSON responses directly
 
 When the response is going straight onto the wire (PSGI handlers and other

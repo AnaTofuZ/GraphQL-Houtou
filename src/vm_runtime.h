@@ -218,6 +218,9 @@ typedef struct {
    * per-request program specialization is required at all. Zero-init via
    * Newxz means "not computed". */
   IV needs_variable_specialization;
+  /* Set once a resolver returned a promise on the sync fast lane; the
+   * router then starts this program on the async lane up front. */
+  U8 prefers_async_lane;
 } gql_runtime_vm_native_program_t;
 
 typedef struct gql_runtime_vm_path_frame gql_runtime_vm_path_frame_t;

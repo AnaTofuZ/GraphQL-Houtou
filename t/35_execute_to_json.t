@@ -141,7 +141,7 @@ subtest 'introspection query smoke' => sub {
   ok $decoded->{data}{__schema}{types}, 'introspection tree serializes';
 };
 
-subtest 'async resolvers are rejected' => sub {
+subtest 'async resolvers fall back to the async lane' => sub {
   my $has_promise_xs = eval { require Promise::XS; 1 };
   plan skip_all => 'Promise::XS not available' if !$has_promise_xs;
   my $async_schema = GraphQL::Houtou::Schema->new(
@@ -149,12 +149,16 @@ subtest 'async resolvers are rejected' => sub {
       name => 'AsyncQuery',
       fields => {
         later => { type => $String, resolve => sub { Promise::XS::resolved('x') } },
+        never => { type => $String, resolve => sub { Promise::XS::deferred()->promise } },
       },
     ),
   );
   my $rt = build_native_runtime($async_schema);
-  eval { $rt->execute_document_to_json('{ later }') };
-  like $@, qr/synchronous fast lane/, 'promise-returning resolver croaks';
+  my $bytes = $rt->execute_document_to_json('{ later }');
+  is_deeply $json->decode($bytes), { data => { later => 'x' }, errors => [] },
+    'pre-resolved promises settle to JSON via the async fallback';
+  eval { $rt->execute_document_to_json('{ never }') };
+  like $@, qr/pass on_stall/, 'a genuine stall points at on_stall';
 };
 
 subtest 'sequential responses are stable' => sub {

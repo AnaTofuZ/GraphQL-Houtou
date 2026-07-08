@@ -284,6 +284,20 @@ sub execute_program {
     return _settle_result($result, $on_stall);
   }
   if ((defined $engine && $engine eq 'native') || (!defined $engine && $has_variables)) {
+    # Promise-returning resolvers cannot run on the sync fast lane. Once a
+    # program has revealed one (see the sentinel catch below) it starts on
+    # the async lane up front, exactly like the no-variables path.
+    if (!defined $engine
+        && GraphQL::Houtou::XS::VM::native_program_prefers_async_lane_xs($native_program)) {
+      require GraphQL::Houtou::Promise::PromiseXS;
+      return GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(
+        $runtime_handle,
+        $native_program,
+        $root_value,
+        $context_value,
+        $variables,
+      );
+    }
     my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
       $self->runtime_schema,
       $native_program,
@@ -293,14 +307,30 @@ sub execute_program {
     # guards are variable-invariant: the fast lanes evaluate dynamic
     # arguments against the prepared variables at request time, so no
     # per-request clone/specialize (or variables-keyed cache) is needed.
-    if (!GraphQL::Houtou::XS::VM::native_program_needs_variable_specialization_xs($native_program)) {
-      return $self->execute_compact_program($native_program, %opts, variables => $prepared_variables);
+    my $effective_program = $native_program;
+    if (GraphQL::Houtou::XS::VM::native_program_needs_variable_specialization_xs($native_program)) {
+      $effective_program = $self->_cached_specialized_program(
+        $native_program,
+        $prepared_variables,
+      );
     }
-    my $specialized = $self->_cached_specialized_program(
-      $native_program,
-      $prepared_variables,
-    );
-    return $self->execute_compact_program($specialized, %opts, variables => $prepared_variables);
+    my $result = eval {
+      $self->execute_compact_program($effective_program, %opts, variables => $prepared_variables);
+    };
+    if (my $err = $@) {
+      die $err if defined $engine
+        || $err !~ /returned a Promise::XS promise in the synchronous fast lane/;
+      return $self->_fast_lane_promise_fallback($native_program, sub {
+        GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(
+          $runtime_handle,
+          $native_program,
+          $root_value,
+          $context_value,
+          $variables,
+        );
+      });
+    }
+    return $result;
   }
   if (!$has_root_value && !$has_context_value && !$has_variables) {
     return GraphQL::Houtou::XS::VM::execute_native_program_auto_simple_xs(
@@ -315,6 +345,25 @@ sub execute_program {
     $context_value,
     $variables,
   );
+}
+
+# A resolver returned a promise on the sync fast lane. Remember that on the
+# program so subsequent requests start on the async lane, then re-execute
+# there - but only for queries, which the GraphQL spec defines as free of
+# side effects. A mutation may already have applied part of its effects, so
+# re-running it is not safe; it fails once with a clear error and later
+# requests for the same operation route to the async lane automatically.
+sub _fast_lane_promise_fallback {
+  my ($self, $native_program, $retry) = @_;
+  GraphQL::Houtou::XS::VM::native_program_mark_prefers_async_lane_xs($native_program);
+  require GraphQL::Houtou::Promise::PromiseXS;
+  if (GraphQL::Houtou::XS::VM::native_program_operation_type_xs($native_program) != 1) {
+    die "a mutation resolver returned a Promise::XS promise on the synchronous lane;"
+      . " the mutation was not re-executed (its side effects may be partially applied)."
+      . " Pass on_stall to start mutations on the async lane; subsequent requests for"
+      . " this operation will route there automatically.\n";
+  }
+  return $retry->();
 }
 
 sub execute_compact_program {
@@ -437,6 +486,9 @@ sub execute_program_to_json {
     );
     return _settle_result($result, $on_stall);
   }
+  if (GraphQL::Houtou::XS::VM::native_program_prefers_async_lane_xs($native_program)) {
+    return $self->_auto_json_or_die($native_program, %opts);
+  }
   my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
     $self->runtime_schema,
     $native_program,
@@ -449,13 +501,54 @@ sub execute_program_to_json {
       $prepared_variables,
     );
   }
-  return GraphQL::Houtou::XS::VM::execute_native_program_to_json_xs(
+  my $json = eval {
+    GraphQL::Houtou::XS::VM::execute_native_program_to_json_xs(
+      $self->_native_runtime_handle,
+      $effective_program,
+      $opts{root_value},
+      $opts{context},
+      $prepared_variables,
+    );
+  };
+  if (my $err = $@) {
+    die $err if $err !~ /returned a Promise::XS promise in the synchronous fast lane/;
+    return $self->_fast_lane_promise_fallback($native_program, sub {
+      $self->_auto_json_or_die($native_program, %opts);
+    });
+  }
+  return $json;
+}
+
+# Async JSON lane without an on_stall hook: promises that resolve during
+# execution (pre-resolved chains) complete synchronously and yield JSON; a
+# genuine stall has nothing to flush it, so fail with a pointer to on_stall
+# rather than handing a promise to a caller that expected bytes.
+sub _auto_json_or_die {
+  my ($self, $native_program, %opts) = @_;
+  require GraphQL::Houtou::Promise::PromiseXS;
+  my $result = GraphQL::Houtou::XS::VM::execute_native_program_auto_to_json_xs(
     $self->_native_runtime_handle,
-    $effective_program,
+    $native_program,
     $opts{root_value},
     $opts{context},
-    $prepared_variables,
+    $opts{variables},
   );
+  if (blessed($result) && $result->isa('Promise::XS::Promise')) {
+    # Pre-resolved promise chains settle during execution, so the response
+    # promise may already hold the JSON; only a genuine stall is an error.
+    my $settled = eval {
+      GraphQL::Houtou::Promise::PromiseXS::maybe_get_promise_xs($result);
+    };
+    if (my $err = $@) {
+      # A rejected response promise carries a real request error; only the
+      # still-pending case earns the on_stall hint.
+      die $err if $err !~ /did not resolve synchronously/;
+      die "resolvers returned pending promises; pass on_stall (see GraphQL::Houtou::DataLoader)"
+        . " so execute_document_to_json can drive them to completion\n";
+    }
+    return $settled;
+  }
+  return $result;
 }
 
 sub execute_document_to_json {

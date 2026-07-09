@@ -239,4 +239,80 @@ subtest 'runtime execute_document accepts on_stall directly' => sub {
   is scalar @user_batches, 1, 'single batch through the runtime API';
 };
 
+subtest 'list field resolving to an array of promises (issue #33)' => sub {
+  require GraphQL::Houtou::Type::List;
+  my @rows = map { { name => "row-$_", qty => $_ } } 1..3;
+  my $Item = GraphQL::Houtou::Type::Object->new(
+    name => 'Row', fields => {
+      name => { type => $String },
+      qty => { type => $Int },
+    });
+  my @batches;
+  my $list_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        rows => {
+          type => GraphQL::Houtou::Type::List->new(of => $Item),
+          resolve => sub {
+            my (undef, undef, $c) = @_;
+            return [ map { $c->{rows}->load($_) } 1..3 ];
+          },
+        },
+        tags => {
+          type => GraphQL::Houtou::Type::List->new(of => $String),
+          resolve => sub {
+            my (undef, undef, $c) = @_;
+            return [ map { $c->{tags}->load($_) } qw(x y) ];
+          },
+        },
+      },
+    ),
+  );
+  my $runtime = build_native_runtime($list_schema);
+
+  my $rows_loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+    push @batches, [ @{ $_[0] } ];
+    return [ map { $rows[$_-1] } @{ $_[0] } ];
+  });
+  my $tags_loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+    return [ map { "tag-$_" } @{ $_[0] } ];
+  });
+  my $result = $runtime->execute_document('{ rows { name qty } tags }',
+    context => { rows => $rows_loader, tags => $tags_loader },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($rows_loader, $tags_loader),
+  );
+  is_deeply $result, {
+    data => {
+      rows => [
+        { name => 'row-1', qty => 1 },
+        { name => 'row-2', qty => 2 },
+        { name => 'row-3', qty => 3 },
+      ],
+      tags => [ 'tag-x', 'tag-y' ],
+    },
+    errors => [],
+  }, 'object and scalar promise items complete after settling';
+  is scalar @batches, 1, 'all item keys collapse into one batch';
+
+  # per-key errors inside a list surface in the errors array with the
+  # item path, and the failed item becomes null
+  my $flaky = GraphQL::Houtou::DataLoader->new(batch => sub {
+    return [ map {
+      $_ == 2 ? GraphQL::Houtou::DataLoader::Error->new('row 2 missing') : $rows[$_-1]
+    } @{ $_[0] } ];
+  });
+  my $tags2 = GraphQL::Houtou::DataLoader->new(batch => sub {
+    [ map { "tag-$_" } @{ $_[0] } ] });
+  my $with_error = $runtime->execute_document('{ rows { name qty } }',
+    context => { rows => $flaky, tags => $tags2 },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($flaky),
+  );
+  is $with_error->{data}{rows}[0]{name}, 'row-1', 'items before the failure survive';
+  ok !defined $with_error->{data}{rows}[1] || !defined $with_error->{data}{rows}[1]{name},
+    'failed item is null';
+  is $with_error->{data}{rows}[2]{name}, 'row-3', 'items after the failure survive';
+  like $with_error->{errors}[0]{message}, qr/row 2 missing/, 'rejection surfaces in errors';
+};
+
 done_testing;

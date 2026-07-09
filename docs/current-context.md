@@ -1327,3 +1327,35 @@ perl -Ilib t/19_vm_execute.t
   (varying_variables 192k/s 横ばい、soak +16KB/12000)
 - t/39(7 subtests)+ t/35 更新、計 271 tests。
   PSGI アダプタへの `async` パススルーは #31 マージ後に追加予定
+
+## 2026-07-10 R0 / #33 修正: list × promise 項目の silent undef を解消
+
+- 根本原因: async lane の COMPLETE_LIST が promise 検出**前に**子ブロックを
+  実行していた(検出対象が item_result で、item_sv ではなかった)。
+  promise を source に子ブロックが走り全フィールド undef、エラーも出ない
+- 修正(lib/GraphQL/Houtou.xs):
+  - COMPLETE_LIST の item ループで `item_sv` を promise 判定し、promise なら
+    子ブロック実行を then コールバックに遅延する
+    `gql_runtime_vm_new_list_item_child_callback_sv`(state_sv + path_frame +
+    child_block_index を magic ctx に保持、resolve 後に
+    `execute_block_async_path_sv` を実行)+ 既存 error_callback を
+    `call_then_promise_for_state_sv` に接続
+  - `xs_list_pending_callback`: `native_list_store_at` の前に Outcome の
+    error_records を writer へ push(list 内 per-key rejection が errors に
+    届くようになった。従来は silent loss)
+  - sync fast lane の list item ループ(`complete_current_list_fast_sv` /
+    `complete_current_list_fast_json`)にも
+    `gql_runtime_vm_fast_lane_guard_promise_sv` を追加 → promise 項目は
+    async => 1 を案内して croak(silent undef の残り経路を閉鎖)
+- 経路の整理(テスト設計にも影響):
+  - sync ランタイムでも variables/root/context なしの execute(SV)は
+    auto lane に乗るため、pre-resolved promise 項目はこの修正で正しく完了する
+  - fast SV lane に乗るのは `engine => 'native'` 明示 or variables あり。
+    t/39 の新 subtest は `engine => 'native'` で fast lane 経由の croak を検証
+  - to_json は sync ランタイムでは常に fast JSON lane → croak
+- テスト: t/36 に DataLoader 経由の list-of-promises subtest(全 data +
+  1 バッチ + per-key error が errors[0] に載る)、t/39 に fast lane croak ×4 +
+  auto lane 完了 subtest。計 273 tests パス
+- soak 全シナリオ +800KB/12000 iters(既知残差水準、リークなし)。
+  benchmark checkpoint: list_of_objects bundle 601k/s、bundle_to_json 876k/s、
+  varying_variables 189k/s(いずれも前回同水準、ガード追加の影響なし)

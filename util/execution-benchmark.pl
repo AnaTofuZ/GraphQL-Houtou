@@ -466,6 +466,92 @@ sub benchmark_case {
   cmpthese($count, { map { $_->[0] => $_->[1] } @checks });
 }
 
+# L3 checkpoint case: the native async lane with promises that are already
+# resolved when execution sees them (the DataLoader steady state after a
+# flush). The sync fast lane on the same query shape is the reference cost;
+# the gap between the two is what L3 works on. 20-item object list with 3
+# fields, variables carried so the sync runtime takes the fast lane.
+sub benchmark_async_preresolved {
+  require Promise::XS;
+  require JSON::MaybeXS;
+
+  my $query = 'query q($n: Int) { items(n: $n) { id name qty } }';
+  my $vars = { n => 20 };
+  # Rows are rebuilt per request (like DB rows in production) rather than
+  # shared between the runtimes: serializing a shared SV marks it POK, and
+  # the async lanes' native tree serializes dualvars string-first (no
+  # GraphQL type info there yet - plan P3), which would fail the sanity
+  # comparison on "1" vs 1 rather than on a real lane difference. qty is a
+  # fresh IV for the same reason ($i itself goes POK via interpolation).
+  my $make_rows = sub {
+    return [ map { my $i = $_; { id => "i$i", name => "item-$i", qty => 0 + $i } } 1 .. 20 ];
+  };
+
+  my $item_fields = {
+    id => { type => $GraphQL::Houtou::Type::Scalar::ID },
+    name => { type => $GraphQL::Houtou::Type::Scalar::String },
+    qty => { type => $GraphQL::Houtou::Type::Scalar::Int },
+  };
+  my $make_schema = sub {
+    my ($resolve) = @_;
+    my $Item = GraphQL::Houtou::Type::Object->new(name => 'Item', fields => $item_fields);
+    return GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          items => {
+            type => $Item->list,
+            args => { n => { type => $GraphQL::Houtou::Type::Scalar::Int } },
+            resolve => $resolve,
+          },
+        },
+      ),
+    );
+  };
+
+  my $sync_rt = $make_schema->(sub { $make_rows->() })->build_native_runtime;
+  my $async_rt = $make_schema->(sub { Promise::XS::resolved($make_rows->()) })
+    ->build_native_runtime(async => 1);
+  my $async_items_rt = $make_schema->(
+    sub { [ map { Promise::XS::resolved($_) } @{ $make_rows->() } ] }
+  )->build_native_runtime(async => 1);
+
+  my %modes = (
+    houtou_sync_sv => sub {
+      return $sync_rt->execute_document($query, variables => $vars);
+    },
+    houtou_async_sv => sub {
+      return maybe_get_promise_xs(
+        $async_rt->execute_document($query, variables => $vars));
+    },
+    houtou_async_items_sv => sub {
+      return maybe_get_promise_xs(
+        $async_items_rt->execute_document($query, variables => $vars));
+    },
+    houtou_sync_json => sub {
+      return $sync_rt->execute_document_to_json($query, variables => $vars);
+    },
+    houtou_async_json => sub {
+      return $async_rt->execute_document_to_json($query, variables => $vars);
+    },
+  );
+
+  my $json = JSON::MaybeXS->new->utf8;
+  my $expected = _normalize_result($modes{houtou_sync_sv}->());
+  for my $mode (sort keys %modes) {
+    my $got = $modes{$mode}->();
+    $got = _normalize_result(ref $got ? $got : $json->decode($got));
+    # JSON-lane key order follows completion order; compare decoded trees.
+    die "Result mismatch for async_preresolved/$mode\n"
+      if _dump($got) ne _dump($expected);
+  }
+
+  print "\n=== async_preresolved ===\n";
+  print "Query: $query\n";
+  print "Mode: native runtime, pre-resolved Promise::XS vs sync fast lane\n";
+  cmpthese($count, \%modes);
+}
+
 sub _dump {
   require Data::Dumper;
   local $Data::Dumper::Sortkeys = 1;
@@ -547,3 +633,6 @@ print "Using built GraphQL::Houtou from blib and upstream GraphQL from sibling c
 for my $case (@cases) {
   benchmark_case($case->{name}, $case, $up_schema, $houtou_schema);
 }
+
+benchmark_async_preresolved()
+  if $include_async && (!@only || $only{async_preresolved});

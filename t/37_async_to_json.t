@@ -136,6 +136,55 @@ subtest 'deadlock is detected' => sub {
   like $err, qr/stalled/, 'no-progress stall dies with the deadlock error';
 };
 
+subtest 'nested structures behind a promise keep their shape in JSON' => sub {
+  # Regression: the outcome->native conversion wrapped nested plain
+  # hash/array trees one level deep as scalars, so a promise-of-list (or a
+  # promise-of-object with nested children) serialized items as the string
+  # "HASH(0x...)" on the JSON lane.
+  my $Inner = GraphQL::Houtou::Type::Object->new(
+    name => 'Inner', fields => { city => { type => $String } });
+  my $Row = GraphQL::Houtou::Type::Object->new(
+    name => 'Row',
+    fields => {
+      name => { type => $String },
+      qty => { type => $Int },
+      inner => { type => $Inner },
+    },
+  );
+  my $make_rows = sub {
+    [ map { my $i = $_;
+        { name => "r$i", qty => 0 + $i, inner => { city => "c$i" } } } 1 .. 2 ];
+  };
+  my $async_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        rows => {
+          type => $Row->list,
+          resolve => sub { Promise::XS::resolved($make_rows->()) },
+        },
+        row => {
+          type => $Row,
+          resolve => sub { Promise::XS::resolved($make_rows->()->[0]) },
+        },
+      },
+    ),
+  );
+  my $rt = build_native_runtime($async_schema, async => 1);
+  my $json = $rt->execute_document_to_json(
+    '{ rows { name qty inner { city } } row { inner { city } } }');
+  is_deeply decode($json), {
+    data => {
+      rows => [
+        { name => 'r1', qty => 1, inner => { city => 'c1' } },
+        { name => 'r2', qty => 2, inner => { city => 'c2' } },
+      ],
+      row => { inner => { city => 'c1' } },
+    },
+    errors => [],
+  }, 'promise-of-list and promise-of-object serialize nested children';
+};
+
 subtest 'top-level execute_to_json accepts on_stall' => sub {
   my $users = new_loader();
   my $json = execute_to_json(

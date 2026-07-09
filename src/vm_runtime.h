@@ -2487,6 +2487,22 @@ gql_runtime_vm_error_record_to_error_sv(pTHX_ const gql_runtime_vm_error_record_
   return newRV_noinc((SV *)error_hv);
 }
 
+/* Completed child selections arrive as plain hash/array trees (nested
+ * objects and lists of the response). Convert those recursively so the
+ * native tree keeps their structure; anything else - scalars and blessed
+ * leaves (custom scalar objects, boolean objects) - stays a scalar node
+ * for the shared scalar serializer. A shallow scalar wrap here turns a
+ * nested hashref into the string "HASH(0x...)" on the JSON lane. */
+static gql_runtime_vm_native_value_t *
+gql_runtime_vm_native_value_from_completed_sv(pTHX_ SV *value)
+{
+  if (value && SvOK(value) && SvROK(value) && !sv_isobject(value)
+      && (SvTYPE(SvRV(value)) == SVt_PVHV || SvTYPE(SvRV(value)) == SVt_PVAV)) {
+    return gql_runtime_vm_native_value_from_sv(aTHX_ value);
+  }
+  return gql_runtime_vm_new_native_value_scalar(aTHX_ value ? value : &PL_sv_undef);
+}
+
 static gql_runtime_vm_outcome_t *
 gql_runtime_vm_new_outcome_struct(pTHX_ U8 kind_code, SV *value, SV *error_records)
 {
@@ -2514,7 +2530,7 @@ gql_runtime_vm_new_outcome_struct(pTHX_ U8 kind_code, SV *value, SV *error_recor
               aTHX_
               outcome->value,
               key_pv,
-              gql_runtime_vm_new_native_value_scalar(aTHX_ val_sv ? val_sv : &PL_sv_undef)
+              gql_runtime_vm_native_value_from_completed_sv(aTHX_ val_sv)
             );
           }
         } else {
@@ -2533,7 +2549,7 @@ gql_runtime_vm_new_outcome_struct(pTHX_ U8 kind_code, SV *value, SV *error_recor
           SV **svp = av_fetch(src_av, i, 0);
           gql_runtime_vm_native_list_push(
             outcome->value,
-            gql_runtime_vm_new_native_value_scalar(aTHX_ (svp && *svp) ? *svp : &PL_sv_undef)
+            gql_runtime_vm_native_value_from_completed_sv(aTHX_ (svp && *svp) ? *svp : &PL_sv_undef)
           );
         }
       } else {

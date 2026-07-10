@@ -1399,3 +1399,41 @@ perl -Ilib t/19_vm_execute.t
   native 値を持つ Outcome を直接返し、COMPLETE_OBJECT/LIST が Outcome を
   透過・転送する形へ(COMPLETE_LIST の item 収集と error_records 集約が要注意)。
   その後に frame プール化(候補5)、XSUB プール化(候補1)の順
+
+## 2026-07-10 P1/L3 第2弾: native-first completion + hot path のアロケーション削減(+58%)
+
+- **native-first completion(候補3)**: `block_frame_finalize_sv` の
+  `return_pending_handle` を 3 モード化(0=従来 SV materialize/promise、
+  1=native Outcome/frame handle(公開 API 用、既存)、
+  **2=同期完了は native Outcome・pending は従来どおり promise**)。
+  COMPLETE_OBJECT/LIST/ABSTRACT の子ブロック呼び出しと #33 の
+  list_item_child_callback を mode 2 に。子ブロックの
+  native→SV materialize→Outcome で再 native 化の往復が消えた
+  - COMPLETE_LIST の同期尾部は SV 配列ラップをやめ native list を直接組み立て
+    (`native_value_take_completed_item_sv`: AV が唯一の所有者なので
+    refcount==1 の Outcome subtree を移譲、promise 解決値は従来どおり
+    `from_list_pending_sv`(エイリアス可能性があるため clone 維持))
+  - pending 側を promise のまま残したのは意図的: スケジューラ/merge の
+    consumer(process_frame 2183 等)は block frame handle を PROMISE_SV と
+    して誤処理するため。frame handle 直通(Promise::XS 境界の完全除去)は
+    次弾でこれらの consumer に block-frame 対応を入れてから mode 1 化する
+- **デフォルト resolver のフィールド取得**: フィールドごとの
+  `newSVpv`(キー SV)+ `hv_fetch_ent` + `newSVsv`(値フルコピー)を
+  `hv_fetch`(char* 直接)+ `SvREFCNT_inc` 共有に。leaf は直後に
+  native 変換でコピーされ、ref は子 source として読むだけなので共有安全
+- **クラス判定の stash キャッシュ**: `sv_derived_from`(ISA ハッシュ引き)が
+  per-field で走っていた。Outcome(19箇所)は exact stash 比較
+  (内部専用・非サブクラス)、Promise::XS は stash 比較 + サブクラス
+  fallback。Outcome handle の bless も `gv_stashpv` 名前引きをやめ
+  キャッシュ stash で `sv_bless`
+- 計測(async_preresolved median、ベースライン→今回):
+  - async_sv 19.4k → **30.6k/s(+58%)**、async_json 19.3k → **30.2k(+57%)**
+  - async_items_sv 12.8k → **16.8k(+31%)**
+  - sync 系は A/B(親コミットを同条件でビルド・計測)で 1-2% 差 = 誤差内。
+    リグレッションなし(朝の絶対値との差はマシン状態)
+- 274 tests + soak 全シナリオパス(+768KB/12000、既知残差水準)
+- プロファイル現況: hv_common 残り(materialize の hv_store、resolver の
+  anonhash=ユーザーコード)、malloc/free(block frame・native value の
+  Newxz/free)。次弾候補: frame/native value プール化(候補5)、
+  process_frame/merge の block-frame 対応 → mode 1 直通(候補4)、
+  root ブロックの mode 2 化(response materialize 一本化)

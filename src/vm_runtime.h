@@ -2658,7 +2658,7 @@ gql_runtime_vm_consume_outcome_native_object(
   pTHX_
   gql_runtime_vm_native_value_t *data_value,
   const char *result_name_pv,
-  const gql_runtime_vm_outcome_t *outcome,
+  gql_runtime_vm_outcome_t *outcome,
   gql_runtime_vm_writer_t *writer
 )
 {
@@ -2668,12 +2668,22 @@ gql_runtime_vm_consume_outcome_native_object(
     return;
   }
 
-  gql_runtime_vm_native_object_store(
-    aTHX_ data_value,
-    result_name_pv,
-    outcome->value ? gql_runtime_vm_native_value_clone(aTHX_ outcome->value)
-                   : gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef)
-  );
+  /* Consuming is the outcome's terminal use: when the caller is the sole
+   * owner, transfer the native subtree instead of deep-cloning it (the
+   * clone was immediately followed by destroying the original). Shared
+   * outcomes (refcount > 1, e.g. still referenced by a pending entry
+   * elsewhere) keep the defensive clone. */
+  if (outcome->refcount == 1 && outcome->value) {
+    gql_runtime_vm_native_object_store(aTHX_ data_value, result_name_pv, outcome->value);
+    outcome->value = NULL;
+  } else {
+    gql_runtime_vm_native_object_store(
+      aTHX_ data_value,
+      result_name_pv,
+      outcome->value ? gql_runtime_vm_native_value_clone(aTHX_ outcome->value)
+                     : gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef)
+    );
+  }
 
   if (!writer) {
     return;

@@ -1359,3 +1359,43 @@ perl -Ilib t/19_vm_execute.t
 - soak 全シナリオ +800KB/12000 iters(既知残差水準、リークなし)。
   benchmark checkpoint: list_of_objects bundle 601k/s、bundle_to_json 876k/s、
   varying_variables 189k/s(いずれも前回同水準、ガード追加の影響なし)
+
+## 2026-07-10 P1/L3 着手: 計測ゲート + outcome clone 除去(+13%)
+
+- 計測ゲート: `async_preresolved` ケースを execution-benchmark(-checkpoint).pl に
+  追加(20件×3フィールド object list、variables あり、native runtime)。モード:
+  `houtou_sync_sv/json`(fast lane 参照値)、`houtou_async_sv/json`
+  (一括 promise)、`houtou_async_items_sv`(per-item promise)。
+  行データはリクエスト毎に生成(共有 SV への POK 汚染で dualvar 比較が
+  壊れるため。id/name 補間で POK が付くので qty は `0 + $i` で純 IV に)
+- ベースライン median (repeat=5): sync_sv 70.4k / sync_json 68.6k /
+  async_sv 19.4k(3.6x)/ async_json 19.3k / async_items_sv 12.8k(5.5x)
+- **切り分けの要点**: async ランタイム + 同期 resolver(promise ゼロ)でも
+  20.5k vs sync 62.7k で 3x 遅い。promise 1 個の追加コストは −13% のみ。
+  → L3 の主犯は Promise::XS 境界(候補1/4)ではなくレーン機構
+  (クローン・native⇔SV 往復・frame 生成)。`sample` プロファイルでも
+  malloc/free + sv_clear/sv_setsv + hv_common が支配的
+- ゲートの sanity チェックが実バグを 2 件検出:
+  1. **修正済み**: `new_outcome_struct` の KIND_OBJECT/KIND_LIST 変換が
+     1 段 shallow(`new_native_value_scalar`)で、promise-of-list /
+     promise-of-object の nested 子ツリーが JSON レーンで
+     `"HASH(0x...)"` に文字列化(main でも再現する L2 以来の既存バグ。
+     SV レーンは block frame から materialize するため無事)。
+     `native_value_from_completed_sv`(plain HV/AV のみ再帰、blessed leaf は
+     scalar fallback 維持)で修正。t/37 に回帰テスト
+  2. **既知ギャップの露出(P3)**: dualvar(IV+POK)の Int leaf が
+     async レーンで `"1"` に quote される。native tree に GraphQL 型情報が
+     ないため SvPOKp 優先で PV 格納される。sync fast lane は型情報で数値化。
+     P3(native scalar kind)で解消予定
+- 最適化 1(候補2の一部): `consume_outcome_native_object` が
+  outcome->value を deep clone 直後に破棄していたのを、refcount==1 なら
+  subtree を移譲する形に。`consume_current_outcome_now` の
+  field_frame->outcome 退避(読者なし、3 行後に解放)も削除し
+  sole-owner 化 → async_sv/json 19.4k→22.0k(+13%)、items +7%。
+  sync 横ばい、274 tests + soak 全シナリオパス
+- **次の実装単位(最大レバー)**: native-first completion(候補3)。
+  現状は子ブロックごとに native values→SV materialize→outcome で再 native 化
+  の往復があり leaf が 4〜5 回コピーされる。execute_block_async_path が
+  native 値を持つ Outcome を直接返し、COMPLETE_OBJECT/LIST が Outcome を
+  透過・転送する形へ(COMPLETE_LIST の item 収集と error_records 集約が要注意)。
+  その後に frame プール化(候補5)、XSUB プール化(候補1)の順

@@ -256,8 +256,8 @@ static gql_runtime_vm_native_runtime_t *gql_runtime_vm_exec_state_native_runtime
 static SV *gql_runtime_vm_exec_state_execute_block_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, SV *base_path);
 static SV *gql_runtime_vm_exec_state_execute_block_async_path_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, gql_runtime_vm_path_frame_t *base_path_ptr, U8 return_pending_handle);
 static SV *gql_runtime_vm_exec_state_resolve_current_value_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *source_sv, gql_runtime_vm_path_frame_t *path_frame, SV **error_out);
-static SV *gql_runtime_vm_exec_state_complete_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame, IV block_index, IV slot_index, IV op_index, SV *resolved_sv);
-static SV *gql_runtime_vm_exec_state_complete_current_native_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame, const gql_runtime_vm_native_op_t *op, const gql_runtime_vm_native_slot_t *slot, SV *resolved_sv);
+static SV *gql_runtime_vm_exec_state_complete_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame, IV block_index, IV slot_index, IV op_index, SV *resolved_sv, gql_runtime_vm_outcome_t **outcome_out);
+static SV *gql_runtime_vm_exec_state_complete_current_native_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_path_frame_t *path_frame, const gql_runtime_vm_native_op_t *op, const gql_runtime_vm_native_slot_t *slot, SV *resolved_sv, gql_runtime_vm_outcome_t **outcome_out);
 static SV *gql_runtime_vm_exec_state_execute_current_op_async_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_outcome_t **outcome_out);
 static SV *gql_runtime_vm_apply_runtime_directives_nonfatal(pTHX_ gql_runtime_vm_exec_state_t *state, SV *source, SV *resolved, SV **error_out);
 static CV *gql_runtime_vm_directive_runtime_apply_cv(pTHX);
@@ -1538,6 +1538,9 @@ gql_runtime_vm_block_frame_finalize_sv(
     }
   }
   gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);
+  /* clear_pending retains the array for pooled reuse; this frame swaps in
+   * the rebuilt one instead, so the old buffer must go now. */
+  Safefree(frame->pending_entries);
   frame->pending_entries = next_pending.pending_entries;
   frame->pending_count = next_pending.pending_count;
   frame->pending_capacity = next_pending.pending_capacity;
@@ -2247,6 +2250,7 @@ gql_runtime_vm_async_scheduler_process_frame(
       }
 
       if (entry->payload_kind == GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV) {
+        gql_runtime_vm_outcome_t *completed_outcome = NULL;
         SV *completed_sv = gql_runtime_vm_exec_state_complete_async_sv(
           aTHX_
           state_sv,
@@ -2255,10 +2259,20 @@ gql_runtime_vm_async_scheduler_process_frame(
           entry->block_index,
           entry->slot_index,
           entry->op_index,
-          entry->payload.promise_sv
+          entry->payload.promise_sv,
+          &completed_outcome
         );
 
-        if (completed_sv && SvOK(completed_sv) && gql_runtime_vm_sv_is_outcome(aTHX_ completed_sv)) {
+        if (completed_outcome) {
+          gql_runtime_vm_consume_outcome_native_object(
+            aTHX_
+            frame->values_value,
+            entry->result_name_pv,
+            completed_outcome,
+            s->writer
+          );
+          gql_runtime_vm_outcome_decref(aTHX_ completed_outcome);
+        } else if (completed_sv && SvOK(completed_sv) && gql_runtime_vm_sv_is_outcome(aTHX_ completed_sv)) {
           gql_runtime_vm_consume_outcome_native_object(
             aTHX_
             frame->values_value,
@@ -2299,6 +2313,9 @@ gql_runtime_vm_async_scheduler_process_frame(
     }
 
     gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);
+    /* clear_pending retains the array for pooled reuse; this frame swaps in
+     * the rebuilt one instead, so the old buffer must go now. */
+    Safefree(frame->pending_entries);
     frame->pending_entries = next_pending.pending_entries;
     frame->pending_count = next_pending.pending_count;
     frame->pending_capacity = next_pending.pending_capacity;
@@ -2384,6 +2401,7 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
           state->writer
         );
       } else {
+        gql_runtime_vm_outcome_t *completed_outcome = NULL;
         SV *completed_sv;
 
         if (!exec_state || !state->state_sv) {
@@ -2397,9 +2415,19 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
           entry->block_index,
           entry->slot_index,
           entry->op_index,
-          resolved_sv
+          resolved_sv,
+          &completed_outcome
         );
-        if (completed_sv && SvOK(completed_sv) && gql_runtime_vm_sv_is_outcome(aTHX_ completed_sv)) {
+        if (completed_outcome) {
+          gql_runtime_vm_consume_outcome_native_object(
+            aTHX_
+            state->frame->values_value,
+            entry->result_name_pv,
+            completed_outcome,
+            state->writer
+          );
+          gql_runtime_vm_outcome_decref(aTHX_ completed_outcome);
+        } else if (completed_sv && SvOK(completed_sv) && gql_runtime_vm_sv_is_outcome(aTHX_ completed_sv)) {
           gql_runtime_vm_consume_outcome_native_object(
             aTHX_
             state->frame->values_value,
@@ -2447,6 +2475,9 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
   }
 
   gql_runtime_vm_block_frame_clear_pending(aTHX_ state->frame);
+  /* clear_pending retains the array for pooled reuse; this frame swaps in
+   * the rebuilt one instead, so the old buffer must go now. */
+  Safefree(state->frame->pending_entries);
   state->frame->pending_entries = next_pending.pending_entries;
   state->frame->pending_count = next_pending.pending_count;
   state->frame->pending_capacity = next_pending.pending_capacity;
@@ -2500,7 +2531,8 @@ static XS(gql_runtime_vm_xs_complete_callback)
     ctx->block_index,
     ctx->slot_index,
     ctx->op_index,
-    resolved_sv
+    resolved_sv,
+    NULL
   );
   if (tmp_resolved) {
     SvREFCNT_dec(tmp_resolved);
@@ -2897,6 +2929,47 @@ gql_runtime_vm_new_outcome_handle_sv(pTHX_ U8 kind_code, SV *value, SV *error_re
   SV *ret = gql_runtime_vm_wrap_outcome_sv(aTHX_ outcome);
   gql_runtime_vm_outcome_decref(aTHX_ outcome);
   return ret;
+}
+
+/* Sync-completion results for callers that consume outcome structs directly
+ * (outcome_out != NULL): hand over a caller-owned struct and skip the
+ * bless-then-DESTROY round trip of an SV handle, which the block execution
+ * loops otherwise pay once per field. */
+static SV *
+gql_runtime_vm_sync_outcome_result_sv(
+  pTHX_
+  U8 kind_code,
+  SV *value,
+  gql_runtime_vm_outcome_t **outcome_out
+)
+{
+  if (outcome_out) {
+    *outcome_out = gql_runtime_vm_new_outcome_struct(
+      aTHX_
+      kind_code,
+      value ? value : &PL_sv_undef,
+      &PL_sv_undef
+    );
+    return NULL;
+  }
+  return gql_runtime_vm_new_outcome_handle_sv(aTHX_ kind_code, value, &PL_sv_undef);
+}
+
+/* Passthrough for a value that is already a wrapped outcome handle SV. */
+static SV *
+gql_runtime_vm_outcome_result_from_handle_sv(
+  pTHX_
+  SV *handle_sv,
+  gql_runtime_vm_outcome_t **outcome_out
+)
+{
+  if (outcome_out) {
+    *outcome_out = gql_runtime_vm_expect_outcome(aTHX_ handle_sv);
+    gql_runtime_vm_outcome_incref(*outcome_out);
+    SvREFCNT_dec(handle_sv);
+    return NULL;
+  }
+  return handle_sv;
 }
 
 static SV *
@@ -3368,7 +3441,8 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
   gql_runtime_vm_path_frame_t *path_frame,
   const gql_runtime_vm_native_op_t *op,
   const gql_runtime_vm_native_slot_t *slot,
-  SV *resolved_sv
+  SV *resolved_sv,
+  gql_runtime_vm_outcome_t **outcome_out
 )
 {
   const gql_runtime_vm_native_runtime_t *runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
@@ -3383,10 +3457,10 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
       SV *child_value;
 
       if (!resolved_sv || !SvOK(resolved_sv)) {
-        return gql_runtime_vm_new_outcome_handle_sv(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, &PL_sv_undef);
+        return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, outcome_out);
       }
       if (child_block_index < 0) {
-        return gql_runtime_vm_new_outcome_handle_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, &PL_sv_undef);
+        return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, outcome_out);
       }
 
       /* Mode 2: a synchronously completed child comes back as a native
@@ -3405,7 +3479,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         return child_value;
       }
       if (child_value && SvOK(child_value) && gql_runtime_vm_sv_is_outcome(aTHX_ child_value)) {
-        return child_value;
+        return gql_runtime_vm_outcome_result_from_handle_sv(aTHX_ child_value, outcome_out);
       }
       if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, child_value)) {
         SV *callback_sv = gql_runtime_vm_wrap_object_outcome_callback_sv(aTHX);
@@ -3423,7 +3497,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
       }
 
       {
-        SV *ret = gql_runtime_vm_new_outcome_handle_sv(aTHX_ GQL_VM_KIND_OBJECT, child_value, &PL_sv_undef);
+        SV *ret = gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_OBJECT, child_value, outcome_out);
         SvREFCNT_dec(child_value);
         return ret;
       }
@@ -3437,10 +3511,10 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
       int has_promise = 0;
 
       if (!resolved_sv || !SvOK(resolved_sv)) {
-        return gql_runtime_vm_new_outcome_handle_sv(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, &PL_sv_undef);
+        return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, outcome_out);
       }
       if (!SvROK(resolved_sv) || SvTYPE(SvRV(resolved_sv)) != SVt_PVAV) {
-        return gql_runtime_vm_new_outcome_handle_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, &PL_sv_undef);
+        return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, outcome_out);
       }
 
       items_av = (AV *)SvRV(resolved_sv);
@@ -3520,6 +3594,12 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
           );
         }
         SvREFCNT_dec((SV *)resolved_items_av);
+        if (outcome_out) {
+          *outcome_out = gql_runtime_vm_new_outcome_from_owned_native_value_struct(
+            aTHX_ GQL_VM_KIND_LIST, list_value
+          );
+          return NULL;
+        }
         return gql_runtime_vm_new_outcome_from_owned_native_value_handle_sv(
           aTHX_ GQL_VM_KIND_LIST, list_value
         );
@@ -3532,7 +3612,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
       IV child_block_index;
 
       if (!resolved_sv || !SvOK(resolved_sv)) {
-        return gql_runtime_vm_new_outcome_handle_sv(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, &PL_sv_undef);
+        return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, outcome_out);
       }
 
       runtime_type_sv = gql_runtime_vm_exec_state_resolve_runtime_type_for_slot_sv(
@@ -3557,7 +3637,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         if (runtime_type_sv) {
           SvREFCNT_dec(runtime_type_sv);
         }
-        return gql_runtime_vm_new_outcome_handle_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, &PL_sv_undef);
+        return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, outcome_out);
       }
 
       child_block_index = gql_runtime_vm_find_abstract_child_block_index(
@@ -3566,7 +3646,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
       );
       SvREFCNT_dec(runtime_type_sv);
       if (child_block_index < 0) {
-        return gql_runtime_vm_new_outcome_handle_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, &PL_sv_undef);
+        return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, outcome_out);
       }
 
       {
@@ -3583,7 +3663,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
           return child_value;
         }
         if (child_value && SvOK(child_value) && gql_runtime_vm_sv_is_outcome(aTHX_ child_value)) {
-          return child_value;
+          return gql_runtime_vm_outcome_result_from_handle_sv(aTHX_ child_value, outcome_out);
         }
         if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, child_value)) {
           SV *callback_sv = gql_runtime_vm_wrap_object_outcome_callback_sv(aTHX);
@@ -3601,7 +3681,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         }
 
         {
-          SV *ret = gql_runtime_vm_new_outcome_handle_sv(aTHX_ GQL_VM_KIND_OBJECT, child_value, &PL_sv_undef);
+          SV *ret = gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_OBJECT, child_value, outcome_out);
           SvREFCNT_dec(child_value);
           return ret;
         }
@@ -3609,7 +3689,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
     }
     case GQL_VM_COMPLETE_GENERIC:
     default:
-      return gql_runtime_vm_new_outcome_handle_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, &PL_sv_undef);
+      return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, outcome_out);
   }
 }
 
@@ -5072,7 +5152,8 @@ gql_runtime_vm_exec_state_complete_async_sv(
   IV block_index,
   IV slot_index,
   IV op_index,
-  SV *resolved_sv
+  SV *resolved_sv,
+  gql_runtime_vm_outcome_t **outcome_out
 )
 {
   const gql_runtime_vm_native_runtime_t *runtime;
@@ -5104,9 +5185,13 @@ gql_runtime_vm_exec_state_complete_async_sv(
     path_ptr,
     op,
     slot,
-    resolved_sv
+    resolved_sv,
+    outcome_out
   );
 
+  if (outcome_out && *outcome_out) {
+    return NULL;
+  }
   return result_sv ? result_sv : newSVsv(&PL_sv_undef);
 }
 
@@ -5204,7 +5289,8 @@ gql_runtime_vm_then_complete_current_sv(
         block_index,
         slot_index,
         op_index,
-        ret
+        ret,
+        NULL
       );
     }
     SvREFCNT_dec(ret);
@@ -5327,9 +5413,13 @@ gql_runtime_vm_exec_state_execute_current_op_async_sv(
     s->cursor->block_index,
     s->cursor->slot_index,
     s->cursor->op_index,
-    resolved_sv
+    resolved_sv,
+    outcome_out
   );
+  /* Fallback for completion paths that still hand back a wrapped outcome
+   * handle SV despite outcome_out (e.g. error outcomes built deeper down). */
   if (outcome_out
+      && !*outcome_out
       && result_sv
       && SvOK(result_sv)
       && gql_runtime_vm_sv_is_outcome(aTHX_ result_sv)) {
@@ -5342,6 +5432,14 @@ gql_runtime_vm_exec_state_execute_current_op_async_sv(
 done_async_current_op:
   if (resolved_sv) {
     SvREFCNT_dec(resolved_sv);
+  }
+  if (outcome_out && *outcome_out) {
+    /* The outcome struct is the result; no SV (not even undef) to return,
+     * so the callers' loops skip a per-field SV allocation. */
+    if (result_sv) {
+      SvREFCNT_dec(result_sv);
+    }
+    return NULL;
   }
   return result_sv ? result_sv : newSVsv(&PL_sv_undef);
 }

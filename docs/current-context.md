@@ -1437,3 +1437,46 @@ perl -Ilib t/19_vm_execute.t
   Newxz/free)。次弾候補: frame/native value プール化(候補5)、
   process_frame/merge の block-frame 対応 → mode 1 直通(候補4)、
   root ブロックの mode 2 化(response materialize 一本化)
+
+## 2026-07-13 P1/L3 第3弾: プール化 + outcome struct 直通 + coerce C 化(累計 +176%)
+
+- **フリーリストプール(候補5)**: native value ノード(cap 4096)、
+  outcome struct(cap 1024)、path frame(cap 1024)、block frame(cap 256)
+  を capped free list で再利用。プロファイルで allocator(calloc/free/bzero)
+  が self time 首位だった(per-request: native value ~100、outcome/path ~63、
+  block frame ~21 個)
+  - コンテナは backing 配列を容量ごと保持(object.names/values、list.items、
+    block frame の pending_entries)→ Renew 倍々成長も再利用時はスキップ
+  - **要注意の不変条件**: 解放時にスロットを NULL クリアする。sparse な
+    `native_list_store_at` は「count 以降は空」を前提に既存項目の上書きを
+    検出するため、stale ポインタが残ると二重破棄でプールが壊れる
+    (t/36 の list×promise 失敗ケースで発現、修正済み)
+  - `block_frame_clear_pending` は配列を解放しなくなった。pending を
+    再構築してスワップする 3 箇所(finalize/process_frame/merge)は
+    旧バッファを明示 Safefree(入れないとリーク)
+- **outcome struct 直通(SV ハンドル bless の除去)**: 同期完了フィールド
+  ごとに Outcome を bless → 呼び出し元が即 unwrap → DESTROY メソッド
+  ディスパッチの往復があった。block ループの `outcome_out` を
+  `complete_async_sv` → `complete_current_native_async_sv` に貫通し、
+  同期完了は caller-owned struct + NULL 返却に(promise / block-frame
+  handle は従来どおり SV)。process_frame / merge の pending consumer にも
+  struct 分岐を追加
+  - 露出したバグ 2 件も修正: (1) 両 block ループが outcome 分岐で
+    プレースホルダの undef SV をフィールドごとにリーク、
+    (2) 上記 pending スワップ 3 箇所の旧配列リーク
+- **組み込みスカラーの coerce C 化**: 変数 coerce が毎回
+  `call_method("graphql_to_perl")`。`_builtin_kind` を C で見て
+  String/ID(非 ref 素通し)、Int/Boolean(純 IV、範囲/0-1 検査)、
+  Float(IV/NV)を直接処理。判定できない形(magic、ref、文字列数値、
+  JSON bool、範囲外)は従来の Perl パスへフォールバックし同じエラー文言
+- 計測(async_preresolved median、第2弾 30.6k →):
+  - async_sv 30.6k → **53.5k/s**(ベースライン 19.4k から **+176%**)
+  - async_json 30.2k → **51.8k**(+168%)、items 16.8k → **24.8k**(+94%)
+  - sync_sv 87k → **98.6k**、sync_json → **97.3k**(coerce C 化は全レーン共通)
+- 274 tests + soak(+544KB、プールは capped で bounded)パス
+- プロファイル現況(async_sv 53k 時点): materialize_sv ~20%(SV 出力に本質)、
+  native_value_destroy ~11%(scalar_pv/object names の savepv 解放が残り)、
+  resolver 呼び出し(ユーザーコード)~19%、Promise::XS 境界 ~10%
+  (Promise_DESTROY/then/deferred)、coerce 残り(prepare_program_variables)。
+  次弾候補: object field 名の borrowed 化(slot 文字列を参照)、
+  mode 1 直通(Promise::XS 境界の除去、候補4)、80k 到達には後者が必要

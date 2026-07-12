@@ -5043,6 +5043,48 @@ gql_runtime_vm_coerce_input_value_sv(pTHX_ SV *type_sv, SV *value_sv)
     return newSVsv(value_sv);
   }
 
+  /* Built-in scalar fast path: Type::Scalar carries _builtin_kind for the
+   * five specced scalars, and graphql_to_perl short-circuits parse_value
+   * for them anyway. Handle the unambiguous plain-SV shapes here and skip
+   * the per-coercion call_method; anything we cannot decide exactly
+   * (magic, refs, string-y numbers, JSON booleans) falls through to the
+   * Perl path, which validates and dies with the same messages. */
+  if (SvROK(type_sv) && SvTYPE(SvRV(type_sv)) == SVt_PVHV && !SvMAGICAL(SvRV(type_sv))) {
+    SV **kindp = hv_fetchs((HV *)SvRV(type_sv), "_builtin_kind", 0);
+    if (kindp && *kindp && SvPOK(*kindp) && !SvROK(value_sv) && !SvMAGICAL(value_sv)) {
+      const char *kind = SvPVX(*kindp);
+      STRLEN klen = SvCUR(*kindp);
+      if (!SvOK(value_sv)) {
+        return newSV(0);
+      }
+      if ((klen == 6 && memcmp(kind, "String", 6) == 0)
+          || (klen == 2 && memcmp(kind, "ID", 2) == 0)) {
+        /* Any defined non-ref value is accepted and passed through. */
+        return newSVsv(value_sv);
+      }
+      if (klen == 3 && memcmp(kind, "Int", 3) == 0 && SvIOK(value_sv) && !SvPOK(value_sv) && !SvNOK(value_sv)) {
+        IV v = SvIV(value_sv);
+        if (v >= -2147483648LL && v <= 2147483647LL) {
+          return newSViv(v);
+        }
+        /* Out-of-range: fall through so the Perl path raises "Not an Int." */
+      } else if (klen == 5 && memcmp(kind, "Float", 5) == 0 && !SvPOK(value_sv)) {
+        if (SvIOK(value_sv)) {
+          return newSViv(SvIV(value_sv));
+        }
+        if (SvNOK(value_sv)) {
+          return newSVnv(SvNV(value_sv));
+        }
+      } else if (klen == 7 && memcmp(kind, "Boolean", 7) == 0 && SvIOK(value_sv) && !SvPOK(value_sv) && !SvNOK(value_sv)) {
+        IV v = SvIV(value_sv);
+        if (v == 0 || v == 1) {
+          return newSViv(v);
+        }
+        /* Other numbers: fall through so the Perl path raises the error. */
+      }
+    }
+  }
+
   ENTER;
   SAVETMPS;
   sv_setsv(ERRSV, &PL_sv_undef);

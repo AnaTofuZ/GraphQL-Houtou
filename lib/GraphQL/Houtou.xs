@@ -383,6 +383,13 @@ gql_runtime_vm_free_block_frame(pTHX_ gql_runtime_vm_block_frame_t *frame)
   if (frame->parent_frame) {
     gql_runtime_vm_free_block_frame(aTHX_ frame->parent_frame);
   }
+  if (gql_runtime_vm_block_frame_pool_count < GQL_RUNTIME_VM_BLOCK_FRAME_POOL_MAX) {
+    frame->parent_frame = gql_runtime_vm_block_frame_pool_head;
+    gql_runtime_vm_block_frame_pool_head = frame;
+    gql_runtime_vm_block_frame_pool_count++;
+    return;
+  }
+  Safefree(frame->pending_entries);
   Safefree(frame);
 }
 
@@ -908,7 +915,7 @@ gql_runtime_vm_new_outcome_from_owned_native_value_struct(
 {
   gql_runtime_vm_outcome_t *outcome;
 
-  Newxz(outcome, 1, gql_runtime_vm_outcome_t);
+  outcome = gql_runtime_vm_outcome_pool_get(aTHX);
   outcome->refcount = 1;
   outcome->kind_code = kind_code;
   outcome->value = value ? value : gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);
@@ -956,7 +963,7 @@ static gql_runtime_vm_path_frame_t *
 gql_runtime_vm_new_path_frame_struct(pTHX_ gql_runtime_vm_path_frame_t *parent, SV *key)
 {
   gql_runtime_vm_path_frame_t *frame;
-  Newxz(frame, 1, gql_runtime_vm_path_frame_t);
+  frame = gql_runtime_vm_path_frame_pool_get(aTHX);
   frame->refcount = 1;
   if (parent) {
     frame->parent = parent;
@@ -988,7 +995,7 @@ gql_runtime_vm_new_path_frame_struct_pvn(
 )
 {
   gql_runtime_vm_path_frame_t *frame;
-  Newxz(frame, 1, gql_runtime_vm_path_frame_t);
+  frame = gql_runtime_vm_path_frame_pool_get(aTHX);
   frame->refcount = 1;
   if (parent) {
     frame->parent = parent;
@@ -1013,7 +1020,7 @@ gql_runtime_vm_new_path_frame_struct_pvn_borrowed(
 )
 {
   gql_runtime_vm_path_frame_t *frame;
-  Newxz(frame, 1, gql_runtime_vm_path_frame_t);
+  frame = gql_runtime_vm_path_frame_pool_get(aTHX);
   frame->refcount = 1;
   if (parent) {
     frame->parent = parent;
@@ -1044,13 +1051,11 @@ static gql_runtime_vm_block_frame_t *
 gql_runtime_vm_new_block_frame_struct(pTHX)
 {
   gql_runtime_vm_block_frame_t *frame;
-  Newxz(frame, 1, gql_runtime_vm_block_frame_t);
+  frame = gql_runtime_vm_block_frame_pool_get(aTHX);
   frame->refcount = 1;
   frame->values_value = gql_runtime_vm_new_native_value_object();
   frame->pending_count = 0;
-  frame->pending_capacity = 0;
   frame->pending_unresolved = 0;
-  frame->pending_entries = NULL;
   frame->parent_frame = NULL;
   frame->parent_entry_index = -1;
   frame->deferred_sv = NULL;
@@ -1238,7 +1243,7 @@ gql_runtime_vm_new_error_outcome_struct_for_path(pTHX_ SV *message_sv, gql_runti
   record = gql_runtime_vm_new_error_record_struct_for_path(aTHX_ clean_message_sv, path_frame);
   SvREFCNT_dec(clean_message_sv);
 
-  Newxz(outcome, 1, gql_runtime_vm_outcome_t);
+  outcome = gql_runtime_vm_outcome_pool_get(aTHX);
   outcome->refcount = 1;
   outcome->kind_code = GQL_VM_KIND_SCALAR;
   outcome->value = gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);

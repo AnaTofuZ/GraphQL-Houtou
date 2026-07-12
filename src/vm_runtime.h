@@ -291,6 +291,7 @@ struct gql_runtime_vm_native_value {
   SV *scalar_fallback_sv;
   gql_runtime_vm_native_object_t object;
   gql_runtime_vm_native_list_t list;
+  gql_runtime_vm_native_value_t *pool_next;
 };
 
 struct gql_runtime_vm_native_dynamic_value {
@@ -437,6 +438,7 @@ struct gql_runtime_vm_outcome {
   gql_runtime_vm_native_value_t *value;
   IV error_record_count;
   gql_runtime_vm_error_record_t **error_records;
+  struct gql_runtime_vm_outcome *pool_next;
 };
 
 struct gql_runtime_vm_writer_t {
@@ -711,12 +713,104 @@ gql_runtime_vm_program_block_by_index_sv(pTHX_ SV *program_sv, IV block_index)
   return (block_svp && *block_svp && SvOK(*block_svp)) ? *block_svp : NULL;
 }
 
+/*
+ * Free-list pool for native value nodes. The async lane allocates and
+ * destroys one node per response field plus one per object/list container,
+ * which made calloc/free the top self-time cost in profiles. Released nodes
+ * park here with their object/list backing arrays intact (count reset,
+ * capacity retained), so a reused container node also skips the Renew
+ * doubling ramp. Nodes hold no SVs while pooled; the pool is process-global
+ * like the cached stashes and is capped so idle memory stays bounded.
+ */
+#define GQL_RUNTIME_VM_NATIVE_VALUE_POOL_MAX 4096
+static gql_runtime_vm_native_value_t *gql_runtime_vm_native_value_pool_head = NULL;
+static IV gql_runtime_vm_native_value_pool_count = 0;
+
+/* Outcome and path-frame structs are allocated once per field on the async
+ * lane; they recycle through the same kind of capped free lists. Reused
+ * structs are zeroed so the constructors keep their Newxz assumptions. */
+#define GQL_RUNTIME_VM_OUTCOME_POOL_MAX 1024
+static gql_runtime_vm_outcome_t *gql_runtime_vm_outcome_pool_head = NULL;
+static IV gql_runtime_vm_outcome_pool_count = 0;
+
+#define GQL_RUNTIME_VM_PATH_FRAME_POOL_MAX 1024
+static gql_runtime_vm_path_frame_t *gql_runtime_vm_path_frame_pool_head = NULL;
+static IV gql_runtime_vm_path_frame_pool_count = 0;
+
+#define GQL_RUNTIME_VM_BLOCK_FRAME_POOL_MAX 256
+static gql_runtime_vm_block_frame_t *gql_runtime_vm_block_frame_pool_head = NULL;
+static IV gql_runtime_vm_block_frame_pool_count = 0;
+
+static gql_runtime_vm_block_frame_t *
+gql_runtime_vm_block_frame_pool_get(pTHX)
+{
+  /* Pooled block frames chain through their (dead) parent_frame pointer and
+   * keep their pending_entries array so refills skip the Renew ramp. */
+  gql_runtime_vm_block_frame_t *ret = gql_runtime_vm_block_frame_pool_head;
+  if (ret) {
+    gql_runtime_vm_pending_entry_t *entries = ret->pending_entries;
+    IV capacity = ret->pending_capacity;
+    gql_runtime_vm_block_frame_pool_head = ret->parent_frame;
+    gql_runtime_vm_block_frame_pool_count--;
+    Zero(ret, 1, gql_runtime_vm_block_frame_t);
+    ret->pending_entries = entries;
+    ret->pending_capacity = capacity;
+    return ret;
+  }
+  Newxz(ret, 1, gql_runtime_vm_block_frame_t);
+  return ret;
+}
+
+static gql_runtime_vm_outcome_t *
+gql_runtime_vm_outcome_pool_get(pTHX)
+{
+  gql_runtime_vm_outcome_t *ret = gql_runtime_vm_outcome_pool_head;
+  if (ret) {
+    gql_runtime_vm_outcome_pool_head = ret->pool_next;
+    gql_runtime_vm_outcome_pool_count--;
+    Zero(ret, 1, gql_runtime_vm_outcome_t);
+    return ret;
+  }
+  Newxz(ret, 1, gql_runtime_vm_outcome_t);
+  return ret;
+}
+
+static gql_runtime_vm_path_frame_t *
+gql_runtime_vm_path_frame_pool_get(pTHX)
+{
+  /* Pooled path frames chain through their (dead) parent pointer. */
+  gql_runtime_vm_path_frame_t *ret = gql_runtime_vm_path_frame_pool_head;
+  if (ret) {
+    gql_runtime_vm_path_frame_pool_head = ret->parent;
+    gql_runtime_vm_path_frame_pool_count--;
+    Zero(ret, 1, gql_runtime_vm_path_frame_t);
+    return ret;
+  }
+  Newxz(ret, 1, gql_runtime_vm_path_frame_t);
+  return ret;
+}
+
+static gql_runtime_vm_native_value_t *
+gql_runtime_vm_native_value_pool_get(U8 kind_code)
+{
+  gql_runtime_vm_native_value_t *ret = gql_runtime_vm_native_value_pool_head;
+  if (ret) {
+    gql_runtime_vm_native_value_pool_head = ret->pool_next;
+    gql_runtime_vm_native_value_pool_count--;
+    ret->pool_next = NULL;
+    ret->kind_code = kind_code;
+    return ret;
+  }
+  Newxz(ret, 1, gql_runtime_vm_native_value_t);
+  ret->kind_code = kind_code;
+  return ret;
+}
+
 static gql_runtime_vm_native_value_t *
 gql_runtime_vm_new_native_value_scalar(pTHX_ SV *value)
 {
   gql_runtime_vm_native_value_t *ret;
-  Newxz(ret, 1, gql_runtime_vm_native_value_t);
-  ret->kind_code = GQL_VM_NATIVE_VALUE_SCALAR;
+  ret = gql_runtime_vm_native_value_pool_get(GQL_VM_NATIVE_VALUE_SCALAR);
   ret->scalar_kind_code = GQL_VM_NATIVE_SCALAR_UNDEF;
   ret->scalar_iv = 0;
   ret->scalar_nv = 0.0;
@@ -757,19 +851,13 @@ gql_runtime_vm_new_native_value_scalar(pTHX_ SV *value)
 static gql_runtime_vm_native_value_t *
 gql_runtime_vm_new_native_value_object(void)
 {
-  gql_runtime_vm_native_value_t *ret;
-  Newxz(ret, 1, gql_runtime_vm_native_value_t);
-  ret->kind_code = GQL_VM_NATIVE_VALUE_OBJECT;
-  return ret;
+  return gql_runtime_vm_native_value_pool_get(GQL_VM_NATIVE_VALUE_OBJECT);
 }
 
 static gql_runtime_vm_native_value_t *
 gql_runtime_vm_new_native_value_list(void)
 {
-  gql_runtime_vm_native_value_t *ret;
-  Newxz(ret, 1, gql_runtime_vm_native_value_t);
-  ret->kind_code = GQL_VM_NATIVE_VALUE_LIST;
-  return ret;
+  return gql_runtime_vm_native_value_pool_get(GQL_VM_NATIVE_VALUE_LIST);
 }
 
 static void
@@ -829,20 +917,38 @@ gql_runtime_vm_native_value_destroy(pTHX_ gql_runtime_vm_native_value_t *value)
       }
       break;
     case GQL_VM_NATIVE_VALUE_OBJECT:
+      /* Slots must go back to NULL: the retained arrays are reused with the
+       * invariant that entries at or beyond count are empty (sparse
+       * store_at fills rely on it to detect real overwrites). */
       for (i = 0; i < value->object.count; i++) {
         Safefree(value->object.names[i]);
+        value->object.names[i] = NULL;
         gql_runtime_vm_native_value_destroy(aTHX_ value->object.values[i]);
+        value->object.values[i] = NULL;
       }
-      Safefree(value->object.names);
-      Safefree(value->object.values);
+      value->object.count = 0;
       break;
     case GQL_VM_NATIVE_VALUE_LIST:
       for (i = 0; i < value->list.count; i++) {
         gql_runtime_vm_native_value_destroy(aTHX_ value->list.items[i]);
+        value->list.items[i] = NULL;
       }
-      Safefree(value->list.items);
+      value->list.count = 0;
       break;
   }
+  value->scalar_kind_code = GQL_VM_NATIVE_SCALAR_UNDEF;
+  value->scalar_pv = NULL;
+  value->scalar_pv_len = 0;
+  value->scalar_fallback_sv = NULL;
+  if (gql_runtime_vm_native_value_pool_count < GQL_RUNTIME_VM_NATIVE_VALUE_POOL_MAX) {
+    value->pool_next = gql_runtime_vm_native_value_pool_head;
+    gql_runtime_vm_native_value_pool_head = value;
+    gql_runtime_vm_native_value_pool_count++;
+    return;
+  }
+  Safefree(value->object.names);
+  Safefree(value->object.values);
+  Safefree(value->list.items);
   Safefree(value);
 }
 
@@ -2044,6 +2150,12 @@ gql_runtime_vm_outcome_decref(pTHX_ gql_runtime_vm_outcome_t *outcome)
     gql_runtime_vm_error_record_decref(aTHX_ outcome->error_records[i]);
   }
   Safefree(outcome->error_records);
+  if (gql_runtime_vm_outcome_pool_count < GQL_RUNTIME_VM_OUTCOME_POOL_MAX) {
+    outcome->pool_next = gql_runtime_vm_outcome_pool_head;
+    gql_runtime_vm_outcome_pool_head = outcome;
+    gql_runtime_vm_outcome_pool_count++;
+    return;
+  }
   Safefree(outcome);
 }
 
@@ -2261,10 +2373,10 @@ gql_runtime_vm_block_frame_clear_pending(pTHX_ gql_runtime_vm_block_frame_t *fra
       SvREFCNT_dec(frame->pending_entries[i].payload.promise_sv);
     }
   }
-  Safefree(frame->pending_entries);
-  frame->pending_entries = NULL;
+  /* The entries array (and its capacity) is retained for reuse; block
+   * frames recycle through a pool and re-fill it without a Renew ramp.
+   * gql_runtime_vm_free_block_frame frees it when a frame really dies. */
   frame->pending_count = 0;
-  frame->pending_capacity = 0;
   frame->pending_unresolved = 0;
 }
 
@@ -2431,7 +2543,13 @@ gql_runtime_vm_path_frame_decref(gql_runtime_vm_path_frame_t *frame)
     if (frame->key_pv && !frame->key_pv_borrowed) {
       Safefree(frame->key_pv);
     }
-    Safefree(frame);
+    if (gql_runtime_vm_path_frame_pool_count < GQL_RUNTIME_VM_PATH_FRAME_POOL_MAX) {
+      frame->parent = gql_runtime_vm_path_frame_pool_head;
+      gql_runtime_vm_path_frame_pool_head = frame;
+      gql_runtime_vm_path_frame_pool_count++;
+    } else {
+      Safefree(frame);
+    }
     gql_runtime_vm_path_frame_decref(parent);
   }
 }
@@ -2510,7 +2628,7 @@ gql_runtime_vm_new_outcome_struct(pTHX_ U8 kind_code, SV *value, SV *error_recor
   AV *errors_av = gql_runtime_vm_expect_error_records_av(aTHX_ error_records);
   SSize_t i;
 
-  Newxz(outcome, 1, gql_runtime_vm_outcome_t);
+  outcome = gql_runtime_vm_outcome_pool_get(aTHX);
   outcome->refcount = 1;
   outcome->kind_code = kind_code;
   switch (kind_code) {

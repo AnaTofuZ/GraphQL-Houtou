@@ -23,6 +23,7 @@ sub new {
     my %runtime_opts;
     $runtime_opts{program_cache_max} = delete $args{program_cache_max}
       if exists $args{program_cache_max};
+    $runtime_opts{async} = delete $args{async} if exists $args{async};
     $runtime = $schema->build_native_runtime(%runtime_opts);
   }
 
@@ -316,6 +317,16 @@ A per-request hook returned by the C<context> builder takes precedence.
 Serve the GraphiQL IDE (loaded from the esm.sh CDN) on C<GET> requests
 whose C<Accept> includes C<text/html>. C<graphiql_path> overrides the
 endpoint URL the IDE posts to (defaults to the page's own path).
+
+=item async
+
+Passed to C<build_native_runtime> when the app is constructed from a
+C<schema>. Declare it when resolvers return promises (DataLoader or other
+Promise::XS sources) so every request starts on the async-capable lane
+(see "Declaring an async schema" in L<GraphQL::Houtou>). Requests that
+carry an C<on_stall> hook run on the async lane either way, so pure
+DataLoader apps work without it - C<async> matters when promises can
+appear without a stall-flush hook.
 
 =item root_value, max_depth, program_cache_max
 

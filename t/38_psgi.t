@@ -60,9 +60,10 @@ my $app = GraphQL::Houtou::PSGI->new(
 
 sub request {
   my (%args) = @_;
+  my $target = $args{app} // $app;
   my $body = $args{body} // '';
   open my $input, '<', \$body or die $!;
-  my $res = $app->({
+  my $res = $target->({
     REQUEST_METHOD => $args{method} // 'POST',
     CONTENT_TYPE => $args{content_type} // 'application/json',
     CONTENT_LENGTH => length $body,
@@ -101,6 +102,34 @@ subtest 'async DataLoader query batches per request' => sub {
     a => { name => 'user-1' }, b => { name => 'user-2' },
   }, 'loader-resolved data';
   is scalar @batch_calls, 1, 'one batch for the request';
+};
+
+subtest 'async => 1 passes through to the runtime' => sub {
+  my $async_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'AsyncQuery',
+      fields => {
+        greeting => {
+          type => $String,
+          resolve => sub { Promise::XS::resolved('hi from a promise') },
+        },
+      },
+    ),
+  );
+
+  # Without the declaration the sync JSON lane refuses promise resolvers.
+  my $sync_app = GraphQL::Houtou::PSGI->new(schema => $async_schema)->to_app;
+  my ($bad_status, $bad_res) = graphql({ query => '{ greeting }' }, app => $sync_app);
+  is $bad_status, 400, 'promise resolver without the declaration is refused';
+  like $bad_res->{errors}[0]{message}, qr/async|on_stall/,
+    'error points at async => 1 / on_stall';
+
+  my $async_app = GraphQL::Houtou::PSGI->new(
+    schema => $async_schema, async => 1)->to_app;
+  my ($status, $res) = graphql({ query => '{ greeting }' }, app => $async_app);
+  is $status, 200, 'status 200';
+  is_deeply $res, { data => { greeting => 'hi from a promise' }, errors => [] },
+    'pre-resolved promise completes on the async lane';
 };
 
 subtest 'per-request context sees the PSGI env' => sub {

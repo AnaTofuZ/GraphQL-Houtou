@@ -48,9 +48,44 @@ sub load {
   return $promise;
 }
 
+# dataloader-js semantics: takes an arrayref of keys, returns one promise
+# that resolves with an arrayref of values in key order. Per-key failures
+# do not reject the promise; the failed slots hold
+# GraphQL::Houtou::DataLoader::Error objects instead.
 sub load_many {
-  my ($self, @keys) = @_;
-  return map { $self->load($_) } @keys;
+  my ($self, @args) = @_;
+  if (@args != 1 || ref($args[0]) ne 'ARRAY') {
+    warnings::warnif(deprecated =>
+      'GraphQL::Houtou::DataLoader::load_many(LIST) is deprecated; '
+      . 'pass an arrayref of keys to get a single promise');
+    return map { $self->load($_) } @args;
+  }
+  my $keys = $args[0];
+  return Promise::XS::resolved([]) if !@$keys;
+
+  my @results;
+  my $remaining = @$keys;
+  my $deferred = Promise::XS::deferred();
+  for my $i (0 .. $#$keys) {
+    my $slot = $i;
+    $self->load($keys->[$slot])->then(
+      sub {
+        $results[$slot] = $_[0];
+        $deferred->resolve(\@results) if !--$remaining;
+        return;
+      },
+      sub {
+        my ($reason) = @_;
+        $results[$slot] =
+          blessed($reason) && $reason->isa('GraphQL::Houtou::DataLoader::Error')
+          ? $reason
+          : GraphQL::Houtou::DataLoader::Error->new($reason);
+        $deferred->resolve(\@results) if !--$remaining;
+        return;
+      },
+    );
+  }
+  return $deferred->promise;
 }
 
 sub prime {
@@ -194,8 +229,16 @@ inside the batch function fails every key in the batch.
 
 =head1 METHODS
 
-C<load($key)>, C<load_many(@keys)>, C<prime($key, $value)>, C<clear($key)>,
+C<load($key)>, C<load_many(\@keys)>, C<prime($key, $value)>, C<clear($key)>,
 C<clear_all>, C<pending_count>, C<dispatch>.
+
+C<load_many> follows dataloader-js C<loadMany>: it takes an arrayref of
+keys and returns a single promise that resolves with an arrayref of values
+in key order. It never rejects on per-key failures - failed slots hold
+C<GraphQL::Houtou::DataLoader::Error> objects (check with C<blessed> +
+C<isa>, read the reason with C<< ->message >>). Calling it with a flat key
+list is deprecated (it returns one promise per key and warns in the
+C<deprecated> category).
 
 Instances cache per key (create one loader per request unless you want
 cross-request caching). Pass C<< cache => 0 >> to disable, C<cache_key>

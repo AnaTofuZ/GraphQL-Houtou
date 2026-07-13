@@ -223,9 +223,79 @@ subtest 'max_batch_size chunks large batches' => sub {
     max_batch_size => 2,
     batch => sub { my ($ids) = @_; push @sizes, scalar @$ids; return [ map { $USERS{1} } @$ids ] },
   );
-  my @promises = $chunked->load_many(qw(a b c d e));
+  my $promise = $chunked->load_many([qw(a b c d e)]);
   is $chunked->dispatch, 5, 'dispatch reports all keys';
   is_deeply \@sizes, [2, 2, 1], 'batches chunked at max size';
+};
+
+subtest 'load_many follows dataloader-js loadMany semantics' => sub {
+  my ($users) = make_loaders();
+  my $got;
+  $users->load_many([qw(1 3)])->then(sub { $got = $_[0] });
+  $users->dispatch;
+  is ref $got, 'ARRAY', 'resolves with a single arrayref';
+  is_deeply [ map { $_->{name} } @$got ], [qw(alice carol)], 'values in key order';
+  is_deeply \@user_batches, [ [qw(1 3)] ], 'both keys queued in one batch';
+
+  my $empty;
+  $users->load_many([])->then(sub { $empty = $_[0] });
+  is_deeply $empty, [], 'empty arrayref resolves immediately';
+};
+
+subtest 'load_many per-key failures land in the result array' => sub {
+  require Scalar::Util;
+  my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+    my ($ids) = @_;
+    return [ map {
+      $_ eq 'bad' ? GraphQL::Houtou::DataLoader::Error->new("no such key: $_") : uc $_
+    } @$ids ];
+  });
+  my $got;
+  $loader->load_many([qw(a bad b)])->then(sub { $got = $_[0] });
+  $loader->dispatch;
+  is $got->[0], 'A', 'value before the failure';
+  ok Scalar::Util::blessed($got->[1])
+    && $got->[1]->isa('GraphQL::Houtou::DataLoader::Error'),
+    'failed slot holds an Error object';
+  like $got->[1]->message, qr/no such key: bad/, 'error carries the reason';
+  is $got->[2], 'B', 'value after the failure';
+};
+
+subtest 'load_many list form is deprecated but keeps working' => sub {
+  my ($users) = make_loaders();
+  my @warnings;
+  local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+  my @promises = $users->load_many(qw(1 2));
+  is scalar @promises, 2, 'list call still returns one promise per key';
+  like $warnings[0], qr/deprecated/, 'list call warns in the deprecated category';
+  my @names;
+  $_->then(sub { push @names, $_[0]{name} }) for @promises;
+  $users->dispatch;
+  is_deeply \@names, [qw(alice bob)], 'promises still settle per key';
+};
+
+subtest 'resolver returning a load_many promise completes the list' => sub {
+  my ($users, $teams) = make_loaders();
+  my $s = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'ManyQuery',
+      fields => {
+        authors => {
+          type => $User->list,
+          resolve => sub { $_[2]->{users}->load_many([qw(1 3)]) },
+        },
+      },
+    ),
+    types => [ $User, $Team ],
+  );
+  my $result = execute($s, '{ authors { name } }', undef,
+    context => { users => $users, teams => $teams },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users, $teams),
+  );
+  is_deeply $result->{data}{authors},
+    [ { name => 'alice' }, { name => 'carol' } ],
+    'promise-of-array from load_many completes the list field';
+  is scalar @user_batches, 1, 'single batch for the whole list';
 };
 
 subtest 'runtime execute_document accepts on_stall directly' => sub {

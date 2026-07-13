@@ -51,7 +51,7 @@ graphql-ruby 型の「executor と不可分な組み込み」は採らない。
   POD で安定 API として明文化する
 - 併せて async リーク残差(タスク #11、~425B/req)をここで解消する
 
-**L1-b: 同梱リファレンス — `GraphQL::Houtou::DataLoader`** — 済 (2026-07-07。SQLite example のみ残)
+**L1-b: 同梱リファレンス — `GraphQL::Houtou::DataLoader`** — 済 (2026-07-08 SQLite example 含め完了)
 
 - `load` / `load_many` / `prime`、per-request キャッシュ、
   batch 関数(keys → values / per-key error)。dataloader(JS)の
@@ -87,7 +87,7 @@ graphql-ruby 型の「executor と不可分な組み込み」は採らない。
 
 ## Track 2: Web 提供面(Track 1 と並行可)
 
-### W1: PSGI/Plack アダプタ
+### W1: PSGI/Plack アダプタ — 済 (2026-07-08)
 
 - GraphQL over HTTP 準拠(POST JSON / `application/graphql-response+json`)
   + GraphiQL 配信

@@ -108,3 +108,23 @@ sub _complete_value {
 }
 
 1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+GraphQL::Houtou::Type::List - GraphQL list wrapper type
+
+=head1 DESCRIPTION
+
+Wraps any type as a GraphQL list: C<< GraphQL::Houtou::Type::List->new(of
+=> $type) >>, or more commonly C<< $type->list >>. Chain with
+C<non_null> for C<[T!]!> shapes: C<< $type->non_null->list->non_null >>.
+
+=head1 SEE ALSO
+
+L<GraphQL::Houtou::Type::NonNull>
+
+=cut

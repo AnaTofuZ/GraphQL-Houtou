@@ -157,3 +157,33 @@ sub _assert_known_fields {
 }
 
 1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+GraphQL::Houtou::Type::InputObject - GraphQL input object type
+
+=head1 SYNOPSIS
+
+    my $Filter = GraphQL::Houtou::Type::InputObject->new(
+      name   => 'Filter',
+      fields => {
+        name_like => { type => $String },
+        limit     => { type => $Int, default_value => 10 },
+      },
+    );
+
+=head1 DESCRIPTION
+
+A structured argument/variable type. C<is_one_of =E<gt> 1> makes it a
+C<@oneOf> input object: exactly one field must be provided and it must
+not be null.
+
+=head1 SEE ALSO
+
+L<GraphQL::Houtou>
+
+=cut

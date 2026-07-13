@@ -857,3 +857,87 @@ sub lookup_type {
 }
 
 1;
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+GraphQL::Houtou::Schema - schema container for GraphQL::Houtou
+
+=head1 SYNOPSIS
+
+    use GraphQL::Houtou::Schema;
+    use GraphQL::Houtou::Type::Object;
+    use GraphQL::Houtou::Type::Scalar qw($String);
+
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name   => 'Query',
+        fields => {
+          hello => { type => $String, resolve => sub { 'world' } },
+        },
+      ),
+    );
+
+    # or from SDL
+    my $schema = GraphQL::Houtou::Schema->from_doc($sdl, resolvers => \%resolvers);
+
+    my $runtime = $schema->build_native_runtime(async => 1);
+
+=head1 DESCRIPTION
+
+Holds the root operation types, the type registry, and the directive
+definitions, and is the factory for execution runtimes. Most applications
+build one schema at startup and one native runtime from it.
+
+=head1 CONSTRUCTORS
+
+=head2 new(%args)
+
+C<query> is required; C<mutation>, C<subscription>, C<description>,
+C<types>, and C<directives> are optional. C<types> defaults to the
+built-in scalars; list types here when they are reachable only through
+an interface or union (concrete types behind abstract fields).
+
+=head2 from_doc($sdl, %opts) / from_ast($ast, %opts)
+
+Build a schema from SDL (or its parsed AST). Resolvers, abstract type
+dispatch, and custom scalar coercion attach through
+C<< resolvers => { TypeName => { field => sub {...} } } >>; see
+L<GraphQL::Houtou/Building a schema from SDL>.
+
+=head1 METHODS
+
+=head2 build_native_runtime(%opts)
+
+Compiles the schema and returns a
+L<GraphQL::Houtou::Runtime::NativeRuntime>. Options: C<async> (declare
+that resolvers return promises; see
+L<GraphQL::Houtou/Batching resolvers (DataLoader / the on_stall hook)>),
+C<program_cache_max> (per-query program cache size, default 1000),
+C<max_depth>. With no options the compiled runtime is cached on the
+schema, so repeated calls are cheap.
+
+=head2 assert_valid / validation_errors
+
+C<validation_errors> returns an arrayref of schema-validation messages
+(interface conformance, input/output type placement, and so on);
+C<assert_valid> dies with the collected messages and is memoized.
+
+=head2 to_doc
+
+Renders the schema back to SDL, matching graphql-js C<printSchema>
+conventions; also exposed as C<print_schema()> in L<GraphQL::Houtou>.
+
+=head2 Accessors
+
+C<query>, C<mutation>, C<subscription>, C<types>, C<directives>,
+C<description>, C<name2type>, C<get_possible_types($abstract)>,
+C<is_possible_type($abstract, $object)>.
+
+=head1 SEE ALSO
+
+L<GraphQL::Houtou>, L<GraphQL::Houtou::Runtime::NativeRuntime>
+
+=cut

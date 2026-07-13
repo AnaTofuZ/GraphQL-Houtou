@@ -58,3 +58,24 @@ sub graphql_to_perl {
 }
 
 1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+GraphQL::Houtou::Type::NonNull - GraphQL non-null wrapper type
+
+=head1 DESCRIPTION
+
+Wraps any type as non-nullable: C<< GraphQL::Houtou::Type::NonNull->new(of
+=> $type) >>, or more commonly C<< $type->non_null >>. A null produced
+for a non-null field propagates to the nearest nullable ancestor, per the
+GraphQL spec.
+
+=head1 SEE ALSO
+
+L<GraphQL::Houtou::Type::List>
+
+=cut

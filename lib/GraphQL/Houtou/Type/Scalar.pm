@@ -265,3 +265,35 @@ our $ID = __PACKAGE__->new(
 );
 
 1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+GraphQL::Houtou::Type::Scalar - built-in and custom GraphQL scalars
+
+=head1 SYNOPSIS
+
+    use GraphQL::Houtou::Type::Scalar qw($String $Int $Float $Boolean $ID);
+
+    my $DateTime = GraphQL::Houtou::Type::Scalar->new(
+      name        => 'DateTime',
+      serialize   => sub { $_[0]->iso8601 },
+      parse_value => sub { parse_iso8601($_[0]) },
+    );
+
+=head1 DESCRIPTION
+
+Exports the five specced scalars as ready-made instances. Custom scalars
+take C<serialize> (internal value to response value) and C<parse_value>
+(variable/argument input to internal value); both default to pass-through.
+C<specified_by_url> adds the C<@specifiedBy> URL. Input coercion for the
+built-in scalars runs natively in the XS lane.
+
+=head1 SEE ALSO
+
+L<GraphQL::Houtou>
+
+=cut

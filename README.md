@@ -35,15 +35,24 @@ GraphQL::Houtou - XS-backed GraphQL parser and execution toolkit for Perl
 # DESCRIPTION
 
 GraphQL::Houtou provides an XS-first GraphQL parser and runtime for Perl.
-The parser surface returns the library's canonical Perl AST, while the
-execution mainline is the compiled runtime / VM pipeline.
+The parser surface returns the library's canonical Perl AST, while
+execution runs through compiled programs on a native (XS) VM.
 
-The current direction is:
+The toolkit is built around the shape of a real web application:
 
-- XS-required public compiler / validation facades
-- runtime-first execution through compiled programs and native bundles
-- legacy implementation tests and snapshots preserved under `legacy-tests/`
-instead of shaping the active mainline
+- **SQL-backed schemas with batching** - resolvers return promises from a
+loader ([GraphQL::Houtou::DataLoader](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3ADataLoader) is bundled) and the runtime's
+stall-flush hook collapses N+1 lookups into one query per nesting level,
+while callers still receive a finished response synchronously
+- **direct JSON responses** - `execute_to_json` renders the response as
+UTF-8 JSON bytes inside the XS lane without materializing the Perl
+envelope, for both sync and batching schemas
+- **an HTTP endpoint in one line** - [GraphQL::Houtou::PSGI](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3APSGI) serves
+GraphQL over HTTP (plus GraphiQL) on any PSGI server with no Plack
+dependency
+- **persisted-query artifacts** - fixed queries compile once into native
+bundles for maximum throughput; variable-bearing queries compile into
+reusable programs with an automatic per-query cache
 
 # USAGE
 
@@ -54,16 +63,11 @@ this library.
 
     my $ast = parse($source);
 
-If you want to tune parser options explicitly, use `parse_with_options()`.
+Computing location data costs real time. If you do not need `location`
+information, pass `no_location => 1` through `parse_with_options()` -
+recommended for throughput-sensitive workloads:
 
     my $ast = parse_with_options($source, {
-      no_location => 1,
-    });
-
-For throughput-sensitive parsing where you do not need location data, passing
-`no_location => 1` is still recommended.
-
-    my $doc = parse_with_options($source, {
       no_location => 1,
     });
 
@@ -146,7 +150,10 @@ request fails with a deadlock error instead of hanging.
 
 The contract is loader-agnostic: anything that can resolve the pending
 promises may implement `on_stall`. [GraphQL::Houtou::DataLoader](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3ADataLoader) is the
-bundled reference implementation.
+bundled reference implementation, following the dataloader-js semantics:
+`load($key)` returns one promise per key, `load_many(\@keys)` returns a
+single promise of the values in key order, and instances cache per key
+(create one loader per request).
 
 ### Declaring an async schema (async => 1)
 
@@ -220,6 +227,26 @@ as the resolver returned them (`0`/`1`) rather than JSON booleans,
 matching what `execute()` plus a JSON module produces for the same async
 request. JSON object member order carries no meaning, and both points are
 slated to converge with the sync lane as the async hot path work lands.
+
+## Serving over HTTP (PSGI)
+
+[GraphQL::Houtou::PSGI](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3APSGI) turns a schema into a GraphQL over HTTP endpoint
+on any PSGI server, with optional GraphiQL. Responses go through the
+direct-JSON lane, and per-request DataLoaders fit in the `context`
+builder:
+
+    # app.psgi
+    use GraphQL::Houtou::PSGI;
+    GraphQL::Houtou::PSGI->new(
+      schema => $schema,
+      graphiql => 1,
+      context => sub {
+        my ($env) = @_;
+        my $users = GraphQL::Houtou::DataLoader->new(batch => \&batch_users);
+        return ({ users => $users },
+                GraphQL::Houtou::DataLoader->on_stall_for($users));
+      },
+    )->to_app;
 
 ## API Selection Guide
 
@@ -318,16 +345,23 @@ variables to `execute_bundle` at request time is not supported.
 
 ### Async / Promise resolvers
 
-No extra configuration is needed. If any resolver returns a
-`Promise::XS::Promise`, the runtime automatically switches to the async path
-and may return a `Promise::XS::Promise` as the top-level result.
+Declare promise-returning schemas with `async => 1`
+(see ["Declaring an async schema (async => 1)"](#declaring-an-async-schema-async-1)):
+
+    my $runtime = build_native_runtime($schema, async => 1);
+
+Requests that pass an `on_stall` hook run on the async-capable lane in
+any case, so DataLoader deployments work with or without the declaration.
+Without either, requests run on the synchronous fast lane and a resolver
+returning a promise fails with an error pointing at both options - promise
+objects never leak into response data.
 
 Mutation fields always execute serially: each resolver is called only after
 the previous resolver's promise has resolved, in conformance with the GraphQL
 specification.
 
-Generic promise adapters and `promise_code` injection are no longer part of
-the active runtime path.
+Only `Promise::XS` promises are recognized. Generic promise adapters and
+`promise_code` injection are no longer part of the active runtime path.
 
 # PARSER SURFACE
 
@@ -335,67 +369,34 @@ The public parser surface is fixed to the library's canonical parser AST.
 `parse_with_options()` only accepts parser-local knobs such as
 `no_location`.
 
-# PERFORMANCE NOTES
-
-Computing location data costs real time. If you do not need `location` or
-`loc` information, passing `no_location => 1` is more efficient and is
-recommended for throughput-sensitive workloads.
-
-Example:
-
-    my $doc = parse_with_options($source, {
-      no_location => 1,
-    });
-
 # BENCHMARK SNAPSHOT
 
-The current benchmark baseline is the runtime/VM mainline rather than the
-legacy executor.
+Medians from `util/execution-benchmark-checkpoint.pl` (repeat 3) on one
+development machine, 2026-07-14. Resolver return values are not cached;
+the numbers measure request throughput with compiled artifacts reused
+across requests.
 
-The primary sync measurements focus on two execution modes:
+    perl util/execution-benchmark-checkpoint.pl --repeat 3
+    perl util/execution-benchmark-checkpoint.pl --include-async --case async_preresolved
 
-- cached runtime (Perl VM)
-- cached native bundle (XS VM)
+- **Dynamic queries** (`execute_document` with variables, program cache
+hit): `192k/s` with varying variable values; `199k-325k/s` across the
+nested-object, list, and abstract query shapes.
+- **Direct JSON responses**: `execute_document_to_json` `463k/s`;
+`execute_bundle_to_json` `894k/s` on the same list-of-objects shape.
+- **Persisted native bundles** (`execute_bundle`, fixed query):
+`611k-683k/s` across the same shapes.
+- **Async lane** (20-item x 3-field list, resolvers returning pre-resolved
+`Promise::XS` promises): `53k/s` for a whole-list promise (the
+DataLoader "promise of array" shape) against `93k/s` for the identical
+query on the sync lane - within `1.8x` and still narrowing. One promise
+per item runs at `25k/s`.
+- For scale: graphql-perl (`GraphQL.pm`) executes the list-of-objects
+JSON shape at `4.9k/s` from a query string and `23k/s` from a
+pre-parsed AST on the same machine.
 
-These benchmarks do not cache resolver return values. They measure throughput
-when the compiled schema/runtime/program artifacts are reused across requests.
-
-Typical commands are:
-
-    perl util/execution-benchmark.pl --count=-3
-    perl util/execution-benchmark-checkpoint.pl --repeat=5 --count=-3
-
-Median results at `fd72137` were:
-
-- sync `runtime_program`
-
-        - C<nested_variable_object>: C<3266/s>
-        - C<list_of_objects>: C<3266/s>
-        - C<abstract_with_fragment>: C<3257/s>
-
-- sync `native_bundle`
-
-        - C<nested_variable_object>: C<582772/s>
-        - C<list_of_objects>: C<515525/s>
-        - C<abstract_with_fragment>: C<576014/s>
-
-- async `Promise::XS` auto-detect path
-
-        - C<async_scalar>: C<3083/s>
-        - C<async_list>: C<3082/s>
-        - C<async_object>: C<3082/s>
-        - C<async_abstract>: C<3054/s>
-
-The key point is that the specialized sync fast lane for `native_bundle`
-remains the fastest path by a wide margin, while the public
-`runtime_program` path and the Promise::XS async mainline currently cluster
-around `3.0k/s`. The async path no longer depends on undocumented
-Promise::XS await hooks and uses only documented `then`, `all`, and
-Promise::XS type detection.
-
-For detailed methodology, see `docs/execution-benchmark.md`. For the current
-implementation assumptions, see `docs/current-context.md` and
-`docs/runtime-vm-architecture.md`.
+For methodology, see `docs/execution-benchmark.md`; for the measurement
+history behind these numbers, `docs/current-context.md`.
 
 # CAVEATS
 
@@ -407,6 +408,14 @@ lead to double frees, so every handle class defines `CLONE_SKIP`, making
 thread clones drop them (they become `undef` in the child thread) instead
 of crashing. Use process-based concurrency (prefork PSGI servers or fork)
 for parallelism.
+
+# SEE ALSO
+
+- [GraphQL::Houtou::Schema](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3ASchema) - schema construction and runtime factory
+- [GraphQL::Houtou::Runtime::NativeRuntime](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3ARuntime%3A%3ANativeRuntime) - the request-time execution API
+- [GraphQL::Houtou::DataLoader](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3ADataLoader) - bundled batching loader
+- [GraphQL::Houtou::PSGI](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3APSGI) - GraphQL over HTTP endpoint
+- `docs/` in the distribution - architecture, benchmarks, and design history
 
 # NAME ORIGIN
 

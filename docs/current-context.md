@@ -1503,3 +1503,38 @@ perl -Ilib t/19_vm_execute.t
   (Promise_DESTROY/then/deferred)、coerce 残り(prepare_program_variables)。
   次弾候補: object field 名の borrowed 化(slot 文字列を参照)、
   mode 1 直通(Promise::XS 境界の除去、候補4)、80k 到達には後者が必要
+
+## 2026-07-14 P1/L3 第4弾: mode 1 直通(pending 子ブロックの Promise::XS 境界除去)
+
+- **mode 1 切り替え**: COMPLETE_OBJECT / COMPLETE_ABSTRACT の子ブロック
+  実行(`execute_block_async_path_sv`)を mode 2 → mode 1 に。pending の
+  子ブロックが deferred+promise ペアを作らず raw block-frame handle を
+  直返しし、親フレームの pending entry(`GQL_VM_PENDING_BLOCK_FRAME_PTR`)
+  に直接リンクされる。子完了は `resolve_frame` の親通知
+  (outcome 直書き + pending_unresolved デクリメント)で伝播
+- **前提として追加した consumer 分岐**(引き継ぎメモの前提作業):
+  - process_frame の PROMISE_RESOLVED_VALUE_SV consumer: complete が
+    handle を返したら next_pending に BLOCK_FRAME_PTR で載せ替え、
+    親リンク + ready なら子を enqueue
+  - pending_merge_resolve にも同分岐(enqueue 後の drain はスワップ後に
+    遅延。swap 前に drain すると resolve_frame が旧 pending 配列に書く)
+  - handle 非対応だった `new_complete_callback_sv`/`xs_complete_callback` は
+    呼び出し元ゼロのデッドコードと確認(変更不要)
+- **踏んだバグ: 実行中フレームへの早期 enqueue**。mode 1 では子の完了が
+  promise を経ずに親へ直接届くため、親がまだ block ループ実行中
+  (frame_stack 上)なのに ready queue に入り、drain が実行途中の
+  response frame を resolve→解放して SV 二重解放 + stall
+  (t/36 の primed cache subtest で発現)。resolve_frame の親通知で
+  frame_stack を走査し、実行中の親は enqueue しない(親自身の finalize が
+  arm 後に正しく enqueue する)ことで修正
+- 計測:
+  - **多段 DataLoader 形状(posts→author→team、20 posts、実バッチ)**:
+    5,645 → **7,730 req/s(+37%)**(A/B、アドホック計測)。
+    mode 1 の対象は「promise 解決後に子ブロックがさらに pending になる」
+    形状で、ここに deferred+promise+then が per-object あった
+  - async_preresolved は **フラット(52.9k/s、回帰なし)**。この形状は
+    list 全体 promise → item 子ブロック同期完了なので pending 子ブロックが
+    発生しない。プロファイルの Promise::XS 境界 ~10% の残りは
+    per-entry の anonymous XSUB 生成(pending/error callback)と
+    response deferred が主因とみられる(次弾候補)
+- 287 tests + soak(+560KB/12000、既知残差水準)パス

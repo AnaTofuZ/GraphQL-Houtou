@@ -114,3 +114,33 @@ sub perl_to_graphql {
 }
 
 1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+GraphQL::Houtou::Type::Enum - GraphQL enum type
+
+=head1 SYNOPSIS
+
+    my $Episode = GraphQL::Houtou::Type::Enum->new(
+      name   => 'Episode',
+      values => {
+        NEWHOPE => { value => 4 },
+        EMPIRE  => { value => 5, description => 'ESB' },
+        JEDI    => {},   # value defaults to the name itself
+      },
+    );
+
+=head1 DESCRIPTION
+
+Enum values map a GraphQL name to an internal C<value> (defaulting to the
+name). C<deprecation_reason> on a value marks it C<@deprecated>.
+
+=head1 SEE ALSO
+
+L<GraphQL::Houtou>
+
+=cut

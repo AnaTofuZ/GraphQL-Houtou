@@ -119,3 +119,31 @@ sub to_doc {
 }
 
 1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+GraphQL::Houtou::Type::Union - GraphQL union type
+
+=head1 SYNOPSIS
+
+    my $SearchResult = GraphQL::Houtou::Type::Union->new(
+      name  => 'SearchResult',
+      types => [ $User, $Post ],
+      resolve_type => sub { my ($value) = @_; $value->{type_name} },
+    );
+
+=head1 DESCRIPTION
+
+An abstract output type over a fixed set of object types. C<resolve_type>
+receives the resolved value and returns the concrete type name; member
+types' C<is_type_of> callbacks are consulted otherwise.
+
+=head1 SEE ALSO
+
+L<GraphQL::Houtou::Type::Interface>
+
+=cut

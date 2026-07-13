@@ -627,3 +627,87 @@ sub _specialize_runtime_directives_op {
 }
 
 1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+GraphQL::Houtou::Runtime::NativeRuntime - request-time execution API on the XS VM
+
+=head1 SYNOPSIS
+
+    my $runtime = $schema->build_native_runtime(async => 1);
+
+    # dynamic queries (program compiled + cached per query string)
+    my $result = $runtime->execute_document($query, variables => \%vars);
+    my $bytes  = $runtime->execute_document_to_json($query, variables => \%vars);
+
+    # persisted artifacts
+    my $program = $runtime->compile_program($query);
+    my $result  = $runtime->execute_program($program, variables => \%vars);
+    my $result  = $runtime->execute_bundle($bundle);
+    my $bytes   = $runtime->execute_bundle_to_json($bundle);
+
+=head1 DESCRIPTION
+
+The reusable execution engine built from a schema by
+C<build_native_runtime>. Build it once at startup; every method here is
+request-time API. Queries compile into native programs (cached per query
+string, FIFO, C<program_cache_max>, default 1000) and execute on the XS
+VM. See L<GraphQL::Houtou/API Selection Guide> for choosing between
+documents, programs, and bundles.
+
+=head1 EXECUTION METHODS
+
+=head2 execute_document($query, %opts) / execute_document_to_json($query, %opts)
+
+Compile (or fetch from the program cache) and execute. The C<_to_json>
+form renders UTF-8 JSON bytes directly from the XS lane without building
+the Perl envelope. Options:
+
+=over 4
+
+=item * C<variables> - hashref of GraphQL variable values
+
+=item * C<context> / C<root_value> - passed to resolvers
+
+=item * C<on_stall> - stall-flush hook; the request runs on the
+async-capable lane and is driven to completion synchronously (see
+L<GraphQL::Houtou/Batching resolvers (DataLoader / the on_stall hook)>)
+
+=item * C<engine =E<gt> 'native'> - force the strict sync fast lane even
+on an C<async> runtime; promise resolvers croak there
+
+=back
+
+=head2 execute_program($program, %opts) / execute_program_to_json($program, %opts)
+
+Execute a program compiled with C<compile_program($query)>. Same options
+as above; this is the persisted-query path for variable-bearing queries.
+
+=head2 execute_bundle($bundle, %opts) / execute_bundle_to_json($bundle, %opts) / execute_bundle_descriptor($descriptor, %opts)
+
+Execute a fixed-query native bundle (no GraphQL variables; argument
+values are baked in at compile time). Descriptors are the serialisable
+form for crossing process boundaries.
+
+=head1 LANE SELECTION
+
+Requests choose an execution lane automatically: C<on_stall> or a runtime
+built with C<async =E<gt> 1> starts on the async-capable lane (promises
+suspend and resume); otherwise requests run the synchronous fast lane and
+promise-returning resolvers fail with an error naming both fixes.
+
+=head1 OTHER METHODS
+
+C<compile_program>, C<compile_bundle>, descriptor dump/load pairs
+(C<dump_bundle_descriptor> / C<load_bundle_descriptor> and friends),
+C<program_cache_size>, C<clear_program_cache>, C<runtime_schema>.
+
+=head1 SEE ALSO
+
+L<GraphQL::Houtou>, L<GraphQL::Houtou::Schema>, L<GraphQL::Houtou::DataLoader>
+
+=cut

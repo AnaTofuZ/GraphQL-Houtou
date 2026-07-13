@@ -123,3 +123,33 @@ sub _ensure_valid_runtime_type {
 }
 
 1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+GraphQL::Houtou::Type::Interface - GraphQL interface type
+
+=head1 SYNOPSIS
+
+    my $Node = GraphQL::Houtou::Type::Interface->new(
+      name   => 'Node',
+      fields => { id => { type => $ID->non_null } },
+      resolve_type => sub { my ($value) = @_; $value->{kind} },
+    );
+
+=head1 DESCRIPTION
+
+An abstract output type. C<resolve_type> receives the resolved value and
+returns the concrete object type name; alternatively implementing types
+may define C<is_type_of>. Objects declare membership through their
+C<interfaces> list, and concrete types reachable only through an
+interface must be listed in the schema's C<types>.
+
+=head1 SEE ALSO
+
+L<GraphQL::Houtou::Type::Union>, L<GraphQL::Houtou::Schema>
+
+=cut

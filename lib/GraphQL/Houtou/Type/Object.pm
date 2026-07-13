@@ -200,3 +200,50 @@ sub to_doc {
 }
 
 1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+GraphQL::Houtou::Type::Object - GraphQL object type
+
+=head1 SYNOPSIS
+
+    my $User = GraphQL::Houtou::Type::Object->new(
+      name   => 'User',
+      fields => {
+        id   => { type => $ID },
+        name => { type => $String },
+        posts => {
+          type => $Post->non_null->list,
+          args => { first => { type => $Int } },
+          resolve => sub {
+            my ($user, $args, $context, $info) = @_;
+            $context->{posts}->load($user->{id});
+          },
+        },
+      },
+      interfaces => [ $Node ],
+    );
+
+=head1 DESCRIPTION
+
+An output object type. Each field takes C<type>, optional C<args>
+(C<< name => { type => ..., default_value => ... } >>), an optional
+C<resolve> callback receiving C<($source, $args, $context, $info)>, and
+optional C<description> / C<deprecation_reason>. Fields without
+C<resolve> use the default resolver: a hash key lookup on the source,
+falling back to a method call. Resolvers may return
+L<Promise::XS> promises; see
+L<GraphQL::Houtou/Batching resolvers (DataLoader / the on_stall hook)>.
+
+C<< $type->list >> and C<< $type->non_null >> wrap any type in
+L<GraphQL::Houtou::Type::List> / L<GraphQL::Houtou::Type::NonNull>.
+
+=head1 SEE ALSO
+
+L<GraphQL::Houtou>, L<GraphQL::Houtou::Schema>
+
+=cut

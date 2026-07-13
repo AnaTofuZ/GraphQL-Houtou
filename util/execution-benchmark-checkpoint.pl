@@ -23,12 +23,17 @@ GetOptions(
 ) or die usage();
 
 @cases = $include_async
-  ? qw(async_scalar async_list async_object async_abstract)
+  ? qw(async_scalar async_list async_object async_abstract async_preresolved)
   : qw(nested_variable_object list_of_objects abstract_with_fragment varying_variables list_of_objects_json)
   if !@cases;
 if ($include_async && $promise_backend eq 'promise_xs') {
-  @modes = grep { $_ eq 'houtou_runtime_program' } @modes;
-  @modes = qw(houtou_runtime_program) if !@modes;
+  # The plain async cases only report the program runtime; async_preresolved
+  # reports the native async lane against its sync fast-lane reference.
+  @modes = qw(
+    houtou_runtime_program
+    houtou_sync_sv houtou_async_sv houtou_async_items_sv
+    houtou_sync_json houtou_async_json
+  );
 }
 {
   my %seen;

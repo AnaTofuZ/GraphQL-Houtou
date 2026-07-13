@@ -1229,12 +1229,10 @@ gql_runtime_vm_consume_current_outcome_now(pTHX_ gql_runtime_vm_exec_state_handl
     result_name_len = (STRLEN)strlen(result_name_pv);
   }
 
-  if (s->field_frame) {
-    gql_runtime_vm_outcome_decref(aTHX_ s->field_frame->outcome);
-    gql_runtime_vm_outcome_incref(outcome);
-    s->field_frame->outcome = outcome;
-  }
-
+  /* No detour through field_frame->outcome: nothing reads it back, and
+   * leave_field_now would drop the reference three lines later anyway.
+   * Keeping the caller as sole owner also lets the consume below transfer
+   * the native subtree instead of cloning it. */
   gql_runtime_vm_consume_outcome_native_object(
     aTHX_ frame->values_value,
     result_name_pv ? result_name_pv : "",

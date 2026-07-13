@@ -2008,7 +2008,22 @@ gql_runtime_vm_async_scheduler_resolve_frame(
       frame->parent_frame->pending_unresolved--;
     }
     if (frame->parent_frame->pending_unresolved == 0) {
-      gql_runtime_vm_async_scheduler_enqueue_frame(s, frame->parent_frame);
+      /* A parent still on the exec stack is mid-block-loop; enqueuing it
+       * now would let the drain resolve (and free) it under the loop's
+       * feet. Its own finalize arms the READY entries and enqueues. */
+      U8 parent_executing = 0;
+      if (s) {
+        IV fi;
+        for (fi = 0; fi < s->frame_stack_count; fi++) {
+          if (s->frame_stack[fi] == frame->parent_frame) {
+            parent_executing = 1;
+            break;
+          }
+        }
+      }
+      if (!parent_executing) {
+        gql_runtime_vm_async_scheduler_enqueue_frame(s, frame->parent_frame);
+      }
     }
 
     gql_runtime_vm_outcome_decref(aTHX_ outcome);
@@ -2280,6 +2295,38 @@ gql_runtime_vm_async_scheduler_process_frame(
             gql_runtime_vm_expect_outcome(aTHX_ completed_sv),
             s->writer
           );
+        } else if (completed_sv && SvOK(completed_sv)
+                   && gql_runtime_vm_is_block_frame_value_sv(completed_sv)) {
+          /* Mode 1: completion produced a pending child block. Link it into
+           * the rebuilt pending array so the child's resolve_frame notifies
+           * this frame directly - no promise in between. */
+          gql_runtime_vm_block_frame_t *child_frame =
+            gql_runtime_vm_expect_block_frame(aTHX_ completed_sv);
+          gql_runtime_vm_pending_entry_t *next_entry =
+            gql_runtime_vm_block_frame_push_pending_entry_with_meta(
+              aTHX_
+              &next_pending,
+              entry->result_name_pv,
+              entry->result_name_len,
+              entry->result_name_pv_borrowed,
+              entry->path_frame,
+              entry->block_index,
+              entry->slot_index,
+              entry->op_index
+            );
+          next_entry->payload_kind = GQL_VM_PENDING_BLOCK_FRAME_PTR;
+          next_entry->state_code = GQL_VM_PENDING_STATE_WAITING_ARMED;
+          next_entry->payload.block_frame_ptr = child_frame;
+          child_frame->refcount++;
+          if (child_frame->parent_frame) {
+            gql_runtime_vm_free_block_frame(aTHX_ child_frame->parent_frame);
+          }
+          child_frame->parent_frame = frame;
+          frame->refcount++;
+          child_frame->parent_entry_index = next_pending.pending_count - 1;
+          if (child_frame->pending_unresolved == 0) {
+            gql_runtime_vm_async_scheduler_enqueue_frame(s, child_frame);
+          }
         } else if (completed_sv && SvOK(completed_sv)) {
           gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
             aTHX_
@@ -2364,6 +2411,7 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
   AV *resolved_av = gql_runtime_vm_expect_arrayref(aTHX_ resolved, "resolved outcomes");
   SSize_t i;
   gql_runtime_vm_block_frame_t next_pending;
+  U8 enqueued_ready_child = 0;
   gql_runtime_vm_exec_state_handle_t *exec_state =
     (state && state->state_sv) ? gql_runtime_vm_expect_exec_state_handle(aTHX_ state->state_sv) : NULL;
 
@@ -2435,6 +2483,40 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
             gql_runtime_vm_expect_outcome(aTHX_ completed_sv),
             state->writer
           );
+        } else if (completed_sv && SvOK(completed_sv)
+                   && gql_runtime_vm_is_block_frame_value_sv(completed_sv)) {
+          /* Mode 1: completion produced a pending child block; link it to
+           * this frame like the scheduler's resolved-value branch does. */
+          gql_runtime_vm_block_frame_t *child_frame =
+            gql_runtime_vm_expect_block_frame(aTHX_ completed_sv);
+          gql_runtime_vm_pending_entry_t *next_entry =
+            gql_runtime_vm_block_frame_push_pending_entry_with_meta(
+              aTHX_
+              &next_pending,
+              entry->result_name_pv,
+              entry->result_name_len,
+              entry->result_name_pv_borrowed,
+              entry->path_frame,
+              entry->block_index,
+              entry->slot_index,
+              entry->op_index
+            );
+          next_entry->payload_kind = GQL_VM_PENDING_BLOCK_FRAME_PTR;
+          next_entry->state_code = GQL_VM_PENDING_STATE_WAITING_ARMED;
+          next_entry->payload.block_frame_ptr = child_frame;
+          child_frame->refcount++;
+          if (child_frame->parent_frame) {
+            gql_runtime_vm_free_block_frame(aTHX_ child_frame->parent_frame);
+          }
+          child_frame->parent_frame = state->frame;
+          state->frame->refcount++;
+          child_frame->parent_entry_index = next_pending.pending_count - 1;
+          if (child_frame->pending_unresolved == 0) {
+            /* Drain happens after the pending swap below: resolve_frame
+             * writes into the parent's installed entry array. */
+            gql_runtime_vm_async_scheduler_enqueue_frame(exec_state, child_frame);
+            enqueued_ready_child = 1;
+          }
         } else if (completed_sv && SvOK(completed_sv)) {
           gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
             aTHX_
@@ -2481,6 +2563,10 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
   state->frame->pending_entries = next_pending.pending_entries;
   state->frame->pending_count = next_pending.pending_count;
   state->frame->pending_capacity = next_pending.pending_capacity;
+
+  if (enqueued_ready_child && exec_state && !exec_state->async_scheduler_draining) {
+    gql_runtime_vm_async_scheduler_drain(aTHX_ state->state_sv, exec_state);
+  }
 
   if (state->frame->pending_count > 0) {
     return gql_runtime_vm_block_frame_finalize_sv(
@@ -3463,9 +3549,12 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, outcome_out);
       }
 
-      /* Mode 2: a synchronously completed child comes back as a native
-       * outcome (returned as-is below), skipping the materialize-to-SV /
-       * reconvert-to-native round trip. */
+      /* Mode 1: a synchronously completed child comes back as a native
+       * outcome (returned as-is below) and a pending child as a raw
+       * block-frame handle - no Promise::XS deferred/promise pair. Every
+       * consumer of this value (consume_current_result_now, the scheduler's
+       * resolved-value branch, pending merge) links handles into the
+       * parent frame directly. */
       child_value = gql_runtime_vm_exec_state_execute_block_async_path_sv(
         aTHX_
         state_sv,
@@ -3473,7 +3562,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         child_block_index,
         resolved_sv,
         path_frame,
-        2
+        1
       );
       if (gql_runtime_vm_is_block_frame_value_sv(child_value)) {
         return child_value;
@@ -3650,6 +3739,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
       }
 
       {
+        /* Mode 1: same contract as the COMPLETE_OBJECT child above. */
         SV *child_value = gql_runtime_vm_exec_state_execute_block_async_path_sv(
           aTHX_
           state_sv,
@@ -3657,7 +3747,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
           child_block_index,
           resolved_sv,
           path_frame,
-          2
+          1
         );
         if (gql_runtime_vm_is_block_frame_value_sv(child_value)) {
           return child_value;

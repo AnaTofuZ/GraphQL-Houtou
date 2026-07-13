@@ -125,6 +125,55 @@ subtest 'async runtime with engine => native stays strict' => sub {
     'explicit sync engine request overrides the async default and croaks';
 };
 
+subtest 'sync runtime: promise LIST ITEMS also croak with the hint (issue #33)' => sub {
+  my $Row = GraphQL::Houtou::Type::Object->new(
+    name => 'Row', fields => { name => { type => $String } });
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        rows => {
+          type => $Row->list,
+          resolve => sub { [ map { Promise::XS::resolved({ name => "r$_" }) } 1..2 ] },
+        },
+        tags => {
+          type => $String->list,
+          resolve => sub { [ Promise::XS::resolved('t1'), Promise::XS::resolved('t2') ] },
+        },
+      },
+    ),
+  );
+  my $sync_rt = build_native_runtime($schema);
+  # engine => 'native' pins the request to the synchronous fast lane, which
+  # is also where variable-carrying requests run; a bare no-variables
+  # request goes down the auto lane instead (asserted below).
+  for my $case (
+    [ 'object list / execute' => sub {
+        $sync_rt->execute_document('{ rows { name } }', engine => 'native') } ],
+    [ 'object list / to_json' => sub { $sync_rt->execute_document_to_json('{ rows { name } }') } ],
+    [ 'scalar list / execute' => sub {
+        $sync_rt->execute_document('{ tags }', engine => 'native') } ],
+    [ 'scalar list / to_json' => sub { $sync_rt->execute_document_to_json('{ tags }') } ],
+  ) {
+    my ($name, $run) = @$case;
+    my $err = do { local $@; eval { $run->() }; $@ };
+    like $err, qr/async => 1/, "$name: croaks with the async => 1 hint";
+  }
+
+  my $auto = maybe_get_promise_xs($sync_rt->execute_document('{ rows { name } tags }'));
+  is_deeply $auto->{data}, {
+    rows => [ { name => 'r1' }, { name => 'r2' } ],
+    tags => [ 't1', 't2' ],
+  }, 'no-variables requests ride the auto lane and complete promise items';
+
+  my $async_rt = build_native_runtime($schema, async => 1);
+  my $r = maybe_get_promise_xs($async_rt->execute_document('{ rows { name } tags }'));
+  is_deeply $r->{data}, {
+    rows => [ { name => 'r1' }, { name => 'r2' } ],
+    tags => [ 't1', 't2' ],
+  }, 'async runtime completes pre-resolved promise list items';
+};
+
 subtest 'async runtime still honors on_stall batching' => sub {
   require GraphQL::Houtou::DataLoader;
   my $schema = new_schema();

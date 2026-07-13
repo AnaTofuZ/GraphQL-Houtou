@@ -178,6 +178,12 @@ typedef struct {
 } gql_runtime_vm_error_callback_ctx_t;
 
 typedef struct {
+  SV *state_sv;
+  gql_runtime_vm_path_frame_t *path_frame;
+  IV child_block_index;
+} gql_runtime_vm_list_item_child_ctx_t;
+
+typedef struct {
   gql_runtime_vm_pending_merge_t *merge;
 } gql_runtime_vm_finalize_callback_ctx_t;
 
@@ -227,6 +233,8 @@ static SV *gql_runtime_vm_snapshot_scalarish_value_sv(pTHX_ SV *value);
 static gql_runtime_vm_path_frame_t *gql_runtime_vm_new_result_path_frame(pTHX_ gql_runtime_vm_path_frame_t *parent, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_new_complete_callback_sv(pTHX_ SV *state_sv, gql_runtime_vm_path_frame_t *path_frame, IV block_index, IV slot_index, IV op_index);
 static SV *gql_runtime_vm_new_error_callback_sv(pTHX_ gql_runtime_vm_path_frame_t *path_frame);
+static SV *gql_runtime_vm_new_list_item_child_callback_sv(pTHX_ SV *state_sv, gql_runtime_vm_path_frame_t *path_frame, IV child_block_index);
+static XS(gql_runtime_vm_xs_list_item_child_callback);
 static SV *gql_runtime_vm_new_pending_callback_sv(pTHX_ SV *state_sv, gql_runtime_vm_block_frame_t *frame, IV entry_index);
 static SV *gql_runtime_vm_new_finalize_callback_sv(pTHX_ gql_runtime_vm_pending_merge_t *merge);
 static SV *gql_runtime_vm_new_materialize_response_callback_sv(pTHX_ SV *state_sv);
@@ -479,6 +487,24 @@ gql_runtime_vm_error_callback_ctx_free(pTHX_ SV *sv, MAGIC *mg)
 }
 
 static int
+gql_runtime_vm_list_item_child_ctx_free(pTHX_ SV *sv, MAGIC *mg)
+{
+  gql_runtime_vm_list_item_child_ctx_t *ctx = mg && mg->mg_ptr
+    ? INT2PTR(gql_runtime_vm_list_item_child_ctx_t *, mg->mg_ptr)
+    : NULL;
+  if (ctx) {
+    SvREFCNT_dec(ctx->state_sv);
+    gql_runtime_vm_path_frame_decref(ctx->path_frame);
+    Safefree(ctx);
+    mg->mg_ptr = NULL;
+  }
+  if (sv && SvTYPE(sv) == SVt_PVCV) {
+    CvXSUBANY((CV *)sv).any_ptr = NULL;
+  }
+  return 0;
+}
+
+static int
 gql_runtime_vm_finalize_callback_ctx_free(pTHX_ SV *sv, MAGIC *mg)
 {
   gql_runtime_vm_finalize_callback_ctx_t *ctx = mg && mg->mg_ptr
@@ -557,6 +583,19 @@ static MGVTBL gql_runtime_vm_error_callback_ctx_vtbl = {
   NULL,
   NULL,
   gql_runtime_vm_error_callback_ctx_free
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
+
+static MGVTBL gql_runtime_vm_list_item_child_ctx_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gql_runtime_vm_list_item_child_ctx_free
 #if PERL_VERSION_GE(5, 15, 0)
   ,NULL
   ,NULL
@@ -2472,6 +2511,18 @@ static XS(gql_runtime_vm_xs_list_pending_callback)
   }
   state = gql_runtime_vm_expect_exec_state_handle(aTHX_ ctx->state_sv);
 
+  /* Outcomes carry error records (rejected items, failed child fields);
+   * surface them in the response instead of collapsing to a silent null. */
+  if (resolved_sv && SvOK(resolved_sv)
+      && sv_derived_from(resolved_sv, "GraphQL::Houtou::Runtime::Outcome")
+      && state->writer) {
+    gql_runtime_vm_outcome_t *outcome = gql_runtime_vm_expect_outcome(aTHX_ resolved_sv);
+    IV j;
+    for (j = 0; outcome && j < outcome->error_record_count; j++) {
+      gql_runtime_vm_writer_push_error_record(state->writer, outcome->error_records[j]);
+    }
+  }
+
   gql_runtime_vm_native_list_store_at(
     aTHX_
     ctx->pending->values_value,
@@ -2492,6 +2543,47 @@ static XS(gql_runtime_vm_xs_list_pending_callback)
     SvREFCNT_dec(tmp_resolved);
   }
   XSRETURN_UNDEF;
+}
+
+/* Then-callback for a list item that arrived as a promise: run the item's
+ * child selection block once the item settles. Returning the child result
+ * (a value, a nested promise - flattened by Promise::XS - or an error
+ * Outcome) lets the ordinary list_pending machinery consume it. */
+static XS(gql_runtime_vm_xs_list_item_child_callback)
+{
+  dVAR;
+  dXSARGS;
+  gql_runtime_vm_list_item_child_ctx_t *ctx = INT2PTR(
+    gql_runtime_vm_list_item_child_ctx_t *,
+    CvXSUBANY(cv).any_ptr
+  );
+  SV *resolved_sv = items > 0 && ST(0) ? ST(0) : &PL_sv_undef;
+  SV *ret = NULL;
+  gql_runtime_vm_exec_state_handle_t *s;
+
+  if (!ctx || !ctx->state_sv) {
+    XSRETURN_UNDEF;
+  }
+  s = gql_runtime_vm_expect_exec_state_handle(aTHX_ ctx->state_sv);
+
+  if (!resolved_sv || !SvOK(resolved_sv)) {
+    ret = newSVsv(&PL_sv_undef);
+  } else if (sv_derived_from(resolved_sv, "GraphQL::Houtou::Runtime::Outcome")) {
+    ret = newSVsv(resolved_sv);
+  } else {
+    ret = gql_runtime_vm_exec_state_execute_block_async_path_sv(
+      aTHX_
+      ctx->state_sv,
+      s,
+      ctx->child_block_index,
+      resolved_sv,
+      ctx->path_frame,
+      0
+    );
+  }
+
+  ST(0) = sv_2mortal(ret ? ret : newSVsv(&PL_sv_undef));
+  XSRETURN(1);
 }
 
 static XS(gql_runtime_vm_xs_error_callback)
@@ -2638,6 +2730,33 @@ gql_runtime_vm_new_error_callback_sv(pTHX_ gql_runtime_vm_path_frame_t *path_fra
   cv = newXS(NULL, gql_runtime_vm_xs_error_callback, __FILE__);
   CvXSUBANY(cv).any_ptr = ctx;
   gql_runtime_vm_attach_callback_magic_ptr(aTHX_ (SV *)cv, &gql_runtime_vm_error_callback_ctx_vtbl, ctx);
+  rv = newRV_noinc((SV *)cv);
+  return rv;
+}
+
+static SV *
+gql_runtime_vm_new_list_item_child_callback_sv(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_path_frame_t *path_frame,
+  IV child_block_index
+)
+{
+  CV *cv;
+  SV *rv;
+  gql_runtime_vm_list_item_child_ctx_t *ctx;
+
+  Newxz(ctx, 1, gql_runtime_vm_list_item_child_ctx_t);
+  ctx->state_sv = state_sv ? SvREFCNT_inc_simple_NN(state_sv) : NULL;
+  ctx->path_frame = path_frame;
+  if (ctx->path_frame) {
+    ctx->path_frame->refcount++;
+  }
+  ctx->child_block_index = child_block_index;
+
+  cv = newXS(NULL, gql_runtime_vm_xs_list_item_child_callback, __FILE__);
+  CvXSUBANY(cv).any_ptr = ctx;
+  gql_runtime_vm_attach_callback_magic_ptr(aTHX_ (SV *)cv, &gql_runtime_vm_list_item_child_ctx_vtbl, ctx);
   rv = newRV_noinc((SV *)cv);
   return rv;
 }
@@ -3242,15 +3361,30 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
           SV *item_key = newSViv(i);
           gql_runtime_vm_path_frame_t *item_path =
             gql_runtime_vm_new_path_frame_struct(aTHX_ path_frame, item_key);
-          item_result = gql_runtime_vm_exec_state_execute_block_async_path_sv(
-            aTHX_
-            state_sv,
-            s,
-            child_block_index,
-            item_sv,
-            item_path,
-            0
-          );
+          if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, item_sv)) {
+            /* The item itself is a promise (per-item loader shape). Defer
+             * the child selection block until it settles; the derived
+             * promise below resolves to the completed child value. */
+            SV *child_cb = gql_runtime_vm_new_list_item_child_callback_sv(
+              aTHX_ state_sv, item_path, child_block_index
+            );
+            SV *error_cb = gql_runtime_vm_new_error_callback_sv(aTHX_ item_path);
+            item_result = gql_runtime_vm_call_then_promise_for_state_sv(
+              aTHX_ s, item_sv, child_cb, error_cb, item_path
+            );
+            SvREFCNT_dec(child_cb);
+            SvREFCNT_dec(error_cb);
+          } else {
+            item_result = gql_runtime_vm_exec_state_execute_block_async_path_sv(
+              aTHX_
+              state_sv,
+              s,
+              child_block_index,
+              item_sv,
+              item_path,
+              0
+            );
+          }
           gql_runtime_vm_path_frame_decref(item_path);
           SvREFCNT_dec(item_key);
         } else {
@@ -7379,7 +7513,9 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
     for (i = 0; i < av_count(in_av); i++) {
       SV **item_svp = av_fetch(in_av, i, 0);
       SV *item = (item_svp && SvOK(*item_svp)) ? *item_svp : &PL_sv_undef;
-      SV *completed = has_child_block
+      SV *completed;
+      gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ item);
+      completed = has_child_block
         ? gql_runtime_vm_execute_block_fast_sv(aTHX_ state, op->child_block_index, item)
         : gql_runtime_vm_clone_value_sv(aTHX_ item);
       av_store(out_av, i, completed);
@@ -7925,6 +8061,7 @@ gql_runtime_vm_complete_current_list_fast_json(
       if (i) {
         sv_catpvs(out, ",");
       }
+      gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ item);
       if (has_child_block && SvOK(item)) {
         gql_runtime_vm_execute_block_fast_json(aTHX_ state, op->child_block_index, item, out);
       } else if (has_child_block) {

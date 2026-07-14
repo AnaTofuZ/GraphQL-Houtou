@@ -344,6 +344,11 @@ typedef struct {
    * bytes (rendered from the native value tree) instead of the Perl
    * envelope hash. */
   U8 response_json_mode;
+  /* Set by resolve_frame when the response frame completes without a
+   * deferred: the request finished inside the original execute call, so
+   * the execute entry point hands this back directly instead of routing
+   * the response through a deferred/promise pair. */
+  SV *completed_response_sv;
 } gql_runtime_vm_exec_state_handle_t;
 
 struct gql_runtime_vm_cursor_t {

@@ -1540,6 +1540,31 @@ gql_runtime_vm_block_frame_finalize_sv(
     U8 saved_draining = exec_state->async_scheduler_draining;
     U8 resolve_response = frame->deferred_resolves_response ? 1 : 0;
     U8 return_promise = (resolve_response || return_pending_handle != 1) ? 1 : 0;
+    U8 armed = 0;
+
+    /* Response frame at the top level: try to complete the request inside
+     * this call before paying for the deferred. Arm first; if every
+     * pending settled during arm (preresolved promises), drain now and
+     * hand the parked response back directly - no deferred/promise pair,
+     * no then(materialize) chain (resolve_frame stashes it on the exec
+     * state). A drain that merely uncovers the next pending wave falls
+     * through to the promise path below. Only the parentless response
+     * frame may be armed before taking a reference: its resolve path
+     * cannot free it while it still has pendings. */
+    if (resolve_response && !frame->deferred_sv && !saved_draining) {
+      exec_state->async_scheduler_draining = 1;
+      gql_runtime_vm_async_scheduler_arm_frame(aTHX_ state_sv, exec_state, frame);
+      exec_state->async_scheduler_draining = saved_draining;
+      armed = 1;
+
+      if (frame->pending_unresolved == 0) {
+        gql_runtime_vm_async_scheduler_enqueue_frame(exec_state, frame);
+        gql_runtime_vm_async_scheduler_drain(aTHX_ state_sv, exec_state);
+        if (exec_state->completed_response_sv) {
+          return newSVsv(&PL_sv_undef);
+        }
+      }
+    }
 
     if (return_promise && !frame->deferred_sv) {
       frame->deferred_sv = gql_runtime_vm_promise_xs_new_deferred_sv(aTHX);
@@ -1549,9 +1574,11 @@ gql_runtime_vm_block_frame_finalize_sv(
       ? (frame->promise_sv ? newSVsv(frame->promise_sv) : newSVsv(&PL_sv_undef))
       : gql_runtime_vm_wrap_block_frame_sv(aTHX_ frame);
 
-    exec_state->async_scheduler_draining = 1;
-    gql_runtime_vm_async_scheduler_arm_frame(aTHX_ state_sv, exec_state, frame);
-    exec_state->async_scheduler_draining = saved_draining;
+    if (!armed) {
+      exec_state->async_scheduler_draining = 1;
+      gql_runtime_vm_async_scheduler_arm_frame(aTHX_ state_sv, exec_state, frame);
+      exec_state->async_scheduler_draining = saved_draining;
+    }
 
     if (return_promise && frame->pending_unresolved == 0) {
       gql_runtime_vm_async_scheduler_enqueue_frame(exec_state, frame);
@@ -2171,8 +2198,18 @@ gql_runtime_vm_async_scheduler_resolve_frame(
 
   if (frame->deferred_sv && SvOK(frame->deferred_sv)) {
     gql_runtime_vm_promise_xs_deferred_resolve_sv(aTHX_ frame->deferred_sv, resolved_sv);
+    SvREFCNT_dec(resolved_sv);
+  } else if (frame->deferred_resolves_response) {
+    /* No deferred was ever created: the request is completing inside the
+     * original execute call. Park the finished response (envelope or JSON
+     * per json_mode) on the exec state for the entry point to return. */
+    if (s->completed_response_sv) {
+      SvREFCNT_dec(s->completed_response_sv);
+    }
+    s->completed_response_sv = resolved_sv;
+  } else {
+    SvREFCNT_dec(resolved_sv);
   }
-  SvREFCNT_dec(resolved_sv);
   if (frame->deferred_sv) {
     SvREFCNT_dec(frame->deferred_sv);
     frame->deferred_sv = NULL;
@@ -6270,7 +6307,13 @@ gql_runtime_vm_execute_native_program_auto_impl_sv(
     effective_root,
     &PL_sv_undef
   );
-  if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ state, data_sv)) {
+  if (state->completed_response_sv) {
+    /* The request finished inside this call without a deferred; the
+     * parked value is already the finished envelope (or JSON bytes). */
+    ret = state->completed_response_sv;
+    state->completed_response_sv = NULL;
+    SvREFCNT_dec(data_sv);
+  } else if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ state, data_sv)) {
     ret = data_sv;
   } else if (json_mode) {
     ret = gql_runtime_vm_response_json_from_data_sv(aTHX_ state->writer, data_sv);
@@ -10340,6 +10383,13 @@ exec_state_execute_block_async_xs(state, block_index, source = &PL_sv_undef, bas
     {
       gql_runtime_vm_exec_state_handle_t *s = gql_runtime_vm_expect_exec_state_handle(aTHX_ state);
       RETVAL = gql_runtime_vm_exec_state_execute_block_async_sv(aTHX_ state, s, block_index, source, base_path);
+      if (s->completed_response_sv) {
+        /* Response frame completed without a deferred; hand back the
+         * parked envelope the promise would have resolved with. */
+        SvREFCNT_dec(RETVAL);
+        RETVAL = s->completed_response_sv;
+        s->completed_response_sv = NULL;
+      }
     }
   OUTPUT:
     RETVAL
@@ -10418,7 +10468,13 @@ exec_state_run_program_async_xs(state, root_value = &PL_sv_undef)
         effective_root,
         &PL_sv_undef
       );
-      if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, data_sv)) {
+      if (s->completed_response_sv) {
+        /* Response frame completed without a deferred; the parked value
+         * is already the finished envelope. */
+        RETVAL = s->completed_response_sv;
+        s->completed_response_sv = NULL;
+        SvREFCNT_dec(data_sv);
+      } else if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, data_sv)) {
         RETVAL = data_sv;
       } else {
         RETVAL = gql_runtime_vm_exec_state_materialize_response_sv(aTHX_ s, data_sv);
@@ -10910,6 +10966,7 @@ DESTROY(self)
         SvREFCNT_dec(state->variables);
         SvREFCNT_dec(state->root_value);
         SvREFCNT_dec(state->empty_args);
+        SvREFCNT_dec(state->completed_response_sv);
         Safefree(state);
       }
     }

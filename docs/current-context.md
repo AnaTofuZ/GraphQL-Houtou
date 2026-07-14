@@ -1561,3 +1561,30 @@ perl -Ilib t/19_vm_execute.t
   依存(DBI/DBD::SQLite/Plack)は examples/cpanfile + Carton で導入、
   `carton exec -- plackup` で end-to-end 確認済み(examples/local は
   gitignore)。DataLoader POD に MULTIPLE LOADERS 節を追加
+
+## 2026-07-14 P1 続き: pending entry の直接購読(中間 identity-then 除去)
+
+- then_complete_current_sv の中間 then を除去: user promise を
+  identity-then で正規化した派生 promise ではなく、**user promise そのものを
+  pending entry に積む**(kind は complete_code で GENERIC/RESOLVED を選択、
+  従来と同じ)。per-user-promise で then 1 回 + 派生 promise 1 個 +
+  error callback CV(newXS)1 個を削減。op/frame/result_name が無い場合のみ
+  従来の then ベースにフォールバック
+- rejection の正規化が then_complete で行われなくなるため、arm_frame の
+  error callback を **entry 直書き型の reject callback** に置換
+  (xs_pending_reject_callback、pending_callback_ctx を共有):
+  reason → entry->path_frame の error outcome に変換して
+  store_outcome、pending_unresolved--、0 なら enqueue + drain
+  (xs_pending_callback の resolve 尾部と同形)
+- 副次修正: 従来の arm では rejection の outcome が破棄済み派生 promise に
+  返るだけで entry が永遠に未解決になる穴があった(raw PROMISE_SV entry が
+  reject された場合の deadlock 経路)。直書き reject で塞がった
+- 計測(A/B、同一マシン):
+  - 多段 DataLoader 形状(posts→author→team): 6.6-7.8k → **8.5-8.8k req/s
+    (~+20%)**
+  - async_preresolved async_sv: 51.9k → **53.3k/s(+2.7%)**。この形状は
+    リクエストあたり user promise 1 個なので効果は限定的
+  - async_items_sv はフラット(list item は list_item 経路で
+    then_complete を通らない)
+- 289 tests + minil test + soak(+576KB/20000)パス。残りの境界コストは
+  per-entry pending/reject callback の newXS と response deferred(次弾)

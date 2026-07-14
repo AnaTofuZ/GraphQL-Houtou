@@ -220,6 +220,33 @@ issues one batched lookup per nesting level instead of N individual ones.
 C<execute> with C<on_stall> drives the request to completion and returns
 the finished response synchronously - callers never handle promises.
 
+=head1 MULTIPLE LOADERS
+
+Real schemas use several loaders per request, and one loader is usually
+shared by every field that resolves the same kind of record. Both shapes
+need no special wiring: put every loader in the context and register them
+all with C<on_stall_for>:
+
+  my $users   = GraphQL::Houtou::DataLoader->new(batch => \&batch_users);
+  my $entries = GraphQL::Houtou::DataLoader->new(batch => \&batch_entries);
+
+  # Blog.author and Entry.author share $users; Blog also uses $entries.
+  #   Blog:  author      => sub { $_[2]->{users}->load($_[0]{author_id}) }
+  #          latestEntry => sub { $_[2]->{entries}->load($_[0]{latest_entry_id}) }
+  #   Entry: author      => sub { $_[2]->{users}->load($_[0]{author_id}) }
+
+  my $result = execute($schema, $query, $variables,
+    context  => { users => $users, entries => $entries },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users, $entries),
+  );
+
+Sharing one loader across types means the per-request cache dedupes keys
+globally: a user already fetched for C<Blog.author> is not fetched again
+for C<Entry.author>. Loaders may also feed each other - settling one
+loader's promises can queue loads on another, and a single stall keeps
+dispatching until a full pass makes no progress - so each dependency
+level still costs one batched query per loader.
+
 =head1 THE BATCH FUNCTION
 
 Receives an arrayref of unique keys and must return an arrayref of the

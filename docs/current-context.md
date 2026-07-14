@@ -1610,3 +1610,24 @@ perl -Ilib t/19_vm_execute.t
 - 回帰テスト: t/36 に mixed 形状 subtest(フィールド順両方)。修正なしで
   deadlock die、修正ありで pass を確認
 - 290 tests + soak(+576KB/20000)+ ベンチ回帰なし(async_sv 54.8k)
+
+## 2026-07-14 P-A + P-B: callback CV ペアのプール化 + then CV キャッシュ
+
+- **P-A**: arm の pending resolve/reject コールバックを「共有 ctx + 2 CV の
+  ペア」に統合(cv_refcnt で ctx 共有、entry->armed_*_ctx は同一 ctx を指す)。
+  どちらかの arm が発火した時点で promise は settle 済み=他方は二度と
+  呼ばれないので、ctx のメンバ(state_sv / frame 参照)を解放してペアを
+  グローバルプール(上限 128)に返却し、次の arm で newXS + magic attach を
+  省いて再利用。未発火のままの CV は従来どおり magic free で死ぬ
+  (プールは発火経由でしか増えないので leak しない)
+- **P-B**: promise は exact stash 比較で Promise::XS::Promise に限定
+  されているため、then() の CV を一度だけ解決してキャッシュし
+  call_method("then") を call_sv に置換(毎回の gv_fetchmethod を除去)。
+  Promise::XS::deferred の call_pv も同様にキャッシュ
+- 計測(#43 マージ後 main 比):
+  - 多段 DataLoader: 8.5-8.8k → **9.9-10.0k req/s(~+15%)**
+    (#42 前からの累計では 6.6-7.8k → ~10k)
+  - async_preresolved async_sv: 54.8k → **55.8k/s**
+  - async_items_sv: 25.4k → 26.4k(items 経路の list callback は未プール。
+    ヘテロ ctx ペアになるため次弾候補)
+- 290 tests + soak(+560KB/20000)パス

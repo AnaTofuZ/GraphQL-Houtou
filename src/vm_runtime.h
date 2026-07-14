@@ -421,6 +421,14 @@ struct gql_runtime_vm_pending_entry_t {
   IV block_index;
   IV slot_index;
   IV op_index;
+  /* Armed then-callback contexts (resolve/reject arms) hold this entry's
+   * index by value; when process_frame re-pushes a still-waiting entry
+   * into the rebuilt pending array its index shifts, and these borrowed
+   * pointers (owned by the callback CVs) let the move retarget them.
+   * A settle through a stale index is silently dropped by the callbacks'
+   * bounds check, deadlocking the frame. */
+  void *armed_resolve_ctx;
+  void *armed_reject_ctx;
   U8 result_name_pv_borrowed;
   U8 payload_kind;
   U8 state_code;
@@ -2295,6 +2303,8 @@ gql_runtime_vm_block_frame_push_pending_entry_with_meta(
   entry->slot_index = slot_index;
   entry->op_index = op_index;
   entry->result_name_pv_borrowed = result_name_pv_borrowed ? 1 : 0;
+  entry->armed_resolve_ctx = NULL;
+  entry->armed_reject_ctx = NULL;
   entry->payload.promise_sv = NULL;
   entry->payload_kind = 0;
   entry->state_code = 0;

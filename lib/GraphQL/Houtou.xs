@@ -2020,6 +2020,12 @@ gql_runtime_vm_async_scheduler_resolve_frame(
 
     if (frame->parent_entry_index < frame->parent_frame->pending_count) {
       entry = &frame->parent_frame->pending_entries[frame->parent_entry_index];
+    } else {
+      /* Adoption re-pushes relink parent_entry_index, so this must not
+       * happen; if it does, the child's result would vanish from the
+       * response - make it loud instead of silent. */
+      warn("GraphQL::Houtou: async child frame resolved with out-of-range parent entry index %" IVdf "; its result is dropped",
+           frame->parent_entry_index);
     }
 
     outcome = gql_runtime_vm_new_outcome_from_owned_native_value_struct(
@@ -2132,7 +2138,14 @@ gql_runtime_vm_async_scheduler_arm_frame(
        * an outcome returned into the discarded derived promise would be
        * lost, deadlocking the frame. */
       SV *error_callback_sv = gql_runtime_vm_new_pending_reject_callback_sv(aTHX_ state_sv, frame, i);
-      SV *ret = gql_runtime_vm_call_then_promise_for_state_sv(
+      SV *ret;
+
+      /* Record the armed contexts so a process_frame re-push can retarget
+       * their entry_index when this entry moves in the rebuilt array. */
+      entry->armed_resolve_ctx = CvXSUBANY((CV *)SvRV(callback_sv)).any_ptr;
+      entry->armed_reject_ctx = CvXSUBANY((CV *)SvRV(error_callback_sv)).any_ptr;
+
+      ret = gql_runtime_vm_call_then_promise_for_state_sv(
         aTHX_
         s,
         entry->payload.promise_sv,
@@ -2221,6 +2234,7 @@ gql_runtime_vm_async_scheduler_process_frame(
           next_entry->payload.list_pending_ptr = entry->payload.list_pending_ptr;
           gql_runtime_vm_list_pending_incref(next_entry->payload.list_pending_ptr);
         } else {
+          gql_runtime_vm_pending_entry_t *moved;
           gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
             aTHX_
             &next_pending,
@@ -2234,7 +2248,22 @@ gql_runtime_vm_async_scheduler_process_frame(
             entry->slot_index,
             entry->op_index
           );
-          next_pending.pending_entries[next_pending.pending_count - 1].state_code = entry->state_code;
+          moved = &next_pending.pending_entries[next_pending.pending_count - 1];
+          moved->state_code = entry->state_code;
+          /* An armed entry's then-callbacks hold its index by value; the
+           * rebuilt array compacts consumed entries away, so retarget the
+           * contexts or a later settle lands on a stale index and the
+           * value is silently dropped (frame deadlocks). */
+          moved->armed_resolve_ctx = entry->armed_resolve_ctx;
+          moved->armed_reject_ctx = entry->armed_reject_ctx;
+          if (moved->armed_resolve_ctx) {
+            ((gql_runtime_vm_pending_callback_ctx_t *)moved->armed_resolve_ctx)->entry_index =
+              next_pending.pending_count - 1;
+          }
+          if (moved->armed_reject_ctx) {
+            ((gql_runtime_vm_pending_callback_ctx_t *)moved->armed_reject_ctx)->entry_index =
+              next_pending.pending_count - 1;
+          }
         }
         if (!(entry->payload_kind == GQL_VM_PENDING_LIST_PENDING_PTR
               && entry->payload.list_pending_ptr

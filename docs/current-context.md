@@ -1693,3 +1693,27 @@ perl -Ilib t/19_vm_execute.t
 - 累計(セッション開始 51.9k 比): async_sv **+17%**、async_json **+24%**、
   items **+16%**、多段 DataLoader **+37%**(6.6-7.8k → 10.1k)
 - 290 tests + minil test + soak(+496KB/20000)パス
+
+## 2026-07-15 堅牢性: 定番例題の移植で適合性バグ 2 件を発見・修正 + BFS 検討
+
+- graphql-js リファレンスの Star Wars スキーマ移植(t/40)で発見:
+  - **enum リテラル引数が resolver に届かない**: parser の enum マーカー
+    (REF-of-SCALAR-ref)を _contains_variable_refs が変数参照と誤判定 →
+    DYNAMIC 経路で 'EMPIRE' という変数を引いて undef。variable 経由は
+    正常だったため潜伏。REF を変数と見なさないよう修正
+  - **interface/union のリストで選択が実行されない**: compiler が
+    ABSTRACT completion と object ブロックしか lowering せず、
+    [Character] 型フィールドに子ブロックが皆無 → **生 source ハッシュが
+    丸ごとレスポンスに漏れる**(未選択フィールド露出、__typename 欠落、
+    member fragment 不適用)。list-of-abstract に member ブロックを
+    lowering し、slot の dispatch family を内側の abstract に、全レーン
+    (async / fast SV / fast JSON / native value)で per-item member
+    dispatch を実装(promise item は settle 時に選択)
+- t/41: Relay cursor ページネーション、TODO ミューテーション(input
+  object リテラル/変数/デフォルト値、直列実行、エラー)、union 検索
+  (sync + per-item DataLoader)— すべて初回パス
+- **BFS(幅優先実行)の検討**(docs/bfs-execution-analysis.md): 実測で
+  木の深さ 1 と 3 のロードが 1 バッチに集約されることを確認。stall
+  ベースの依存深度バッチングはレベル順 BFS の上位互換であり、BFS 導入
+  効果なしと結論。異深度 1 バッチの回帰テストを t/41 に固定
+- 306 tests + soak + ASan(seed 1-10 × 4 ファイル)パス

@@ -186,7 +186,9 @@ subtest 'root blocks and slots are compiled' => sub {
   my ($search_slot) = grep { $_->field_name eq 'search' } @{ $query_block->slots || [] };
   ok $search_slot, 'search slot is present';
   is $search_slot->completion_family, 'LIST', 'search slot is list family';
-  is $search_slot->dispatch_family, 'LIST', 'search slot dispatch stays list';
+  # A list of a union dispatches per item, so the slot carries the inner
+  # type's abstract dispatch family (plain object lists keep LIST).
+  is $search_slot->dispatch_family, 'TAG', 'list-of-union slot carries abstract dispatch';
   my ($ids_arg) = grep { $_->[0] eq 'ids' } @{ $search_slot->arg_defs_compact || [] };
   is_deeply $ids_arg, [
     'ids',

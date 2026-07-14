@@ -106,7 +106,9 @@ subtest 'top-level helper can lower operation source' => sub {
   isa_ok $program, 'GraphQL::Houtou::Runtime::VMProgram';
   my ($search) = @{ $program->root_block->ops };
   is $search->complete_family, 'COMPLETE_LIST', 'list field lowers to list completion op';
-  is $search->dispatch_family, 'LIST', 'dispatch family preserved';
+  # A list of a union dispatches per item, so the op carries the inner
+  # type's abstract dispatch family (plain object lists keep LIST).
+  is $search->dispatch_family, 'TAG', 'list-of-union op carries abstract dispatch';
 };
 
 subtest 'execution program can round-trip through struct form' => sub {

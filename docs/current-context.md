@@ -1665,3 +1665,31 @@ perl -Ilib t/19_vm_execute.t
   Linux コンテナ(perl:5.40 + LD_PRELOAD libasan + PERL_DESTRUCT_LEVEL=2)
   で seed 1/3/4/7/11 フルスイート PASS、通常ビルドで minil test 290 件 +
   soak(+512KB)PASS
+
+## 2026-07-15 P-D: response deferred 削減(同期完走時の直接返却)
+
+- async レーンは従来、response frame の finalize で無条件に deferred +
+  promise を作り、resolve 時に deferred_resolve → Perl 側 _settle_result が
+  then() で取り出していた。**リクエストが execute 呼び出し内で完走する場合
+  (preresolved promise / キャッシュヒット)には deferred を作らず、
+  materialize 済み response を exec state に stash して直接返す**ように変更
+- finalize の再構成: response frame(top-level、deferred 未作成、
+  非 draining)に限り arm を先行 → 全 settle なら enqueue+drain →
+  resolve_frame が deferred 不在時に s->completed_response_sv へ stash →
+  finalize は undef を返し、entry point(auto impl / run_program /
+  execute_block_async の各 XS)が stash を直接返す。drain が新しい
+  pending wave を発見した場合は従来の promise 経路にフォールバック
+- mode-1(wrap 返却)経路の arm 順序は変えない(arm 先行だと drain 外の
+  同期 settle で frame が resolve→解放されてから wrap する
+  use-after-free になり得るため。armed フラグで response frame の
+  トライに限定)
+- API 互換: POD は元々「settled envelope(pending 中は promise)を返す」
+  契約。旧実装は常に resolved promise を返していただけなので、直接返却は
+  契約どおり。_settle_result も非 promise はそのまま返す
+- 計測(#45 後 main 比): async_sv 56.2k → **60.5k/s(+7.6%)**、
+  async_json 55.2k → **63.2k/s(+14.5%)**、items_sv 26.9k → 28.6k、
+  nested loader ~10.1k(loader 経路は stall 駆動で deferred が必要なので
+  ほぼ横ばい、想定どおり)
+- 累計(セッション開始 51.9k 比): async_sv **+17%**、async_json **+24%**、
+  items **+16%**、多段 DataLoader **+37%**(6.6-7.8k → 10.1k)
+- 290 tests + minil test + soak(+496KB/20000)パス

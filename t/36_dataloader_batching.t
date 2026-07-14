@@ -298,6 +298,159 @@ subtest 'resolver returning a load_many promise completes the list' => sub {
   is scalar @user_batches, 1, 'single batch for the whole list';
 };
 
+subtest 'one loader shared across types, several loaders per type' => sub {
+  # The realistic wiring: Blog.author and Entry.author share the users
+  # loader (cross-type dedup through the per-request cache), while Blog
+  # also uses a second loader for latestEntry. Loaders feed each other
+  # within one stall: settling entries queues Entry.author loads.
+  my %users_db = (
+    u1 => { id => 'u1', name => 'alice' },
+    u2 => { id => 'u2', name => 'bob' },
+    u3 => { id => 'u3', name => 'carol' },
+  );
+  my %entries_db = (
+    e1 => { id => 'e1', title => 'entry-one', author_id => 'u3' },
+    e2 => { id => 'e2', title => 'entry-two', author_id => 'u1' },
+  );
+  my @blogs = (
+    { id => 'b1', title => 'blog-one', author_id => 'u1', latest_entry_id => 'e1' },
+    { id => 'b2', title => 'blog-two', author_id => 'u2', latest_entry_id => 'e2' },
+  );
+
+  my (@users_batched, @entries_batched);
+  my $users = GraphQL::Houtou::DataLoader->new(batch => sub {
+    push @users_batched, [ @{ $_[0] } ];
+    return [ map { $users_db{$_} } @{ $_[0] } ];
+  });
+  my $entries = GraphQL::Houtou::DataLoader->new(batch => sub {
+    push @entries_batched, [ @{ $_[0] } ];
+    return [ map { $entries_db{$_} } @{ $_[0] } ];
+  });
+
+  my $BUser = GraphQL::Houtou::Type::Object->new(
+    name => 'BUser', fields => { id => { type => $ID }, name => { type => $String } });
+  my $Entry = GraphQL::Houtou::Type::Object->new(
+    name => 'Entry',
+    fields => {
+      title => { type => $String },
+      author => { type => $BUser, resolve => sub { $_[2]->{users}->load($_[0]{author_id}) } },
+    });
+  my $Blog = GraphQL::Houtou::Type::Object->new(
+    name => 'Blog',
+    fields => {
+      title => { type => $String },
+      author => { type => $BUser, resolve => sub { $_[2]->{users}->load($_[0]{author_id}) } },
+      latestEntry => { type => $Entry, resolve => sub { $_[2]->{entries}->load($_[0]{latest_entry_id}) } },
+    });
+  my $blog_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'BlogQuery',
+      fields => { blogs => { type => $Blog->non_null->list, resolve => sub { [ @blogs ] } } },
+    ),
+    types => [ $BUser, $Entry, $Blog ],
+  );
+
+  my $result = execute($blog_schema,
+    '{ blogs { title author { name } latestEntry { title author { name } } } }',
+    undef,
+    context => { users => $users, entries => $entries },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users, $entries),
+  );
+
+  is_deeply $result->{errors}, [], 'no errors';
+  is_deeply $result->{data}{blogs}, [
+    { title => 'blog-one', author => { name => 'alice' },
+      latestEntry => { title => 'entry-one', author => { name => 'carol' } } },
+    { title => 'blog-two', author => { name => 'bob' },
+      latestEntry => { title => 'entry-two', author => { name => 'alice' } } },
+  ], 'both loaders resolve across both types';
+
+  is_deeply \@entries_batched, [ [qw(e1 e2)] ], 'entries batched once';
+  is scalar @users_batched, 2, 'users batched once per dependency level';
+  is_deeply $users_batched[0], [qw(u1 u2)], 'blog authors collapse into one batch';
+  is_deeply $users_batched[1], [qw(u3)],
+    'entry authors batch within the same stall; u1 deduped across types by the cache';
+};
+
+subtest 'late-resolving list whose items queue more loads (grouping loader)' => sub {
+  # Post.comments loads an arrayref of rows per post id (grouping loader);
+  # the list promise resolves at the flush, and each comment's child block
+  # then queues Comment.author on the shared users loader. The completed
+  # list arrives as a list-pending handle on the scheduler's resolved-value
+  # path - treating it as a promise used to break the whole response.
+  my %users_db = (
+    1 => { id => 1, name => 'alice' }, 2 => { id => 2, name => 'bob' },
+    3 => { id => 3, name => 'carol' },
+  );
+  my %comments_db = (
+    1 => [ { post_id => 1, author_id => 2, body => 'nice' },
+           { post_id => 1, author_id => 3, body => '+1' } ],
+    2 => [ { post_id => 2, author_id => 1, body => 'thanks' } ],
+  );
+  my @posts = (
+    { id => 1, title => 'first', author_id => 1 },
+    { id => 2, title => 'second', author_id => 2 },
+  );
+
+  my (@users_batched, @comments_batched);
+  my $users = GraphQL::Houtou::DataLoader->new(batch => sub {
+    push @users_batched, [ @{ $_[0] } ];
+    return [ map { $users_db{$_} } @{ $_[0] } ];
+  });
+  my $comments = GraphQL::Houtou::DataLoader->new(batch => sub {
+    push @comments_batched, [ @{ $_[0] } ];
+    return [ map { $comments_db{$_} || [] } @{ $_[0] } ];
+  });
+
+  my $CUser = GraphQL::Houtou::Type::Object->new(
+    name => 'CUser', fields => { name => { type => $String } });
+  my $Comment = GraphQL::Houtou::Type::Object->new(
+    name => 'Comment',
+    fields => {
+      body => { type => $String },
+      author => { type => $CUser, resolve => sub { $_[2]->{users}->load($_[0]{author_id}) } },
+    });
+  require GraphQL::Houtou::Type::List;
+  my $CPost = GraphQL::Houtou::Type::Object->new(
+    name => 'CPost',
+    fields => {
+      title => { type => $String },
+      author => { type => $CUser, resolve => sub { $_[2]->{users}->load($_[0]{author_id}) } },
+      comments => {
+        type => GraphQL::Houtou::Type::List->new(of => $Comment),
+        resolve => sub { $_[2]->{comments_by_post}->load($_[0]{id}) },
+      },
+    });
+  my $s = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'CommentsQuery',
+      fields => { posts => { type => $CPost->non_null->list, resolve => sub { [ @posts ] } } },
+    ),
+    types => [ $CUser, $Comment, $CPost ],
+  );
+
+  my $result = execute($s,
+    '{ posts { title author { name } comments { body author { name } } } }',
+    undef,
+    context => { users => $users, comments_by_post => $comments },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users, $comments),
+  );
+
+  is_deeply $result->{errors}, [], 'no errors';
+  is_deeply $result->{data}{posts}, [
+    { title => 'first', author => { name => 'alice' },
+      comments => [
+        { body => 'nice', author => { name => 'bob' } },
+        { body => '+1', author => { name => 'carol' } },
+      ] },
+    { title => 'second', author => { name => 'bob' },
+      comments => [ { body => 'thanks', author => { name => 'alice' } } ] },
+  ], 'nested loads under a late-resolving list complete';
+  is_deeply \@comments_batched, [ [ 1, 2 ] ], 'comments grouped into one batch';
+  is_deeply \@users_batched, [ [ 1, 2 ], [ 3 ] ],
+    'comment authors batch in the next level, deduped against post authors';
+};
+
 subtest 'runtime execute_document accepts on_stall directly' => sub {
   my ($users, $teams) = make_loaders();
   my $runtime = build_native_runtime($schema);

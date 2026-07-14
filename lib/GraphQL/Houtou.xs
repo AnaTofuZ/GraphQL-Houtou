@@ -2327,6 +2327,35 @@ gql_runtime_vm_async_scheduler_process_frame(
           if (child_frame->pending_unresolved == 0) {
             gql_runtime_vm_async_scheduler_enqueue_frame(s, child_frame);
           }
+        } else if (completed_sv && SvOK(completed_sv)
+                   && gql_runtime_vm_is_list_pending_value_sv(completed_sv)) {
+          /* A late-resolving list field whose items pend again (child
+           * blocks queueing loads) completes to a list-pending handle.
+           * Adopt it like consume_current_result_now does; treating it as
+           * a promise breaks the response. */
+          gql_runtime_vm_list_pending_t *list_pending =
+            gql_runtime_vm_expect_list_pending(aTHX_ completed_sv);
+          gql_runtime_vm_pending_entry_t *next_entry =
+            gql_runtime_vm_block_frame_push_pending_entry_with_meta(
+              aTHX_
+              &next_pending,
+              entry->result_name_pv,
+              entry->result_name_len,
+              entry->result_name_pv_borrowed,
+              entry->path_frame,
+              entry->block_index,
+              entry->slot_index,
+              entry->op_index
+            );
+          next_entry->payload_kind = GQL_VM_PENDING_LIST_PENDING_PTR;
+          next_entry->state_code = GQL_VM_PENDING_STATE_WAITING_ARMED;
+          next_entry->payload.list_pending_ptr = list_pending;
+          gql_runtime_vm_list_pending_incref(list_pending);
+          if (list_pending->owner_frame) {
+            gql_runtime_vm_free_block_frame(aTHX_ list_pending->owner_frame);
+          }
+          list_pending->owner_frame = frame;
+          frame->refcount++;
         } else if (completed_sv && SvOK(completed_sv)) {
           gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
             aTHX_
@@ -2517,6 +2546,32 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
             gql_runtime_vm_async_scheduler_enqueue_frame(exec_state, child_frame);
             enqueued_ready_child = 1;
           }
+        } else if (completed_sv && SvOK(completed_sv)
+                   && gql_runtime_vm_is_list_pending_value_sv(completed_sv)) {
+          /* Same adoption as the scheduler's resolved-value branch. */
+          gql_runtime_vm_list_pending_t *list_pending =
+            gql_runtime_vm_expect_list_pending(aTHX_ completed_sv);
+          gql_runtime_vm_pending_entry_t *next_entry =
+            gql_runtime_vm_block_frame_push_pending_entry_with_meta(
+              aTHX_
+              &next_pending,
+              entry->result_name_pv,
+              entry->result_name_len,
+              entry->result_name_pv_borrowed,
+              entry->path_frame,
+              entry->block_index,
+              entry->slot_index,
+              entry->op_index
+            );
+          next_entry->payload_kind = GQL_VM_PENDING_LIST_PENDING_PTR;
+          next_entry->state_code = GQL_VM_PENDING_STATE_WAITING_ARMED;
+          next_entry->payload.list_pending_ptr = list_pending;
+          gql_runtime_vm_list_pending_incref(list_pending);
+          if (list_pending->owner_frame) {
+            gql_runtime_vm_free_block_frame(aTHX_ list_pending->owner_frame);
+          }
+          list_pending->owner_frame = state->frame;
+          state->frame->refcount++;
         } else if (completed_sv && SvOK(completed_sv)) {
           gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
             aTHX_

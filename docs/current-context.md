@@ -1538,3 +1538,26 @@ perl -Ilib t/19_vm_execute.t
     per-entry の anonymous XSUB 生成(pending/error callback)と
     response deferred が主因とみられる(次弾候補)
 - 287 tests + soak(+560KB/12000、既知残差水準)パス
+
+## 2026-07-14 DataLoader 実運用パターン整備 + list 遅延解決バグ修正
+
+- ユーザー要望の 2 パターンを検証: (1) 複数の型から同じ loader
+  (Blog.author / Entry.author が users を共有)、(2) 1 つの型に複数 loader
+  (Blog の author と latestEntry)。**インターフェース変更なしで動作**
+  (context に全 loader + `on_stall_for(@loaders)`)。per-request キャッシュは
+  型をまたいでデデュープし、stall 内で loader が loader を連鎖できる
+- **既存バグ発見・修正**: list フィールドの promise が flush で遅延解決され、
+  その要素の子ブロックがさらに loader を呼ぶ形状(grouping loader:
+  posts → comments → comment.author)で **execute が空文字列を返す**。
+  原因は process_frame / pending_merge の RESOLVED_VALUE consumer に
+  ListPending handle の分岐がなく、handle を PROMISE_SV として押し込んで
+  非 promise に then を呼んでいた(#40 の block-frame 分岐の list 版が
+  元から欠落。#40 以前の d30ffca でも再現する pre-existing)。
+  consume_current_result_now と同じ owner_frame 付け替え+incref で採用
+- t/36 に 2 subtest 追加(blog/entry 共有パターン、comments grouping
+  パターン=修正の回帰テスト)。計 289 tests + soak(+624KB)パス
+- examples/sqlite-dataloader.psgi を実運用形状に拡張(Post.author +
+  Post.comments、Comment.author が users を共有、grouping loader の実例)。
+  依存(DBI/DBD::SQLite/Plack)は examples/cpanfile + Carton で導入、
+  `carton exec -- plackup` で end-to-end 確認済み(examples/local は
+  gitignore)。DataLoader POD に MULTIPLE LOADERS 節を追加

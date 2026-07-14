@@ -897,6 +897,7 @@ static void
 gql_runtime_vm_native_list_push(gql_runtime_vm_native_value_t *value, gql_runtime_vm_native_value_t *child)
 {
   gql_runtime_vm_native_list_t *list;
+  IV i;
   if (!value || value->kind_code != GQL_VM_NATIVE_VALUE_LIST || !child) {
     return;
   }
@@ -904,6 +905,13 @@ gql_runtime_vm_native_list_push(gql_runtime_vm_native_value_t *value, gql_runtim
   if (list->count == list->capacity) {
     IV new_capacity = list->capacity ? list->capacity * 2 : 8;
     Renew(list->items, new_capacity, gql_runtime_vm_native_value_t *);
+    /* Entries at or beyond count must be NULL: destroy only clears up to
+     * count before pooling the value, and a pooled reuse via the sparse
+     * native_list_store_at treats any non-NULL slot as a live child to
+     * destroy - an uninitialized slot there is a wild pointer. */
+    for (i = list->capacity; i < new_capacity; i++) {
+      list->items[i] = NULL;
+    }
     list->capacity = new_capacity;
   }
   list->items[list->count] = child;

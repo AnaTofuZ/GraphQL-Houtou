@@ -282,6 +282,7 @@ static SV *gql_runtime_vm_new_error_callback_sv(pTHX_ gql_runtime_vm_path_frame_
 static SV *gql_runtime_vm_new_list_item_child_callback_sv(pTHX_ SV *state_sv, gql_runtime_vm_path_frame_t *path_frame, IV child_block_index);
 static XS(gql_runtime_vm_xs_list_item_child_callback);
 static SV *gql_runtime_vm_new_pending_callback_sv(pTHX_ SV *state_sv, gql_runtime_vm_block_frame_t *frame, IV entry_index);
+static SV *gql_runtime_vm_new_pending_reject_callback_sv(pTHX_ SV *state_sv, gql_runtime_vm_block_frame_t *frame, IV entry_index);
 static SV *gql_runtime_vm_new_finalize_callback_sv(pTHX_ gql_runtime_vm_pending_merge_t *merge);
 static SV *gql_runtime_vm_new_materialize_response_callback_sv(pTHX_ SV *state_sv);
 static SV *gql_runtime_vm_call_then_promise_xs_sv(pTHX_ SV *promise_sv, SV *callback_sv, SV *error_callback_sv, gql_runtime_vm_path_frame_t *path_frame);
@@ -316,6 +317,7 @@ static int gql_runtime_vm_is_list_pending_value_sv(SV *value);
 static SV *gql_runtime_vm_list_pending_handle_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, AV *values_av, gql_runtime_vm_path_frame_t *path_frame);
 static XS(gql_runtime_vm_xs_complete_callback);
 static XS(gql_runtime_vm_xs_pending_callback);
+static XS(gql_runtime_vm_xs_pending_reject_callback);
 static XS(gql_runtime_vm_xs_list_pending_callback);
 static XS(gql_runtime_vm_xs_error_callback);
 static XS(gql_runtime_vm_xs_finalize_callback);
@@ -1961,6 +1963,33 @@ gql_runtime_vm_new_pending_callback_sv(
   return rv;
 }
 
+static SV *
+gql_runtime_vm_new_pending_reject_callback_sv(
+  pTHX_
+  SV *state_sv,
+  gql_runtime_vm_block_frame_t *frame,
+  IV entry_index
+)
+{
+  CV *cv;
+  SV *rv;
+  gql_runtime_vm_pending_callback_ctx_t *ctx;
+
+  Newxz(ctx, 1, gql_runtime_vm_pending_callback_ctx_t);
+  ctx->state_sv = state_sv ? SvREFCNT_inc_simple_NN(state_sv) : NULL;
+  ctx->frame = frame;
+  if (ctx->frame) {
+    ctx->frame->refcount++;
+  }
+  ctx->entry_index = entry_index;
+
+  cv = newXS(NULL, gql_runtime_vm_xs_pending_reject_callback, __FILE__);
+  CvXSUBANY(cv).any_ptr = ctx;
+  gql_runtime_vm_attach_callback_magic_ptr(aTHX_ (SV *)cv, &gql_runtime_vm_pending_callback_ctx_vtbl, ctx);
+  rv = newRV_noinc((SV *)cv);
+  return rv;
+}
+
 static void
 gql_runtime_vm_async_scheduler_resolve_frame(
   pTHX_
@@ -2098,7 +2127,11 @@ gql_runtime_vm_async_scheduler_arm_frame(
 
     {
       SV *callback_sv = gql_runtime_vm_new_pending_callback_sv(aTHX_ state_sv, frame, i);
-      SV *error_callback_sv = gql_runtime_vm_new_error_callback_sv(aTHX_ entry->path_frame);
+      /* The reject arm settles the entry directly: promises land here
+       * unnormalized (then_complete pushes the user promise itself), and
+       * an outcome returned into the discarded derived promise would be
+       * lost, deadlocking the frame. */
+      SV *error_callback_sv = gql_runtime_vm_new_pending_reject_callback_sv(aTHX_ state_sv, frame, i);
       SV *ret = gql_runtime_vm_call_then_promise_for_state_sv(
         aTHX_
         s,
@@ -2739,6 +2772,56 @@ static XS(gql_runtime_vm_xs_pending_callback)
   if (tmp_resolved) {
     SvREFCNT_dec(tmp_resolved);
   }
+  XSRETURN_UNDEF;
+}
+
+/* Rejection arm for a directly-subscribed pending entry. The entry holds
+ * the user promise itself (no normalizing then() in between), so the
+ * rejection reason arrives raw here: convert it into an error outcome for
+ * the entry's path and settle the entry exactly like the resolve arm. */
+static XS(gql_runtime_vm_xs_pending_reject_callback)
+{
+  dVAR;
+  dXSARGS;
+  gql_runtime_vm_pending_callback_ctx_t *ctx = INT2PTR(
+    gql_runtime_vm_pending_callback_ctx_t *,
+    CvXSUBANY(cv).any_ptr
+  );
+  SV *reason_sv = items > 0 && ST(0) ? ST(0) : &PL_sv_undef;
+  gql_runtime_vm_exec_state_handle_t *state = NULL;
+  gql_runtime_vm_pending_entry_t *entry = NULL;
+
+  if (!ctx || !ctx->state_sv || !ctx->frame) {
+    XSRETURN_UNDEF;
+  }
+  state = gql_runtime_vm_expect_exec_state_handle(aTHX_ ctx->state_sv);
+  if (ctx->entry_index < 0 || ctx->entry_index >= ctx->frame->pending_count) {
+    XSRETURN_UNDEF;
+  }
+
+  entry = &ctx->frame->pending_entries[ctx->entry_index];
+  if (SvOK(reason_sv) && gql_runtime_vm_sv_is_outcome(aTHX_ reason_sv)) {
+    gql_runtime_vm_async_pending_entry_store_outcome(aTHX_ entry, reason_sv);
+  } else {
+    SV *outcome_sv = gql_runtime_vm_new_error_outcome_for_path_sv(
+      aTHX_
+      reason_sv,
+      entry->path_frame
+    );
+    gql_runtime_vm_async_pending_entry_store_outcome(aTHX_ entry, outcome_sv);
+    SvREFCNT_dec(outcome_sv);
+  }
+
+  if (ctx->frame->pending_unresolved > 0) {
+    ctx->frame->pending_unresolved--;
+  }
+  if (ctx->frame->pending_unresolved == 0) {
+    gql_runtime_vm_async_scheduler_enqueue_frame(state, ctx->frame);
+    if (!state->async_scheduler_draining) {
+      gql_runtime_vm_async_scheduler_drain(aTHX_ ctx->state_sv, state);
+    }
+  }
+
   XSRETURN_UNDEF;
 }
 
@@ -5365,6 +5448,29 @@ gql_runtime_vm_then_complete_current_sv(
   SV *error_callback_sv;
   SV *ret = NULL;
 
+  /* Direct subscription: park the user promise itself as the pending
+   * entry; arm_frame then()s it once with the resolve/reject arms writing
+   * straight into the entry. Skips one then(), one derived promise and
+   * one error CV per user promise. */
+  if (op && s && s->frame && result_name_pv && result_name_len > 0) {
+    gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
+      aTHX_
+      s->frame,
+      result_name_pv,
+      result_name_len,
+      1,
+      promise_sv,
+      complete_code == GQL_VM_COMPLETE_GENERIC
+        ? GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
+        : GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV,
+      path_frame,
+      block_index,
+      slot_index,
+      op_index
+    );
+    return newSVsv(&PL_sv_undef);
+  }
+
   callback_sv = gql_runtime_vm_identity_callback_sv(aTHX);
   error_callback_sv = gql_runtime_vm_new_error_callback_sv(aTHX_ path_frame);
 
@@ -5382,34 +5488,6 @@ gql_runtime_vm_then_complete_current_sv(
   }
   if (error_callback_sv) {
     SvREFCNT_dec(error_callback_sv);
-  }
-
-  if (op
-      && ret
-      && SvOK(ret)
-      && !gql_runtime_vm_sv_is_outcome(aTHX_ ret)
-      && gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, ret)
-      && s
-      && s->frame
-      && result_name_pv
-      && result_name_len > 0) {
-    gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
-      aTHX_
-      s->frame,
-      result_name_pv,
-      result_name_len,
-      1,
-      ret,
-      complete_code == GQL_VM_COMPLETE_GENERIC
-        ? GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
-        : GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV,
-      path_frame,
-      block_index,
-      slot_index,
-      op_index
-    );
-    SvREFCNT_dec(ret);
-    return newSVsv(&PL_sv_undef);
   }
 
   if (ret

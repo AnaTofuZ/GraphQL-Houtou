@@ -270,6 +270,10 @@ enum {
 
 typedef struct {
   char **names;
+  /* Parallel to names: 1 marks a field name borrowed from the execution
+   * plan (plan strings outlive every value of the request), 0 an owned
+   * savepv copy that destroy must free. */
+  U8 *names_borrowed;
   gql_runtime_vm_native_value_t **values;
   IV count;
   IV capacity;
@@ -539,7 +543,7 @@ static SV *gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_s
 static gql_runtime_vm_native_value_t *gql_runtime_vm_new_native_value_scalar(pTHX_ SV *value);
 static gql_runtime_vm_native_value_t *gql_runtime_vm_new_native_value_object(void);
 static gql_runtime_vm_native_value_t *gql_runtime_vm_new_native_value_list(void);
-static void gql_runtime_vm_native_object_store(pTHX_ gql_runtime_vm_native_value_t *value, const char *name, gql_runtime_vm_native_value_t *child);
+static void gql_runtime_vm_native_object_store(pTHX_ gql_runtime_vm_native_value_t *value, const char *name, U8 name_borrowed, gql_runtime_vm_native_value_t *child);
 static void gql_runtime_vm_native_list_push(gql_runtime_vm_native_value_t *value, gql_runtime_vm_native_value_t *child);
 static void gql_runtime_vm_native_value_destroy(pTHX_ gql_runtime_vm_native_value_t *value);
 static SV *gql_runtime_vm_native_value_materialize_sv(pTHX_ gql_runtime_vm_native_value_t *value);
@@ -869,7 +873,7 @@ gql_runtime_vm_new_native_value_list(void)
 }
 
 static void
-gql_runtime_vm_native_object_store(pTHX_ gql_runtime_vm_native_value_t *value, const char *name, gql_runtime_vm_native_value_t *child)
+gql_runtime_vm_native_object_store(pTHX_ gql_runtime_vm_native_value_t *value, const char *name, U8 name_borrowed, gql_runtime_vm_native_value_t *child)
 {
   gql_runtime_vm_native_object_t *object;
   if (!value || value->kind_code != GQL_VM_NATIVE_VALUE_OBJECT || !name || !child) {
@@ -879,10 +883,12 @@ gql_runtime_vm_native_object_store(pTHX_ gql_runtime_vm_native_value_t *value, c
   if (object->count == object->capacity) {
     IV new_capacity = object->capacity ? object->capacity * 2 : 8;
     Renew(object->names, new_capacity, char *);
+    Renew(object->names_borrowed, new_capacity, U8);
     Renew(object->values, new_capacity, gql_runtime_vm_native_value_t *);
     object->capacity = new_capacity;
   }
-  object->names[object->count] = savepv(name);
+  object->names[object->count] = name_borrowed ? (char *)name : savepv(name);
+  object->names_borrowed[object->count] = name_borrowed ? 1 : 0;
   object->values[object->count] = child;
   object->count++;
 }
@@ -891,6 +897,7 @@ static void
 gql_runtime_vm_native_list_push(gql_runtime_vm_native_value_t *value, gql_runtime_vm_native_value_t *child)
 {
   gql_runtime_vm_native_list_t *list;
+  IV i;
   if (!value || value->kind_code != GQL_VM_NATIVE_VALUE_LIST || !child) {
     return;
   }
@@ -898,6 +905,13 @@ gql_runtime_vm_native_list_push(gql_runtime_vm_native_value_t *value, gql_runtim
   if (list->count == list->capacity) {
     IV new_capacity = list->capacity ? list->capacity * 2 : 8;
     Renew(list->items, new_capacity, gql_runtime_vm_native_value_t *);
+    /* Entries at or beyond count must be NULL: destroy only clears up to
+     * count before pooling the value, and a pooled reuse via the sparse
+     * native_list_store_at treats any non-NULL slot as a live child to
+     * destroy - an uninitialized slot there is a wild pointer. */
+    for (i = list->capacity; i < new_capacity; i++) {
+      list->items[i] = NULL;
+    }
     list->capacity = new_capacity;
   }
   list->items[list->count] = child;
@@ -929,7 +943,9 @@ gql_runtime_vm_native_value_destroy(pTHX_ gql_runtime_vm_native_value_t *value)
        * invariant that entries at or beyond count are empty (sparse
        * store_at fills rely on it to detect real overwrites). */
       for (i = 0; i < value->object.count; i++) {
-        Safefree(value->object.names[i]);
+        if (!value->object.names_borrowed || !value->object.names_borrowed[i]) {
+          Safefree(value->object.names[i]);
+        }
         value->object.names[i] = NULL;
         gql_runtime_vm_native_value_destroy(aTHX_ value->object.values[i]);
         value->object.values[i] = NULL;
@@ -955,6 +971,7 @@ gql_runtime_vm_native_value_destroy(pTHX_ gql_runtime_vm_native_value_t *value)
     return;
   }
   Safefree(value->object.names);
+  Safefree(value->object.names_borrowed);
   Safefree(value->object.values);
   Safefree(value->list.items);
   Safefree(value);
@@ -1026,12 +1043,8 @@ gql_runtime_vm_native_value_from_sv(pTHX_ SV *value)
         SV *val_sv = hv_iterval(hv, he);
         STRLEN key_len = 0;
         const char *key_pv = key_sv ? SvPV(key_sv, key_len) : "";
-        char *name;
-        Newxz(name, key_len + 1, char);
-        Copy(key_pv, name, key_len, char);
-        name[key_len] = '\0';
-        gql_runtime_vm_native_object_store(aTHX_ ret, name, gql_runtime_vm_native_value_from_sv(aTHX_ val_sv));
-        Safefree(name);
+        /* store copies non-borrowed names itself (SvPV is NUL-terminated). */
+        gql_runtime_vm_native_object_store(aTHX_ ret, key_pv, 0, gql_runtime_vm_native_value_from_sv(aTHX_ val_sv));
       }
       return ret;
     }
@@ -1063,6 +1076,9 @@ gql_runtime_vm_native_value_clone(pTHX_ const gql_runtime_vm_native_value_t *val
         gql_runtime_vm_native_object_store(
           aTHX_ ret,
           value->object.names[i],
+          /* Plan-borrowed names stay borrowed: clones never outlive the
+           * request, and the plan outlives it. */
+          value->object.names_borrowed ? value->object.names_borrowed[i] : 0,
           gql_runtime_vm_native_value_clone(aTHX_ value->object.values[i])
         );
       }
@@ -2658,6 +2674,7 @@ gql_runtime_vm_new_outcome_struct(pTHX_ U8 kind_code, SV *value, SV *error_recor
               aTHX_
               outcome->value,
               key_pv,
+              0,
               gql_runtime_vm_native_value_from_completed_sv(aTHX_ val_sv)
             );
           }
@@ -2786,6 +2803,7 @@ gql_runtime_vm_consume_outcome_native_object(
   pTHX_
   gql_runtime_vm_native_value_t *data_value,
   const char *result_name_pv,
+  U8 result_name_borrowed,
   gql_runtime_vm_outcome_t *outcome,
   gql_runtime_vm_writer_t *writer
 )
@@ -2802,12 +2820,13 @@ gql_runtime_vm_consume_outcome_native_object(
    * outcomes (refcount > 1, e.g. still referenced by a pending entry
    * elsewhere) keep the defensive clone. */
   if (outcome->refcount == 1 && outcome->value) {
-    gql_runtime_vm_native_object_store(aTHX_ data_value, result_name_pv, outcome->value);
+    gql_runtime_vm_native_object_store(aTHX_ data_value, result_name_pv, result_name_borrowed, outcome->value);
     outcome->value = NULL;
   } else {
     gql_runtime_vm_native_object_store(
       aTHX_ data_value,
       result_name_pv,
+      result_name_borrowed,
       outcome->value ? gql_runtime_vm_native_value_clone(aTHX_ outcome->value)
                      : gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef)
     );
@@ -2827,6 +2846,7 @@ gql_runtime_vm_consume_value_native_object(
   pTHX_
   gql_runtime_vm_native_value_t *data_value,
   const char *result_name_pv,
+  U8 result_name_borrowed,
   SV *value_sv
 )
 {
@@ -2838,6 +2858,7 @@ gql_runtime_vm_consume_value_native_object(
     aTHX_
     data_value,
     result_name_pv,
+    result_name_borrowed,
     gql_runtime_vm_native_value_from_sv(aTHX_ value_sv ? value_sv : &PL_sv_undef)
   );
 }

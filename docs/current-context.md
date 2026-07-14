@@ -1631,3 +1631,37 @@ perl -Ilib t/19_vm_execute.t
   - async_items_sv: 25.4k → 26.4k(items 経路の list callback は未プール。
     ヘテロ ctx ペアになるため次弾候補)
 - 290 tests + soak(+560KB/20000)パス
+
+## 2026-07-14 P-C: object field 名の borrowed 化
+
+- native_object_store が field 名を毎回 savepv し destroy で Safefree して
+  いた(プロファイルの native_value_destroy と malloc churn の一部)。
+  gql_runtime_vm_native_object_t に names_borrowed 並列配列を追加し、
+  実行プラン(slot->result_name)由来の名前は参照のまま保持
+  (exec state が program への強参照を持つので、値がリクエストを跨いで
+  遅延 settle しても plan 文字列は生きている — entry の borrow と同じ不変条件)
+- 伝播経路: consume_outcome/value_native_object に result_name_borrowed
+  パラメータを追加し、entry->result_name_pv_borrowed / slot 由来 =1 /
+  HV キー・XS フック由来 =0 を各サイトで指定。clone は borrow フラグを維持
+- おまけ: native_value_from_sv の HV キーで Newxz+Copy+savepv の二重コピーに
+  なっていたのを一重に(store が自分でコピーするので手前の複製は不要)
+- 計測(#44 後 main 比): async_sv 55.8k → 56.2k、items_sv 26.4k → 26.9k、
+  async_json 54.3k → 55.2k、nested loader ~10.0k(横ばい)、sync はノイズ内
+- 290 tests + soak(+544KB/20000)パス
+
+## 2026-07-14 ASan flake 修正: native_list_push の未初期化スロット
+
+- #45 の robustness CI(ASan)が同一コミットで 1 回成功 / 1 回 SEGV する
+  flake を発見 → PERL_HASH_SEED 依存で main でも再現(seed 1/3/4 で crash、
+  seed 2/5 で pass)する**既存バグ**と確定
+- 原因: native_list_push の grow(Renew)が新スロットをゼロ埋めしない。
+  destroy は count 未満しか NULL に戻さないため、push で構築された list が
+  pool 経由で再利用され sparse な native_list_store_at(「count 以降は
+  NULL」前提で非 NULL を live child とみなし destroy)に渡ると、
+  未初期化スロット(ASan では 0xbe fill)を wild pointer として destroy
+  → SEGV。ハッシュシード → HV 反復順 → pool の並びで発火が決まる
+- 修正: native_list_push の grow に store_at と同じゼロ埋めループを追加
+- 検証: ASan で seed 1-20 の t/36 全通過(修正前は seed 1 で即 SEGV)、
+  Linux コンテナ(perl:5.40 + LD_PRELOAD libasan + PERL_DESTRUCT_LEVEL=2)
+  で seed 1/3/4/7/11 フルスイート PASS、通常ビルドで minil test 290 件 +
+  soak(+512KB)PASS

@@ -17,6 +17,36 @@ static SV *gql_runtime_vm_global_identity_callback_sv = NULL;
 static HV *gql_runtime_vm_outcome_stash = NULL;
 static HV *gql_runtime_vm_promise_xs_stash = NULL;
 
+/* Recycled resolve/reject callback pairs for armed pending entries. Each
+ * newXS + magic attach costs more than the entry bookkeeping it drives, so
+ * fired pairs park here (holding one refcount per CV) and the next arm
+ * reuses them with fresh ctx fields. Bounded; overflow pairs just die with
+ * their promise. Process-lifetime, like the identity callback above. */
+#define GQL_VM_PENDING_CB_POOL_MAX 128
+static SV *gql_runtime_vm_pending_cb_pool_resolve[GQL_VM_PENDING_CB_POOL_MAX];
+static SV *gql_runtime_vm_pending_cb_pool_reject[GQL_VM_PENDING_CB_POOL_MAX];
+static IV gql_runtime_vm_pending_cb_pool_count = 0;
+
+/* Promises on the hot path are exactly Promise::XS::Promise (the stash
+ * compare above gates them), so then() always resolves to the same CV;
+ * cache it and skip call_method's per-call method lookup. */
+static CV *gql_runtime_vm_promise_xs_then_cv = NULL;
+
+static CV *
+gql_runtime_vm_promise_xs_then_cv_get(pTHX)
+{
+  if (!gql_runtime_vm_promise_xs_then_cv) {
+    GV *gv = gv_fetchmethod_autoload(
+      gv_stashpvs("Promise::XS::Promise", GV_ADD), "then", 0
+    );
+    if (gv && GvCV(gv)) {
+      gql_runtime_vm_promise_xs_then_cv = GvCV(gv);
+      SvREFCNT_inc_simple_void_NN((SV *)gql_runtime_vm_promise_xs_then_cv);
+    }
+  }
+  return gql_runtime_vm_promise_xs_then_cv;
+}
+
 /* Outcome handles are internal-only and blessed exactly into their class,
  * so an exact stash-pointer compare replaces sv_derived_from's ISA hash
  * lookups on the per-field hot path. */
@@ -203,6 +233,13 @@ typedef struct {
   SV *state_sv;
   gql_runtime_vm_block_frame_t *frame;
   IV entry_index;
+  /* The resolve and reject arms of one then() share this ctx; the pair is
+   * pooled for reuse once either arm fires (a settled promise never fires
+   * the other). cv_refcnt counts the CVs still holding the ctx; the CV
+   * pointers are borrowed - the CVs' own refcounts govern their lifetime. */
+  SV *resolve_cv;
+  SV *reject_cv;
+  U8 cv_refcnt;
 } gql_runtime_vm_pending_callback_ctx_t;
 
 typedef struct {
@@ -281,8 +318,7 @@ static SV *gql_runtime_vm_new_complete_callback_sv(pTHX_ SV *state_sv, gql_runti
 static SV *gql_runtime_vm_new_error_callback_sv(pTHX_ gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_new_list_item_child_callback_sv(pTHX_ SV *state_sv, gql_runtime_vm_path_frame_t *path_frame, IV child_block_index);
 static XS(gql_runtime_vm_xs_list_item_child_callback);
-static SV *gql_runtime_vm_new_pending_callback_sv(pTHX_ SV *state_sv, gql_runtime_vm_block_frame_t *frame, IV entry_index);
-static SV *gql_runtime_vm_new_pending_reject_callback_sv(pTHX_ SV *state_sv, gql_runtime_vm_block_frame_t *frame, IV entry_index);
+static gql_runtime_vm_pending_callback_ctx_t *gql_runtime_vm_new_pending_callback_pair(pTHX_ SV *state_sv, gql_runtime_vm_block_frame_t *frame, IV entry_index, SV **resolve_rv_out, SV **reject_rv_out);
 static SV *gql_runtime_vm_new_finalize_callback_sv(pTHX_ gql_runtime_vm_pending_merge_t *merge);
 static SV *gql_runtime_vm_new_materialize_response_callback_sv(pTHX_ SV *state_sv);
 static SV *gql_runtime_vm_call_then_promise_xs_sv(pTHX_ SV *promise_sv, SV *callback_sv, SV *error_callback_sv, gql_runtime_vm_path_frame_t *path_frame);
@@ -477,9 +513,21 @@ gql_runtime_vm_pending_callback_ctx_free(pTHX_ SV *sv, MAGIC *mg)
     ? INT2PTR(gql_runtime_vm_pending_callback_ctx_t *, mg->mg_ptr)
     : NULL;
   if (ctx) {
-    SvREFCNT_dec(ctx->state_sv);
-    gql_runtime_vm_free_block_frame(aTHX_ ctx->frame);
-    Safefree(ctx);
+    /* The ctx is shared by the pair's two CVs; members go with the last
+     * one (a recycle may have dropped them already - the fields are
+     * NULLed then). */
+    if (ctx->cv_refcnt > 0) {
+      ctx->cv_refcnt--;
+    }
+    if (ctx->cv_refcnt == 0) {
+      if (ctx->state_sv) {
+        SvREFCNT_dec(ctx->state_sv);
+      }
+      if (ctx->frame) {
+        gql_runtime_vm_free_block_frame(aTHX_ ctx->frame);
+      }
+      Safefree(ctx);
+    }
     mg->mg_ptr = NULL;
   }
   if (sv && SvTYPE(sv) == SVt_PVCV) {
@@ -1936,58 +1984,98 @@ gql_runtime_vm_push_pending_list_pending(
   list_pending->owner_frame->refcount++;
 }
 
-static SV *
-gql_runtime_vm_new_pending_callback_sv(
+static gql_runtime_vm_pending_callback_ctx_t *
+gql_runtime_vm_new_pending_callback_pair(
   pTHX_
   SV *state_sv,
   gql_runtime_vm_block_frame_t *frame,
-  IV entry_index
+  IV entry_index,
+  SV **resolve_rv_out,
+  SV **reject_rv_out
 )
 {
-  CV *cv;
-  SV *rv;
   gql_runtime_vm_pending_callback_ctx_t *ctx;
 
-  Newxz(ctx, 1, gql_runtime_vm_pending_callback_ctx_t);
-  ctx->state_sv = state_sv ? SvREFCNT_inc_simple_NN(state_sv) : NULL;
-  ctx->frame = frame;
-  if (ctx->frame) {
-    ctx->frame->refcount++;
-  }
-  ctx->entry_index = entry_index;
+  if (gql_runtime_vm_pending_cb_pool_count > 0) {
+    IV n = --gql_runtime_vm_pending_cb_pool_count;
+    SV *resolve_cv = gql_runtime_vm_pending_cb_pool_resolve[n];
+    SV *reject_cv = gql_runtime_vm_pending_cb_pool_reject[n];
 
-  cv = newXS(NULL, gql_runtime_vm_xs_pending_callback, __FILE__);
-  CvXSUBANY(cv).any_ptr = ctx;
-  gql_runtime_vm_attach_callback_magic_ptr(aTHX_ (SV *)cv, &gql_runtime_vm_pending_callback_ctx_vtbl, ctx);
-  rv = newRV_noinc((SV *)cv);
-  return rv;
+    gql_runtime_vm_pending_cb_pool_resolve[n] = NULL;
+    gql_runtime_vm_pending_cb_pool_reject[n] = NULL;
+    ctx = INT2PTR(
+      gql_runtime_vm_pending_callback_ctx_t *,
+      CvXSUBANY((CV *)resolve_cv).any_ptr
+    );
+    ctx->state_sv = state_sv ? SvREFCNT_inc_simple_NN(state_sv) : NULL;
+    ctx->frame = frame;
+    if (ctx->frame) {
+      ctx->frame->refcount++;
+    }
+    ctx->entry_index = entry_index;
+    /* The pool's CV refcounts transfer into the returned RVs. */
+    *resolve_rv_out = newRV_noinc(resolve_cv);
+    *reject_rv_out = newRV_noinc(reject_cv);
+    return ctx;
+  }
+
+  {
+    CV *resolve_cv;
+    CV *reject_cv;
+
+    Newxz(ctx, 1, gql_runtime_vm_pending_callback_ctx_t);
+    ctx->state_sv = state_sv ? SvREFCNT_inc_simple_NN(state_sv) : NULL;
+    ctx->frame = frame;
+    if (ctx->frame) {
+      ctx->frame->refcount++;
+    }
+    ctx->entry_index = entry_index;
+    ctx->cv_refcnt = 2;
+
+    resolve_cv = newXS(NULL, gql_runtime_vm_xs_pending_callback, __FILE__);
+    CvXSUBANY(resolve_cv).any_ptr = ctx;
+    gql_runtime_vm_attach_callback_magic_ptr(aTHX_ (SV *)resolve_cv, &gql_runtime_vm_pending_callback_ctx_vtbl, ctx);
+    reject_cv = newXS(NULL, gql_runtime_vm_xs_pending_reject_callback, __FILE__);
+    CvXSUBANY(reject_cv).any_ptr = ctx;
+    gql_runtime_vm_attach_callback_magic_ptr(aTHX_ (SV *)reject_cv, &gql_runtime_vm_pending_callback_ctx_vtbl, ctx);
+    ctx->resolve_cv = (SV *)resolve_cv;
+    ctx->reject_cv = (SV *)reject_cv;
+
+    *resolve_rv_out = newRV_noinc((SV *)resolve_cv);
+    *reject_rv_out = newRV_noinc((SV *)reject_cv);
+    return ctx;
+  }
 }
 
-static SV *
-gql_runtime_vm_new_pending_reject_callback_sv(
+/* One arm fired: the promise has settled, so the other arm can never
+ * fire. Drop the ctx's references now (parked callbacks must not keep the
+ * exec state alive) and park the pair for the next arm to reuse. */
+static void
+gql_runtime_vm_pending_callback_pair_recycle(
   pTHX_
-  SV *state_sv,
-  gql_runtime_vm_block_frame_t *frame,
-  IV entry_index
+  gql_runtime_vm_pending_callback_ctx_t *ctx
 )
 {
-  CV *cv;
-  SV *rv;
-  gql_runtime_vm_pending_callback_ctx_t *ctx;
-
-  Newxz(ctx, 1, gql_runtime_vm_pending_callback_ctx_t);
-  ctx->state_sv = state_sv ? SvREFCNT_inc_simple_NN(state_sv) : NULL;
-  ctx->frame = frame;
-  if (ctx->frame) {
-    ctx->frame->refcount++;
+  if (!ctx) {
+    return;
   }
-  ctx->entry_index = entry_index;
-
-  cv = newXS(NULL, gql_runtime_vm_xs_pending_reject_callback, __FILE__);
-  CvXSUBANY(cv).any_ptr = ctx;
-  gql_runtime_vm_attach_callback_magic_ptr(aTHX_ (SV *)cv, &gql_runtime_vm_pending_callback_ctx_vtbl, ctx);
-  rv = newRV_noinc((SV *)cv);
-  return rv;
+  if (ctx->state_sv) {
+    SvREFCNT_dec(ctx->state_sv);
+    ctx->state_sv = NULL;
+  }
+  if (ctx->frame) {
+    gql_runtime_vm_free_block_frame(aTHX_ ctx->frame);
+    ctx->frame = NULL;
+  }
+  ctx->entry_index = -1;
+  if (ctx->resolve_cv && ctx->reject_cv && ctx->cv_refcnt == 2
+      && gql_runtime_vm_pending_cb_pool_count < GQL_VM_PENDING_CB_POOL_MAX) {
+    gql_runtime_vm_pending_cb_pool_resolve[gql_runtime_vm_pending_cb_pool_count] =
+      SvREFCNT_inc_simple_NN(ctx->resolve_cv);
+    gql_runtime_vm_pending_cb_pool_reject[gql_runtime_vm_pending_cb_pool_count] =
+      SvREFCNT_inc_simple_NN(ctx->reject_cv);
+    gql_runtime_vm_pending_cb_pool_count++;
+  }
 }
 
 static void
@@ -2132,18 +2220,22 @@ gql_runtime_vm_async_scheduler_arm_frame(
     frame->pending_unresolved++;
 
     {
-      SV *callback_sv = gql_runtime_vm_new_pending_callback_sv(aTHX_ state_sv, frame, i);
+      SV *callback_sv;
       /* The reject arm settles the entry directly: promises land here
        * unnormalized (then_complete pushes the user promise itself), and
        * an outcome returned into the discarded derived promise would be
        * lost, deadlocking the frame. */
-      SV *error_callback_sv = gql_runtime_vm_new_pending_reject_callback_sv(aTHX_ state_sv, frame, i);
+      SV *error_callback_sv;
+      gql_runtime_vm_pending_callback_ctx_t *pair_ctx =
+        gql_runtime_vm_new_pending_callback_pair(
+          aTHX_ state_sv, frame, i, &callback_sv, &error_callback_sv
+        );
       SV *ret;
 
-      /* Record the armed contexts so a process_frame re-push can retarget
-       * their entry_index when this entry moves in the rebuilt array. */
-      entry->armed_resolve_ctx = CvXSUBANY((CV *)SvRV(callback_sv)).any_ptr;
-      entry->armed_reject_ctx = CvXSUBANY((CV *)SvRV(error_callback_sv)).any_ptr;
+      /* Record the armed context so a process_frame re-push can retarget
+       * its entry_index when this entry moves in the rebuilt array. */
+      entry->armed_resolve_ctx = pair_ctx;
+      entry->armed_reject_ctx = pair_ctx;
 
       ret = gql_runtime_vm_call_then_promise_for_state_sv(
         aTHX_
@@ -2801,6 +2893,8 @@ static XS(gql_runtime_vm_xs_pending_callback)
   if (tmp_resolved) {
     SvREFCNT_dec(tmp_resolved);
   }
+  /* Last: nothing below may touch ctx once the pair is parked. */
+  gql_runtime_vm_pending_callback_pair_recycle(aTHX_ ctx);
   XSRETURN_UNDEF;
 }
 
@@ -2851,6 +2945,8 @@ static XS(gql_runtime_vm_xs_pending_reject_callback)
     }
   }
 
+  /* Last: nothing below may touch ctx once the pair is parked. */
+  gql_runtime_vm_pending_callback_pair_recycle(aTHX_ ctx);
   XSRETURN_UNDEF;
 }
 
@@ -3257,7 +3353,14 @@ gql_runtime_vm_call_then_promise_xs_sv(
     XPUSHs(error_callback_sv);
   }
   PUTBACK;
-  call_method("then", G_SCALAR | G_EVAL);
+  {
+    CV *then_cv = gql_runtime_vm_promise_xs_then_cv_get(aTHX);
+    if (then_cv) {
+      call_sv((SV *)then_cv, G_SCALAR | G_EVAL);
+    } else {
+      call_method("then", G_SCALAR | G_EVAL);
+    }
+  }
   SPAGAIN;
   if (SP > PL_stack_base) {
     stack_ret = POPs;
@@ -3353,7 +3456,20 @@ gql_runtime_vm_promise_xs_new_deferred_sv(pTHX)
   sv_setsv(ERRSV, &PL_sv_undef);
   PUSHMARK(SP);
   PUTBACK;
-  call_pv("Promise::XS::deferred", G_SCALAR | G_EVAL);
+  {
+    static CV *deferred_cv = NULL;
+    if (!deferred_cv) {
+      deferred_cv = get_cv("Promise::XS::deferred", 0);
+      if (deferred_cv) {
+        SvREFCNT_inc_simple_void_NN((SV *)deferred_cv);
+      }
+    }
+    if (deferred_cv) {
+      call_sv((SV *)deferred_cv, G_SCALAR | G_EVAL);
+    } else {
+      call_pv("Promise::XS::deferred", G_SCALAR | G_EVAL);
+    }
+  }
   SPAGAIN;
   if (!SvTRUE(ERRSV) && SP > PL_stack_base) {
     SV *stack_ret = POPs;

@@ -538,4 +538,56 @@ subtest 'list field resolving to an array of promises (issue #33)' => sub {
   like $with_error->{errors}[0]{message}, qr/row 2 missing/, 'rejection surfaces in errors';
 };
 
+subtest 'preresolved promise next to a loader promise in one object' => sub {
+  # Regression: the preresolved field settles synchronously while the
+  # frame is being armed, so the scheduler processes the frame once
+  # before the loader promise settles. The re-pushed armed entry moves
+  # to a new index; its callbacks used to keep the old one, dropping the
+  # loader's value and deadlocking the request. The parent resolving via
+  # a loader puts the child's finalize inside the drain, which is what
+  # defers the early process until the armed entry already exists.
+  my $Parent = GraphQL::Houtou::Type::Object->new(
+    name => 'Parent',
+    fields => {
+      fast => {
+        type => $String,
+        resolve => sub { Promise::XS::resolved('fast-value') },
+      },
+      slow => {
+        type => $String,
+        resolve => sub { $_[2]->{users}->load('1')->then(sub { $_[0]->{name} }) },
+      },
+    },
+  );
+  my $mixed_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        parent => {
+          type => $Parent,
+          resolve => sub { $_[2]->{parents}->load('x') },
+        },
+      },
+    ),
+  );
+  my $runtime = build_native_runtime($mixed_schema);
+
+  for my $selection ('{ parent { fast slow } }', '{ parent { slow fast } }') {
+    my $users = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { $USERS{$_} } @{ $_[0] } ];
+    });
+    my $parents = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { { id => $_ } } @{ $_[0] } ];
+    });
+    my $result = $runtime->execute_document($selection,
+      context => { users => $users, parents => $parents },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users, $parents),
+    );
+    is_deeply $result, {
+      data => { parent => { fast => 'fast-value', slow => 'alice' } },
+      errors => [],
+    }, "both fields resolve for $selection";
+  }
+};
+
 done_testing;

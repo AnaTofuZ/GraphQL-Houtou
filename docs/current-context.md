@@ -1588,3 +1588,25 @@ perl -Ilib t/19_vm_execute.t
     then_complete を通らない)
 - 289 tests + minil test + soak(+576KB/20000)パス。残りの境界コストは
   per-entry pending/reject callback の newXS と response deferred(次弾)
+
+## 2026-07-14 B1: armed pending entry の stale entry_index 修正(deadlock)
+
+- **確認済みバグ(main でも再現する既存)**: 同一フレームで preresolved
+  promise フィールドが loader promise フィールドより先にあると deadlock。
+  repro: `{ parent { fast slow } }`(parent は loader 経由 = 子フレームが
+  drain 中に finalize)。`{ slow fast }` 順なら成功する非対称でメカニズム確定
+- 原因: arm 済み entry の then コールバック ctx は entry_index を値で保持。
+  preresolved が arm 中に同期 settle → frame が ready queue へ(drain 中
+  なので後回し)→ process_frame が READY entry を消費して armed entry を
+  前詰めで再 push → ctx の旧 index への settle が bounds check で黙って
+  捨てられ entry が永遠に未解決 → on_stall 進捗 0 で deadlock 報告
+- 修正: pending entry に armed_resolve_ctx / armed_reject_ctx
+  (コールバック CV 所有の borrowed pointer)を追加。arm 時に記録し、
+  process_frame の WAITING 再 push で ctx->entry_index を新 index に更新。
+  finalize が arm を draining=1 で包む(=arm 中に配列 swap は起きない)
+  ことは確認済みなので記録タイミングは安全
+- 防御: resolve_frame の親通知で parent_entry_index が範囲外なら warn
+  (従来は outcome が silent に消えていた)
+- 回帰テスト: t/36 に mixed 形状 subtest(フィールド順両方)。修正なしで
+  deadlock die、修正ありで pass を確認
+- 290 tests + soak(+576KB/20000)+ ベンチ回帰なし(async_sv 54.8k)

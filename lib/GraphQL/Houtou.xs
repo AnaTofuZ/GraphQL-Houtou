@@ -1347,6 +1347,7 @@ gql_runtime_vm_consume_current_outcome_now(pTHX_ gql_runtime_vm_exec_state_handl
   gql_runtime_vm_consume_outcome_native_object(
     aTHX_ frame->values_value,
     result_name_pv ? result_name_pv : "",
+    result_name_pv ? 1 : 0,
     outcome,
     writer
   );
@@ -1568,6 +1569,7 @@ gql_runtime_vm_block_frame_finalize_sv(
         aTHX_
         frame->values_value,
         frame->pending_entries[i].result_name_pv,
+        frame->pending_entries[i].result_name_pv_borrowed,
         frame->pending_entries[i].payload.outcome_ptr,
         writer
       );
@@ -2399,6 +2401,7 @@ gql_runtime_vm_async_scheduler_process_frame(
           aTHX_
           frame->values_value,
           entry->result_name_pv,
+          entry->result_name_pv_borrowed,
           outcome,
           s->writer
         );
@@ -2412,6 +2415,7 @@ gql_runtime_vm_async_scheduler_process_frame(
           aTHX_
           frame->values_value,
           entry->result_name_pv,
+          entry->result_name_pv_borrowed,
           entry->payload.outcome_ptr,
           s->writer
         );
@@ -2437,6 +2441,7 @@ gql_runtime_vm_async_scheduler_process_frame(
             aTHX_
             frame->values_value,
             entry->result_name_pv,
+            entry->result_name_pv_borrowed,
             completed_outcome,
             s->writer
           );
@@ -2446,6 +2451,7 @@ gql_runtime_vm_async_scheduler_process_frame(
             aTHX_
             frame->values_value,
             entry->result_name_pv,
+            entry->result_name_pv_borrowed,
             gql_runtime_vm_expect_outcome(aTHX_ completed_sv),
             s->writer
           );
@@ -2537,6 +2543,7 @@ gql_runtime_vm_async_scheduler_process_frame(
           aTHX_
           frame->values_value,
           entry->result_name_pv,
+          entry->result_name_pv_borrowed,
           entry->payload.promise_sv
         );
       }
@@ -2611,6 +2618,7 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
           aTHX_
           state->frame->values_value,
           entry->result_name_pv,
+          entry->result_name_pv_borrowed,
           resolved_sv
         );
       } else {
@@ -2618,6 +2626,7 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
           aTHX_
           state->frame->values_value,
           entry->result_name_pv,
+          entry->result_name_pv_borrowed,
           gql_runtime_vm_expect_outcome(aTHX_ resolved_sv),
           state->writer
         );
@@ -2628,6 +2637,7 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
           aTHX_
           state->frame->values_value,
           entry->result_name_pv,
+          entry->result_name_pv_borrowed,
           gql_runtime_vm_expect_outcome(aTHX_ resolved_sv),
           state->writer
         );
@@ -2654,6 +2664,7 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
             aTHX_
             state->frame->values_value,
             entry->result_name_pv,
+            entry->result_name_pv_borrowed,
             completed_outcome,
             state->writer
           );
@@ -2663,6 +2674,7 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
             aTHX_
             state->frame->values_value,
             entry->result_name_pv,
+            entry->result_name_pv_borrowed,
             gql_runtime_vm_expect_outcome(aTHX_ completed_sv),
             state->writer
           );
@@ -2751,6 +2763,7 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
           aTHX_
           state->frame->values_value,
           entry->result_name_pv,
+          entry->result_name_pv_borrowed,
           gql_runtime_vm_expect_outcome(aTHX_ resolved_sv),
           state->writer
         );
@@ -2759,6 +2772,7 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
           aTHX_
           state->frame->values_value,
           entry->result_name_pv,
+          entry->result_name_pv_borrowed,
           resolved_sv
         );
       }
@@ -7802,7 +7816,7 @@ gql_runtime_vm_execute_block_value(pTHX_ gql_runtime_vm_exec_state_t *state, IV 
       gql_runtime_vm_outcome_decref(aTHX_ error_outcome);
       completed = gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);
     }
-    gql_runtime_vm_native_object_store(aTHX_ data_value, slot->result_name, completed);
+    gql_runtime_vm_native_object_store(aTHX_ data_value, slot->result_name, 1, completed);
   }
 
   state->block = saved_block;
@@ -10207,6 +10221,7 @@ block_frame_consume_outcome_xs(frame, writer, result_name, outcome)
         aTHX_
         state->values_value,
         result_name_pv,
+        0,
         gql_runtime_vm_expect_outcome(aTHX_ outcome),
         writer_state
       );
@@ -10273,6 +10288,7 @@ block_frame_merge_pending_xs(frame, writer, resolved)
             aTHX_
             state->values_value,
             state->pending_entries[i].result_name_pv,
+            state->pending_entries[i].result_name_pv_borrowed,
             gql_runtime_vm_expect_outcome(aTHX_ *outcome_svp),
             writer_state
           );

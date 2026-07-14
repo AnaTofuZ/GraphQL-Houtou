@@ -372,7 +372,7 @@ The public parser surface is fixed to the library's canonical parser AST.
 # BENCHMARK SNAPSHOT
 
 Medians from `util/execution-benchmark-checkpoint.pl` (repeat 3) on one
-development machine, 2026-07-14. Resolver return values are not cached;
+development machine, 2026-07-15. Resolver return values are not cached;
 the numbers measure request throughput with compiled artifacts reused
 across requests.
 
@@ -387,13 +387,28 @@ nested-object, list, and abstract query shapes.
 - **Persisted native bundles** (`execute_bundle`, fixed query):
 `611k-683k/s` across the same shapes.
 - **Async lane** (20-item x 3-field list, resolvers returning pre-resolved
-`Promise::XS` promises): `53k/s` for a whole-list promise (the
-DataLoader "promise of array" shape) against `93k/s` for the identical
-query on the sync lane - within `1.8x` and still narrowing. One promise
-per item runs at `25k/s`.
-- For scale: graphql-perl (`GraphQL.pm`) executes the list-of-objects
-JSON shape at `4.9k/s` from a query string and `23k/s` from a
-pre-parsed AST on the same machine.
+`Promise::XS` promises): `60k/s` for a whole-list promise (the
+DataLoader "promise of array" shape) against `97k/s` for the identical
+query on the sync lane - within `1.6x` and still narrowing. Direct JSON
+on the async lane runs at `63k/s`; one promise per item at `29k/s`.
+
+## Compared with graphql-perl
+
+Same machine, same 20-item x 3-field list-of-objects query, both sides
+executing to a JSON response. `util/execution-benchmark.pl` runs the
+upstream lanes automatically when a `graphql-perl` checkout sits next
+to this repository:
+
+    graphql-perl, query string each request        5.0k/s
+    graphql-perl, pre-parsed AST + reused schema    23k/s
+    GraphQL::Houtou execute_document_to_json       463k/s
+    GraphQL::Houtou execute_bundle_to_json         894k/s
+
+Against upstream's fastest configuration (pre-parsed AST), the dynamic
+document lane is roughly `20x` and persisted bundles roughly `39x`.
+The async lane - resolvers returning promises, which upstream's executor
+resolves through its own promise plumbing - still clears upstream's sync
+numbers by more than `2x`.
 
 For methodology, see `docs/execution-benchmark.md`; for the measurement
 history behind these numbers, `docs/current-context.md`.

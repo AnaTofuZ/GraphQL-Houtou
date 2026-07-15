@@ -162,8 +162,14 @@ my %scenarios = (
     die "resolver error not captured\n" if !@{ $r->{errors} || [] };
   },
   escaped_die => sub {
-    eval { $runtime->execute_document('{ find(by: { id: "1", email: "x" }) }') };
-    die "escaped die did not propagate\n" if !$@;
+    # The oneOf coercion die unwinds through the XS lowering (the leak
+    # shape under test) and is caught at the request boundary as an
+    # errors-only envelope; validate => 0 keeps it off the validator.
+    my $result = $runtime->execute_document(
+      '{ find(by: { id: "1", email: "x" }) }', validate => 0,
+    );
+    die "escaped die did not surface\n"
+      if !@{ $result->{errors} || [] } || exists $result->{data};
   },
   async_promise => sub {
     my $result = maybe_get_promise_xs($runtime->execute_document('{ asyncHello }'));

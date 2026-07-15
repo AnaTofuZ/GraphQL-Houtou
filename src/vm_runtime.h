@@ -5008,6 +5008,27 @@ gql_runtime_vm_coerce_input_value_sv(pTHX_ SV *type_sv, SV *value_sv)
     PUTBACK;
     FREETMPS;
     LEAVE;
+    /* Input coercion failures are GraphQL request errors (bad variables
+     * or literals from the client), so they surface as
+     * GraphQL::Houtou::Error: the execute_document boundary turns blessed
+     * Houtou errors into an errors-only response envelope and lets any
+     * other die (a config or internal error) propagate. graphql_to_perl
+     * raises plain strings; wrap them, keep already-blessed errors. */
+    if (!sv_isobject(err)) {
+      HV *error_hv = newHV();
+      SV *message_sv = newSVsv(err);
+      STRLEN message_len;
+      char *message_pv = SvPV(message_sv, message_len);
+      /* Trailing newline is die()'s "no location suffix" convention, not
+       * part of the GraphQL error message. */
+      while (message_len > 0 && message_pv[message_len - 1] == '\n') {
+        SvCUR_set(message_sv, --message_len);
+      }
+      (void)hv_stores(error_hv, "message", message_sv);
+      SvREFCNT_dec(err);
+      err = newRV_noinc((SV *)error_hv);
+      sv_bless(err, gv_stashpvs("GraphQL::Houtou::Error", GV_ADD));
+    }
     /* Mortalize onto the caller's tmps so the copy is reclaimed during
      * die unwinding instead of leaking once per coercion failure. */
     croak_sv(sv_2mortal(err));

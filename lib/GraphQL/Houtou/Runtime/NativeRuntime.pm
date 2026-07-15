@@ -431,16 +431,54 @@ sub _document_request_errors {
   return undef;
 }
 
+# Convert a caught exception into GraphQL error entries for an errors-only
+# envelope. Houtou error objects keep their locations/extensions; the
+# parser's graphql-perl-style message is reduced to a spec-style syntax
+# error line (the parse() API keeps raising the full legacy format).
+sub _request_error_entries {
+  my ($error) = @_;
+  if (blessed($error) && $error->isa('GraphQL::Houtou::Error')) {
+    my $entry = $error->to_json;
+    if (($entry->{message} // '') =~ /\AError parsing Pegex document:\s*\n\s*msg:\s*(.+?)\s*\n/) {
+      $entry->{message} = "Syntax Error: $1";
+    }
+    return [ $entry ];
+  }
+  my $message = "$error";
+  $message =~ s/\s+\z//;
+  return [ { message => $message } ];
+}
+
+# True for exceptions that represent GraphQL request errors (client-caused:
+# syntax, validation, input coercion). Anything else - configuration or
+# internal errors - must keep propagating as an exception.
+sub _is_request_error {
+  my ($error) = @_;
+  return blessed($error) && $error->isa('GraphQL::Houtou::Error');
+}
+
 sub execute_document {
   my ($self, $document, %opts) = @_;
   my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
   my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
 
-  my $request_errors = $self->_document_request_errors($document, $max_depth, $validate);
+  my $request_errors = eval { $self->_document_request_errors($document, $max_depth, $validate) };
+  return { errors => _request_error_entries($@) } if $@;
   return { errors => $request_errors } if $request_errors;
 
-  my $program = $self->compile_program($document, %opts);
-  return $self->execute_program($program, %opts);
+  # Compile failures are document-caused (syntax when the request stage was
+  # skipped, literal argument coercion): always a request error. Execution
+  # failures envelope only when they are GraphQL request errors (variable
+  # coercion raises GraphQL::Houtou::Error); other dies - async
+  # misconfiguration, scheduler deadlock, internal bugs - propagate.
+  my $program = eval { $self->compile_program($document, %opts) };
+  return { errors => _request_error_entries($@) } if $@;
+  my $result = eval { $self->execute_program($program, %opts) };
+  if (my $error = $@) {
+    die $error if !_is_request_error($error);
+    return { errors => _request_error_entries($error) };
+  }
+  return $result;
 }
 
 sub execute_bundle {
@@ -547,19 +585,30 @@ sub _auto_json_or_die {
   return $result;
 }
 
+sub _request_errors_json {
+  my ($errors) = @_;
+  require JSON::MaybeXS;
+  return JSON::MaybeXS->new->utf8->canonical->encode({ errors => $errors });
+}
+
 sub execute_document_to_json {
   my ($self, $document, %opts) = @_;
   my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
   my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
 
-  my $request_errors = $self->_document_request_errors($document, $max_depth, $validate);
-  if ($request_errors) {
-    require JSON::MaybeXS;
-    return JSON::MaybeXS->new->utf8->encode({ errors => $request_errors });
-  }
+  my $request_errors = eval { $self->_document_request_errors($document, $max_depth, $validate) };
+  return _request_errors_json(_request_error_entries($@)) if $@;
+  return _request_errors_json($request_errors) if $request_errors;
 
-  my $program = $self->compile_program($document, %opts);
-  return $self->execute_program_to_json($program, %opts);
+  # Same error taxonomy as execute_document above.
+  my $program = eval { $self->compile_program($document, %opts) };
+  return _request_errors_json(_request_error_entries($@)) if $@;
+  my $result = eval { $self->execute_program_to_json($program, %opts) };
+  if (my $error = $@) {
+    die $error if !_is_request_error($error);
+    return _request_errors_json(_request_error_entries($error));
+  }
+  return $result;
 }
 
 sub _cached_specialized_program {

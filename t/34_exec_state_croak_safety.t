@@ -29,7 +29,10 @@ my $schema = build_schema(q{
 });
 
 subtest 'coercion die propagates and the runtime stays usable' => sub {
-  my $runtime = build_native_runtime($schema);
+  # validate => 0: the request-stage validator would reject this document
+  # before coercion runs; the die-through-coercion path under test is what
+  # pre-validated (persisted) deployments still exercise.
+  my $runtime = build_native_runtime($schema, validate => 0);
 
   eval { $runtime->execute_document('{ find(by: { nope: 1 }) }') };
   like $@, qr/Unknown field/, 'unknown input field dies through coercion';

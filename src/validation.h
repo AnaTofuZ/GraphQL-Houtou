@@ -872,7 +872,11 @@ gql_validation_validate_value(
 
   {
     SV *inner_sv = SvRV(value_sv);
-    if (!SvROK(inner_sv)) {
+    /* A variable reference is an UNBLESSED scalar ref (\'name'). Blessed
+     * scalar refs are literals - JSON::PP::Boolean booleans from the
+     * parser - and REF-of-ref is the enum literal marker; neither names
+     * a variable. */
+    if (!SvROK(inner_sv) && !sv_isobject(value_sv)) {
       STRLEN name_len;
       const char *name = SvPV(inner_sv, name_len);
       if (!variables_hv || !hv_exists(variables_hv, name, (I32)name_len)) {
@@ -920,10 +924,26 @@ gql_validation_validate_field_selection(
   }
 
   if (!field_he) {
-    if (!strEQ(SvPV_nolen(*field_name_svp), "__typename")) {
+    const char *field_name = SvPV_nolen(*field_name_svp);
+    int is_meta = strEQ(field_name, "__typename");
+    if (!is_meta && (strEQ(field_name, "__schema") || strEQ(field_name, "__type"))) {
+      /* __schema / __type exist on the query root only. Their subtrees
+       * select over the introspection meta types, which are not part of
+       * the compiled type index, so validation stops here (like the
+       * __typename leaf) and the introspection executor takes over. */
+      HV *compiled_hv = gql_validation_compiled_hv_from_sv(compiled_sv);
+      SV **roots_svp = compiled_hv ? hv_fetch(compiled_hv, "roots", 5, 0) : NULL;
+      if (roots_svp && SvROK(*roots_svp) && SvTYPE(SvRV(*roots_svp)) == SVt_PVHV) {
+        SV **query_root_svp = hv_fetch((HV *)SvRV(*roots_svp), "query", 5, 0);
+        is_meta = query_root_svp && SvOK(*query_root_svp)
+          && parent_name_svp && SvOK(*parent_name_svp)
+          && strEQ(SvPV_nolen(*query_root_svp), SvPV_nolen(*parent_name_svp));
+      }
+    }
+    if (!is_meta) {
       SV *message = newSVpvf(
         "Field '%s' does not exist on type '%s'.",
-        SvPV_nolen(*field_name_svp),
+        field_name,
         (parent_name_svp && SvOK(*parent_name_svp)) ? SvPV_nolen(*parent_name_svp) : ""
       );
       av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL));
@@ -1093,7 +1113,11 @@ gql_validation_validate_variable_definitions(
       continue;
     }
     {
-      int is_input = sv_does(type_sv, "GraphQL::Houtou::Role::Input") || sv_does(type_sv, "GraphQL::Role::Input");
+      /* Role::Tiny provides DOES as an installed method, which C-level
+       * sv_does (UNIVERSAL isa semantics) never dispatches - it reported
+       * every Houtou type as non-input. Call the DOES method instead. */
+      int is_input = gql_schema_does_role(aTHX_ type_sv, "GraphQL::Houtou::Role::Input")
+        || gql_schema_does_role(aTHX_ type_sv, "GraphQL::Role::Input");
       if (!is_input) {
         dSP;
         int count_call;

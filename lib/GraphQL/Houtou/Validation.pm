@@ -212,6 +212,7 @@ sub _validate_directive_arguments {
       directive_name => $directive_name,
       arg_name => $arg_name,
       expected_type => $type,
+      location_has_default => exists $arg_def->{default_value} ? 1 : 0,
       value => $arg_values->{$arg_name},
       variable_defs => $args{variable_defs},
       schema_name2type => $args{schema_name2type},
@@ -229,7 +230,17 @@ sub _validate_argument_value {
     my $var_def = ($args{variable_defs} || {})->{$var_name};
     return if !$var_def;
     my $var_type = lookup_type($var_def, $args{schema_name2type});
-    if (!_variable_type_compatible($var_type, $expected_type)) {
+    # Spec AllowedVariableUsage: a nullable variable may flow into a
+    # non-null location when either side supplies a default value; the
+    # inner types are then compared instead.
+    my $location_type = $expected_type;
+    if (_is_non_null_type($location_type) && !_is_non_null_type($var_type)) {
+      my $has_var_default = defined $var_def->{default_value};
+      if ($has_var_default || $args{location_has_default}) {
+        $location_type = $location_type->of;
+      }
+    }
+    if (!_variable_type_compatible($var_type, $location_type)) {
       push @{ $args{errors} }, _validation_error(
         $args{directive},
         "Variable '\$$var_name' of type '" . $var_type->to_string .

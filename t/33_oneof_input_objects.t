@@ -92,16 +92,19 @@ subtest 'literal values validate statically' => sub {
 };
 
 subtest 'literal values are enforced at execution' => sub {
-  my $schema = lookup_schema();
-  my $ok = execute($schema, '{ find(by: { email: "x@example.com" }) }');
+  # validate => 0 keeps these requests on the execution-time enforcement
+  # path (the request-stage validator would reject them first otherwise);
+  # this is the lane persisted/pre-validated deployments run on.
+  my $runtime = build_native_runtime(lookup_schema(), validate => 0);
+  my $ok = $runtime->execute_document('{ find(by: { email: "x@example.com" }) }');
   is_deeply $ok->{errors}, [], 'no errors for exactly one field';
   is $ok->{data}{find}, 'email=x@example.com', 'value resolved';
 
-  eval { execute($schema, '{ find(by: { id: "1", email: "x" }) }') };
+  eval { $runtime->execute_document('{ find(by: { id: "1", email: "x" }) }') };
   like $@, qr/OneOf Input Object 'LookupBy' must specify exactly one key/,
     'two keys rejected';
 
-  eval { execute($schema, '{ find(by: { id: null }) }') };
+  eval { $runtime->execute_document('{ find(by: { id: null }) }') };
   like $@, qr/OneOf Input Object 'LookupBy' field 'id' must be non-null/,
     'null value rejected';
 };

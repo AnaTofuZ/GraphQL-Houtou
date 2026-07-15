@@ -409,10 +409,12 @@ sub build_native_runtime {
   my $cache_max = delete $opts{program_cache_max};
   my $max_depth = delete $opts{max_depth};
   my $async = delete $opts{async};
+  my $validate = delete $opts{validate};
   my %runtime_args;
   $runtime_args{program_cache_max} = $cache_max if defined $cache_max;
   $runtime_args{max_depth}         = $max_depth if defined $max_depth;
   $runtime_args{async}             = $async if defined $async;
+  $runtime_args{validate}          = $validate if defined $validate;
   if (%opts || %runtime_args) {
     my $runtime_schema = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
     require GraphQL::Houtou::Runtime::NativeRuntime;
@@ -709,6 +711,18 @@ sub _build_name2type {
 
   my %name2type;
   _expand_type_houtou(\%name2type, $_) for @types;
+  # The built-in scalars are always available (spec 3.5) even when nothing
+  # in the schema references them, e.g. a variable declared as Int against
+  # a schema whose fields are all String.
+  for my $builtin (
+    $GraphQL::Houtou::Type::Scalar::Int,
+    $GraphQL::Houtou::Type::Scalar::Float,
+    $GraphQL::Houtou::Type::Scalar::String,
+    $GraphQL::Houtou::Type::Scalar::Boolean,
+    $GraphQL::Houtou::Type::Scalar::ID,
+  ) {
+    $name2type{ $builtin->name } //= $builtin;
+  }
   return \%name2type;
 }
 

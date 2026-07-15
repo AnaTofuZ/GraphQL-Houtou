@@ -8,8 +8,14 @@ use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);
 
+my $Node;
+
+# interfaces is lazy so User can implement the Node declared below it;
+# without the declaration `... on User` inside a Node selection would be
+# rejected by request validation before resolve_type ever runs.
 my $User = GraphQL::Houtou::Type::Object->new(
   name => 'User',
+  interfaces => sub { [ $Node ] },
   fields => {
     id => { type => $String->non_null },
     brokenName => {
@@ -19,7 +25,7 @@ my $User = GraphQL::Houtou::Type::Object->new(
   },
 );
 
-my $Node = GraphQL::Houtou::Type::Interface->new(
+$Node = GraphQL::Houtou::Type::Interface->new(
   name => 'Node',
   fields => {
     id => { type => $String->non_null },

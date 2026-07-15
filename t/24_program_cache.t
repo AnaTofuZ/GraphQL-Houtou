@@ -165,7 +165,9 @@ subtest 'runtime-directive programs still use the specialized cache' => sub {
     directives => [ @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES, $mask ],
   );
   my $runtime = $directive_schema->build_native_runtime;
-  my $query = 'query Q($on: String) { secret @mask(enabled: $on) }';
+  # $on must match the directive argument's declared Int type now that
+  # request validation checks variable/argument type compatibility.
+  my $query = 'query Q($on: Int) { secret @mask(enabled: $on) }';
 
   my $masked = $runtime->execute_document($query, variables => { on => 1 });
   is $masked->{data}{secret}, '***', 'runtime directive applied with variables';

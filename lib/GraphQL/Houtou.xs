@@ -2922,7 +2922,18 @@ static XS(gql_runtime_vm_xs_list_item_child_callback)
         XSRETURN(1);
       }
     }
-    if (item_block_index < 0) {
+    if (item_block_index < 0 && !ctx->op && ctx->slot) {
+      /* Leaf list item settled from a promise: result coercion against
+       * the inner type (armed with a slot but no op / block index). */
+      SV *leaf_error = NULL;
+      ret = gql_runtime_vm_serialize_leaf_sv(
+        aTHX_ gql_runtime_vm_exec_state_native_runtime(aTHX_ s), ctx->slot, resolved_sv, &leaf_error
+      );
+      if (leaf_error) {
+        ret = gql_runtime_vm_new_error_outcome_for_path_sv(aTHX_ leaf_error, ctx->path_frame);
+        SvREFCNT_dec(leaf_error);
+      }
+    } else if (item_block_index < 0) {
       ret = newSVsv(resolved_sv);
     } else {
       /* Mode 2: sync completion yields a native outcome; the list_pending
@@ -3776,8 +3787,41 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
           }
           gql_runtime_vm_path_frame_decref(item_path);
           SvREFCNT_dec(item_key);
+        } else if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, item_sv)) {
+          /* Leaf list with a per-item promise: defer result coercion to
+           * settle time (the list-item callback with block index -1 and a
+           * slot but no op runs serialize_leaf_sv on the settled value). */
+          SV *item_key = newSViv(i);
+          gql_runtime_vm_path_frame_t *item_path =
+            gql_runtime_vm_new_path_frame_struct(aTHX_ path_frame, item_key);
+          SV *child_cb = gql_runtime_vm_new_list_item_child_callback_sv(
+            aTHX_ state_sv, item_path, -1, NULL, slot
+          );
+          SV *error_cb = gql_runtime_vm_new_error_callback_sv(aTHX_ item_path);
+          item_result = gql_runtime_vm_call_then_promise_for_state_sv(
+            aTHX_ s, item_sv, child_cb, error_cb, item_path
+          );
+          SvREFCNT_dec(child_cb);
+          SvREFCNT_dec(error_cb);
+          gql_runtime_vm_path_frame_decref(item_path);
+          SvREFCNT_dec(item_key);
         } else {
-          item_result = newSVsv(item_sv);
+          /* Leaf list item: result coercion against the inner type. */
+          SV *leaf_error = NULL;
+          item_result = gql_runtime_vm_serialize_leaf_sv(
+            aTHX_ gql_runtime_vm_exec_state_native_runtime(aTHX_ s), slot, item_sv, &leaf_error
+          );
+          if (leaf_error) {
+            SV *item_key = newSViv(i);
+            gql_runtime_vm_path_frame_t *item_path =
+              gql_runtime_vm_new_path_frame_struct(aTHX_ path_frame, item_key);
+            item_result = gql_runtime_vm_new_error_outcome_for_path_sv(
+              aTHX_ leaf_error, item_path
+            );
+            SvREFCNT_dec(leaf_error);
+            gql_runtime_vm_path_frame_decref(item_path);
+            SvREFCNT_dec(item_key);
+          }
         }
 
         if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, item_result)) {
@@ -3926,7 +3970,23 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
     }
     case GQL_VM_COMPLETE_GENERIC:
     default:
-      return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, outcome_out);
+    {
+      /* Leaf result coercion; a failure is a field error + null. */
+      SV *leaf_error = NULL;
+      SV *serialized = gql_runtime_vm_serialize_leaf_sv(
+        aTHX_ runtime, slot, resolved_sv, &leaf_error
+      );
+      if (leaf_error) {
+        SV *ret = gql_runtime_vm_new_error_outcome_for_path_sv(aTHX_ leaf_error, path_frame);
+        SvREFCNT_dec(leaf_error);
+        return ret;
+      }
+      {
+        SV *ret = gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, serialized, outcome_out);
+        SvREFCNT_dec(serialized);
+        return ret;
+      }
+    }
   }
 }
 
@@ -5340,7 +5400,16 @@ gql_runtime_vm_then_complete_current_sv(
       result_name_len,
       1,
       promise_sv,
+      /* GENERIC_VALUE_SV stores the settled value without running
+       * completion, so leaf-typed slots park as RESOLVED_VALUE_SV to get
+       * result coercion at settle time. */
       complete_code == GQL_VM_COMPLETE_GENERIC
+          && gql_runtime_vm_slot_leaf_kind(
+               gql_runtime_vm_exec_state_native_runtime(aTHX_ s),
+               gql_runtime_vm_effective_slot(
+                 gql_runtime_vm_exec_state_native_runtime(aTHX_ s), slot
+               )
+             ) == GQL_VM_LEAF_NONE
         ? GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
         : GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV,
       path_frame,
@@ -5647,6 +5716,8 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
     Newxz(runtime->callback_catalog->slot_tag_entry_counts, runtime->runtime_slot_count, IV);
     Newxz(runtime->callback_catalog->slot_possible_type_entries, runtime->runtime_slot_count, gql_runtime_vm_native_possible_type_entry_t *);
     Newxz(runtime->callback_catalog->slot_possible_type_entry_counts, runtime->runtime_slot_count, IV);
+    Newxz(runtime->callback_catalog->slot_leaf_kinds, runtime->runtime_slot_count, IV);
+    Newxz(runtime->callback_catalog->slot_leaf_payloads, runtime->runtime_slot_count, SV *);
     for (i = 0; i < runtime->runtime_slot_count; i++) {
       SV **slot_svp = av_fetch(catalog_av, i, 0);
       HV *slot_hv;
@@ -5694,6 +5765,9 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
     HV *resolve_type_map_hv = NULL;
     HV *possible_types_hv = NULL;
     HV *is_type_of_map_hv = NULL;
+    HV *leaf_kind_map_hv = NULL;
+    HV *enum_values_map_hv = NULL;
+    HV *serialize_map_hv = NULL;
 
     if ((runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "name2type", 9))) {
       name2type_hv = gql_runtime_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache name2type");
@@ -5713,6 +5787,15 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
     if ((runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "is_type_of_map", 14))) {
       is_type_of_map_hv = gql_runtime_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache is_type_of_map");
     }
+    if ((runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "leaf_kind_map", 13))) {
+      leaf_kind_map_hv = gql_runtime_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache leaf_kind_map");
+    }
+    if ((runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "enum_values_map", 15))) {
+      enum_values_map_hv = gql_runtime_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache enum_values_map");
+    }
+    if ((runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "serialize_map", 13))) {
+      serialize_map_hv = gql_runtime_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache serialize_map");
+    }
 
     if (runtime->runtime_slot_count > 0 && name2type_hv) {
       for (i = 0; i < runtime->runtime_slot_count; i++) {
@@ -5731,6 +5814,24 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
           SV **svp = hv_fetch(tag_resolver_map_hv, return_type_name, (I32)strlen(return_type_name), 0);
           if (svp && SvOK(*svp)) {
             runtime->callback_catalog->slot_tag_resolvers[i] = newSVsv(*svp);
+          }
+        }
+        if (leaf_kind_map_hv) {
+          SV **svp = hv_fetch(leaf_kind_map_hv, return_type_name, (I32)strlen(return_type_name), 0);
+          if (svp && SvOK(*svp)) {
+            IV leaf_kind = SvIV(*svp);
+            runtime->callback_catalog->slot_leaf_kinds[i] = leaf_kind;
+            if (leaf_kind == GQL_VM_LEAF_ENUM && enum_values_map_hv) {
+              SV **payload_svp = hv_fetch(enum_values_map_hv, return_type_name, (I32)strlen(return_type_name), 0);
+              if (payload_svp && SvOK(*payload_svp)) {
+                runtime->callback_catalog->slot_leaf_payloads[i] = newSVsv(*payload_svp);
+              }
+            } else if (leaf_kind == GQL_VM_LEAF_CUSTOM && serialize_map_hv) {
+              SV **payload_svp = hv_fetch(serialize_map_hv, return_type_name, (I32)strlen(return_type_name), 0);
+              if (payload_svp && SvOK(*payload_svp)) {
+                runtime->callback_catalog->slot_leaf_payloads[i] = newSVsv(*payload_svp);
+              }
+            }
           }
         }
         if (runtime_tag_map_hv) {
@@ -7223,19 +7324,21 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
 }
 
 static SV *
-gql_runtime_vm_complete_current_generic_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *value)
+gql_runtime_vm_complete_current_generic_fast_sv(
+  pTHX_
+  gql_runtime_vm_exec_state_t *state,
+  SV *value,
+  SV **error_out
+)
 {
-  PERL_UNUSED_ARG(state);
   /*
-   * Fast generic completion assumes resolver fast paths return an owned SV.
-   * We transfer ownership by taking one extra ref here, then the dispatch
-   * loop drops the original "resolved" ref after completion.
-   *
-   * If resolver helpers ever return borrowed SVs, this must go back to
-   * cloning instead of refcount transfer.
+   * Leaf result coercion: serialize_leaf_sv returns an owned SV (the input
+   * with an extra ref when it already conforms, matching this lane's
+   * ownership-transfer contract; the dispatch loop drops the original
+   * "resolved" ref after completion). A coercion failure sets *error_out
+   * and the loop records a field error + null.
    */
-  SvREFCNT_inc_simple_NN(value);
-  return value;
+  return gql_runtime_vm_serialize_leaf_sv(aTHX_ state->runtime, state->slot, value, error_out);
 }
 
 static SV *
@@ -7346,7 +7449,39 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
       } else if (item_block_index >= 0) {
         completed = gql_runtime_vm_execute_block_fast_sv(aTHX_ state, item_block_index, item);
       } else {
-        completed = gql_runtime_vm_clone_value_sv(aTHX_ item);
+        /* Leaf list item: result coercion against the inner type
+         * (slot->return_type_name is the list's inner name). Errors get
+         * a lazily built field+index path since leaf lists skip the
+         * per-item frames. */
+        SV *leaf_error = NULL;
+        completed = gql_runtime_vm_serialize_leaf_sv(
+          aTHX_ state->runtime, state->slot, item, &leaf_error
+        );
+        if (leaf_error) {
+          gql_runtime_vm_path_frame_t *error_path = item_path;
+          gql_runtime_vm_path_frame_t *lazy_field = NULL;
+          gql_runtime_vm_path_frame_t *lazy_item = NULL;
+          if (!error_path) {
+            SV *item_key = newSViv(i);
+            lazy_field = state->path_frame_is_current_field
+              ? NULL
+              : gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
+            lazy_item = gql_runtime_vm_new_path_frame_struct(
+              aTHX_ lazy_field ? lazy_field : state->path_frame, item_key
+            );
+            SvREFCNT_dec(item_key);
+            error_path = lazy_item;
+          }
+          gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, leaf_error, error_path);
+          SvREFCNT_dec(leaf_error);
+          if (lazy_item) {
+            gql_runtime_vm_path_frame_decref(lazy_item);
+          }
+          if (lazy_field) {
+            gql_runtime_vm_path_frame_decref(lazy_field);
+          }
+          completed = newSVsv(&PL_sv_undef);
+        }
       }
       if (item_path) {
         state->path_frame = base_path;
@@ -7404,7 +7539,7 @@ OP_DEFAULT_GENERIC:
     SvREFCNT_dec(resolved);
     resolved = applied;
   }
-  completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved);
+  completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved, &error_sv);
   goto DISPATCH_DONE;
 OP_DEFAULT_OBJECT:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
@@ -7449,7 +7584,7 @@ OP_EXPLICIT_GENERIC:
     SvREFCNT_dec(resolved);
     resolved = applied;
   }
-  completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved);
+  completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved, &error_sv);
   goto DISPATCH_DONE;
 OP_EXPLICIT_OBJECT:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
@@ -7497,7 +7632,7 @@ DISPATCH_DONE:
         SvREFCNT_dec(resolved);
         resolved = applied;
       }
-      completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved);
+      completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved, &error_sv);
       break;
     case 1:
       resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
@@ -7541,7 +7676,7 @@ DISPATCH_DONE:
         SvREFCNT_dec(resolved);
         resolved = applied;
       }
-      completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved);
+      completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved, &error_sv);
       break;
     case 5:
       resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
@@ -7950,12 +8085,47 @@ gql_runtime_vm_complete_current_list_fast_json(
         gql_runtime_vm_execute_block_fast_json(aTHX_ state, op->child_block_index, item, out);
       } else if (has_child_block) {
         sv_catpvs(out, "null");
-      } else if (SvOK(item) && !SvROK(item)
-          && state->slot && state->slot->return_type_name
-          && strEQ(state->slot->return_type_name, "Boolean")) {
-        sv_catpv(out, SvTRUE(item) ? "true" : "false");
       } else {
-        gql_runtime_vm_json_cat_scalar(aTHX_ out, item);
+        /* Leaf list item: result coercion against the inner type before
+         * serialization; a failure is a per-item field error + null. */
+        SV *leaf_error = NULL;
+        SV *serialized = gql_runtime_vm_serialize_leaf_sv(
+          aTHX_ state->runtime, state->slot, item, &leaf_error
+        );
+        if (leaf_error) {
+          gql_runtime_vm_path_frame_t *error_path = item_path;
+          gql_runtime_vm_path_frame_t *lazy_field = NULL;
+          gql_runtime_vm_path_frame_t *lazy_item = NULL;
+          if (!error_path) {
+            SV *item_key = newSViv(i);
+            lazy_field = state->path_frame_is_current_field
+              ? NULL
+              : gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
+            lazy_item = gql_runtime_vm_new_path_frame_struct(
+              aTHX_ lazy_field ? lazy_field : state->path_frame, item_key
+            );
+            SvREFCNT_dec(item_key);
+            error_path = lazy_item;
+          }
+          gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, leaf_error, error_path);
+          SvREFCNT_dec(leaf_error);
+          if (lazy_item) {
+            gql_runtime_vm_path_frame_decref(lazy_item);
+          }
+          if (lazy_field) {
+            gql_runtime_vm_path_frame_decref(lazy_field);
+          }
+          sv_catpvs(out, "null");
+        } else if (SvOK(serialized) && !SvROK(serialized)
+            && state->slot && state->slot->return_type_name
+            && strEQ(state->slot->return_type_name, "Boolean")) {
+          sv_catpv(out, SvTRUE(serialized) ? "true" : "false");
+        } else {
+          gql_runtime_vm_json_cat_scalar(aTHX_ out, serialized);
+        }
+        if (serialized) {
+          SvREFCNT_dec(serialized);
+        }
       }
       if (item_path) {
         state->path_frame = base_path;
@@ -8050,15 +8220,28 @@ gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state,
     if (!error_sv) {
       switch (family) {
         case 0: /* GENERIC */
-          if (resolved && SvOK(resolved) && !SvROK(resolved)
+        {
+          /* Leaf result coercion before serialization; a failure becomes
+           * a field error + null via the shared error_sv tail. */
+          SV *serialized = gql_runtime_vm_serialize_leaf_sv(
+            aTHX_ state->runtime, slot, resolved, &error_sv
+          );
+          if (error_sv) {
+            /* The shared error tail records the field error and emits the
+             * null for this field. */
+            break;
+          }
+          if (serialized && SvOK(serialized) && !SvROK(serialized)
               && slot->return_type_name && strEQ(slot->return_type_name, "Boolean")) {
             /* Boolean-typed leaves serialize as JSON booleans even when the
              * resolver returned a plain 0/1. */
-            sv_catpv(out, SvTRUE(resolved) ? "true" : "false");
+            sv_catpv(out, SvTRUE(serialized) ? "true" : "false");
           } else {
-            gql_runtime_vm_json_cat_scalar(aTHX_ out, resolved);
+            gql_runtime_vm_json_cat_scalar(aTHX_ out, serialized);
           }
+          SvREFCNT_dec(serialized);
           break;
+        }
         case 1: /* OBJECT */
           if (resolved && SvOK(resolved) && op->complete_code == GQL_VM_COMPLETE_OBJECT && op->child_block_index >= 0) {
             gql_runtime_vm_execute_child_block_fast_json(aTHX_ state, op->child_block_index, resolved, out);

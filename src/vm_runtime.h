@@ -134,6 +134,17 @@ typedef struct {
   SV *is_type_of_cb;
 } gql_runtime_vm_native_possible_type_entry_t;
 
+/* Leaf result coercion kinds, shared with Schema::prepare_runtime's
+ * leaf_kind_map. 0 = not a leaf type (or unknown: no coercion). */
+#define GQL_VM_LEAF_NONE 0
+#define GQL_VM_LEAF_INT 1
+#define GQL_VM_LEAF_FLOAT 2
+#define GQL_VM_LEAF_STRING 3
+#define GQL_VM_LEAF_BOOLEAN 4
+#define GQL_VM_LEAF_ID 5
+#define GQL_VM_LEAF_ENUM 6
+#define GQL_VM_LEAF_CUSTOM 7
+
 typedef struct {
   SV *runtime_schema;
   SV **slot_field_names;
@@ -145,6 +156,10 @@ typedef struct {
   IV *slot_tag_entry_counts;
   gql_runtime_vm_native_possible_type_entry_t **slot_possible_type_entries;
   IV *slot_possible_type_entry_counts;
+  /* Leaf result coercion per slot: kind code, and for ENUM the
+   * value-to-name HV ref / for CUSTOM the serialize CV. */
+  IV *slot_leaf_kinds;
+  SV **slot_leaf_payloads;
 } gql_runtime_vm_native_callback_catalog_t;
 
 typedef struct {
@@ -3429,6 +3444,9 @@ gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
       if (catalog->slot_resolve_types && catalog->slot_resolve_types[i]) {
         SvREFCNT_dec(catalog->slot_resolve_types[i]);
       }
+      if (catalog->slot_leaf_payloads && catalog->slot_leaf_payloads[i]) {
+        SvREFCNT_dec(catalog->slot_leaf_payloads[i]);
+      }
       if (catalog->slot_tag_entries && catalog->slot_tag_entries[i]) {
         IV j;
         for (j = 0; j < catalog->slot_tag_entry_counts[i]; j++) {
@@ -3456,6 +3474,8 @@ gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
     Safefree(catalog->slot_resolve_types);
     Safefree(catalog->slot_possible_type_entries);
     Safefree(catalog->slot_possible_type_entry_counts);
+    Safefree(catalog->slot_leaf_kinds);
+    Safefree(catalog->slot_leaf_payloads);
     if (catalog->runtime_schema) {
       SvREFCNT_dec(catalog->runtime_schema);
     }
@@ -4936,6 +4956,208 @@ gql_runtime_vm_lookup_input_type_by_typedef_sv(pTHX_ SV *runtime_schema, SV *typ
   FREETMPS;
   LEAVE;
   return result;
+}
+
+/* Leaf coercion kind for a slot, or GQL_VM_LEAF_NONE when the runtime
+ * carries no leaf metadata (descriptor-inflated) or the slot's return
+ * type is not a leaf. */
+static IV
+gql_runtime_vm_slot_leaf_kind(
+  const gql_runtime_vm_native_runtime_t *runtime,
+  const gql_runtime_vm_native_slot_t *slot
+)
+{
+  IV slot_index;
+  if (!runtime || !slot || !runtime->callback_catalog
+      || !runtime->callback_catalog->slot_leaf_kinds) {
+    return GQL_VM_LEAF_NONE;
+  }
+  slot_index = slot->schema_slot_index;
+  if (slot_index < 0 || slot_index >= runtime->runtime_slot_count) {
+    return GQL_VM_LEAF_NONE;
+  }
+  return runtime->callback_catalog->slot_leaf_kinds[slot_index];
+}
+
+/*
+ * Leaf result coercion (spec 6.4.3 value completion for leaf types).
+ * Checks/serializes a resolver's output value against the field's leaf
+ * type. Returns an OWNED SV with the coerced value on success (which may
+ * be the input with an extra refcount when it already conforms). On a
+ * coercion failure returns NULL and sets *error_out to an owned message
+ * SV; the caller nulls the field and records a field error. Slots whose
+ * return type carries no leaf metadata (objects, unions, descriptor-only
+ * runtimes) pass the value through untouched.
+ *
+ * Perl note: scalars are untyped, so the builtin checks are value-based
+ * (grok_number), not SV-flag-based - a resolver returning "5" for an Int
+ * serializes as 5, matching graphql-js's coercing serializers.
+ */
+static SV *
+gql_runtime_vm_serialize_leaf_sv(
+  pTHX_
+  const gql_runtime_vm_native_runtime_t *runtime,
+  const gql_runtime_vm_native_slot_t *slot,
+  SV *value,
+  SV **error_out
+)
+{
+  const gql_runtime_vm_native_callback_catalog_t *catalog =
+    runtime ? runtime->callback_catalog : NULL;
+  IV slot_index;
+  IV leaf_kind;
+  SV *payload;
+
+  if (error_out) {
+    *error_out = NULL;
+  }
+  if (!value || !SvOK(value)) {
+    return newSVsv(&PL_sv_undef);
+  }
+  if (!catalog || !catalog->slot_leaf_kinds || !slot) {
+    SvREFCNT_inc_simple_NN(value);
+    return value;
+  }
+  slot_index = slot->schema_slot_index;
+  if (slot_index < 0 || slot_index >= runtime->runtime_slot_count) {
+    SvREFCNT_inc_simple_NN(value);
+    return value;
+  }
+  leaf_kind = catalog->slot_leaf_kinds[slot_index];
+  if (leaf_kind == GQL_VM_LEAF_NONE) {
+    SvREFCNT_inc_simple_NN(value);
+    return value;
+  }
+  payload = catalog->slot_leaf_payloads ? catalog->slot_leaf_payloads[slot_index] : NULL;
+
+  switch (leaf_kind) {
+    case GQL_VM_LEAF_INT:
+    {
+      /* Fast path: an IV in int32 range passes as-is. */
+      if (SvIOK(value) && !SvPOK(value) && !SvNOK(value)) {
+        IV iv = SvIV(value);
+        if (iv >= -2147483648LL && iv <= 2147483647LL) {
+          SvREFCNT_inc_simple_NN(value);
+          return value;
+        }
+      }
+      if (!SvROK(value) && looks_like_number(value)) {
+        NV nv = SvNV(value);
+        if (nv == (NV)(IV)nv && nv >= -2147483648.0 && nv <= 2147483647.0) {
+          return newSViv((IV)nv);
+        }
+      }
+      if (error_out) {
+        *error_out = newSVpvf("Int cannot represent non-integer value: %s",
+          SvROK(value) ? "(reference)" : SvPV_nolen(value));
+      }
+      return NULL;
+    }
+    case GQL_VM_LEAF_FLOAT:
+    {
+      if (SvNIOK(value) && !SvPOK(value)) {
+        SvREFCNT_inc_simple_NN(value);
+        return value;
+      }
+      if (!SvROK(value) && looks_like_number(value)) {
+        return newSVnv(SvNV(value));
+      }
+      if (error_out) {
+        *error_out = newSVpvf("Float cannot represent non-numeric value: %s",
+          SvROK(value) ? "(reference)" : SvPV_nolen(value));
+      }
+      return NULL;
+    }
+    case GQL_VM_LEAF_STRING:
+    case GQL_VM_LEAF_ID:
+    {
+      const char *type_label = leaf_kind == GQL_VM_LEAF_ID ? "ID" : "String";
+      if (SvPOK(value) && !SvROK(value)) {
+        SvREFCNT_inc_simple_NN(value);
+        return value;
+      }
+      if (!SvROK(value)) {
+        /* Numbers (and dualvars) stringify; the copy pins the PV
+         * representation so the JSON lanes emit a string. */
+        STRLEN len;
+        const char *pv = SvPV(value, len);
+        return newSVpvn_utf8(pv, len, SvUTF8(value) ? 1 : 0);
+      }
+      if (sv_isobject(value) && sv_derived_from(value, "JSON::PP::Boolean")) {
+        return newSVpv(SvTRUE(value) ? "true" : "false", 0);
+      }
+      if (error_out) {
+        *error_out = newSVpvf("%s cannot represent a reference value", type_label);
+      }
+      return NULL;
+    }
+    case GQL_VM_LEAF_BOOLEAN:
+    {
+      /* Perl has no boolean type: any non-reference scalar coerces by
+       * truthiness (JSON bool objects included). */
+      if (!SvROK(value) || (sv_isobject(value) && sv_derived_from(value, "JSON::PP::Boolean"))) {
+        return newSViv(SvTRUE(value) ? 1 : 0);
+      }
+      if (error_out) {
+        *error_out = newSVpvs("Boolean cannot represent a reference value");
+      }
+      return NULL;
+    }
+    case GQL_VM_LEAF_ENUM:
+    {
+      /* payload maps internal values to enum names (identity for the
+       * default declaration shape). */
+      if (!SvROK(value) && payload && SvROK(payload) && SvTYPE(SvRV(payload)) == SVt_PVHV) {
+        STRLEN klen;
+        const char *kpv = SvPV(value, klen);
+        SV **name_svp = hv_fetch((HV *)SvRV(payload), kpv, (I32)klen, 0);
+        if (name_svp && SvOK(*name_svp)) {
+          return newSVsv(*name_svp);
+        }
+      }
+      if (error_out) {
+        *error_out = newSVpvf("Enum '%s' cannot represent value: %s",
+          slot->return_type_name ? slot->return_type_name : "(unknown)",
+          SvROK(value) ? "(reference)" : SvPV_nolen(value));
+      }
+      return NULL;
+    }
+    case GQL_VM_LEAF_CUSTOM:
+    {
+      dSP;
+      int count;
+      SV *result = NULL;
+      if (!payload) {
+        SvREFCNT_inc_simple_NN(value);
+        return value;
+      }
+      ENTER;
+      SAVETMPS;
+      sv_setsv(ERRSV, &PL_sv_undef);
+      PUSHMARK(SP);
+      XPUSHs(value);
+      PUTBACK;
+      count = call_sv(payload, G_SCALAR | G_EVAL);
+      SPAGAIN;
+      if (SvTRUE(ERRSV)) {
+        if (error_out) {
+          *error_out = newSVsv(ERRSV);
+        }
+        PUTBACK;
+        FREETMPS;
+        LEAVE;
+        return NULL;
+      }
+      result = count > 0 ? newSVsv(POPs) : newSVsv(&PL_sv_undef);
+      PUTBACK;
+      FREETMPS;
+      LEAVE;
+      return result;
+    }
+    default:
+      SvREFCNT_inc_simple_NN(value);
+      return value;
+  }
 }
 
 static SV *

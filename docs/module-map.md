@@ -141,8 +141,6 @@ parser compatibility は mainline 要件ではありませんが、最小 parser
 
 次は mainline ではありません。
 
-- `legacy-tests/`
-  - 旧 execution / parser compatibility の退避領域
 - docs 内の `runtime-vm-architecture.md`
   - 履歴を含む詳細設計メモ
   - 日常的な入口は `architecture.md` と `runtime-mainline-overview.md`

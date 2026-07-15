@@ -27,7 +27,8 @@
   - `t/19_vm_execute.t`
   - `t/20_public_runtime_api.t`
   - `t/21_public_parser_api.t`
-- 旧テストは `legacy-tests/original-t/` に退避済み
+- 旧テストは削除済み(有効ケースは active suite へ移植。原本は Git 履歴の
+  `legacy-tests/original-t/`)
 - PP fallback は設計上の主要求ではない
 - 子モジュールが XS を直接 `use` して hot path を組み立てる形は避ける
 - XS bundle のロード責務は `GraphQL::Houtou` だけが持つ

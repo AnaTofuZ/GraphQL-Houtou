@@ -3,6 +3,11 @@ use warnings;
 
 use Test::More 0.98;
 
+# Restored from legacy-tests/original-t/09_introspection.t: the
+# introspection meta types (__Schema, __Type, ...) must be Houtou-owned
+# wrappers, marked is_introspection, and registered in every schema's
+# name2type map. This still holds on the current architecture unchanged.
+
 use GraphQL::Houtou::Introspection qw(
   $TYPE_KIND_META_TYPE
   $DIRECTIVE_LOCATION_META_TYPE

@@ -267,7 +267,7 @@ native mainline では 3 の後にさらに
 - parser compatibility は要件から外した
 - PP fallback は主要求ではない
 - 旧 execution mainline は active tree から削除した
-- 旧テストは `legacy-tests/` に退避した
+- 旧テストは削除済み(必要なケースは active suite へ移植済み。原本は Git 履歴の `legacy-tests/` を参照)
 
 つまり、公開面は残すが、内部は mainline のために作り直す、という立場です。
 

@@ -462,22 +462,43 @@ sub execute_document {
   my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
   my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
 
-  my $request_errors = eval { $self->_document_request_errors($document, $max_depth, $validate) };
-  return { errors => _request_error_entries($@) } if $@;
-  return { errors => $request_errors } if $request_errors;
+  # Hot path: a cached program whose document this runtime already
+  # validated skips the request stage entirely (depth was checked before
+  # it entered the cache, validation is recorded per document).
+  my $cached = !ref($document) && $self->{_program_cache_max}
+    ? $self->{_program_cache}{$document}
+    : undef;
+  if ($cached && (!$validate || $self->{_validated_documents}{$document})) {
+    my $result = eval { $self->execute_program($cached, %opts) };
+    if (my $error = $@) {
+      die $error if !_is_request_error($error);
+      return { errors => _request_error_entries($error) };
+    }
+    return $result;
+  }
 
-  # Compile failures are document-caused (syntax when the request stage was
-  # skipped, literal argument coercion): always a request error. Execution
-  # failures envelope only when they are GraphQL request errors (variable
-  # coercion raises GraphQL::Houtou::Error); other dies - async
-  # misconfiguration, scheduler deadlock, internal bugs - propagate.
-  my $program = eval { $self->compile_program($document, %opts) };
-  return { errors => _request_error_entries($@) } if $@;
-  my $result = eval { $self->execute_program($program, %opts) };
-  if (my $error = $@) {
-    die $error if !_is_request_error($error);
+  # Cold path. The taxonomy: parse/validation/compile failures are
+  # document-caused and always envelope; execution failures envelope only
+  # when they are GraphQL request errors (variable coercion raises
+  # GraphQL::Houtou::Error) - async misconfiguration, scheduler deadlock,
+  # and internal bugs keep propagating.
+  my $executing = 0;
+  my ($result, $request_errors);
+  my $ok = eval {
+    $request_errors = $self->_document_request_errors($document, $max_depth, $validate);
+    if (!$request_errors) {
+      my $program = $self->compile_program($document, %opts);
+      $executing = 1;
+      $result = $self->execute_program($program, %opts);
+    }
+    1;
+  };
+  if (!$ok) {
+    my $error = $@;
+    die $error if $executing && !_is_request_error($error);
     return { errors => _request_error_entries($error) };
   }
+  return { errors => $request_errors } if $request_errors;
   return $result;
 }
 
@@ -596,18 +617,36 @@ sub execute_document_to_json {
   my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
   my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
 
-  my $request_errors = eval { $self->_document_request_errors($document, $max_depth, $validate) };
-  return _request_errors_json(_request_error_entries($@)) if $@;
-  return _request_errors_json($request_errors) if $request_errors;
+  # Same hot/cold structure and error taxonomy as execute_document.
+  my $cached = !ref($document) && $self->{_program_cache_max}
+    ? $self->{_program_cache}{$document}
+    : undef;
+  if ($cached && (!$validate || $self->{_validated_documents}{$document})) {
+    my $result = eval { $self->execute_program_to_json($cached, %opts) };
+    if (my $error = $@) {
+      die $error if !_is_request_error($error);
+      return _request_errors_json(_request_error_entries($error));
+    }
+    return $result;
+  }
 
-  # Same error taxonomy as execute_document above.
-  my $program = eval { $self->compile_program($document, %opts) };
-  return _request_errors_json(_request_error_entries($@)) if $@;
-  my $result = eval { $self->execute_program_to_json($program, %opts) };
-  if (my $error = $@) {
-    die $error if !_is_request_error($error);
+  my $executing = 0;
+  my ($result, $request_errors);
+  my $ok = eval {
+    $request_errors = $self->_document_request_errors($document, $max_depth, $validate);
+    if (!$request_errors) {
+      my $program = $self->compile_program($document, %opts);
+      $executing = 1;
+      $result = $self->execute_program_to_json($program, %opts);
+    }
+    1;
+  };
+  if (!$ok) {
+    my $error = $@;
+    die $error if $executing && !_is_request_error($error);
     return _request_errors_json(_request_error_entries($error));
   }
+  return _request_errors_json($request_errors) if $request_errors;
   return $result;
 }
 

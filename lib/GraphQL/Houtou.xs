@@ -3892,8 +3892,8 @@ gql_runtime_vm_exec_state_resolve_runtime_type_for_slot_sv(
 }
 
 /* Pick the member block for one item of an abstract-typed list. Returns
- * -1 (no matching member: complete the raw value like COMPLETE_ABSTRACT
- * does) or sets *error_out when the type resolution itself failed. */
+ * -1 without an error only for null items; a present item that fails to
+ * resolve to a member type sets *error_out (field error per the spec). */
 static IV
 gql_runtime_vm_abstract_list_item_block_index(
   pTHX_
@@ -3939,6 +3939,14 @@ gql_runtime_vm_abstract_list_item_block_index(
   }
   if (runtime_type_sv) {
     SvREFCNT_dec(runtime_type_sv);
+  }
+  /* A present item whose member type cannot be resolved is a field error
+   * (the -1/no-error return is reserved for null items). */
+  if (child_block_index < 0 && error_out && !*error_out) {
+    *error_out = newSVpvf(
+      "Abstract type %s must resolve to an Object type at runtime",
+      slot && slot->return_type_name ? slot->return_type_name : "(unknown)"
+    );
   }
   return child_block_index;
 }
@@ -4028,7 +4036,12 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, outcome_out);
       }
       if (!SvROK(resolved_sv) || SvTYPE(SvRV(resolved_sv)) != SVt_PVAV) {
-        return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, outcome_out);
+        /* Non-list resolver result for a list field: field error + null,
+         * never the raw value (same contract as the fast lanes). */
+        SV *msg_sv = newSVpvs("list value must be an array reference");
+        SV *ret = gql_runtime_vm_new_error_outcome_for_path_sv(aTHX_ msg_sv, path_frame);
+        SvREFCNT_dec(msg_sv);
+        return ret;
       }
 
       items_av = (AV *)SvRV(resolved_sv);
@@ -4124,11 +4137,23 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         gql_runtime_vm_native_value_t *list_value = gql_runtime_vm_new_native_value_list();
         for (i = 0; i <= av_len(resolved_items_av); i++) {
           SV **item_svp = av_fetch(resolved_items_av, i, 0);
+          SV *completed_item_sv = (item_svp && *item_svp) ? *item_svp : &PL_sv_undef;
+          /* Outcomes carry error records (unresolvable member types);
+           * surface them before the value is flattened into the list,
+           * mirroring the list_pending settle path. */
+          if (SvOK(completed_item_sv)
+              && gql_runtime_vm_sv_is_outcome(aTHX_ completed_item_sv)
+              && s->writer) {
+            gql_runtime_vm_outcome_t *item_outcome =
+              gql_runtime_vm_expect_outcome(aTHX_ completed_item_sv);
+            IV k;
+            for (k = 0; item_outcome && k < item_outcome->error_record_count; k++) {
+              gql_runtime_vm_writer_push_error_record(s->writer, item_outcome->error_records[k]);
+            }
+          }
           gql_runtime_vm_native_list_push(
             list_value,
-            gql_runtime_vm_native_value_take_completed_item_sv(
-              aTHX_ (item_svp && *item_svp) ? *item_svp : &PL_sv_undef
-            )
+            gql_runtime_vm_native_value_take_completed_item_sv(aTHX_ completed_item_sv)
           );
         }
         SvREFCNT_dec((SV *)resolved_items_av);
@@ -4147,7 +4172,7 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
     {
       SV *runtime_error_sv = NULL;
       SV *runtime_type_sv;
-      IV child_block_index;
+      IV child_block_index = -1;
 
       if (!resolved_sv || !SvOK(resolved_sv)) {
         return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, outcome_out);
@@ -4171,20 +4196,25 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         SvREFCNT_dec(runtime_error_sv);
         return ret;
       }
-      if (!runtime_type_sv || !SvOK(runtime_type_sv)) {
-        if (runtime_type_sv) {
-          SvREFCNT_dec(runtime_type_sv);
-        }
-        return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, outcome_out);
+      if (runtime_type_sv && SvOK(runtime_type_sv)) {
+        child_block_index = gql_runtime_vm_find_abstract_child_block_index(
+          op,
+          gql_runtime_vm_type_name_from_sv(aTHX_ runtime_type_sv)
+        );
       }
-
-      child_block_index = gql_runtime_vm_find_abstract_child_block_index(
-        op,
-        gql_runtime_vm_type_name_from_sv(aTHX_ runtime_type_sv)
-      );
-      SvREFCNT_dec(runtime_type_sv);
+      if (runtime_type_sv) {
+        SvREFCNT_dec(runtime_type_sv);
+      }
       if (child_block_index < 0) {
-        return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, outcome_out);
+        /* Unresolvable member type: field error + null, never the raw
+         * source value (same contract as the fast lanes). */
+        SV *msg_sv = newSVpvf(
+          "Abstract type %s must resolve to an Object type at runtime",
+          slot && slot->return_type_name ? slot->return_type_name : "(unknown)"
+        );
+        SV *ret = gql_runtime_vm_new_error_outcome_for_path_sv(aTHX_ msg_sv, path_frame);
+        SvREFCNT_dec(msg_sv);
+        return ret;
       }
 
       {
@@ -8053,7 +8083,7 @@ gql_runtime_vm_execute_child_block_fast_sv(
  * and return the matching abstract child block index, or -1.
  */
 static IV
-gql_runtime_vm_select_abstract_child_block_fast(
+gql_runtime_vm_select_abstract_child_block_fast_core(
   pTHX_
   gql_runtime_vm_exec_state_t *state,
   SV *value,
@@ -8220,6 +8250,31 @@ gql_runtime_vm_select_abstract_child_block_fast(
   return child_block_index;
 }
 
+/* Failing to resolve a member type is a field error per the spec: the
+ * callers null the field/item and record the error, never leak the raw
+ * source value. The wrapper guarantees the error regardless of which
+ * early return in the core produced the -1. */
+static IV
+gql_runtime_vm_select_abstract_child_block_fast(
+  pTHX_
+  gql_runtime_vm_exec_state_t *state,
+  SV *value,
+  SV **error_out
+)
+{
+  const gql_runtime_vm_native_slot_t *slot = state->slot;
+  IV child_block_index = gql_runtime_vm_select_abstract_child_block_fast_core(
+    aTHX_ state, value, error_out
+  );
+  if (child_block_index < 0 && error_out && !*error_out) {
+    *error_out = newSVpvf(
+      "Abstract type %s must resolve to an Object type at runtime",
+      slot && slot->return_type_name ? slot->return_type_name : "(unknown)"
+    );
+  }
+  return child_block_index;
+}
+
 static SV *
 gql_runtime_vm_complete_current_abstract_fast_sv(
   pTHX_
@@ -8277,6 +8332,28 @@ gql_runtime_vm_complete_current_object_fast_sv(pTHX_ gql_runtime_vm_exec_state_t
   return gql_runtime_vm_clone_value_sv(aTHX_ value);
 }
 
+/* Record a field error at `path` on the fast lanes' shared writer (the
+ * envelope/JSON response tails render writer records into the errors
+ * array). Copies error_sv; the caller keeps ownership. */
+static void
+gql_runtime_vm_fast_lane_record_error_for_path(
+  pTHX_
+  gql_runtime_vm_exec_state_t *state,
+  SV *error_sv,
+  gql_runtime_vm_path_frame_t *path
+)
+{
+  gql_runtime_vm_outcome_t *outcome =
+    gql_runtime_vm_new_error_outcome_struct_for_path(aTHX_ error_sv, path);
+  if (state->writer) {
+    IV j;
+    for (j = 0; j < outcome->error_record_count; j++) {
+      gql_runtime_vm_writer_push_error_record(state->writer, outcome->error_records[j]);
+    }
+  }
+  gql_runtime_vm_outcome_decref(aTHX_ outcome);
+}
+
 static SV *
 gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *value)
 {
@@ -8287,38 +8364,73 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
     IV i;
     gql_runtime_vm_path_frame_t *saved_path_frame = state ? state->path_frame : NULL;
     gql_runtime_vm_path_frame_t *field_path = NULL;
+    gql_runtime_vm_path_frame_t *base_path = NULL;
     int has_child_block = op->child_block_index >= 0;
 
     if (!value || !SvOK(value)) {
       return newSVsv(&PL_sv_undef);
     }
-    in_av = gql_runtime_vm_expect_arrayref(aTHX_ value, "list value");
+    if (!SvROK(value) || SvTYPE(SvRV(value)) != SVt_PVAV) {
+      /* Non-list resolver result for a list field: field error + null,
+       * matching the async lane (never croak the whole request). */
+      SV *msg_sv = newSVpvs("list value must be an array reference");
+      gql_runtime_vm_path_frame_t *error_path = state->path_frame_is_current_field
+        ? state->path_frame
+        : (field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot));
+      gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, msg_sv, error_path);
+      SvREFCNT_dec(msg_sv);
+      if (field_path) {
+        gql_runtime_vm_path_frame_decref(field_path);
+      }
+      return newSVsv(&PL_sv_undef);
+    }
+    in_av = (AV *)SvRV(value);
     out_av = newAV();
     av_extend(out_av, av_count(in_av) > 0 ? av_count(in_av) - 1 : 0);
     if (has_child_block || op->abstract_child_count > 0) {
-      field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
-      state->path_frame = field_path;
+      /* Base the per-item index frames on the field frame; when the
+       * dispatch loop already pushed it (eager path) reuse that frame
+       * instead of stacking a duplicate segment. */
+      if (!state->path_frame_is_current_field) {
+        field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
+        state->path_frame = field_path;
+      }
+      base_path = state->path_frame;
     }
     for (i = 0; i < av_count(in_av); i++) {
       SV **item_svp = av_fetch(in_av, i, 0);
       SV *item = (item_svp && SvOK(*item_svp)) ? *item_svp : &PL_sv_undef;
       SV *completed;
+      SV *sel_error = NULL;
+      gql_runtime_vm_path_frame_t *item_path = NULL;
       IV item_block_index = (has_child_block && SvOK(item)) ? op->child_block_index : -1;
       gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ item);
+      if (base_path) {
+        SV *item_key = newSViv(i);
+        item_path = gql_runtime_vm_new_path_frame_struct(aTHX_ base_path, item_key);
+        SvREFCNT_dec(item_key);
+        state->path_frame = item_path;
+      }
       if (item_block_index < 0 && op->abstract_child_count > 0 && SvOK(item)) {
         /* List of an interface/union: pick the member block per item. */
-        SV *sel_error = NULL;
         item_block_index = gql_runtime_vm_select_abstract_child_block_fast(
           aTHX_ state, item, &sel_error
         );
-        if (sel_error) {
-          SvREFCNT_dec(sel_error);
-          item_block_index = -1;
-        }
       }
-      completed = (item_block_index >= 0)
-        ? gql_runtime_vm_execute_block_fast_sv(aTHX_ state, item_block_index, item)
-        : gql_runtime_vm_clone_value_sv(aTHX_ item);
+      if (sel_error) {
+        /* Unresolvable member type: field error + null item. */
+        gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, sel_error, item_path);
+        SvREFCNT_dec(sel_error);
+        completed = newSVsv(&PL_sv_undef);
+      } else if (item_block_index >= 0) {
+        completed = gql_runtime_vm_execute_block_fast_sv(aTHX_ state, item_block_index, item);
+      } else {
+        completed = gql_runtime_vm_clone_value_sv(aTHX_ item);
+      }
+      if (item_path) {
+        state->path_frame = base_path;
+        gql_runtime_vm_path_frame_decref(item_path);
+      }
       av_store(out_av, i, completed);
     }
     if (field_path) {
@@ -8844,26 +8956,57 @@ gql_runtime_vm_complete_current_list_fast_json(
     sv_catpvs(out, "null");
     return;
   }
+  if (!SvROK(value) || SvTYPE(SvRV(value)) != SVt_PVAV) {
+    /* Non-list resolver result for a list field: field error + null,
+     * matching the async lane (never croak the whole request). */
+    gql_runtime_vm_path_frame_t *field_path = NULL;
+    gql_runtime_vm_path_frame_t *error_path;
+    SV *msg_sv = newSVpvs("list value must be an array reference");
+    error_path = state->path_frame_is_current_field
+      ? state->path_frame
+      : (field_path = gql_runtime_vm_new_result_path_frame(aTHX_ state->path_frame, state->slot));
+    gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, msg_sv, error_path);
+    SvREFCNT_dec(msg_sv);
+    if (field_path) {
+      gql_runtime_vm_path_frame_decref(field_path);
+    }
+    sv_catpvs(out, "null");
+    return;
+  }
   {
-    AV *in_av = gql_runtime_vm_expect_arrayref(aTHX_ value, "list value");
+    AV *in_av = (AV *)SvRV(value);
     gql_runtime_vm_path_frame_t *saved_path_frame = state ? state->path_frame : NULL;
     gql_runtime_vm_path_frame_t *field_path = NULL;
+    gql_runtime_vm_path_frame_t *base_path = NULL;
     int has_child_block = op->child_block_index >= 0;
     int has_abstract_items = (!has_child_block && op->abstract_child_count > 0);
     IV i;
 
     if (has_child_block || has_abstract_items) {
-      field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
-      state->path_frame = field_path;
+      /* Base the per-item index frames on the field frame; when the
+       * dispatch loop already pushed it (eager path) reuse that frame
+       * instead of stacking a duplicate segment. */
+      if (!state->path_frame_is_current_field) {
+        field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
+        state->path_frame = field_path;
+      }
+      base_path = state->path_frame;
     }
     sv_catpvs(out, "[");
     for (i = 0; i < av_count(in_av); i++) {
       SV **item_svp = av_fetch(in_av, i, 0);
       SV *item = (item_svp && SvOK(*item_svp)) ? *item_svp : &PL_sv_undef;
+      gql_runtime_vm_path_frame_t *item_path = NULL;
       if (i) {
         sv_catpvs(out, ",");
       }
       gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ item);
+      if (base_path) {
+        SV *item_key = newSViv(i);
+        item_path = gql_runtime_vm_new_path_frame_struct(aTHX_ base_path, item_key);
+        SvREFCNT_dec(item_key);
+        state->path_frame = item_path;
+      }
       if (has_abstract_items && SvOK(item)) {
         /* List of an interface/union: pick the member block per item. */
         SV *sel_error = NULL;
@@ -8871,10 +9014,11 @@ gql_runtime_vm_complete_current_list_fast_json(
           aTHX_ state, item, &sel_error
         );
         if (sel_error) {
+          /* Unresolvable member type: field error + null item. */
+          gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, sel_error, item_path);
           SvREFCNT_dec(sel_error);
-          item_block_index = -1;
-        }
-        if (item_block_index >= 0) {
+          sv_catpvs(out, "null");
+        } else if (item_block_index >= 0) {
           gql_runtime_vm_execute_block_fast_json(aTHX_ state, item_block_index, item, out);
         } else {
           sv_catpvs(out, "null");
@@ -8891,6 +9035,10 @@ gql_runtime_vm_complete_current_list_fast_json(
         sv_catpv(out, SvTRUE(item) ? "true" : "false");
       } else {
         gql_runtime_vm_json_cat_scalar(aTHX_ out, item);
+      }
+      if (item_path) {
+        state->path_frame = base_path;
+        gql_runtime_vm_path_frame_decref(item_path);
       }
     }
     sv_catpvs(out, "]");

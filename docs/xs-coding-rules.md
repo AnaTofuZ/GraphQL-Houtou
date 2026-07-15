@@ -102,7 +102,26 @@ entry の index が**前詰めされる**。
   reject arm に使うと、outcome が破棄済み派生 promise に消えて
   デッドロックする。
 
-## 8. 検証手順
+## 8. 完了セマンティクスのレーン間パリティ
+
+同じ completion(OBJECT / LIST / ABSTRACT / GENERIC)が **4 実装**ある:
+async レーン、sync fast SV レーン、fast JSON レーン、native value
+(bundle)レーン(+ legacy sync_now)。仕様上の分岐(null → null、
+abstract の型解決前 null チェック、リスト内 null 項目など)は**全レーンに
+同じガードが要る**。
+
+- completion の意味論を触るときは `GQL_VM_COMPLETE_*` を grep して
+  全レーンの同名分岐を並べ、ガードの有無を突き合わせる。
+- 片方のレーンにしかテストがない意味論は「レーンを跨いで同じ入力を
+  流す」テスト(t/43 の形)で固定する。実行レーンは
+  variables の有無・bundle・to_json で切り替わるため、ユーザ入力次第で
+  どのレーンにも到達する。
+- 出典: object 完了の undef ガードが async / JSON レーンにだけあり、
+  fast SV レーン(variables 付き execute_document)と bundle レーンは
+  undef source のまま child block を実行して「全フィールド null の
+  偽オブジェクト」を返していた(リスト内 null 項目も同型)。
+
+## 9. 検証手順
 
 - **ヘッダ(src/*.h)を変えたら `rm lib/GraphQL/Houtou.o
   lib/GraphQL/Houtou.c` してから `perl Build`**。Build はヘッダ変更で

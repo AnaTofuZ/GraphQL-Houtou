@@ -4059,10 +4059,12 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
             SvREFCNT_dec(child_cb);
             SvREFCNT_dec(error_cb);
           } else {
-            IV item_block_index = child_block_index;
+            /* A null item completes as null: keep the block index at -1 so
+             * it falls into the raw-value branch below. */
+            IV item_block_index = SvOK(item_sv) ? child_block_index : -1;
             SV *type_error_sv = NULL;
 
-            if (abstract_items) {
+            if (abstract_items && SvOK(item_sv)) {
               item_block_index = gql_runtime_vm_abstract_list_item_block_index(
                 aTHX_ state_sv, s, op, slot, item_sv, item_path, &type_error_sv
               );
@@ -7376,6 +7378,11 @@ gql_runtime_vm_complete_current_abstract(pTHX_ gql_runtime_vm_exec_state_t *stat
   SV *info_sv = NULL;
   SV *abstract_type = NULL;
 
+  /* A null abstract value completes as null without consulting the
+   * tag/resolve_type dispatch (mirrors the async lane). */
+  if (!value || !SvOK(value)) {
+    return gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);
+  }
   if (!runtime) {
     return gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);
   }
@@ -7498,6 +7505,11 @@ gql_runtime_vm_complete_current_object(pTHX_ gql_runtime_vm_exec_state_t *state,
 {
   const gql_runtime_vm_native_op_t *op = state->op;
   if (op->complete_code == GQL_VM_COMPLETE_OBJECT && op->child_block_index >= 0) {
+    /* A null resolved value completes as null; the selection block only
+     * runs over a present source (mirrors the async lane). */
+    if (!value || !SvOK(value)) {
+      return gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);
+    }
     return gql_runtime_vm_execute_block_value(aTHX_ state, op->child_block_index, value);
   }
   return gql_runtime_vm_new_native_value_scalar(aTHX_ value);
@@ -7520,7 +7532,7 @@ gql_runtime_vm_complete_current_list(pTHX_ gql_runtime_vm_exec_state_t *state, S
       SV **item_svp = av_fetch(in_av, i, 0);
       SV *item = (item_svp && SvOK(*item_svp)) ? *item_svp : &PL_sv_undef;
       gql_runtime_vm_native_value_t *completed;
-      IV item_block_index = op->child_block_index;
+      IV item_block_index = SvOK(item) ? op->child_block_index : -1;
       if (item_block_index < 0 && op->abstract_child_count > 0 && SvOK(item)) {
         /* List of an interface/union: pick the member block per item.
          * Error handling matches this lane's abstract completion (a
@@ -8216,7 +8228,13 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
   SV **error_out
 )
 {
-  IV child_block_index = gql_runtime_vm_select_abstract_child_block_fast(
+  IV child_block_index;
+  /* A null abstract value completes as null without consulting the
+   * tag/resolve_type dispatch (mirrors the async lane). */
+  if (!value || !SvOK(value)) {
+    return newSVsv(&PL_sv_undef);
+  }
+  child_block_index = gql_runtime_vm_select_abstract_child_block_fast(
     aTHX_ state, value, error_out
   );
   if (error_out && *error_out) {
@@ -8249,6 +8267,11 @@ gql_runtime_vm_complete_current_object_fast_sv(pTHX_ gql_runtime_vm_exec_state_t
 {
   const gql_runtime_vm_native_op_t *op = state->op;
   if (op->complete_code == GQL_VM_COMPLETE_OBJECT && op->child_block_index >= 0) {
+    /* A null resolved value completes as null; the selection block only
+     * runs over a present source (mirrors the async lane). */
+    if (!value || !SvOK(value)) {
+      return newSVsv(&PL_sv_undef);
+    }
     return gql_runtime_vm_execute_child_block_fast_sv(aTHX_ state, op->child_block_index, value);
   }
   return gql_runtime_vm_clone_value_sv(aTHX_ value);
@@ -8280,7 +8303,7 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
       SV **item_svp = av_fetch(in_av, i, 0);
       SV *item = (item_svp && SvOK(*item_svp)) ? *item_svp : &PL_sv_undef;
       SV *completed;
-      IV item_block_index = has_child_block ? op->child_block_index : -1;
+      IV item_block_index = (has_child_block && SvOK(item)) ? op->child_block_index : -1;
       gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ item);
       if (item_block_index < 0 && op->abstract_child_count > 0 && SvOK(item)) {
         /* List of an interface/union: pick the member block per item. */

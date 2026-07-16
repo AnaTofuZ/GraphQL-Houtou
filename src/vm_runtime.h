@@ -4266,7 +4266,7 @@ gql_runtime_vm_parse_native_block(pTHX_ SV *sv, gql_runtime_vm_native_block_t *o
   IV i;
   SV **svp;
   if (gql_runtime_vm_sv_to_av(aTHX_ sv, &av)) {
-    SV **name_svp = av_fetch(av, 0, 0);
+    /* index 0 is the block name; the native block keeps only type_name. */
     SV **type_svp = av_fetch(av, 1, 0);
     SV **family_svp = av_fetch(av, 2, 0);
     SV **slots_svp = av_fetch(av, 3, 0);

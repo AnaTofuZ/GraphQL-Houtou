@@ -64,3 +64,28 @@ jobs:
       - uses: actions/checkout@v3
       - name: Run lint
         run: perl util/lint-xs-ownership.pl
+  compiler-warnings:
+    name: Compiler warning gate
+    runs-on: ubuntu-latest
+    container:
+      image: perldocker/perl-tester:5.42
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install dependencies
+        run: cpm install -g --with-all --show-build-log-on-failure -v
+      # Generate the XS .c (Build creates lib/GraphQL/Houtou.c), then
+      # recompile it with warnings as errors. -Wno-unused-parameter is the
+      # one blanket exception: pTHX and unused XSUB tail args are pervasive
+      # and not bugs. Everything else (unused/uninitialized variables, sign
+      # comparisons, ...) must stay clean.
+      - name: Build (emits the XS .c)
+        run: |
+          perl Build.PL
+          ./Build build
+      - name: Recompile the XS with -Werror
+        run: |
+          CORE=$(perl -MConfig -e 'print $Config{archlibexp}')/CORE
+          cc -Isrc -I"$CORE" -DVERSION='"0.01"' -DXS_VERSION='"0.01"' \
+             -c -fno-common -fno-strict-aliasing -O2 \
+             -Wall -Wextra -Wno-unused-parameter -Werror \
+             -o /dev/null lib/GraphQL/Houtou.c

@@ -58,7 +58,19 @@ typedef struct {
   UV *line_starts;
   I32 num_lines;
   gql_ir_arena_t *ir_arena;
+  /* Nesting depth of the recursive-descent parser (selection sets and
+   * input values). Capped so adversarial input cannot overflow the C
+   * stack: a deeply nested query used to segfault the worker before any
+   * validation ran (release-tasks.md S1). */
+  IV depth;
 } gql_parser_t;
+
+/* Maximum selection-set / input-value nesting. Real documents nest a few
+ * dozen levels; 512 is well clear of that yet far below the ~35k that
+ * overflows an 8 MB stack. Exceeding it is a request error, not a crash. */
+#ifndef GQL_PARSER_MAX_DEPTH
+#define GQL_PARSER_MAX_DEPTH 512
+#endif
 
 typedef struct {
   const char *src;

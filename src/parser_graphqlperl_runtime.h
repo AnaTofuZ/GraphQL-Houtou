@@ -366,6 +366,7 @@ gql_parser_init(pTHX_ gql_parser_t *p, SV *source_sv, int no_location) {
   p->line_starts = NULL;
   p->num_lines = 0;
   p->ir_arena = NULL;
+  p->depth = 0;
 
   if (p->no_location) {
     return;
@@ -529,18 +530,31 @@ gql_make_type_wrapper(pTHX_ SV *type_sv, const char *kind) {
 
 static SV *
 gql_parse_list_value(pTHX_ gql_parser_t *p, int is_const) {
-  AV *av = newAV();
+  AV *av;
+  /* Input-value nesting recurses only through list/object values; guard
+   * here so a deep [[[... cannot overflow the C stack (S1). */
+  if (++p->depth > GQL_PARSER_MAX_DEPTH) {
+    gql_throw(aTHX_ p, p->tok_start,
+      "Value is too deeply nested (exceeds maximum nesting depth)");
+  }
+  av = newAV();
   gql_expect(aTHX_ p, TOK_LBRACKET, NULL);
   while (p->kind != TOK_RBRACKET) {
     av_push(av, gql_parse_value(aTHX_ p, is_const));
   }
   gql_expect(aTHX_ p, TOK_RBRACKET, NULL);
+  p->depth--;
   return newRV_noinc((SV *)av);
 }
 
 static SV *
 gql_parse_object_value(pTHX_ gql_parser_t *p, int is_const) {
-  HV *hv = newHV();
+  HV *hv;
+  if (++p->depth > GQL_PARSER_MAX_DEPTH) {
+    gql_throw(aTHX_ p, p->tok_start,
+      "Value is too deeply nested (exceeds maximum nesting depth)");
+  }
+  hv = newHV();
   gql_expect(aTHX_ p, TOK_LBRACE, "Expected name");
   while (p->kind != TOK_RBRACE) {
     SV *name = gql_parse_name(aTHX_ p, "Expected name");
@@ -549,6 +563,7 @@ gql_parse_object_value(pTHX_ gql_parser_t *p, int is_const) {
     SvREFCNT_dec(name);
   }
   gql_expect(aTHX_ p, TOK_RBRACE, NULL);
+  p->depth--;
   return newRV_noinc((SV *)hv);
 }
 
@@ -651,8 +666,14 @@ gql_parse_directives(pTHX_ gql_parser_t *p) {
 
 static SV *
 gql_parse_selection_set(pTHX_ gql_parser_t *p) {
-  HV *hv = newHV();
-  AV *av = newAV();
+  HV *hv;
+  AV *av;
+  if (++p->depth > GQL_PARSER_MAX_DEPTH) {
+    gql_throw(aTHX_ p, p->tok_start,
+      "Query is too deeply nested (exceeds maximum nesting depth)");
+  }
+  hv = newHV();
+  av = newAV();
   gql_expect(aTHX_ p, TOK_LBRACE, "Expected name");
   if (p->kind == TOK_RBRACE) {
     gql_throw(aTHX_ p, p->tok_start, "Expected name");
@@ -662,6 +683,7 @@ gql_parse_selection_set(pTHX_ gql_parser_t *p) {
   }
   gql_expect(aTHX_ p, TOK_RBRACE, NULL);
   gql_store_sv(hv, "selections", newRV_noinc((SV *)av));
+  p->depth--;
   return newRV_noinc((SV *)hv);
 }
 

@@ -102,6 +102,34 @@ XS の入力コアーション(`prepare_program_variables`)は失敗を
 plain string の die は internal 扱いのまま — **リクエスト起因の失敗だけを
 blessed error にする**のが規律。
 
+### なぜこのステージは Pure Perl か(意図的な設計判断)
+
+「ループは native、ポリシーは Perl」の原則をこの層に適用した結果で、
+XS 化しない理由は 3 つ:
+
+1. **document 単位のコールドパスで、program cache が償却する。**
+   ステージの実務(depth 検査・validation・コンパイル)が走るのは
+   未キャッシュの document につき 1 回。ホットパスは Perl ハッシュを
+   2 回引いて即 XSUB に入る。ゲートコストは単体計測でノイズの範囲
+   (validate 全 on 86.8k/s vs 全 off 85.7k/s)。P0-1 導入時に一度
+   15% 退行したのは cache 判定より前に毎回 parse していたのが原因で、
+   ステージが Perl であること自体ではない(ホットパス復元で解消済み)。
+2. **中身がポリシーで、Perl の道具が本体。** エラー分類は Perl 例外を
+   eval で受けて blessed 判定するのが仕事の中心。オプション優先順位、
+   validate オプトアウト、descriptor 由来 runtime の判定、cache eviction
+   との連動など、変更頻度の高いオーケストレーションを Perl に置くことで
+   反復を安くし、XS の表面積(ASan/soak/シード掃引が必要な領域)を
+   増やさない。
+3. **重いループは既に XS に降りている。** ステージが委譲する先 —
+   パーサ、validation ルール群(src/validation.h)、入力コアーション、
+   実行本体 — は全部 native。Perl に残るのは depth walk(未キャッシュ時
+   のみ)と directive 検査程度。
+
+留意点: persisted queries なしでユニーククエリが無限に流れる運用では
+ステージが毎リクエスト走るが、その場合の支配項も parse + validation
+(既に XS)であり、Perl のオーケストレーション部は小さい定数。将来の
+complexity 上限(P1)もこの層に足す想定なので、Perl のままが都合よい。
+
 ## 4. 実行レーン
 
 実行器は 3 本。エントリポイント(XSUB)は複数あるが、実体はこの 3 つに

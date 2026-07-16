@@ -408,11 +408,13 @@ sub build_native_runtime {
   my ($self, %opts) = @_;
   my $cache_max = delete $opts{program_cache_max};
   my $max_depth = delete $opts{max_depth};
+  my $max_nodes = delete $opts{max_nodes};
   my $async = delete $opts{async};
   my $validate = delete $opts{validate};
   my %runtime_args;
   $runtime_args{program_cache_max} = $cache_max if defined $cache_max;
   $runtime_args{max_depth}         = $max_depth if defined $max_depth;
+  $runtime_args{max_nodes}         = $max_nodes if defined $max_nodes;
   $runtime_args{async}             = $async if defined $async;
   $runtime_args{validate}          = $validate if defined $validate;
   if (%opts || %runtime_args) {

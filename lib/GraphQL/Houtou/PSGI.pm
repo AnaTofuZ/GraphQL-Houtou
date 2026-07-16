@@ -42,6 +42,7 @@ sub new {
     root_value => delete $args{root_value},
     on_stall => delete $args{on_stall},
     max_depth => delete $args{max_depth},
+    max_nodes => delete $args{max_nodes},
     max_body_size => $max_body_size,
   }, $class;
 
@@ -123,6 +124,7 @@ sub _handle_post {
   $exec_opts{root_value} = $self->{root_value} if defined $self->{root_value};
   $exec_opts{on_stall} = $on_stall if defined $on_stall;
   $exec_opts{max_depth} = $self->{max_depth} if defined $self->{max_depth};
+  $exec_opts{max_nodes} = $self->{max_nodes} if defined $self->{max_nodes};
 
   my ($json, $error) = do {
     local $@;
@@ -350,9 +352,12 @@ carry an C<on_stall> hook run on the async lane either way, so pure
 DataLoader apps work without it - C<async> matters when promises can
 appear without a stall-flush hook.
 
-=item root_value, max_depth, program_cache_max
+=item root_value, max_depth, max_nodes, program_cache_max
 
-Passed through to the runtime.
+Passed through to the runtime. C<max_depth> caps query nesting;
+C<max_nodes> caps the total field selections an operation resolves
+(alias-flooding defense). Both reject over-limit queries with an
+errors-only 400.
 
 =item max_body_size
 

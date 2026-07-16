@@ -13,14 +13,17 @@ use GraphQL::Houtou::Schema ();
 use JSON::MaybeXS qw(decode_json encode_json is_bool);
 
 use GraphQL::Houtou::Validation::DepthLimit ();
+use GraphQL::Houtou::Validation::NodeLimit ();
 
 use constant DEFAULT_MAX_DEPTH => GraphQL::Houtou::Validation::DepthLimit::DEFAULT_MAX_DEPTH();
+use constant DEFAULT_MAX_NODES => GraphQL::Houtou::Validation::NodeLimit::DEFAULT_MAX_NODES();
 
 sub new {
   my ($class, %args) = @_;
   die "runtime_schema is required\n" if !$args{runtime_schema};
   my $cache_max = exists $args{program_cache_max} ? $args{program_cache_max} : 1000;
   my $max_depth = exists $args{max_depth} ? $args{max_depth} : DEFAULT_MAX_DEPTH;
+  my $max_nodes = exists $args{max_nodes} ? $args{max_nodes} : DEFAULT_MAX_NODES;
   return bless {
     runtime_schema => $args{runtime_schema},
     native_runtime_struct => $args{native_runtime_struct},
@@ -33,6 +36,7 @@ sub new {
     _specialized_program_cache_order => [],
     _specialized_program_cache_max => $cache_max,
     _max_depth => $max_depth,
+    _max_nodes => $max_nodes,
     _validate => exists $args{validate} ? ($args{validate} ? 1 : 0) : 1,
     _async => $args{async} ? 1 : 0,
   }, $class;
@@ -394,22 +398,30 @@ sub execute_bundle_descriptor {
 # produce an errors-only envelope (no "data" key), per the spec's
 # request-error contract.
 sub _document_request_errors {
-  my ($self, $document, $max_depth, $validate) = @_;
-  return undef if !defined $max_depth && !$validate;
+  my ($self, $document, $max_depth, $max_nodes, $validate) = @_;
+  return undef if !defined $max_depth && !defined $max_nodes && !$validate;
 
   my $is_string = !ref($document);
   my $already_cached = $is_string
     && $self->{_program_cache_max}
     && $self->{_program_cache}{$document};
   my $already_validated = $is_string && $self->{_validated_documents}{$document};
-  my $need_depth = defined $max_depth && !$already_cached;
+  # Depth and node caps bound the untrusted document; skip them once the
+  # program is cached (a cached document already passed them once).
+  my $need_limits = (defined $max_depth || defined $max_nodes) && !$already_cached;
   my $need_validate = $validate && !$already_validated;
-  return undef if !$need_depth && !$need_validate;
+  return undef if !$need_limits && !$need_validate;
 
   my $ast = $is_string ? GraphQL::Houtou::parse($document) : $document;
-  if ($need_depth) {
+  if ($need_limits && defined $max_depth) {
     my @errors = GraphQL::Houtou::Validation::DepthLimit::check_query_depth(
       $ast, max_depth => $max_depth,
+    );
+    return \@errors if @errors;
+  }
+  if ($need_limits && defined $max_nodes) {
+    my @errors = GraphQL::Houtou::Validation::NodeLimit::check_query_nodes(
+      $ast, max_nodes => $max_nodes,
     );
     return \@errors if @errors;
   }
@@ -460,6 +472,7 @@ sub _is_request_error {
 sub execute_document {
   my ($self, $document, %opts) = @_;
   my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
+  my $max_nodes = exists $opts{max_nodes} ? delete $opts{max_nodes} : $self->{_max_nodes};
   my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
 
   # Hot path: a cached program whose document this runtime already
@@ -485,7 +498,7 @@ sub execute_document {
   my $executing = 0;
   my ($result, $request_errors);
   my $ok = eval {
-    $request_errors = $self->_document_request_errors($document, $max_depth, $validate);
+    $request_errors = $self->_document_request_errors($document, $max_depth, $max_nodes, $validate);
     if (!$request_errors) {
       my $program = $self->compile_program($document, %opts);
       $executing = 1;
@@ -615,6 +628,7 @@ sub _request_errors_json {
 sub execute_document_to_json {
   my ($self, $document, %opts) = @_;
   my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
+  my $max_nodes = exists $opts{max_nodes} ? delete $opts{max_nodes} : $self->{_max_nodes};
   my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
 
   # Same hot/cold structure and error taxonomy as execute_document.
@@ -633,7 +647,7 @@ sub execute_document_to_json {
   my $executing = 0;
   my ($result, $request_errors);
   my $ok = eval {
-    $request_errors = $self->_document_request_errors($document, $max_depth, $validate);
+    $request_errors = $self->_document_request_errors($document, $max_depth, $max_nodes, $validate);
     if (!$request_errors) {
       my $program = $self->compile_program($document, %opts);
       $executing = 1;

@@ -20,11 +20,14 @@
    - いまの mainline の要約
 2. `docs/architecture.md`
    - 設計原則と大きな構成
-3. `docs/runtime-mainline-architecture.md`
+3. `docs/architecture-overview.md`
+   - 全体アーキテクチャの地図(コンパイル/リクエスト/実行レーン/
+     async スケジューラの図と、エラー分類・completion 意味論の一覧)
+4. `docs/runtime-mainline-architecture.md`
    - ownership と境界
-4. `docs/module-map.md`
+5. `docs/module-map.md`
    - モジュールごとの責務
-5. `docs/current-context.md`
+6. `docs/current-context.md`
    - 最新 checkpoint / ベンチマーク / 直近判断
 
 ## 目的

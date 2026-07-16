@@ -121,6 +121,10 @@ typedef struct {
   gql_runtime_vm_native_arg_def_t *arg_defs;
   U8 has_args;
   U8 has_directives;
+  /* Non-Null propagation (spec 6.4.4): return_type_kind_code == 8 marks
+   * the field position itself non-null; item_non_null marks a list
+   * field's item positions ([T!]). */
+  U8 item_non_null;
 } gql_runtime_vm_native_slot_t;
 
 typedef struct {
@@ -266,6 +270,11 @@ typedef struct {
   const gql_runtime_vm_native_slot_t *slot;
   IV block_index;
   IV op_index;
+  /* Non-Null propagation scratch: set when a block/list just nulled
+   * itself over a non-null violation (the field error is already
+   * recorded), consumed by the enclosing field/item check so propagation
+   * does not add one error per level. */
+  U8 null_carries_error;
 } gql_runtime_vm_exec_state_t;
 
 enum {
@@ -1655,6 +1664,7 @@ gql_runtime_vm_native_slot_to_compact_sv(
   }
   av_push(av, newRV_noinc((SV *)arg_defs_av));
   av_push(av, newSViv(slot->callback_abi_code));
+  av_push(av, newSViv(slot->item_non_null ? 1 : 0));
 
   return newRV_noinc((SV *)av);
 }
@@ -3723,6 +3733,8 @@ gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out
     out->callback_abi_code = (svp && SvOK(*svp))
       ? SvIV(*svp)
       : gql_runtime_vm_infer_callback_abi_code(out->resolver_shape_code, out->resolver_mode_code);
+    svp = av_fetch(av, 13, 0);
+    out->item_non_null = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
     return 1;
   }
   if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &hv)) {
@@ -3769,6 +3781,10 @@ gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out
       out->resolver_mode_code
     );
   }
+  {
+    SV **item_nn_svp = hv_fetch(hv, "item_non_null", 13, 0);
+    out->item_non_null = (item_nn_svp && SvOK(*item_nn_svp) && SvTRUE(*item_nn_svp)) ? 1 : 0;
+  }
   svp = hv_fetch(hv, "arg_defs", 8, 0);
   gql_runtime_vm_parse_native_arg_defs(aTHX_ (svp ? *svp : NULL), &out->arg_defs, &out->arg_def_count);
   return 1;
@@ -3792,6 +3808,7 @@ gql_runtime_vm_clone_native_slot(
   dst->arg_def_count = src->arg_def_count;
   dst->has_args = src->has_args;
   dst->has_directives = src->has_directives;
+  dst->item_non_null = src->item_non_null;
   if (src->field_name) {
     STRLEN len = src->field_name_len ? src->field_name_len : strlen(src->field_name);
     Newxz(dst->field_name, len + 1, char);

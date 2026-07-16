@@ -415,6 +415,7 @@ sub _inflate_slot {
       : ($struct->{arg_defs} || [])
     ),
     return_type_kind_code => $struct->{return_type_kind_code} || 0,
+    item_non_null => $struct->{item_non_null} || 0,
     has_args => $struct->{has_args},
     has_directives => $struct->{has_directives},
   );
@@ -460,12 +461,24 @@ sub _build_slots_for_object {
       dispatch_family => _dispatch_family_for_type($return_type),
       arg_defs_compact => _build_input_defs_compact($field->{args} || {}),
       return_type_kind_code => _type_kind_code($return_type),
+      item_non_null => _item_non_null_for_type($return_type),
       has_args => ($field->{args} && keys %{ $field->{args} }) ? 1 : 0,
       has_directives => ($field->{directives} && @{ $field->{directives} }) ? 1 : 0,
     );
   }
 
   return \@slots;
+}
+
+# True when the field is list-typed and its item type is Non-Null
+# ([T!], [T!]!): a null item then propagates to the list position
+# (spec 6.4.4). Nested list interiors ([[T!]]) are not tracked yet.
+sub _item_non_null_for_type {
+  my ($type) = @_;
+  return 0 if !$type;
+  $type = $type->of if $type->isa('GraphQL::Houtou::Type::NonNull');
+  return 0 if !$type->isa('GraphQL::Houtou::Type::List');
+  return $type->of && $type->of->isa('GraphQL::Houtou::Type::NonNull') ? 1 : 0;
 }
 
 sub _add_introspection_meta_slots {

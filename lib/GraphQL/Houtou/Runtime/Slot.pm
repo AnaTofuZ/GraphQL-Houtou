@@ -17,6 +17,7 @@ sub new {
     result_name => $args{result_name},
     return_type_name => $args{return_type_name},
     return_type_kind_code => defined $args{return_type_kind_code} ? $args{return_type_kind_code} : 0,
+    item_non_null => $args{item_non_null} ? 1 : 0,
     resolver_shape => $args{resolver_shape} || 'DEFAULT',
     resolver_mode => $args{resolver_mode} || 'DEFAULT',
     completion_family => $args{completion_family} || 'GENERIC',
@@ -33,6 +34,7 @@ sub field_name { return $_[0]{field_name} }
 sub result_name { return $_[0]{result_name} }
 sub return_type_name { return $_[0]{return_type_name} }
 sub return_type_kind_code { return $_[0]{return_type_kind_code} }
+sub item_non_null { return $_[0]{item_non_null} }
 sub resolver_shape { return $_[0]{resolver_shape} }
 sub resolver_mode { return $_[0]{resolver_mode} }
 sub completion_family { return $_[0]{completion_family} }
@@ -55,6 +57,7 @@ sub to_struct {
     completion_family => $self->{completion_family},
     dispatch_family => $self->{dispatch_family},
     return_type_kind_code => $self->{return_type_kind_code},
+    item_non_null => $self->{item_non_null},
     arg_defs_compact => _clone_compact($self->{arg_defs_compact}),
     has_args => $self->{has_args},
     has_directives => $self->{has_directives},
@@ -71,6 +74,7 @@ sub to_native_struct {
     result_name => $self->{result_name},
     return_type_name => $self->{return_type_name},
     return_type_kind_code => $self->{return_type_kind_code},
+    item_non_null => $self->{item_non_null},
     resolver_shape => $self->{resolver_shape},
     resolver_shape_code => _resolver_shape_code($self->{resolver_shape}),
     resolver_mode => $self->{resolver_mode},
@@ -104,6 +108,7 @@ sub to_native_compact_struct {
     $native->{resolver_mode_code},
     ($include_arg_defs ? _clone_compact($self->{arg_defs_compact}) : undef),
     $native->{callback_abi_code},
+    $native->{item_non_null} ? 1 : 0,
   ];
 }
 

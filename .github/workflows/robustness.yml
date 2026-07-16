@@ -14,7 +14,7 @@ jobs:
         run: |
           perl Build.PL --config optimize="-O2 -g -fsanitize=address -fno-omit-frame-pointer" --config lddlflags="-shared -fsanitize=address"
           ./Build build
-      - name: Run test suite under ASan
+      - name: Run test suite under ASan (hash-seed sweep)
         run: |
           LIBASAN=$(gcc -print-file-name=libasan.so)
           # detect_leaks stays off: the perl interpreter's own arena
@@ -24,7 +24,22 @@ jobs:
           export LD_PRELOAD=$LIBASAN
           export ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=1:abort_on_error=1:malloc_context_size=20
           export PERL_DESTRUCT_LEVEL=2
-          prove -b -Iblib/lib -Iblib/arch t/
+          # Sweep hash seeds: HV iteration order changes pool layouts, so an
+          # uninitialized read (e.g. the #45 SEGV) can fire only on some
+          # seeds. A single seed once passed while the same commit crashed
+          # on another - see docs/xs-coding-rules.md.
+          for seed in 0 1 2 3 5 8 13; do
+            echo "== PERL_HASH_SEED=$seed =="
+            PERL_HASH_SEED=$seed prove -b -Iblib/lib -Iblib/arch t/
+          done
+      - name: Parser fuzz smoke under ASan
+        run: |
+          export LD_PRELOAD=$(gcc -print-file-name=libasan.so)
+          export ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:malloc_context_size=20
+          # A few seeds so mutation coverage varies run to run.
+          for seed in 1 2 3; do
+            perl -Iblib/lib -Iblib/arch util/parser-fuzz.pl --iterations 30000 --seed $seed
+          done
   soak:
     name: RSS soak
     runs-on: ubuntu-latest

@@ -429,6 +429,11 @@ struct gql_runtime_vm_block_frame_t {
   SV *promise_sv;
   U8 queued;
   U8 deferred_resolves_response;
+  /* Non-Null propagation (spec 6.4.4): set when one of this frame's
+   * non-null fields resolved to null. The frame then resolves to null
+   * instead of its object; the originating "Cannot return null" error is
+   * already recorded, so the null propagates without stacking errors. */
+  U8 self_nulled;
 };
 
 enum {
@@ -480,6 +485,10 @@ struct gql_runtime_vm_outcome {
   IV error_record_count;
   gql_runtime_vm_error_record_t **error_records;
   struct gql_runtime_vm_outcome *pool_next;
+  /* Non-Null propagation: set on a null outcome whose originating
+   * "Cannot return null" (or field) error is already recorded, so a
+   * parent nulling itself over this value adds no further error. */
+  U8 null_carries_error;
 };
 
 struct gql_runtime_vm_writer_t {
@@ -2770,6 +2779,19 @@ gql_runtime_vm_consume_outcome_native_object(
   for (i = 0; i < outcome->error_record_count; i++) {
     gql_runtime_vm_writer_push_error_record(writer, outcome->error_records[i]);
   }
+}
+
+/* A completed native value counts as null when it is absent or a scalar
+ * undef. Object/list values are never null here (an empty list is not a
+ * null). Used by Non-Null propagation on the async lane. */
+static int
+gql_runtime_vm_native_value_is_null(const gql_runtime_vm_native_value_t *value)
+{
+  if (!value) {
+    return 1;
+  }
+  return value->kind_code == GQL_VM_NATIVE_VALUE_SCALAR
+    && value->scalar_kind_code == GQL_VM_NATIVE_SCALAR_UNDEF;
 }
 
 static void

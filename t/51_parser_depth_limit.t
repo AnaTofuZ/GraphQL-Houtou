@@ -65,6 +65,30 @@ subtest 'the cap tracks nesting, not width (siblings are independent)' => sub {
     'adjacent deep subtrees are counted independently';
 };
 
+subtest 'a huge but flat document is capped by the token limit' => sub {
+  sub token_outcome {
+    my ($query) = @_;
+    my $pid = fork();
+    die "fork failed: $!" if !defined $pid;
+    if ($pid == 0) {
+      my $ok = eval { parse($query); 1 };
+      exit($ok ? 0 : (($@ =~ /too many tokens/) ? 3 : 2));
+    }
+    waitpid $pid, 0;
+    return 'CRASH' if $? & 127;
+    my $code = $? >> 8;
+    return $code == 0 ? 'parsed' : $code == 3 ? 'too-many' : 'other-error';
+  }
+
+  # ~600k sibling fields stays under the 1M-token cap (width is fine).
+  my $under = '{ ' . join(' ', map { "f$_" } 1 .. 600_000) . ' }';
+  is token_outcome($under), 'parsed', '600k sibling fields parse';
+
+  # ~1.1M tokens is a multi-MB adversarial document, not a real request.
+  my $over = '{ ' . join(' ', map { "f$_" } 1 .. 1_100_000) . ' }';
+  is token_outcome($over), 'too-many', 'a 1.1M-token document is a clean error';
+};
+
 subtest 'the depth error reaches execute_document as a request error' => sub {
   my $schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(

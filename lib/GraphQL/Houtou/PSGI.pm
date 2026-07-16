@@ -27,6 +27,13 @@ sub new {
     $runtime = $schema->build_native_runtime(%runtime_opts);
   }
 
+  # Request body cap (release-tasks.md S2): an unauthenticated client
+  # must not be able to exhaust memory with a giant body. 1 MiB is far
+  # above any real GraphQL request. Pass max_body_size => 0 to disable.
+  my $max_body_size = exists $args{max_body_size}
+    ? delete $args{max_body_size}
+    : 1024 * 1024;
+
   my $self = bless {
     runtime => $runtime,
     graphiql => delete $args{graphiql},
@@ -35,6 +42,7 @@ sub new {
     root_value => delete $args{root_value},
     on_stall => delete $args{on_stall},
     max_depth => delete $args{max_depth},
+    max_body_size => $max_body_size,
   }, $class;
 
   if (my @unknown = sort keys %args) {
@@ -71,7 +79,13 @@ sub _handle_post {
     return _error_response($env, 415, 'Content-Type must be application/json');
   }
 
-  my $body = _read_body($env);
+  my $max_body = $self->{max_body_size};
+  if ($max_body && ($env->{CONTENT_LENGTH} || 0) > $max_body) {
+    return _error_response($env, 413, 'Request body is too large');
+  }
+
+  my ($body, $too_large) = _read_body($env, $max_body);
+  return _error_response($env, 413, 'Request body is too large') if $too_large;
   my $payload = do {
     local $@;
     my $decoded = eval { $JSON->decode($body) };
@@ -172,17 +186,21 @@ sub _select_operation {
   return ([ $selected, @fragments ], undef);
 }
 
+# Reads the request body, enforcing $max_body against the bytes actually
+# read (not just the client-supplied CONTENT_LENGTH, which can lie).
+# Returns ($body, $too_large).
 sub _read_body {
-  my ($env) = @_;
-  my $input = $env->{'psgi.input'} or return '';
+  my ($env, $max_body) = @_;
+  my $input = $env->{'psgi.input'} or return ('', 0);
   my $length = $env->{CONTENT_LENGTH} || 0;
   my $body = '';
   while ($length > 0) {
     my $read = $input->read($body, $length, length $body);
     last if !$read;
     $length -= $read;
+    return ($body, 1) if $max_body && length($body) > $max_body;
   }
-  return $body;
+  return ($body, 0);
 }
 
 sub _accepts_html {
@@ -335,6 +353,12 @@ appear without a stall-flush hook.
 =item root_value, max_depth, program_cache_max
 
 Passed through to the runtime.
+
+=item max_body_size
+
+Maximum request body in bytes (default C<1048576>, i.e. 1 MiB). Bodies
+whose C<Content-Length> exceeds this, or that read past it, are rejected
+with a C<413> before parsing. Pass C<0> to disable the cap.
 
 =back
 

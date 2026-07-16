@@ -44,6 +44,12 @@ gql_lex_token(pTHX_ gql_parser_t *p) {
     p->kind = TOK_EOF;
     return;
   }
+  /* Bound total tokens (S2): a real token follows, so count it before
+   * lexing. EOF above is not counted. */
+  if (++p->token_count > GQL_PARSER_MAX_TOKENS) {
+    gql_throw(aTHX_ p, start,
+      "Document has too many tokens (exceeds maximum token count)");
+  }
   c = (unsigned char)p->src[p->pos];
   switch (c) {
     case '!':
@@ -367,6 +373,7 @@ gql_parser_init(pTHX_ gql_parser_t *p, SV *source_sv, int no_location) {
   p->num_lines = 0;
   p->ir_arena = NULL;
   p->depth = 0;
+  p->token_count = 0;
 
   if (p->no_location) {
     return;

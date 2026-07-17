@@ -67,14 +67,48 @@ sub _native_runtime_handle {
 
 sub compile_program {
   my ($self, $document, %opts) = @_;
+  my $operation_name = delete $opts{operation_name};
   if (!ref($document) && $self->{_program_cache_max}) {
-    my $cached = $self->{_program_cache}{$document};
+    my $key = _document_cache_key($document, $operation_name);
+    my $cached = $self->{_program_cache}{$key};
     return $cached if $cached;
-    my $program = $self->runtime_schema->compile_program($document, %opts);
-    $self->_store_program_cache($document, $program);
+    my $source = defined $operation_name
+      ? _select_operation_ast(GraphQL::Houtou::parse($document), $operation_name)
+      : $document;
+    my $program = $self->runtime_schema->compile_program($source, %opts);
+    $self->_store_program_cache($key, $program);
     return $program;
   }
-  return $self->runtime_schema->compile_program($document, %opts);
+  my $source = defined $operation_name
+    ? _select_operation_ast(
+        ref($document) ? $document : GraphQL::Houtou::parse($document),
+        $operation_name,
+      )
+    : $document;
+  return $self->runtime_schema->compile_program($source, %opts);
+}
+
+# NUL is not a valid GraphQL source character, so joining on it cannot
+# collide with a plain document key.
+sub _document_cache_key {
+  my ($document, $operation_name) = @_;
+  return defined $operation_name ? $document . "\0" . $operation_name : $document;
+}
+
+# The operation compiler executes the first operation in a document, so a
+# request naming an operationName compiles a filtered AST: the named
+# operation plus every fragment. Dies are GraphQL request errors (the
+# document, not the server, is at fault) and become errors-only envelopes.
+sub _select_operation_ast {
+  my ($ast, $operation_name) = @_;
+  die "GraphQL document must parse to a list of definitions\n"
+    if ref($ast) ne 'ARRAY';
+  my ($selected) = grep {
+    ($_->{kind} || '') eq 'operation' && ($_->{name} || '') eq $operation_name
+  } @$ast;
+  die qq{Operation "$operation_name" was not found in the document\n}
+    if !$selected;
+  return [ $selected, grep { ($_->{kind} || '') eq 'fragment' } @$ast ];
 }
 
 sub _store_program_cache {
@@ -398,14 +432,17 @@ sub execute_bundle_descriptor {
 # produce an errors-only envelope (no "data" key), per the spec's
 # request-error contract.
 sub _document_request_errors {
-  my ($self, $document, $max_depth, $max_nodes, $validate) = @_;
+  my ($self, $document, $max_depth, $max_nodes, $validate, $operation_name) = @_;
   return undef if !defined $max_depth && !defined $max_nodes && !$validate;
 
   my $is_string = !ref($document);
+  my $cache_key = $is_string
+    ? _document_cache_key($document, $operation_name)
+    : undef;
   my $already_cached = $is_string
     && $self->{_program_cache_max}
-    && $self->{_program_cache}{$document};
-  my $already_validated = $is_string && $self->{_validated_documents}{$document};
+    && $self->{_program_cache}{$cache_key};
+  my $already_validated = $is_string && $self->{_validated_documents}{$cache_key};
   # Depth and node caps bound the untrusted document; skip them once the
   # program is cached (a cached document already passed them once).
   my $need_limits = (defined $max_depth || defined $max_nodes) && !$already_cached;
@@ -413,6 +450,7 @@ sub _document_request_errors {
   return undef if !$need_limits && !$need_validate;
 
   my $ast = $is_string ? GraphQL::Houtou::parse($document) : $document;
+  $ast = _select_operation_ast($ast, $operation_name) if defined $operation_name;
   if ($need_limits && defined $max_depth) {
     my @errors = GraphQL::Houtou::Validation::DepthLimit::check_query_depth(
       $ast, max_depth => $max_depth,
@@ -436,7 +474,7 @@ sub _document_request_errors {
       return $errors if $errors && @$errors;
       # Only remember validated documents that the program cache can also
       # hold, so the set stays bounded by the cache's eviction.
-      $self->{_validated_documents}{$document} = 1
+      $self->{_validated_documents}{$cache_key} = 1
         if $is_string && $self->{_program_cache_max};
     }
   }
@@ -474,14 +512,19 @@ sub execute_document {
   my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
   my $max_nodes = exists $opts{max_nodes} ? delete $opts{max_nodes} : $self->{_max_nodes};
   my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
+  my $operation_name = delete $opts{operation_name};
 
   # Hot path: a cached program whose document this runtime already
   # validated skips the request stage entirely (depth was checked before
-  # it entered the cache, validation is recorded per document).
-  my $cached = !ref($document) && $self->{_program_cache_max}
-    ? $self->{_program_cache}{$document}
+  # it entered the cache, validation is recorded per document). Requests
+  # naming an operationName cache under a (document, operationName) key.
+  my $cache_key = !ref($document)
+    ? _document_cache_key($document, $operation_name)
     : undef;
-  if ($cached && (!$validate || $self->{_validated_documents}{$document})) {
+  my $cached = defined $cache_key && $self->{_program_cache_max}
+    ? $self->{_program_cache}{$cache_key}
+    : undef;
+  if ($cached && (!$validate || $self->{_validated_documents}{$cache_key})) {
     my $result = eval { $self->execute_program($cached, %opts) };
     if (my $error = $@) {
       die $error if !_is_request_error($error);
@@ -498,9 +541,11 @@ sub execute_document {
   my $executing = 0;
   my ($result, $request_errors);
   my $ok = eval {
-    $request_errors = $self->_document_request_errors($document, $max_depth, $max_nodes, $validate);
+    $request_errors = $self->_document_request_errors(
+      $document, $max_depth, $max_nodes, $validate, $operation_name);
     if (!$request_errors) {
-      my $program = $self->compile_program($document, %opts);
+      my $program = $self->compile_program($document, %opts,
+        (defined $operation_name ? (operation_name => $operation_name) : ()));
       $executing = 1;
       $result = $self->execute_program($program, %opts);
     }
@@ -630,12 +675,16 @@ sub execute_document_to_json {
   my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
   my $max_nodes = exists $opts{max_nodes} ? delete $opts{max_nodes} : $self->{_max_nodes};
   my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
+  my $operation_name = delete $opts{operation_name};
 
   # Same hot/cold structure and error taxonomy as execute_document.
-  my $cached = !ref($document) && $self->{_program_cache_max}
-    ? $self->{_program_cache}{$document}
+  my $cache_key = !ref($document)
+    ? _document_cache_key($document, $operation_name)
     : undef;
-  if ($cached && (!$validate || $self->{_validated_documents}{$document})) {
+  my $cached = defined $cache_key && $self->{_program_cache_max}
+    ? $self->{_program_cache}{$cache_key}
+    : undef;
+  if ($cached && (!$validate || $self->{_validated_documents}{$cache_key})) {
     my $result = eval { $self->execute_program_to_json($cached, %opts) };
     if (my $error = $@) {
       die $error if !_is_request_error($error);
@@ -647,9 +696,11 @@ sub execute_document_to_json {
   my $executing = 0;
   my ($result, $request_errors);
   my $ok = eval {
-    $request_errors = $self->_document_request_errors($document, $max_depth, $max_nodes, $validate);
+    $request_errors = $self->_document_request_errors(
+      $document, $max_depth, $max_nodes, $validate, $operation_name);
     if (!$request_errors) {
-      my $program = $self->compile_program($document, %opts);
+      my $program = $self->compile_program($document, %opts,
+        (defined $operation_name ? (operation_name => $operation_name) : ()));
       $executing = 1;
       $result = $self->execute_program_to_json($program, %opts);
     }
@@ -801,6 +852,12 @@ the Perl envelope. Options:
 =over 4
 
 =item * C<variables> - hashref of GraphQL variable values
+
+=item * C<operation_name> - selects the named operation from a
+multi-operation document (the compiler otherwise executes the first one).
+Programs cache under a C<(document, operation_name)> key, so repeated
+requests naming an operation stay on the hot path. An unknown name is a
+request error (errors-only envelope).
 
 =item * C<context> / C<root_value> - passed to resolvers
 

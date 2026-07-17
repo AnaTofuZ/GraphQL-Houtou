@@ -171,6 +171,17 @@ subtest 'operationName selects the operation' => sub {
   is $status, 200, 'status 200';
   is_deeply $res->{data}, { whoami => 'bob' }, 'operation B executed';
 
+  # Second identical request runs on the cached-program hot path.
+  ($status, $res) = graphql(
+    { query => $doc, operationName => 'B' }, remote_user => 'bob');
+  is $status, 200, 'repeat request status 200';
+  is_deeply $res->{data}, { whoami => 'bob' }, 'cached operation B executed';
+
+  ($status, $res) = graphql({ query => $doc, operationName => 'A' });
+  is $status, 200, 'sibling operation status 200';
+  is_deeply $res->{data}, { hello => 'hello world' },
+    'operation A resolves under its own cache key';
+
   ($status, $res) = graphql({ query => $doc, operationName => 'C' });
   is $status, 400, 'unknown operationName is a 400';
   like $res->{errors}[0]{message}, qr/"C"/, 'names the missing operation';

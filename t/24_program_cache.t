@@ -179,4 +179,49 @@ subtest 'runtime-directive programs still use the specialized cache' => sub {
     'variable-dependent runtime directives still specialize per variables';
 };
 
+subtest 'operation_name caches per (document, operationName) pair' => sub {
+  my $runtime = $schema->build_native_runtime;
+  $runtime->clear_program_cache;
+  my $doc = 'query A { hello } query B { greet(name: "b") }';
+
+  my $a = $runtime->execute_document($doc, operation_name => 'A');
+  is_deeply $a->{data}, { hello => 'world' }, 'operation A executed';
+  is $runtime->program_cache_size, 1, 'operation A cached';
+
+  my $b = $runtime->execute_document($doc, operation_name => 'B');
+  is_deeply $b->{data}, { greet => 'hi b' }, 'operation B executed';
+  is $runtime->program_cache_size, 2, 'operation B cached under its own key';
+
+  my $a2 = $runtime->execute_document($doc, operation_name => 'A');
+  is_deeply $a2->{data}, { hello => 'world' }, 'cached operation A still correct';
+  my $b2 = $runtime->execute_document($doc, operation_name => 'B');
+  is_deeply $b2->{data}, { greet => 'hi b' }, 'cached operation B still correct';
+  is $runtime->program_cache_size, 2, 'repeat requests hit the cache';
+
+  # Without operation_name the compiler takes the first operation; the
+  # plain-document key must not collide with the composite keys.
+  my $first = $runtime->execute_document($doc);
+  is_deeply $first->{data}, { hello => 'world' }, 'no operation_name runs the first operation';
+  is $runtime->program_cache_size, 3, 'plain document key is a separate entry';
+
+  my $json = $runtime->execute_document_to_json($doc, operation_name => 'B');
+  like $json, qr/"greet":"hi b"/, 'to_json lane honors operation_name';
+  is $runtime->program_cache_size, 3, 'to_json reuses the same cache entry';
+};
+
+subtest 'unknown operation_name is a request error and is not cached' => sub {
+  my $runtime = $schema->build_native_runtime;
+  $runtime->clear_program_cache;
+  my $doc = 'query A { hello }';
+
+  my $result = $runtime->execute_document($doc, operation_name => 'Nope');
+  ok !exists $result->{data}, 'errors-only envelope';
+  like $result->{errors}[0]{message}, qr/"Nope" was not found/,
+    'names the missing operation';
+  is $runtime->program_cache_size, 0, 'nothing cached for the failed request';
+
+  my $json = $runtime->execute_document_to_json($doc, operation_name => 'Nope');
+  like $json, qr/^\{"errors":/, 'to_json returns an errors-only envelope';
+};
+
 done_testing;

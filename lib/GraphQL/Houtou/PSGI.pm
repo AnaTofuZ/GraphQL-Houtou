@@ -109,16 +109,10 @@ sub _handle_post {
     return _error_response($env, 400, 'The "operationName" field must be a non-empty string');
   }
 
-  my $document = $query;
-  if (defined $operation_name) {
-    my ($selected, $error) = _select_operation($query, $operation_name);
-    return _error_response($env, 400, $error) if $error;
-    $document = $selected;
-  }
-
   my ($context, $on_stall) = $self->_request_context($env);
 
   my %exec_opts;
+  $exec_opts{operation_name} = $operation_name if defined $operation_name;
   $exec_opts{variables} = $variables if defined $variables;
   $exec_opts{context} = $context if defined $context;
   $exec_opts{root_value} = $self->{root_value} if defined $self->{root_value};
@@ -128,7 +122,7 @@ sub _handle_post {
 
   my ($json, $error) = do {
     local $@;
-    my $out = eval { $self->{runtime}->execute_document_to_json($document, %exec_opts) };
+    my $out = eval { $self->{runtime}->execute_document_to_json($query, %exec_opts) };
     $@ ? (undef, $@) : ($out, undef);
   };
   if (defined $error) {
@@ -165,27 +159,6 @@ sub _request_context {
     return ($built, $on_stall // $self->{on_stall});
   }
   return ($context, $self->{on_stall});
-}
-
-# The runtime compiler executes the first operation in the document, so
-# operationName selection happens here: keep the fragments and the named
-# operation only, and hand the filtered AST to the runtime.
-sub _select_operation {
-  my ($query, $operation_name) = @_;
-  my $ast = do {
-    local $@;
-    my $parsed = eval { GraphQL::Houtou::parse($query) };
-    $@ ? undef : $parsed;
-  };
-  return (undef, 'GraphQL document failed to parse') if ref $ast ne 'ARRAY';
-
-  my @operations = grep { ($_->{kind} || '') eq 'operation' } @$ast;
-  my ($selected) = grep { ($_->{name} || '') eq $operation_name } @operations;
-  return (undef, qq{Operation "$operation_name" was not found in the document})
-    if !$selected;
-
-  my @fragments = grep { ($_->{kind} || '') eq 'fragment' } @$ast;
-  return ([ $selected, @fragments ], undef);
 }
 
 # Reads the request body, enforcing $max_body against the bytes actually
@@ -379,8 +352,9 @@ return 400 with an errors-only envelope; field-level errors execute to a
 specifies. GET execution is not implemented; GET serves GraphiQL when
 enabled and 405 otherwise.
 
-Note: documents that name an C<operationName> are compiled from their
-parsed AST and bypass the string-keyed program cache; single-operation
-requests without C<operationName> hit the cache as usual.
+Requests naming an C<operationName> are cached like any other: the
+program cache keys on the C<(query, operationName)> pair, so clients that
+always send C<operationName> (Apollo Client and friends) stay on the
+compiled hot path.
 
 =cut

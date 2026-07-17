@@ -55,6 +55,39 @@ jobs:
           ./Build build
       - name: Soak (mixed request patterns, RSS growth gate)
         run: perl -Iblib/lib -Iblib/arch util/soak-test.pl --iterations 20000 --warmup 5000 --max-growth-kb 8192
+  valgrind:
+    name: Valgrind leak gate
+    runs-on: ubuntu-latest
+    container:
+      image: perldocker/perl-tester:5.42
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install dependencies
+        run: |
+          cpm install -g --with-all --show-build-log-on-failure -v
+          apt-get update -qq && apt-get install -y -qq valgrind
+      - name: Build
+        run: |
+          perl Build.PL
+          ./Build build
+      # PERL_DESTRUCT_LEVEL=2 makes perl free everything at exit so a real
+      # leak in our XS shows as definitely/indirectly lost; the suppression
+      # file silences the interpreter's own still-reachable bookkeeping.
+      # Runs the subset verified leak-clean under valgrind. Two leaks are
+      # tracked in docs/release-tasks.md R5 (an async nested block frame in
+      # t/36/t/40, and a path frame reached only via t/35/t/48's cumulative
+      # execute paths); widen this list to the whole suite once both are
+      # fixed.
+      - name: Valgrind (leak-clean subset, definite/indirect are errors)
+        run: |
+          for t in t/44_lane_parity.t t/49_result_coercion.t \
+                   t/50_nonnull_propagation.t t/47_request_validation.t; do
+            echo "== valgrind $t =="
+            PERL_DESTRUCT_LEVEL=2 valgrind -q --leak-check=full \
+              --errors-for-leak-kinds=definite,indirect --error-exitcode=99 \
+              --suppressions=util/valgrind-perl.supp \
+              perl -Iblib/lib -Iblib/arch "$t"
+          done
   lint-xs-ownership:
     name: XS ownership lint
     runs-on: ubuntu-latest

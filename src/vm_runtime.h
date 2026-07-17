@@ -3312,6 +3312,24 @@ gql_runtime_vm_evaluate_runtime_guards_hv(pTHX_ SV *guards_sv, HV *variables)
   return 1;
 }
 
+/* Free an op's abstract-child member-name table. abstract_child_names is a
+ * char** whose entries are individually allocated by parse/clone, so the
+ * destroy paths must free each string, not just the array (release-tasks.md
+ * R5: valgrind found these leaking - bounded by the program cache, so the
+ * RSS soak never saw them). */
+static void
+gql_runtime_vm_free_op_abstract_child_names(pTHX_ gql_runtime_vm_native_op_t *op)
+{
+  IV i;
+  if (op->abstract_child_names) {
+    for (i = 0; i < op->abstract_child_count; i++) {
+      Safefree(op->abstract_child_names[i]);
+    }
+  }
+  Safefree(op->abstract_child_names);
+  op->abstract_child_names = NULL;
+}
+
 static void
 gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
 {
@@ -3345,7 +3363,7 @@ gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
       }
       if (bundle->blocks[i].ops) {
         for (j = 0; j < bundle->blocks[i].op_count; j++) {
-          Safefree(bundle->blocks[i].ops[j].abstract_child_names);
+          gql_runtime_vm_free_op_abstract_child_names(aTHX_ &bundle->blocks[i].ops[j]);
           Safefree(bundle->blocks[i].ops[j].abstract_child_indexes);
           gql_runtime_vm_native_args_payload_destroy(aTHX_ bundle->blocks[i].ops[j].args_payload_native);
           gql_runtime_vm_native_directives_payload_destroy(aTHX_ bundle->blocks[i].ops[j].directives_payload_native);
@@ -3414,7 +3432,7 @@ gql_runtime_vm_native_program_destroy(gql_runtime_vm_native_program_t *program)
       }
       if (program->blocks[i].ops) {
         for (j = 0; j < program->blocks[i].op_count; j++) {
-          Safefree(program->blocks[i].ops[j].abstract_child_names);
+          gql_runtime_vm_free_op_abstract_child_names(aTHX_ &program->blocks[i].ops[j]);
           Safefree(program->blocks[i].ops[j].abstract_child_indexes);
           gql_runtime_vm_native_args_payload_destroy(aTHX_ program->blocks[i].ops[j].args_payload_native);
           gql_runtime_vm_native_directives_payload_destroy(aTHX_ program->blocks[i].ops[j].directives_payload_native);

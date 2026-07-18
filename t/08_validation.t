@@ -104,6 +104,14 @@ my $schema = GraphQL::Houtou::Schema->new(
         args => { input => { type => $LookupInput->non_null } },
         resolve => sub { +{} },
       },
+      listShapes => {
+        type => $String,
+        args => {
+          required => { type => $String->list->non_null },
+          nested => { type => $String->non_null->list->non_null->list->non_null },
+        },
+        resolve => sub { 'ok' },
+      },
     },
   ),
   mutation => $Mutation,
@@ -438,6 +446,25 @@ subtest 'literal shape and non-null values are validated in XS' => sub {
   is_deeply messages($errors), [
     'Scalar value is not valid for an input object type.',
   ], 'a scalar cannot satisfy an input object argument';
+};
+
+subtest 'non-null list wrappers validate compiled schema types' => sub {
+  my $errors = validate($schema, q|{
+    listShapes(required: ["a", "b"], nested: [["a"], ["b"]])
+  }|);
+  is_deeply $errors, [], 'non-null and nested list literals are accepted';
+
+  $errors = validate($schema, q|{
+    listShapes(required: "a", nested: "b")
+  }|);
+  is_deeply $errors, [], 'a single value is promoted through list wrappers';
+
+  $errors = validate($schema, q|{
+    listShapes(required: ["a"], nested: [[null]])
+  }|);
+  is_deeply messages($errors), [
+    "Null is not a valid value for non-null type 'String'.",
+  ], 'nested non-null list items are enforced';
 };
 
 subtest 'variable default values are validated in XS' => sub {

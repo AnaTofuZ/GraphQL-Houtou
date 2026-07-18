@@ -10,7 +10,7 @@ blockers are production cost control and production-shaped load qualification.
 ## Verified baseline
 
 - The complete local suite passes on Perl 5.44 / macOS arm64: 45 files and
-  420 tests.
+  421 tests.
 - The normal CI matrix covers Perl 5.24 through 5.42 on Linux.
 - Robustness CI includes ASan with hash-seed sweeping, parser fuzzing, an RSS
   soak gate, full-suite Valgrind, compiler warnings, and XS ownership linting.

@@ -4,8 +4,10 @@ Baseline: [GraphQL Specification, September 2025, section 5](https://spec.graphq
 
 GraphQL::Houtou validates executable documents in XS. The public Perl module
 is only a facade; validation does not perform a second Pure Perl AST walk.
-The table below is the release checklist for every stable executable-document
-rule in the baseline specification.
+The table below is the implementation index for every stable
+executable-document rule in the baseline specification. The named subtests are
+the primary regression entry points; each contains multiple valid and invalid
+documents rather than claiming that a filename alone is exhaustive evidence.
 
 | Specification rule | Status | Primary coverage |
 | --- | --- | --- |
@@ -26,7 +28,7 @@ rule in the baseline specification.
 | Argument Names | implemented | `t/08_validation.t` |
 | Argument Uniqueness | implemented | `t/08_validation.t` |
 | Required Arguments | implemented | `t/08_validation.t` |
-| Values of Correct Type | implemented | `t/08_validation.t`, `t/33_oneof_input_objects.t` |
+| Values of Correct Type | implemented | `literal shape and non-null values are validated in XS`; `non-null list wrappers validate compiled schema types`; `t/33_oneof_input_objects.t` |
 | Input Object Field Names | implemented | `t/08_validation.t` |
 | Input Object Field Uniqueness | implemented | `t/08_validation.t` |
 | Input Object Required Fields | implemented | `t/08_validation.t` |

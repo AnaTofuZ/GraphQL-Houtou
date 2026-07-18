@@ -1143,8 +1143,9 @@ gql_validation_validate_value(
     AV *value_av = (AV *)SvRV(value_sv);
     SV *item_type_sv = expected_type_sv;
     SV *list_type_sv = expected_type_sv;
-    if (gql_validation_variable_type_is_kind(list_type_sv, "non_null")) {
-      list_type_sv = gql_validation_variable_type_inner(list_type_sv);
+    if (gql_validation_type_is_non_null(list_type_sv)) {
+      SV **of_svp = hv_fetch((HV *)SvRV(list_type_sv), "of", 2, 0);
+      list_type_sv = of_svp ? *of_svp : NULL;
     }
     if (list_type_sv && SvROK(list_type_sv) && SvTYPE(SvRV(list_type_sv)) == SVt_PVHV) {
       SV **kind_svp = hv_fetch((HV *)SvRV(list_type_sv), "kind", 4, 0);

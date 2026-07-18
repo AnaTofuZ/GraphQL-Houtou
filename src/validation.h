@@ -1450,6 +1450,84 @@ gql_validation_collect_merge_fields(
   }
 }
 
+static SV *
+gql_validation_field_type_sv(
+  pTHX_ SV *compiled_sv,
+  SV *parent_type_name_sv,
+  SV *field_name_sv
+) {
+  HV *parent_hv = gql_validation_compiled_type_hv(aTHX_ compiled_sv, parent_type_name_sv);
+  SV **fields_svp = parent_hv ? hv_fetch(parent_hv, "fields", 6, 0) : NULL;
+  HE *field_he;
+  SV **type_svp;
+  if (!fields_svp || !SvROK(*fields_svp) || SvTYPE(SvRV(*fields_svp)) != SVt_PVHV) {
+    return NULL;
+  }
+  field_he = hv_fetch_ent((HV *)SvRV(*fields_svp), field_name_sv, 0, 0);
+  if (!field_he || !SvROK(HeVAL(field_he)) || SvTYPE(SvRV(HeVAL(field_he))) != SVt_PVHV) {
+    return NULL;
+  }
+  type_svp = hv_fetch((HV *)SvRV(HeVAL(field_he)), "type", 4, 0);
+  return type_svp ? *type_svp : NULL;
+}
+
+static int
+gql_validation_same_response_shape(pTHX_ SV *compiled_sv, SV *left_type_sv, SV *right_type_sv) {
+  HV *left_hv;
+  HV *right_hv;
+  SV **left_kind_svp;
+  SV **right_kind_svp;
+  const char *left_kind;
+  const char *right_kind;
+  if (!left_type_sv || !right_type_sv || !SvROK(left_type_sv) || !SvROK(right_type_sv)
+      || SvTYPE(SvRV(left_type_sv)) != SVt_PVHV || SvTYPE(SvRV(right_type_sv)) != SVt_PVHV) {
+    return 0;
+  }
+  left_hv = (HV *)SvRV(left_type_sv);
+  right_hv = (HV *)SvRV(right_type_sv);
+  left_kind_svp = hv_fetch(left_hv, "kind", 4, 0);
+  right_kind_svp = hv_fetch(right_hv, "kind", 4, 0);
+  if (!left_kind_svp || !right_kind_svp || !SvOK(*left_kind_svp) || !SvOK(*right_kind_svp)) {
+    return 0;
+  }
+  left_kind = SvPV_nolen(*left_kind_svp);
+  right_kind = SvPV_nolen(*right_kind_svp);
+  if (strEQ(left_kind, "NON_NULL") || strEQ(right_kind, "NON_NULL")
+      || strEQ(left_kind, "LIST") || strEQ(right_kind, "LIST")) {
+    SV **left_of_svp;
+    SV **right_of_svp;
+    if (!strEQ(left_kind, right_kind)) {
+      return 0;
+    }
+    left_of_svp = hv_fetch(left_hv, "of", 2, 0);
+    right_of_svp = hv_fetch(right_hv, "of", 2, 0);
+    return left_of_svp && right_of_svp
+      && gql_validation_same_response_shape(aTHX_ compiled_sv, *left_of_svp, *right_of_svp);
+  }
+  if (strEQ(left_kind, "NAMED") && strEQ(right_kind, "NAMED")) {
+    SV **left_name_svp = hv_fetch(left_hv, "name", 4, 0);
+    SV **right_name_svp = hv_fetch(right_hv, "name", 4, 0);
+    HV *left_named_hv = left_name_svp
+      ? gql_validation_compiled_type_hv(aTHX_ compiled_sv, *left_name_svp) : NULL;
+    HV *right_named_hv = right_name_svp
+      ? gql_validation_compiled_type_hv(aTHX_ compiled_sv, *right_name_svp) : NULL;
+    SV **left_named_kind_svp = left_named_hv ? hv_fetch(left_named_hv, "kind", 4, 0) : NULL;
+    SV **right_named_kind_svp = right_named_hv ? hv_fetch(right_named_hv, "kind", 4, 0) : NULL;
+    int left_leaf = left_named_kind_svp && SvOK(*left_named_kind_svp)
+      && (strEQ(SvPV_nolen(*left_named_kind_svp), "SCALAR")
+        || strEQ(SvPV_nolen(*left_named_kind_svp), "ENUM"));
+    int right_leaf = right_named_kind_svp && SvOK(*right_named_kind_svp)
+      && (strEQ(SvPV_nolen(*right_named_kind_svp), "SCALAR")
+        || strEQ(SvPV_nolen(*right_named_kind_svp), "ENUM"));
+    if (left_leaf || right_leaf) {
+      return left_leaf && right_leaf && left_name_svp && right_name_svp
+        && sv_eq(*left_name_svp, *right_name_svp);
+    }
+    return 1;
+  }
+  return 0;
+}
+
 static void
 gql_validation_validate_field_merging(
   pTHX_ AV *errors_av,
@@ -1523,6 +1601,12 @@ gql_validation_validate_field_merging(
       SV **previous_name_svp = hv_fetch(previous_hv, "name", 4, 0);
       SV **arguments_svp = hv_fetch(selection_hv, "arguments", 9, 0);
       SV **previous_arguments_svp = hv_fetch(previous_hv, "arguments", 9, 0);
+      SV *field_type_sv = gql_validation_field_type_sv(
+        aTHX_ compiled_sv, *parent_svp, *name_svp
+      );
+      SV *previous_field_type_sv = gql_validation_field_type_sv(
+        aTHX_ compiled_sv, *previous_parent_svp, *previous_name_svp
+      );
       int same_name = previous_name_svp && SvOK(*previous_name_svp)
         && sv_eq(*name_svp, *previous_name_svp);
       int same_arguments = gql_validation_values_equal(
@@ -1533,10 +1617,13 @@ gql_validation_validate_field_merging(
         && gql_validation_selection_types_overlap(
           aTHX_ compiled_sv, *parent_svp, *previous_parent_svp
         );
-      if (sv_eq(*parent_svp, *previous_parent_svp) && same_name && same_arguments) {
+      int same_shape = gql_validation_same_response_shape(
+        aTHX_ compiled_sv, field_type_sv, previous_field_type_sv
+      );
+      if (sv_eq(*parent_svp, *previous_parent_svp) && same_name && same_arguments && same_shape) {
         keep_entry = 0;
       }
-      if (types_overlap && (!same_name || !same_arguments)) {
+      if (!same_shape || (types_overlap && (!same_name || !same_arguments))) {
         SV **location_svp = hv_fetch(selection_hv, "location", 8, 0);
         SV *message = newSVpvf(
           "Fields '%s' conflict because they select different fields or arguments.",

@@ -249,7 +249,18 @@ subtest 'field merging expands fragments and respects exclusive types' => sub {
       ... on Page { value: title }
     }
   }|);
-  is_deeply $errors, [], 'different object type conditions are mutually exclusive';
+  is_deeply $errors, [], 'different object type conditions are mutually exclusive'
+    or diag explain $errors;
+
+  $errors = validate($schema, q|{
+    node(id: "1") {
+      ... on User { value: name }
+      ... on Page { value: id }
+    }
+  }|);
+  is_deeply messages($errors), [
+    "Fields 'value' conflict because they select different fields or arguments.",
+  ], 'exclusive fields must still have the same response shape';
 };
 
 subtest 'anonymous operation must be alone' => sub {

@@ -78,6 +78,8 @@ Implementation progress:
 - performance: identical fields in a response-key bucket collapse to one
   representative per type condition, and comparison stops after the first
   conflict for that key, preventing quadratic same-key duplicate floods;
+- completed: field response shape validation compares Non-Null/List wrappers
+  and leaf type identity in XS, including mutually-exclusive type conditions;
 - next: custom scalar literal API, complete field merging, and the remaining
   rules.
 

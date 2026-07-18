@@ -3,9 +3,10 @@
 ## Decision
 
 The current tree has complete executable-document validation against the
-September 2025 stable specification. It should not yet be presented as ready
-for an untrusted, high-traffic public GraphQL endpoint: the remaining release
-blockers are production cost control and production-shaped load qualification.
+September 2025 stable specification. The broader conformance audit in
+`docs/spec-conformance-september-2025.md` found remaining type-system
+validation and executable-description gaps. It should not yet be presented as
+ready for an untrusted, high-traffic public GraphQL endpoint.
 
 ## Verified baseline
 
@@ -109,7 +110,15 @@ termination, and cache-limit signatures. Resolver-side pagination limits are
 still required because list size is a schema estimate rather than a runtime
 row counter.
 
-### P0-3: production-shaped load qualification
+### P0-3: complete the query/mutation conformance profile
+
+Complete the Section 3 schema-validation gaps recorded in
+`docs/spec-conformance-september-2025.md`, then add September 2025 executable
+descriptions. Subscription execution is intentionally outside the 0.01
+profile; ordinary execution and PSGI paths must reject subscription operations
+instead of treating them as one-shot queries.
+
+### P0-4: production-shaped load qualification
 
 Run a prefork PSGI server with a real database pool and request-scoped
 DataLoaders. Record cache-hit/miss mixtures, p50/p95/p99 latency, RSS and CPU
@@ -133,6 +142,7 @@ not yet constitute capacity planning for a deployed service.
 
 ## Recommended order
 
-1. Qualify a realistic PSGI + database deployment under concurrent load.
-2. Finish Changes, user-facing documentation, distribution tests, and a
+1. Complete and verify the documented query/mutation conformance profile.
+2. Qualify a realistic PSGI + database deployment under concurrent load.
+3. Finish Changes, user-facing documentation, distribution tests, and a
    release candidate before publishing 0.01 to CPAN.

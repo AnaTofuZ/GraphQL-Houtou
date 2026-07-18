@@ -66,10 +66,9 @@ Implementation progress:
 - performance check: the existing kitchen-sink parser benchmark measured
   about 67k parses/s with locations and 84k parses/s without locations on the
   development macOS arm64 host after these changes;
-- in progress: variables in allowed positions; direct field arguments and
-  the nullable-variable/default-value exception are implemented in XS;
-- next: nested input positions, literal value validation, field merging, and
-  the remaining rules.
+- completed: variables in allowed positions for direct arguments, list items,
+  and input object fields, including default-value exceptions, in XS;
+- next: literal value validation, field merging, and the remaining rules.
 
 ### P0-2: cost control beyond AST node count
 

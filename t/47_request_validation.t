@@ -88,6 +88,17 @@ subtest 'invalid documents return an errors-only envelope' => sub {
   ok !exists $unused_fragment->{data}, 'an unused fragment is a request error';
   like $unused_fragment->{errors}[0]{message}, qr/Fragment 'F' is never used/,
     'the unused-fragment error is exposed through execute_document';
+
+  my $nested_input_variable = $runtime->execute_document(
+    'query Q($bad: Boolean) { hello(name: "Ana", filter: { q: $bad }) }');
+  like $nested_input_variable->{errors}[0]{message},
+    qr/cannot be used for an input object field/,
+    'nested input object variable positions are validated';
+
+  my $list_item_variable = $runtime->execute_document(
+    'query Q($bad: Boolean) { hello(name: "Ana", numbers: [$bad]) }');
+  like $list_item_variable->{errors}[0]{message}, qr/cannot be used for a list item/,
+    'list item variable positions are validated';
 };
 
 subtest 'valid documents that used to be false positives execute cleanly' => sub {

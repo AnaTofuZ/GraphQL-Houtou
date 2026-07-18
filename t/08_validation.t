@@ -7,6 +7,7 @@ use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Directive;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
+use GraphQL::Houtou::Type::Scalar;
 use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 use GraphQL::Houtou::Schema qw(lookup_type);
 
@@ -14,6 +15,7 @@ use GraphQL::Houtou::Validation qw(validate);
 
 my $Node;
 my $User;
+my $Page;
 
 $Node = GraphQL::Houtou::Type::Interface->new(
   name => 'Node',
@@ -29,6 +31,15 @@ $User = GraphQL::Houtou::Type::Object->new(
   fields => {
     id => { type => $String->non_null },
     name => { type => $String },
+  },
+);
+
+$Page = GraphQL::Houtou::Type::Object->new(
+  name => 'Page',
+  interfaces => [ $Node ],
+  fields => {
+    id => { type => $String->non_null },
+    title => { type => $String },
   },
 );
 
@@ -60,6 +71,12 @@ my $Subscription = GraphQL::Houtou::Type::Object->new(
   },
 );
 
+my $Odd = GraphQL::Houtou::Type::Scalar->new(
+  name => 'Odd',
+  serialize => sub { $_[0] },
+  parse_value => sub { $_[0] eq 'odd' ? $_[0] : die "Not odd.\n" },
+);
+
 my $schema = GraphQL::Houtou::Schema->new(
   query => GraphQL::Houtou::Type::Object->new(
     name => 'Query',
@@ -80,7 +97,7 @@ my $schema = GraphQL::Houtou::Schema->new(
   ),
   mutation => $Mutation,
   subscription => $Subscription,
-  types => [ $User, $Node ],
+  types => [ $User, $Page, $Node, $Odd ],
   directives => [
     @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES,
     GraphQL::Houtou::Directive->new(
@@ -97,6 +114,16 @@ my $schema = GraphQL::Houtou::Schema->new(
       args => {
         name => { type => $String->non_null },
       },
+    ),
+    GraphQL::Houtou::Directive->new(
+      name => 'odd',
+      locations => [ qw(FIELD) ],
+      args => { value => { type => $Odd->non_null } },
+    ),
+    GraphQL::Houtou::Directive->new(
+      name => 'flags',
+      locations => [ qw(FIELD) ],
+      args => { values => { type => $Boolean->list } },
     ),
   ],
 );
@@ -153,6 +180,126 @@ subtest 'duplicate operation names are rejected' => sub {
   ];
 };
 
+subtest 'duplicate fragment names are rejected' => sub {
+  my $errors = validate($schema, q|
+    query Q { viewer { ...UserFields } }
+    fragment UserFields on User { id }
+    fragment UserFields on User { name }
+  |);
+
+  is_deeply messages($errors), [
+    "Fragment 'UserFields' is defined more than once.",
+  ];
+};
+
+subtest 'duplicate arguments and variables are rejected before hash overwrite' => sub {
+  my $errors = validate($schema, q|{
+    node(id: "first", id: "second") { id }
+  }|);
+  is_deeply messages($errors), [
+    "Argument 'id' is provided more than once.",
+  ], 'duplicate field arguments are retained as validation diagnostics';
+
+  $errors = validate($schema, q|
+    query Q($id: String!, $id: String!) { node(id: $id) { id } }
+  |);
+  is_deeply messages($errors), [
+    "Variable '\$id' is defined more than once.",
+  ], 'duplicate variable definitions are retained as validation diagnostics';
+};
+
+subtest 'leaf and composite fields require the correct selection shape' => sub {
+  my $errors = validate($schema, q|{
+    viewer
+  }|);
+  is_deeply messages($errors), [
+    "Field 'viewer' of type 'User' must have a selection of subfields.",
+  ], 'composite field without a selection is rejected';
+
+  $errors = validate($schema, q|{
+    viewer { name { id } }
+  }|);
+  is_deeply messages($errors), [
+    "Field 'name' must not have a selection since type 'String' has no subfields.",
+  ], 'leaf field with a selection is rejected without cascading errors';
+};
+
+subtest 'direct fields with the same response key must merge' => sub {
+  my $errors = validate($schema, q|{
+    viewer { value: id value: name }
+  }|);
+  is_deeply messages($errors), [
+    "Fields 'value' conflict because they select different fields or arguments.",
+  ], 'aliases cannot merge different fields';
+
+  $errors = validate($schema, q|{
+    first: node(id: "1") { id }
+    first: node(id: "2") { id }
+  }|);
+  is_deeply messages($errors), [
+    "Fields 'first' conflict because they select different fields or arguments.",
+  ], 'the same field with different arguments conflicts';
+
+  $errors = validate($schema, q|{
+    viewer { value: name value: name }
+  }|);
+  is_deeply $errors, [], 'identical fields can merge';
+
+  my $duplicate_flood = join ' ', ('value: name') x 1_000;
+  $errors = validate($schema, "{ viewer { $duplicate_flood } }");
+  is_deeply $errors, [], 'same-key duplicate floods stay mergeable';
+};
+
+subtest 'field merging expands fragments and respects exclusive types' => sub {
+  my $errors = validate($schema, q|
+    query Q { viewer { ...A ...B } }
+    fragment A on User { value: id }
+    fragment B on User { value: name }
+  |);
+  is_deeply messages($errors), [
+    "Fields 'value' conflict because they select different fields or arguments.",
+  ], 'conflicts across fragment spreads are rejected';
+
+  $errors = validate($schema, q|{
+    node(id: "1") {
+      ... on User { value: name }
+      ... on Page { value: title }
+    }
+  }|);
+  is_deeply $errors, [], 'different object type conditions are mutually exclusive'
+    or diag explain $errors;
+
+  $errors = validate($schema, q|{
+    node(id: "1") {
+      ... on User { value: name }
+      ... on Page { value: id }
+    }
+  }|);
+  is_deeply messages($errors), [
+    "Fields 'value' conflict because they select different fields or arguments.",
+  ], 'exclusive fields must still have the same response shape';
+};
+
+subtest 'merged composite fields validate their combined subfields' => sub {
+  my $errors = validate($schema, q|{
+    first: viewer { value: id }
+    first: viewer { value: name }
+  }|);
+  is_deeply messages($errors), [
+    "Fields 'value' conflict because they select different fields or arguments.",
+  ], 'subfield conflicts split across composite fields are rejected';
+
+  $errors = validate($schema, q|{
+    first: viewer { id }
+    first: viewer { name }
+  }|);
+  is_deeply $errors, [], 'compatible composite selections merge';
+
+  my $composite_flood = join ' ', ('first: viewer { id }') x 1_000;
+  $errors = validate($schema, "{ $composite_flood }");
+  is_deeply $errors, [], 'same-key composite floods stay mergeable';
+};
+
 subtest 'anonymous operation must be alone' => sub {
   my $errors = validate($schema, q|
     { viewer { id } }
@@ -188,6 +335,7 @@ subtest 'output types cannot be used as variables' => sub {
   |);
 
   is_deeply messages($errors), [
+    "Variable '\$user' is never used in operation 'Q'.",
     "Variable '\$user' is type 'User' which cannot be used as an input type.",
   ];
 };
@@ -202,6 +350,69 @@ subtest 'undefined variable use is rejected' => sub {
   is_deeply messages($errors), [
     "Variable '\$id' is used but not defined.",
   ];
+};
+
+subtest 'field arguments enforce variable positions in XS' => sub {
+  my $errors = validate($schema, q|
+    query Q($id: Boolean) { node(id: $id) { id } }
+  |);
+  is_deeply messages($errors), [
+    "Variable '\$id' cannot be used for argument 'id' because its type is incompatible.",
+  ];
+
+  $errors = validate($schema, q|
+    query Q($id: String = "1") { node(id: $id) { id } }
+  |);
+  is_deeply $errors, [], 'a non-null variable default permits a nullable variable';
+};
+
+subtest 'built-in scalar literals are validated in XS' => sub {
+  my $errors = validate($schema, q|{
+    node(id: true) { id }
+  }|);
+  is_deeply messages($errors), [
+    'Value is not a valid String literal.',
+  ];
+};
+
+subtest 'variable default values are validated in XS' => sub {
+  my $errors = validate($schema, q|
+    query Q($id: String = true) { node(id: $id) { id } }
+  |);
+  is_deeply messages($errors), [
+    'Value is not a valid String literal.',
+  ], 'a variable default must match its declared input type';
+
+  $errors = validate($schema, q|
+    query Q($id: String = "1") { node(id: $id) { id } }
+  |);
+  is_deeply $errors, [], 'a correctly typed variable default is accepted';
+};
+
+subtest 'unused variables are rejected, including fragment-aware usage' => sub {
+  my $errors = validate($schema, q|
+    query Q($used: Boolean!, $unused: String) {
+      node(id: "1") { ...UserName }
+    }
+    fragment UserName on User { name @include(if: $used) }
+  |);
+
+  is_deeply messages($errors), [
+    "Variable '\$unused' is never used in operation 'Q'.",
+  ], 'a variable used through a fragment counts as used';
+};
+
+subtest 'unused fragments are rejected using transitive operation reachability' => sub {
+  my $errors = validate($schema, q|
+    query Q { viewer { ...Outer } }
+    fragment Outer on User { ...Inner }
+    fragment Inner on User { id }
+    fragment Unused on User { name }
+  |);
+
+  is_deeply messages($errors), [
+    "Fragment 'Unused' is never used.",
+  ], 'transitively reached fragments are used';
 };
 
 subtest 'unknown fragment targets and cycles are rejected' => sub {
@@ -321,6 +532,29 @@ subtest 'directive validation checks literal argument types' => sub {
   is_deeply messages($errors), [
     q{Argument 'if' on directive '@skip' has invalid value: Not a Boolean.},
   ];
+};
+
+subtest 'directive validation preserves custom scalar callbacks' => sub {
+  my $errors = validate($schema, q|{
+    viewer { id @odd(value: "even") }
+  }|);
+  like messages($errors)->[0], qr/^Argument 'value'.*Not odd\./,
+    'custom scalar parse_value rejects an invalid directive literal';
+};
+
+subtest 'fragment directive variables use each operation context' => sub {
+  my $errors = validate($schema, q|
+    query Q($enabled: Boolean) { viewer { ...Names } }
+    fragment Names on User { name @flags(values: [$enabled]) }
+  |);
+  is_deeply $errors, [], 'nested directive variable in a fragment is resolved';
+
+  $errors = validate($schema, q|
+    query Q($enabled: String) { viewer { ...Names } }
+    fragment Names on User { name @flags(values: [$enabled]) }
+  |);
+  like messages($errors)->[0], qr/cannot be used for a list item/,
+    'fragment directive variable position is checked per operation';
 };
 
 done_testing;

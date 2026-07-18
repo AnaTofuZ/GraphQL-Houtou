@@ -61,6 +61,8 @@ Implementation progress:
 - completed: no unused fragments, using transitive operation reachability;
 - completed: duplicate argument/variable detection through a validation-only
   parser error sink, without changing the public canonical AST;
+- completed: duplicate input object fields use the same validation-only parser
+  diagnostics before the canonical hash representation overwrites them;
 - completed: unused variable/fragment graph traversal moved from Pure Perl to
   XS; cached documents still bypass validation entirely;
 - performance check: the existing kitchen-sink parser benchmark measured
@@ -80,8 +82,8 @@ Implementation progress:
 - completed: directive literals retain directive-specific errors, custom scalar
   callbacks use the compiled CV fallback, and fragment variable positions are
   validated in each operation context;
-- remaining parser parity: directives on variable definitions are currently
-  rejected syntactically before validation and need executable grammar support;
+- completed: executable grammar and XS validation support directives on
+  variable definitions, including constant directive arguments;
 - completed: field merging conflicts are grouped by response key, expanded
   through named and inline fragments, and compared only across overlapping
   runtime type conditions in XS;

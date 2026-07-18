@@ -6,6 +6,7 @@ use Test::More 0.98;
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Directive;
 use GraphQL::Houtou::Type::Interface;
+use GraphQL::Houtou::Type::InputObject;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar;
 use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
@@ -77,6 +78,11 @@ my $Odd = GraphQL::Houtou::Type::Scalar->new(
   parse_value => sub { $_[0] eq 'odd' ? $_[0] : die "Not odd.\n" },
 );
 
+my $LookupInput = GraphQL::Houtou::Type::InputObject->new(
+  name => 'LookupInput',
+  fields => { id => { type => $String->non_null } },
+);
+
 my $schema = GraphQL::Houtou::Schema->new(
   query => GraphQL::Houtou::Type::Object->new(
     name => 'Query',
@@ -93,11 +99,16 @@ my $schema = GraphQL::Houtou::Schema->new(
         },
         resolve => sub { +{} },
       },
+      lookup => {
+        type => $Node,
+        args => { input => { type => $LookupInput->non_null } },
+        resolve => sub { +{} },
+      },
     },
   ),
   mutation => $Mutation,
   subscription => $Subscription,
-  types => [ $User, $Page, $Node, $Odd ],
+  types => [ $User, $Page, $Node, $Odd, $LookupInput ],
   directives => [
     @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES,
     GraphQL::Houtou::Directive->new(
@@ -124,6 +135,11 @@ my $schema = GraphQL::Houtou::Schema->new(
       name => 'flags',
       locations => [ qw(FIELD) ],
       args => { values => { type => $Boolean->list } },
+    ),
+    GraphQL::Houtou::Directive->new(
+      name => 'variableTag',
+      locations => [ qw(VARIABLE_DEFINITION) ],
+      args => { enabled => { type => $Boolean->non_null } },
     ),
   ],
 );
@@ -206,6 +222,15 @@ subtest 'duplicate arguments and variables are rejected before hash overwrite' =
   is_deeply messages($errors), [
     "Variable '\$id' is defined more than once.",
   ], 'duplicate variable definitions are retained as validation diagnostics';
+};
+
+subtest 'duplicate input object fields are rejected before hash overwrite' => sub {
+  my $errors = validate($schema, q|{
+    lookup(input: { id: "first", id: "second" }) { id }
+  }|);
+  is_deeply messages($errors), [
+    "Input field 'id' is provided more than once.",
+  ];
 };
 
 subtest 'leaf and composite fields require the correct selection shape' => sub {
@@ -487,6 +512,22 @@ subtest 'directive validation rejects unknown directives and invalid locations' 
     "Directive '\@skip' may not be used on QUERY.",
     "Unknown directive '\@unknown'.",
   ];
+};
+
+subtest 'variable definition directives parse and validate' => sub {
+  my $errors = validate($schema, q|
+    query Q($id: String! @variableTag(enabled: true)) {
+      node(id: $id) { id }
+    }
+  |);
+  is_deeply $errors, [], 'valid variable definition directive passes';
+
+  $errors = validate($schema, q|
+    query Q($id: String! @skip(if: true)) { node(id: $id) { id } }
+  |);
+  is_deeply messages($errors), [
+    "Directive '\@skip' may not be used on VARIABLE_DEFINITION.",
+  ], 'directive location is enforced on variable definitions';
 };
 
 subtest 'directive validation rejects duplicate non-repeatable directives' => sub {

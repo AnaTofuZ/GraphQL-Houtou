@@ -10,9 +10,9 @@ gql_validation_parse_ast(pTHX_ SV *document, SV *options, AV *errors_av) {
     return newSVsv(document);
   }
 
-  /* Validation owns an internal parser mode so duplicate arguments and
-   * variables can be diagnosed before the canonical hash AST overwrites the
-   * earlier entry. Public parse() remains byte-for-byte compatible. */
+  /* Validation owns an internal parser mode so duplicate arguments,
+   * variables, and input fields can be diagnosed before the canonical hash
+   * AST overwrites the earlier entry. Public parse() remains compatible. */
   {
     SV *no_location_sv = &PL_sv_undef;
     if (options && SvROK(options) && SvTYPE(SvRV(options)) == SVt_PVHV) {

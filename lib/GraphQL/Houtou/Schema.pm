@@ -274,6 +274,12 @@ sub _applied_directive_errors {
         push @errors, "Unknown argument '$arg_name' on directive '\@$name' at $coordinate.";
         next;
       }
+      if (my $detail = _missing_required_input_field(
+          $definition->{type}, $arguments->{$arg_name}, q())) {
+        push @errors, "Argument '$arg_name' on directive '\@$name' at $coordinate "
+          . "is invalid for type @{[$definition->{type}->to_string]}: $detail.";
+        next;
+      }
       my $ok = eval { $definition->{type}->graphql_to_perl($arguments->{$arg_name}); 1 };
       if (!$ok) {
         my $detail = $@ || 'invalid value';

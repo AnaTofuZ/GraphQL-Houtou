@@ -336,6 +336,11 @@ SDL
       'invalid directive argument value',
     ],
     [
+      'input Filter { required: String! } directive @tag(filter: Filter) on OBJECT type Query @tag(filter: {}) { value: String }',
+      qr/Argument 'filter'.*required input field required is missing/,
+      'missing nested required input field',
+    ],
+    [
       'directive @tag on OBJECT type Query @tag(extra: true) { value: String }',
       qr/Unknown argument 'extra' on directive '\@tag'/,
       'unknown directive argument',
@@ -361,6 +366,16 @@ SDL
     my $schema = GraphQL::Houtou::Schema->from_doc($sdl);
     like join("\n", @{ $schema->validation_errors }), $pattern, $label;
   }
+
+  my $parsed = eval {
+    GraphQL::Houtou::Schema->from_doc(
+      'directive @tag(label: String) on OBJECT type Query @tag(label: $value) { value: String }',
+    );
+    1;
+  };
+  ok !$parsed, 'variables are rejected in type-system directive arguments';
+  like $@, qr/Expected name or constant/,
+    'type-system directive arguments use constant values';
 };
 
 done_testing;

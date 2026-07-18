@@ -197,6 +197,28 @@ subtest 'leaf and composite fields require the correct selection shape' => sub {
   ], 'leaf field with a selection is rejected without cascading errors';
 };
 
+subtest 'direct fields with the same response key must merge' => sub {
+  my $errors = validate($schema, q|{
+    viewer { value: id value: name }
+  }|);
+  is_deeply messages($errors), [
+    "Fields 'value' conflict because they select different fields or arguments.",
+  ], 'aliases cannot merge different fields';
+
+  $errors = validate($schema, q|{
+    first: node(id: "1") { id }
+    first: node(id: "2") { id }
+  }|);
+  is_deeply messages($errors), [
+    "Fields 'first' conflict because they select different fields or arguments.",
+  ], 'the same field with different arguments conflicts';
+
+  $errors = validate($schema, q|{
+    viewer { value: name value: name }
+  }|);
+  is_deeply $errors, [], 'identical fields can merge';
+};
+
 subtest 'anonymous operation must be alone' => sub {
   my $errors = validate($schema, q|
     { viewer { id } }

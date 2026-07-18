@@ -72,7 +72,10 @@ Implementation progress:
   XS, avoiding a Perl method call per literal;
 - completed: Enum literal shape and membership validation uses direct XS hash
   lookup against the compiled enum descriptor;
-- next: custom scalar literals, field merging, and the remaining rules.
+- in progress: direct field merging conflicts are grouped by response key and
+  compared in XS; fragment-expanded and mutually-exclusive selections remain;
+- next: custom scalar literal API, complete field merging, and the remaining
+  rules.
 
 ### P0-2: cost control beyond AST node count
 

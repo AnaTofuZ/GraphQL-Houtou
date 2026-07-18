@@ -20,6 +20,16 @@ This document describes the repeatable memory-safety workflow for
 3. **ithreads guard** — all XS handle classes define `CLONE_SKIP = 1` so
    ithread clones drop raw-pointer handles instead of double-freeing them.
    ithreads are otherwise unsupported (see POD CAVEATS).
+4. **Frame live counters** — the XS keeps allocated-minus-released counts
+   for block frames and path frames, readable via
+   `GraphQL::Houtou::XS::VM::debug_frame_live_counts_xs()`. Both must be
+   zero whenever no request is executing and no promise is pending; a
+   positive residue after a completed request is an orphaned frame. This
+   reproduces valgrind-class leaks deterministically on macOS (no
+   valgrind needed) and is asserted per scenario by
+   `t/54_frame_leak_regression.t`. The R5 leak hunt (2026-07-18) used
+   these counters to pinpoint the fast-lane croak path-frame leak and the
+   abandoned-request reference cycle; see `docs/release-tasks.md` R5.
 
 ## Soak test
 

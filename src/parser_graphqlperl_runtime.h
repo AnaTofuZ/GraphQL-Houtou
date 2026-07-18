@@ -1015,7 +1015,7 @@ gql_parse_input_value_definition(pTHX_ gql_parser_t *p) {
     gql_store_sv(def, "default_value", gql_parse_value(aTHX_ p, 1));
   }
   if (p->kind == TOK_AT) {
-    gql_store_sv(def, "directives", gql_parse_directives(aTHX_ p));
+    gql_store_sv(def, "directives", gql_parse_const_directives(aTHX_ p));
   }
   if (SvOK(description)) {
     HV *dhv = (HV *)SvRV(description);
@@ -1078,7 +1078,7 @@ gql_parse_field_definition(pTHX_ gql_parser_t *p) {
   gql_expect(aTHX_ p, TOK_COLON, NULL);
   gql_store_sv(def, "type", gql_parse_type_reference(aTHX_ p));
   if (p->kind == TOK_AT) {
-    gql_store_sv(def, "directives", gql_parse_directives(aTHX_ p));
+    gql_store_sv(def, "directives", gql_parse_const_directives(aTHX_ p));
   }
   if (SvOK(description)) {
     HV *dhv = (HV *)SvRV(description);
@@ -1108,7 +1108,7 @@ gql_parse_schema_definition_extended(pTHX_ gql_parser_t *p, int allow_empty_body
   gql_advance(aTHX_ p);
   if (p->kind == TOK_AT) {
     had_directives = 1;
-    gql_store_sv(hv, "directives", gql_parse_directives(aTHX_ p));
+    gql_store_sv(hv, "directives", gql_parse_const_directives(aTHX_ p));
   }
   if (allow_empty_body && p->kind != TOK_LBRACE) {
     gql_store_sv(hv, "kind", newSVpv("schema", 0));
@@ -1142,7 +1142,7 @@ gql_parse_scalar_type_definition(pTHX_ gql_parser_t *p) {
   gql_store_sv(hv, "name", gql_parse_name(aTHX_ p, "Expected name"));
   if (p->kind == TOK_AT) {
     had_directives = 1;
-    gql_store_sv(hv, "directives", gql_parse_directives(aTHX_ p));
+    gql_store_sv(hv, "directives", gql_parse_const_directives(aTHX_ p));
   }
   gql_store_sv(hv, "kind", newSVpv("scalar", 0));
   if (had_directives) {
@@ -1176,7 +1176,7 @@ gql_parse_object_type_definition(pTHX_ gql_parser_t *p, const char *kind) {
   }
   if (p->kind == TOK_AT) {
     had_directives = 1;
-    gql_store_sv(hv, "directives", gql_parse_directives(aTHX_ p));
+    gql_store_sv(hv, "directives", gql_parse_const_directives(aTHX_ p));
   }
   {
     HV *fields = newHV();
@@ -1227,7 +1227,7 @@ gql_parse_union_type_definition(pTHX_ gql_parser_t *p) {
   gql_store_sv(hv, "name", gql_parse_name(aTHX_ p, "Expected name"));
   if (p->kind == TOK_AT) {
     had_directives = 1;
-    gql_store_sv(hv, "directives", gql_parse_directives(aTHX_ p));
+    gql_store_sv(hv, "directives", gql_parse_const_directives(aTHX_ p));
   }
   if (p->kind == TOK_EQUALS) {
     had_members = 1;
@@ -1270,7 +1270,7 @@ gql_parse_enum_type_definition(pTHX_ gql_parser_t *p) {
   gql_store_sv(hv, "name", gql_parse_name(aTHX_ p, "Expected name"));
   if (p->kind == TOK_AT) {
     had_directives = 1;
-    gql_store_sv(hv, "directives", gql_parse_directives(aTHX_ p));
+    gql_store_sv(hv, "directives", gql_parse_const_directives(aTHX_ p));
   }
   if (p->kind == TOK_LBRACE) {
     had_body = 1;
@@ -1287,7 +1287,7 @@ gql_parse_enum_type_definition(pTHX_ gql_parser_t *p) {
         gql_throw(aTHX_ p, p->tok_start > 0 ? p->tok_start - 1 : p->tok_start, "Invalid enum value");
       }
       if (p->kind == TOK_AT) {
-        gql_store_sv(value_hv, "directives", gql_parse_directives(aTHX_ p));
+        gql_store_sv(value_hv, "directives", gql_parse_const_directives(aTHX_ p));
       }
       if (p->validation_errors && hv_exists(values, name_str, (I32)SvCUR(name))) {
         HV *error_hv = newHV();

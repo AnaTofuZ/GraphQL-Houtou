@@ -297,4 +297,85 @@ subtest 'custom scalars pass values through by default' => sub {
   is $result->{data}{when}, '2026-07-04', 'identity serialize';
 };
 
+subtest 'type-system directive applications are validated' => sub {
+  my $valid = GraphQL::Houtou::Schema->from_doc(<<'SDL');
+directive @tag(label: String!, rank: Int) repeatable on OBJECT | FIELD_DEFINITION
+type Query @tag(label: "root") {
+  value: String @deprecated(reason: "old") @tag(label: "first", rank: 1) @tag(label: "second")
+}
+SDL
+  is_deeply $valid->validation_errors, [],
+    'defined repeatable directive with valid locations and arguments passes';
+  is scalar(@{ $valid->name2type->{Query}->fields->{value}{directives} || [] }), 2,
+    'non-deprecated directives survive deprecated metadata extraction';
+
+  my @cases = (
+    [
+      'type Query @missing { value: String }',
+      qr/Unknown directive '\@missing' on type Query/,
+      'unknown directive',
+    ],
+    [
+      'directive @fieldOnly on FIELD_DEFINITION type Query @fieldOnly { value: String }',
+      qr/cannot be used at OBJECT on type Query/,
+      'invalid directive location',
+    ],
+    [
+      'directive @once on OBJECT type Query @once @once { value: String }',
+      qr/is not repeatable and cannot be used more than once/,
+      'duplicate non-repeatable directive',
+    ],
+    [
+      'directive @tag(label: String!) on OBJECT type Query @tag { value: String }',
+      qr/Required argument 'label' was not provided/,
+      'missing required directive argument',
+    ],
+    [
+      'directive @tag(rank: Int) on OBJECT type Query @tag(rank: "high") { value: String }',
+      qr/Argument 'rank'.*is invalid for type Int/,
+      'invalid directive argument value',
+    ],
+    [
+      'input Filter { required: String! } directive @tag(filter: Filter) on OBJECT type Query @tag(filter: {}) { value: String }',
+      qr/Argument 'filter'.*required input field required is missing/,
+      'missing nested required input field',
+    ],
+    [
+      'directive @tag on OBJECT type Query @tag(extra: true) { value: String }',
+      qr/Unknown argument 'extra' on directive '\@tag'/,
+      'unknown directive argument',
+    ],
+    [
+      'type Query @deprecated { value: String }',
+      qr/Directive '\@deprecated' cannot be used at OBJECT/,
+      'specified directive location is enforced',
+    ],
+    [
+      'directive @tag on OBJECT | OBJECT type Query { value: String }',
+      qr/Directive '\@tag' repeats location 'OBJECT'/,
+      'directive definition locations must be unique',
+    ],
+    [
+      'directive @tag on SOMEWHERE type Query { value: String }',
+      qr/Directive '\@tag' has unknown location 'SOMEWHERE'/,
+      'directive definition locations must be recognized',
+    ],
+  );
+  for my $case (@cases) {
+    my ($sdl, $pattern, $label) = @$case;
+    my $schema = GraphQL::Houtou::Schema->from_doc($sdl);
+    like join("\n", @{ $schema->validation_errors }), $pattern, $label;
+  }
+
+  my $parsed = eval {
+    GraphQL::Houtou::Schema->from_doc(
+      'directive @tag(label: String) on OBJECT type Query @tag(label: $value) { value: String }',
+    );
+    1;
+  };
+  ok !$parsed, 'variables are rejected in type-system directive arguments';
+  like $@, qr/Expected name or constant/,
+    'type-system directive arguments use constant values';
+};
+
 done_testing;

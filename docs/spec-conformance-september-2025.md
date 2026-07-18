@@ -85,7 +85,7 @@ must be added and tested:
 | Duplicate SDL fields, arguments, enum values, and input fields within one definition | Implemented with XS parser diagnostics on `schema-validation-conformance` |
 | Input-object circular references through an unbroken chain of singular Non-Null fields | Implemented on `schema-validation-conformance` with an O(V+E) schema-build DFS |
 | Schema default values must be valid for their declared input types | Implemented on `schema-validation-conformance` for field arguments, input fields, and directive arguments |
-| Type-system directives must be defined, valid at their location, and unique when non-repeatable | Executable directives are fully validated; applied SDL directives are not yet covered at the same level |
+| Type-system directives must be defined, valid at their location, and unique when non-repeatable | Implemented for merged SDL definitions and extensions on `type-system-directive-validation`, including arguments and directive-definition locations |
 | Required arguments and input fields must not be deprecated | Not comprehensively enforced by schema validation |
 | Complete uniqueness and non-empty rules for all programmatically constructed types | Some rules exist for unions, enums, and OneOf, but Section 3 is not exhaustively mapped |
 

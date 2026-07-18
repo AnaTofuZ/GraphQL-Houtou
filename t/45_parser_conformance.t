@@ -80,4 +80,33 @@ subtest 'nested selections keep the legacy AST shape with locations' => sub {
   ok exists $user->{location}, 'fields carry locations';
 };
 
+subtest 'executable definition descriptions are preserved' => sub {
+  my $ast = parse(<<'GRAPHQL');
+"Operation docs"
+query Described(
+  "Variable docs"
+  $id: ID!
+) {
+  node(id: $id) { id }
+}
+
+"""
+Fragment docs
+on multiple lines.
+"""
+fragment NodeFields on Node { id }
+GRAPHQL
+
+  is $ast->[0]{description}, 'Operation docs', 'operation description preserved';
+  is $ast->[0]{variables}{id}{description}, 'Variable docs',
+    'variable definition description preserved';
+  is $ast->[1]{description}, "Fragment docs\non multiple lines.",
+    'fragment block description normalized and preserved';
+};
+
+subtest 'descriptions are not permitted on query shorthand' => sub {
+  my $ok = eval { parse('"Not allowed" { field }'); 1 };
+  ok !$ok, 'description before query shorthand is rejected';
+};
+
 done_testing;

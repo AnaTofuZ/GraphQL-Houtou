@@ -847,6 +847,7 @@ gql_parse_variable_definitions(pTHX_ gql_parser_t *p) {
     gql_throw(aTHX_ p, p->tok_start, "Expected $argument: Type");
   }
   while (p->kind != TOK_RPAREN) {
+    SV *description = gql_parse_description(aTHX_ p);
     HV *def = newHV();
     SV *name;
     gql_expect(aTHX_ p, TOK_DOLLAR, NULL);
@@ -859,6 +860,12 @@ gql_parse_variable_definitions(pTHX_ gql_parser_t *p) {
     }
     if (p->kind == TOK_AT) {
       gql_store_sv(def, "directives", gql_parse_const_directives(aTHX_ p));
+    }
+    if (SvOK(description)) {
+      HV *description_hv = (HV *)SvRV(description);
+      SV **description_svp = hv_fetch(description_hv, "description", 11, 0);
+      gql_store_sv(def, "description", newSVsv(*description_svp));
+      SvREFCNT_dec(description);
     }
     if (p->validation_errors) {
       STRLEN name_len;
@@ -903,7 +910,7 @@ gql_parse_type_reference(pTHX_ gql_parser_t *p) {
 }
 
 static SV *
-gql_parse_operation_definition(pTHX_ gql_parser_t *p) {
+gql_parse_operation_definition(pTHX_ gql_parser_t *p, SV *description) {
   HV *hv = newHV();
   if (p->kind == TOK_LBRACE) {
     SV *sel = gql_parse_selection_set(aTHX_ p);
@@ -940,13 +947,19 @@ gql_parse_operation_definition(pTHX_ gql_parser_t *p) {
     gql_store_sv(hv, "selections", newSVsv(*svp));
     SvREFCNT_dec(sel);
   }
+  if (SvOK(description)) {
+    HV *description_hv = (HV *)SvRV(description);
+    SV **description_svp = hv_fetch(description_hv, "description", 11, 0);
+    gql_store_sv(hv, "description", newSVsv(*description_svp));
+    SvREFCNT_dec(description);
+  }
   gql_store_sv(hv, "kind", newSVpv("operation", 0));
   gql_store_current_location(aTHX_ p, hv);
   return newRV_noinc((SV *)hv);
 }
 
 static SV *
-gql_parse_fragment_definition(pTHX_ gql_parser_t *p) {
+gql_parse_fragment_definition(pTHX_ gql_parser_t *p, SV *description) {
   HV *hv = newHV();
   gql_advance(aTHX_ p);
   gql_store_sv(hv, "name", gql_parse_fragment_name(aTHX_ p));
@@ -964,6 +977,12 @@ gql_parse_fragment_definition(pTHX_ gql_parser_t *p) {
     SV **svp = hv_fetch(selhv, "selections", 10, 0);
     gql_store_sv(hv, "selections", newSVsv(*svp));
     SvREFCNT_dec(sel);
+  }
+  if (SvOK(description)) {
+    HV *description_hv = (HV *)SvRV(description);
+    SV **description_svp = hv_fetch(description_hv, "description", 11, 0);
+    gql_store_sv(hv, "description", newSVsv(*description_svp));
+    SvREFCNT_dec(description);
   }
   gql_store_sv(hv, "kind", newSVpv("fragment", 0));
   gql_store_current_location(aTHX_ p, hv);
@@ -1414,17 +1433,23 @@ gql_parse_type_system_definition(pTHX_ gql_parser_t *p, SV *description) {
 static SV *
 gql_parse_definition(pTHX_ gql_parser_t *p) {
   if (p->kind == TOK_LBRACE) {
-    return gql_parse_operation_definition(aTHX_ p);
+    return gql_parse_operation_definition(aTHX_ p, &PL_sv_undef);
   }
   if (p->kind == TOK_STRING || p->kind == TOK_BLOCK_STRING) {
     SV *description = gql_parse_description(aTHX_ p);
+    if (gql_peek_name(p, "fragment")) {
+      return gql_parse_fragment_definition(aTHX_ p, description);
+    }
+    if (gql_peek_name(p, "query") || gql_peek_name(p, "mutation") || gql_peek_name(p, "subscription")) {
+      return gql_parse_operation_definition(aTHX_ p, description);
+    }
     return gql_parse_type_system_definition(aTHX_ p, description);
   }
   if (gql_peek_name(p, "fragment")) {
-    return gql_parse_fragment_definition(aTHX_ p);
+    return gql_parse_fragment_definition(aTHX_ p, &PL_sv_undef);
   }
   if (gql_peek_name(p, "query") || gql_peek_name(p, "mutation") || gql_peek_name(p, "subscription")) {
-    return gql_parse_operation_definition(aTHX_ p);
+    return gql_parse_operation_definition(aTHX_ p, &PL_sv_undef);
   }
   return gql_parse_type_system_definition(aTHX_ p, &PL_sv_undef);
 }

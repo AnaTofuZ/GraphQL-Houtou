@@ -153,8 +153,8 @@ adapter would therefore conflict with the stated high-traffic production
 target. The 0.01 behavior should be fail-closed:
 
 1. Keep subscription syntax, schema roots, introspection, and validation.
-2. Reject attempts to execute a subscription through `execute` or PSGI with a
-   clear unsupported-operation request error.
+2. Attempts to execute a subscription through `execute`, native runtime, JSON,
+   or PSGI fail closed with a `SUBSCRIPTION_NOT_SUPPORTED` request error.
 3. Document query and mutation as the supported execution profile.
 4. Design a later transport-independent `subscribe_document` API returning a
    cancellable async iterator.

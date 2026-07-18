@@ -182,7 +182,7 @@ sub _default_field_resolver {
     return $parent_type && $parent_type->can('name') ? $parent_type->name : undef;
   }
 
-  if ($source && ref($source) && eval { $source->can($field_name) }) {
+  if (blessed($source) && $source->can($field_name)) {
     return $source->$field_name($args, $context, $info);
   }
 

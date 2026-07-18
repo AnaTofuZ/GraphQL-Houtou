@@ -4735,7 +4735,10 @@ gql_runtime_vm_is_callable_property_candidate(pTHX_ SV *value_sv)
   }
   /* Perl_amagic_applies is not exported by older supported Perls.  Treat a
    * blessed magical value as a rare candidate and let the Perl helper decide
-   * whether it implements &{}; real CVs remain entirely on the native path. */
+   * whether it implements &{}; real CVs remain entirely on the native path.
+   * If schemas commonly return objects with unrelated overloads (for example
+   * stringified date objects), a future optimization may cache the public
+   * overload::Method result by stash to avoid repeated Perl round trips. */
   return SvOBJECT(SvRV(value_sv)) && SvAMAGIC(value_sv) ? 1 : 0;
 }
 
@@ -5618,7 +5621,7 @@ gql_runtime_vm_exec_state_resolve_current_value_sv(
         );
         SvREFCNT_dec(args_sv);
         SvREFCNT_dec(info_sv);
-        return resolved_sv;
+        return resolved_sv ? resolved_sv : newSVsv(&PL_sv_undef);
       }
       return SvREFCNT_inc_simple_NN(*valp);
     }

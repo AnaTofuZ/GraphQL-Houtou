@@ -176,6 +176,16 @@ subtest 'blessed sources use method fallback' => sub {
   }
 };
 
+subtest 'blessed hashes without a method retain hash fallback' => sub {
+  my $root = bless { hello => 'hash-fallback' },
+    'Local::DefaultResolver::HashOnly';
+  my $result = build_native_runtime($schema)->execute_document(
+    '{ hello }', root_value => $root,
+  );
+  is_deeply $result, { data => { hello => 'hash-fallback' } },
+    'a missing method falls through to the blessed hash key';
+};
+
 subtest 'callable overloads follow graphql-perl default resolver behavior' => sub {
   my $result = build_native_runtime($schema)->execute_document(
     '{ hello(suffix: "x") }',

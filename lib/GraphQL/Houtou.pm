@@ -290,6 +290,10 @@ default resolver. A hash value that is a coderef is called as
 C<($args, $context, $info)>; other hash values are returned directly. A
 blessed source method matching the field name is called as
 C<($args, $context, $info)>. Explicit field resolvers always take precedence.
+Because method lookup follows normal Perl semantics, field names such as
+C<can>, C<isa>, or C<DOES> may resolve inherited C<UNIVERSAL> methods and
+produce a field error whose message includes Perl source location details;
+use an explicit resolver for such names on blessed sources.
 Custom scalars default to pass-through C<serialize> / C<parse_value>; supply
 your own through C<resolvers> when coercion matters. C<@deprecated>,
 C<@specifiedBy>, C<@oneOf>, and C<repeatable> directive definitions in the

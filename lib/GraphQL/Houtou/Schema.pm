@@ -548,6 +548,11 @@ sub _default_value_error {
   return () if !exists $definition->{default_value};
   my $type = $definition->{type};
   return () if !_is_input_type($type);
+  if (my $detail = _missing_required_input_field(
+      $type, $definition->{default_value}, q())) {
+    return "The default value for $coordinate is invalid for type "
+      . $type->to_string . ": $detail.";
+  }
   my $ok = eval { $type->graphql_to_perl($definition->{default_value}); 1 };
   return () if $ok;
   my $detail = $@ || 'invalid value';
@@ -555,6 +560,40 @@ sub _default_value_error {
   $detail =~ s/ at \S+ line \d+\.?\z//;
   return "The default value for $coordinate is invalid for type "
     . $type->to_string . ": $detail.";
+}
+
+sub _missing_required_input_field {
+  my ($type, $value, $path) = @_;
+  return if !ref($type) || !defined($value);
+  $type = $type->of if $type->isa('GraphQL::Houtou::Type::NonNull');
+  if ($type->isa('GraphQL::Houtou::Type::List')) {
+    my $values = ref($value) eq 'ARRAY' ? $value : [ $value ];
+    for my $index (0 .. $#$values) {
+      my $error = _missing_required_input_field(
+        $type->of, $values->[$index], "$path\[$index\]",
+      );
+      return $error if $error;
+    }
+    return;
+  }
+  return if !$type->isa('GraphQL::Houtou::Type::InputObject')
+    || ref($value) ne 'HASH';
+
+  for my $field_name (sort keys %{ $type->fields || {} }) {
+    my $field = $type->fields->{$field_name};
+    my $field_path = length($path) ? "$path.$field_name" : $field_name;
+    if (!exists($value->{$field_name}) && !exists($field->{default_value})
+        && ref($field->{type})
+        && $field->{type}->isa('GraphQL::Houtou::Type::NonNull')) {
+      return "required input field $field_path is missing";
+    }
+    next if !exists $value->{$field_name};
+    my $error = _missing_required_input_field(
+      $field->{type}, $value->{$field_name}, $field_path,
+    );
+    return $error if $error;
+  }
+  return;
 }
 
 sub _object_field_errors {

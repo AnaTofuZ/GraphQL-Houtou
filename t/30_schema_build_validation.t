@@ -346,6 +346,11 @@ subtest 'schema default values must match their input types' => sub {
             type => $Options,
             default_value => { count => 1, unknown => 1 },
           },
+          missing => { type => $Options, default_value => { label => 'x' } },
+          nested => {
+            type => $Options->list,
+            default_value => [ { count => 1 }, { label => 'x' } ],
+          },
           required => { type => $String->non_null, default_value => undef },
         },
       },
@@ -357,6 +362,12 @@ subtest 'schema default values must match their input types' => sub {
     'invalid scalar default rejected';
   like $errors, qr/default value for argument Query\.search\(options:\) is invalid for type Options/,
     'invalid nested input object default rejected';
+  like $errors,
+    qr/default value for argument Query\.search\(missing:\).*required input field count is missing/,
+    'missing required input field rejected';
+  like $errors,
+    qr/default value for argument Query\.search\(nested:\).*required input field \[1\]\.count is missing/,
+    'missing required field in a nested list element rejected';
   like $errors, qr/default value for argument Query\.search\(required:\) is invalid for type String!/
     , 'null default for a non-null type rejected';
 

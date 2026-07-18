@@ -53,6 +53,23 @@ subtest 'invalid unicode escapes die with a structured error' => sub {
   like $@->message, qr/Invalid Unicode escape sequence/, 'error names the escape problem';
 };
 
+subtest 'type system extensions must add content' => sub {
+  for my $source (
+    'extend scalar DateTime',
+    'extend type Query',
+    'extend interface Node',
+    'extend union Search',
+    'extend enum Status',
+    'extend input Filter',
+    'extend schema',
+  ) {
+    my $ok = eval { parse($source); 1 };
+    ok !$ok, "$source is rejected";
+    like $@->message, qr/extension must add a directive or member/,
+      'error explains the missing extension content';
+  }
+};
+
 subtest 'nested selections keep the legacy AST shape with locations' => sub {
   my $ast = parse('{ user { id } }');
   is $ast->[0]{kind}, 'operation', 'operation kind';

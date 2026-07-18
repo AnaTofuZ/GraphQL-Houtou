@@ -105,8 +105,8 @@ your own through `resolvers` when coercion matters. `@deprecated`,
 `@specifiedBy`, `@oneOf`, and `repeatable` directive definitions in the
 SDL are reflected on the built types. The same functionality is available as
 `GraphQL::Houtou::Schema->from_doc($sdl, %opts)` and
-`->from_ast($ast, %opts)`. Type extensions (`extend type`) are not
-supported yet.
+`->from_ast($ast, %opts)`. Type-system extensions in the same SDL
+document are merged before the executable schema is constructed.
 
 The inverse direction is `print_schema()` (also available as
 `$schema->to_doc`), which renders any schema back to SDL — including

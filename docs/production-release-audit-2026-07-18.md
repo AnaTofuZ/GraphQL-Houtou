@@ -16,6 +16,8 @@ blockers are production cost control and production-shaped load qualification.
   soak gate, full-suite Valgrind, compiler warnings, and XS ownership linting.
 - Request errors, result coercion, Non-Null propagation, parser nesting and
   token limits, request-body limits, and alias/node limits are implemented.
+- SDL type-system extensions are merged before schema construction, including
+  interface inheritance and extension-specific duplicate checks.
 - POD syntax and META.json validation pass locally.
 
 ## Release blockers
@@ -123,7 +125,7 @@ not yet constitute capacity planning for a deployed service.
 - Add a production deployment guide covering prefork operation, timeouts,
   pagination/cost policy, rate limiting, logging, GraphiQL/CSP, and shutdown.
 - State unsupported features prominently: ithreads, GET query execution,
-  subscriptions, defer/stream, Federation, SDL type extensions, generic
+  subscriptions, defer/stream, Federation, generic
   promise adapters, and variables with fixed bundles.
 - Add macOS and Perl 5.44 jobs plus distribution/POD/minimum-version tests.
 - Consider GET query execution and stricter GraphQL-over-HTTP content

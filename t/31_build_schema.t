@@ -135,6 +135,97 @@ subtest 'forward references across definitions work' => sub {
     'self-referencing type resolves lazily';
 };
 
+subtest 'type system extensions are merged before schema construction' => sub {
+  my $extension_sdl = <<'SDL';
+type Query { base: String }
+extend type Query { greeting: String }
+
+interface Resource { id: ID! }
+interface Named { id: ID! name: String! }
+extend interface Named implements Resource { label: String }
+type User implements Named & Resource { id: ID! name: String! label: String role: Role }
+
+enum Role { USER }
+extend enum Role { ADMIN }
+
+input Filter { name: String }
+extend input Filter { role: Role }
+
+union Result = User
+type Team { name: String! }
+extend union Result = Team
+
+scalar Token
+extend scalar Token @specifiedBy(url: "https://example.com/token")
+SDL
+  my $schema = build_schema($extension_sdl, resolvers => {
+    Query => { greeting => sub { 'hello' } },
+  });
+
+  is $schema->query->fields->{greeting}{type}->to_string, 'String',
+    'object extension field is available';
+  is $schema->name2type->{Named}->fields->{label}{type}->to_string, 'String',
+    'interface extension field is available';
+  is_deeply [ map { $_->name } @{ $schema->name2type->{Named}->interfaces } ],
+    ['Resource'], 'interface extension can add an implemented interface';
+  is_deeply [ map { $_->name } @{ $schema->get_possible_types($schema->name2type->{Resource}) } ],
+    ['User'], 'possible object types propagate through interface inheritance';
+  ok $schema->name2type->{Role}->values->{ADMIN}, 'enum extension value is available';
+  is $schema->name2type->{Filter}->fields->{role}{type}->to_string, 'Role',
+    'input extension field is available';
+  is_deeply [ map { $_->name } @{ $schema->name2type->{Result}->types } ],
+    [qw(User Team)], 'union extension member is available';
+  is $schema->name2type->{Token}->specified_by_url, 'https://example.com/token',
+    'scalar extension directive is applied';
+  is execute($schema, '{ greeting }')->{data}{greeting}, 'hello',
+    'resolver can attach to an extension field';
+};
+
+subtest 'schema extensions can supply operation roots' => sub {
+  my $schema = build_schema('
+    type Query { ping: String }
+    type RootMutation { update: String }
+    extend schema { mutation: RootMutation }
+  ');
+  is $schema->query->name, 'Query', 'implicit query root is retained';
+  is $schema->mutation->name, 'RootMutation', 'mutation root comes from schema extension';
+};
+
+subtest 'invalid type system extensions are rejected' => sub {
+  eval { build_schema('type Query { a: String } extend type Missing { b: String }') };
+  like $@, qr/Cannot extend type 'Missing'/, 'extension target must exist';
+
+  eval { build_schema('type Query { a: String } extend type Query { a: Int }') };
+  like $@, qr/redefines fields 'a'/, 'extension cannot redefine a field';
+
+  eval { build_schema('type Query { a: String } extend enum Query { A }') };
+  like $@, qr/Cannot extend type 'Query' as enum/, 'extension kind must match target';
+
+  eval { build_schema('
+    directive @once on OBJECT
+    type Query @once { a: String }
+    extend type Query @once
+  ') };
+  like $@, qr/repeats non-repeatable directive '\@once'/,
+    'extension cannot repeat a non-repeatable directive';
+
+  my $repeatable = eval { build_schema('
+    directive @tag repeatable on OBJECT
+    type Query @tag { a: String }
+    extend type Query @tag
+  ') };
+  ok $repeatable, 'extension may repeat a repeatable directive';
+
+  my $invalid_inheritance = build_schema('
+    interface Resource { id: ID! }
+    interface Named implements Resource { id: ID! name: String! }
+    type Query implements Named { id: ID! name: String! }
+  ');
+  like join("\n", @{ $invalid_inheritance->validation_errors }),
+    qr/Query must implement Resource because it is implemented by Named/,
+    'implementors must explicitly include inherited interfaces';
+};
+
 subtest 'abstract dispatch via resolvers option' => sub {
   my $schema = build_schema('
     type Query { pets: [Pet!] }

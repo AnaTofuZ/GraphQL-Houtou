@@ -1378,28 +1378,117 @@ gql_validation_values_equal(pTHX_ SV *left_sv, SV *right_sv) {
 }
 
 static void
-gql_validation_validate_direct_field_merging(pTHX_ AV *errors_av, AV *selections_av) {
-  HV *fields_by_key_hv = newHV();
+gql_validation_collect_merge_fields(
+  pTHX_ AV *out_av,
+  AV *selections_av,
+  SV *parent_type_name_sv,
+  HV *fragments_hv,
+  HV *visited_fragments_hv
+) {
   I32 i;
+  if (!selections_av) {
+    return;
+  }
   for (i = 0; i <= av_len(selections_av); i++) {
     SV **selection_svp = av_fetch(selections_av, i, 0);
     HV *selection_hv;
     SV **kind_svp;
+    if (!selection_svp || !SvROK(*selection_svp) || SvTYPE(SvRV(*selection_svp)) != SVt_PVHV) {
+      continue;
+    }
+    selection_hv = (HV *)SvRV(*selection_svp);
+    kind_svp = hv_fetch(selection_hv, "kind", 4, 0);
+    if (!kind_svp || !SvOK(*kind_svp) || !SvPOK(*kind_svp)) {
+      continue;
+    }
+    if (strEQ(SvPV_nolen(*kind_svp), "field")) {
+      HV *entry_hv = newHV();
+      gql_store_sv(entry_hv, "field", newSVsv(*selection_svp));
+      gql_store_sv(entry_hv, "parent_type", newSVsv(parent_type_name_sv));
+      av_push(out_av, newRV_noinc((SV *)entry_hv));
+      continue;
+    }
+    if (strEQ(SvPV_nolen(*kind_svp), "inline_fragment")) {
+      SV **on_svp = hv_fetch(selection_hv, "on", 2, 0);
+      SV **nested_svp = hv_fetch(selection_hv, "selections", 10, 0);
+      SV *target_type_sv = on_svp && SvOK(*on_svp) ? *on_svp : parent_type_name_sv;
+      if (nested_svp && SvROK(*nested_svp) && SvTYPE(SvRV(*nested_svp)) == SVt_PVAV) {
+        gql_validation_collect_merge_fields(
+          aTHX_ out_av, (AV *)SvRV(*nested_svp), target_type_sv,
+          fragments_hv, visited_fragments_hv
+        );
+      }
+      continue;
+    }
+    if (strEQ(SvPV_nolen(*kind_svp), "fragment_spread")) {
+      SV **name_svp = hv_fetch(selection_hv, "name", 4, 0);
+      HE *fragment_he;
+      STRLEN name_len;
+      const char *name;
+      if (!name_svp || !SvOK(*name_svp)) {
+        continue;
+      }
+      name = SvPV(*name_svp, name_len);
+      if (hv_exists(visited_fragments_hv, name, (I32)name_len)) {
+        continue;
+      }
+      fragment_he = hv_fetch_ent(fragments_hv, *name_svp, 0, 0);
+      if (fragment_he && SvROK(HeVAL(fragment_he)) && SvTYPE(SvRV(HeVAL(fragment_he))) == SVt_PVHV) {
+        HV *fragment_hv = (HV *)SvRV(HeVAL(fragment_he));
+        SV **on_svp = hv_fetch(fragment_hv, "on", 2, 0);
+        SV **nested_svp = hv_fetch(fragment_hv, "selections", 10, 0);
+        (void)hv_store_ent(visited_fragments_hv, *name_svp, newSViv(1), 0);
+        if (on_svp && SvOK(*on_svp) && nested_svp && SvROK(*nested_svp)
+            && SvTYPE(SvRV(*nested_svp)) == SVt_PVAV) {
+          gql_validation_collect_merge_fields(
+            aTHX_ out_av, (AV *)SvRV(*nested_svp), *on_svp,
+            fragments_hv, visited_fragments_hv
+          );
+        }
+      }
+    }
+  }
+}
+
+static void
+gql_validation_validate_field_merging(
+  pTHX_ AV *errors_av,
+  SV *compiled_sv,
+  AV *selections_av,
+  SV *parent_type_name_sv,
+  HV *fragments_hv
+) {
+  HV *fields_by_key_hv = newHV();
+  HV *visited_fragments_hv = newHV();
+  AV *fields_av = newAV();
+  I32 i;
+  gql_validation_collect_merge_fields(
+    aTHX_ fields_av, selections_av, parent_type_name_sv,
+    fragments_hv, visited_fragments_hv
+  );
+  for (i = 0; i <= av_len(fields_av); i++) {
+    SV **entry_svp = av_fetch(fields_av, i, 0);
+    HV *entry_hv;
+    SV **selection_svp;
+    SV **parent_svp;
+    HV *selection_hv;
     SV **name_svp;
     SV **alias_svp;
     SV *response_key_sv;
     HE *previous_he;
     AV *previous_av;
     I32 j;
-    if (!selection_svp || !SvROK(*selection_svp) || SvTYPE(SvRV(*selection_svp)) != SVt_PVHV) {
+    if (!entry_svp || !SvROK(*entry_svp) || SvTYPE(SvRV(*entry_svp)) != SVt_PVHV) {
+      continue;
+    }
+    entry_hv = (HV *)SvRV(*entry_svp);
+    selection_svp = hv_fetch(entry_hv, "field", 5, 0);
+    parent_svp = hv_fetch(entry_hv, "parent_type", 11, 0);
+    if (!selection_svp || !SvROK(*selection_svp) || SvTYPE(SvRV(*selection_svp)) != SVt_PVHV
+        || !parent_svp || !SvOK(*parent_svp)) {
       continue;
     }
     selection_hv = (HV *)SvRV(*selection_svp);
-    kind_svp = hv_fetch(selection_hv, "kind", 4, 0);
-    if (!kind_svp || !SvOK(*kind_svp) || !SvPOK(*kind_svp)
-        || !strEQ(SvPV_nolen(*kind_svp), "field")) {
-      continue;
-    }
     name_svp = hv_fetch(selection_hv, "name", 4, 0);
     alias_svp = hv_fetch(selection_hv, "alias", 5, 0);
     if (!name_svp || !SvOK(*name_svp)) {
@@ -1415,7 +1504,10 @@ gql_validation_validate_direct_field_merging(pTHX_ AV *errors_av, AV *selections
     }
     for (j = 0; j <= av_len(previous_av); j++) {
       SV **previous_svp = av_fetch(previous_av, j, 0);
-      HV *previous_hv = (HV *)SvRV(*previous_svp);
+      HV *previous_entry_hv = (HV *)SvRV(*previous_svp);
+      SV **previous_field_svp = hv_fetch(previous_entry_hv, "field", 5, 0);
+      SV **previous_parent_svp = hv_fetch(previous_entry_hv, "parent_type", 11, 0);
+      HV *previous_hv = (HV *)SvRV(*previous_field_svp);
       SV **previous_name_svp = hv_fetch(previous_hv, "name", 4, 0);
       SV **arguments_svp = hv_fetch(selection_hv, "arguments", 9, 0);
       SV **previous_arguments_svp = hv_fetch(previous_hv, "arguments", 9, 0);
@@ -1425,7 +1517,11 @@ gql_validation_validate_direct_field_merging(pTHX_ AV *errors_av, AV *selections
         aTHX_ arguments_svp ? *arguments_svp : NULL,
         previous_arguments_svp ? *previous_arguments_svp : NULL
       );
-      if (!same_name || !same_arguments) {
+      int types_overlap = previous_parent_svp && SvOK(*previous_parent_svp)
+        && gql_validation_selection_types_overlap(
+          aTHX_ compiled_sv, *parent_svp, *previous_parent_svp
+        );
+      if (types_overlap && (!same_name || !same_arguments)) {
         SV **location_svp = hv_fetch(selection_hv, "location", 8, 0);
         SV *message = newSVpvf(
           "Fields '%s' conflict because they select different fields or arguments.",
@@ -1435,8 +1531,10 @@ gql_validation_validate_direct_field_merging(pTHX_ AV *errors_av, AV *selections
         SvREFCNT_dec(message);
       }
     }
-    av_push(previous_av, newSVsv(*selection_svp));
+    av_push(previous_av, newSVsv(*entry_svp));
   }
+  SvREFCNT_dec((SV *)fields_av);
+  SvREFCNT_dec((SV *)visited_fragments_hv);
   SvREFCNT_dec((SV *)fields_by_key_hv);
 }
 
@@ -1588,7 +1686,10 @@ gql_validation_validate_selections(
     return;
   }
 
-  gql_validation_validate_direct_field_merging(aTHX_ errors_av, selections_av);
+  gql_validation_validate_field_merging(
+    aTHX_ errors_av, compiled_sv, selections_av,
+    parent_type_name_sv, fragments_hv
+  );
 
   for (i = 0; i <= av_len(selections_av); i++) {
     SV **selection_svp = av_fetch(selections_av, i, 0);

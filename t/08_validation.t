@@ -14,6 +14,7 @@ use GraphQL::Houtou::Validation qw(validate);
 
 my $Node;
 my $User;
+my $Page;
 
 $Node = GraphQL::Houtou::Type::Interface->new(
   name => 'Node',
@@ -29,6 +30,15 @@ $User = GraphQL::Houtou::Type::Object->new(
   fields => {
     id => { type => $String->non_null },
     name => { type => $String },
+  },
+);
+
+$Page = GraphQL::Houtou::Type::Object->new(
+  name => 'Page',
+  interfaces => [ $Node ],
+  fields => {
+    id => { type => $String->non_null },
+    title => { type => $String },
   },
 );
 
@@ -80,7 +90,7 @@ my $schema = GraphQL::Houtou::Schema->new(
   ),
   mutation => $Mutation,
   subscription => $Subscription,
-  types => [ $User, $Node ],
+  types => [ $User, $Page, $Node ],
   directives => [
     @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES,
     GraphQL::Houtou::Directive->new(
@@ -217,6 +227,25 @@ subtest 'direct fields with the same response key must merge' => sub {
     viewer { value: name value: name }
   }|);
   is_deeply $errors, [], 'identical fields can merge';
+};
+
+subtest 'field merging expands fragments and respects exclusive types' => sub {
+  my $errors = validate($schema, q|
+    query Q { viewer { ...A ...B } }
+    fragment A on User { value: id }
+    fragment B on User { value: name }
+  |);
+  is_deeply messages($errors), [
+    "Fields 'value' conflict because they select different fields or arguments.",
+  ], 'conflicts across fragment spreads are rejected';
+
+  $errors = validate($schema, q|{
+    node(id: "1") {
+      ... on User { value: name }
+      ... on Page { value: title }
+    }
+  }|);
+  is_deeply $errors, [], 'different object type conditions are mutually exclusive';
 };
 
 subtest 'anonymous operation must be alone' => sub {

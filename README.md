@@ -441,6 +441,22 @@ history behind these numbers, `docs/current-context.md`.
 
 # CAVEATS
 
+## Supported execution profile
+
+Version 0.01 supports GraphQL queries and mutations. Subscription syntax,
+schema roots, introspection, and document validation are supported, but
+subscription execution and streaming transports are not. Attempting to
+execute a subscription fails closed with a `SUBSCRIPTION_NOT_SUPPORTED`
+request error.
+
+The PSGI adapter accepts GraphQL execution requests over POST. GET query
+execution, `@defer`, `@stream`, WebSocket/SSE subscriptions, Federation,
+and generic promise adapters are outside the 0.01 profile. Only
+`Promise::XS` promises are recognized.
+
+Fixed native bundles are for variable-free queries. Use compiled native
+programs for persisted queries that accept variables.
+
 ## Perl ithreads are not supported
 
 The runtime keeps request and schema state in C structures referenced by

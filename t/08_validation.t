@@ -520,6 +520,21 @@ subtest 'subscription must have a single top-level field' => sub {
   is_deeply messages($errors), [
     'Subscription needs to have only one field; got (importantUser otherUser)',
   ];
+
+  $errors = validate($schema, q|
+    subscription S {
+      user: importantUser { id }
+      user: importantUser { name }
+    }
+  |);
+  is_deeply $errors, [], 'one merged response name is one subscription root field';
+
+  $errors = validate($schema, q|
+    subscription S { __typename }
+  |);
+  is_deeply messages($errors), [
+    'Subscription root field must not be an introspection field.',
+  ], 'subscription root cannot select introspection';
 };
 
 subtest 'directive validation rejects unknown directives and invalid locations' => sub {

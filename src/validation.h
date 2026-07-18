@@ -416,7 +416,7 @@ gql_validation_push_usage_errors(
 }
 
 static void
-gql_validation_collect_subscription_fields(pTHX_ AV *names_av, SV *selections_sv, HV *fragments_hv, HV *visited_hv) {
+gql_validation_collect_subscription_fields(pTHX_ HV *fields_hv, SV *selections_sv, HV *fragments_hv, HV *visited_hv) {
   AV *selections_av;
   I32 selection_len;
   I32 i;
@@ -445,7 +445,9 @@ gql_validation_collect_subscription_fields(pTHX_ AV *names_av, SV *selections_sv
     if (strEQ(SvPV_nolen(*kind_svp), "field")) {
       SV **name_svp = hv_fetch(selection_hv, "name", 4, 0);
       if (name_svp && SvOK(*name_svp)) {
-        av_push(names_av, newSVsv(*name_svp));
+        SV **alias_svp = hv_fetch(selection_hv, "alias", 5, 0);
+        SV *response_name_sv = alias_svp && SvOK(*alias_svp) ? *alias_svp : *name_svp;
+        (void)hv_store_ent(fields_hv, response_name_sv, newSVsv(*name_svp), 0);
       }
       continue;
     }
@@ -482,7 +484,7 @@ gql_validation_collect_subscription_fields(pTHX_ AV *names_av, SV *selections_sv
       fragment_hv = (HV *)SvRV(fragment_sv);
       fragment_selections_svp = hv_fetch(fragment_hv, "selections", 10, 0);
       gql_validation_collect_subscription_fields(
-        aTHX_ names_av,
+        aTHX_ fields_hv,
         fragment_selections_svp ? *fragment_selections_svp : NULL,
         fragments_hv,
         visited_hv
@@ -494,7 +496,7 @@ gql_validation_collect_subscription_fields(pTHX_ AV *names_av, SV *selections_sv
     if (strEQ(SvPV_nolen(*kind_svp), "inline_fragment")) {
       SV **nested_svp = hv_fetch(selection_hv, "selections", 10, 0);
       gql_validation_collect_subscription_fields(
-        aTHX_ names_av,
+        aTHX_ fields_hv,
         nested_svp ? *nested_svp : NULL,
         fragments_hv,
         visited_hv
@@ -662,31 +664,29 @@ gql_validation_push_subscription_errors(pTHX_ AV *operation_errors_av, AV *opera
     operation_type_svp = hv_fetch(operation_hv, "operationType", 13, 0);
     if (operation_type_svp && SvOK(*operation_type_svp) && SvPOK(*operation_type_svp)
         && strEQ(SvPV_nolen(*operation_type_svp), "subscription")) {
-      AV *field_names_av = newAV();
+      HV *fields_hv = newHV();
       HV *visited_hv = newHV();
       SV **selections_svp = hv_fetch(operation_hv, "selections", 10, 0);
       SV **location_svp = hv_fetch(operation_hv, "location", 8, 0);
-      I32 field_len;
+      I32 field_count;
 
       gql_validation_collect_subscription_fields(
-        aTHX_ field_names_av,
+        aTHX_ fields_hv,
         selections_svp ? *selections_svp : NULL,
         fragments_hv,
         visited_hv
       );
-      field_len = av_len(field_names_av);
-      if (field_len != 0) {
+      field_count = (I32)HvUSEDKEYS(fields_hv);
+      if (field_count != 1) {
         SV *message = newSVpv("Subscription needs to have only one field; got (", 0);
+        I32 sorted_count = 0;
+        SV **keys = gql_parser_sorted_hash_keys(aTHX_ fields_hv, &sorted_count);
         I32 j;
-        for (j = 0; j <= field_len; j++) {
-          SV **name_svp = av_fetch(field_names_av, j, 0);
-          if (!name_svp || !SvOK(*name_svp)) {
-            continue;
-          }
+        for (j = 0; j < sorted_count; j++) {
           if (j > 0) {
             sv_catpvn(message, " ", 1);
           }
-          sv_catsv(message, *name_svp);
+          sv_catsv(message, keys[j]);
         }
         sv_catpvn(message, ")", 1);
         av_push(
@@ -694,10 +694,24 @@ gql_validation_push_subscription_errors(pTHX_ AV *operation_errors_av, AV *opera
           gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL)
         );
         SvREFCNT_dec(message);
+        gql_parser_free_sorted_hash_keys(keys, sorted_count);
+      } else {
+        HE *field_he;
+        hv_iterinit(fields_hv);
+        field_he = hv_iternext(fields_hv);
+        if (field_he && HeVAL(field_he) && SvOK(HeVAL(field_he))
+            && strnEQ(SvPV_nolen(HeVAL(field_he)), "__", 2)) {
+          SV *message = newSVpv("Subscription root field must not be an introspection field.", 0);
+          av_push(
+            errors_av,
+            gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL)
+          );
+          SvREFCNT_dec(message);
+        }
       }
 
       SvREFCNT_dec((SV *)visited_hv);
-      SvREFCNT_dec((SV *)field_names_av);
+      SvREFCNT_dec((SV *)fields_hv);
     }
   }
 }

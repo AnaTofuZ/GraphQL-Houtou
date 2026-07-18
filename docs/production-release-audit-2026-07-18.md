@@ -133,7 +133,7 @@ not yet constitute capacity planning for a deployed service.
 - The production deployment guide covers prefork operation, timeouts,
   pagination/cost policy, rate limiting, logging, GraphiQL/CSP, and shutdown.
 - State unsupported features prominently: ithreads, GET query execution,
-  subscriptions, defer/stream, Federation, generic
+  subscriptions, defer/stream, a Federation Gateway/Router, generic
   promise adapters, and variables with fixed bundles.
 - Perl 5.44 and distribution/POD/minimum-version tests run in CI using the
   Docker Official Image for Perl. A native macOS job remains to be added.

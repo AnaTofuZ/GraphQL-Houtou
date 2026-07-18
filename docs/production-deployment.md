@@ -95,6 +95,21 @@ Disable GraphiQL in production. The bundled page loads JavaScript and CSS from
 that CDN. If an operator UI is required, protect it with authentication and
 serve pinned assets under an explicitly reviewed CSP.
 
+## Federation subgraphs
+
+`GraphQL::Houtou::Federation` makes a Houtou schema usable behind an
+Apollo-compatible Gateway or Router. Keep the subgraph on a private network or
+require service authentication; clients should only reach the Router.
+`_service` exposes the authored SDL and `_entities` exposes entity lookup
+across types, so neither field should be treated as harmless public
+introspection.
+
+Keep `max_representations` bounded and use request-scoped DataLoaders from
+entity resolvers to avoid one database query per representation. The subgraph
+still needs the ordinary body, depth, node, cost, timeout, and rate limits.
+The Router and supergraph composition lifecycle are separate services and
+should be deployed, monitored, and upgraded independently.
+
 ## Graceful restart and capacity
 
 On deploy, stop routing new requests to a worker, allow in-flight requests to

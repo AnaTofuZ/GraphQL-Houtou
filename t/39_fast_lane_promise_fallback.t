@@ -91,7 +91,7 @@ subtest 'async runtime: a genuine stall points at on_stall' => sub {
     local $@;
     eval {
       $runtime->execute_document_to_json(
-        'query Q($id: ID) { pendingForever }', variables => { id => 'x' });
+        'query Q { pendingForever }');
     };
     $@;
   };

@@ -16,7 +16,7 @@ use GraphQL::Houtou qw(build_native_runtime);
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::InputObject;
 use GraphQL::Houtou::Type::Object;
-use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
+use GraphQL::Houtou::Type::Scalar qw($Boolean $Int $String);
 
 my $Filter = GraphQL::Houtou::Type::InputObject->new(
   name => 'Filter',
@@ -37,6 +37,7 @@ my $schema = GraphQL::Houtou::Schema->new(
         args => {
           name => { type => $String->non_null },
           filter => { type => $Filter },
+          numbers => { type => $Int->list },
           upcase => { type => $Boolean, default_value => 0 },
         },
         resolve => sub { 'hi ' . $_[1]{name} },
@@ -69,6 +70,24 @@ subtest 'invalid documents return an errors-only envelope' => sub {
   my $undefined_var = $runtime->execute_document('{ hello(name: $ghost) }');
   like $undefined_var->{errors}[0]{message}, qr/Variable '\$ghost' is used but not defined/,
     'undefined variable use is a request error';
+
+  my $missing_subselection = $runtime->execute_document('{ item }');
+  ok !exists $missing_subselection->{data},
+    'a composite field without a subselection is a request error';
+  like $missing_subselection->{errors}[0]{message}, qr/must have a selection of subfields/,
+    'the subselection error is exposed through execute_document';
+
+  my $unused_variable = $runtime->execute_document(
+    'query Q($unused: String) { hello(name: "Ana") }');
+  ok !exists $unused_variable->{data}, 'an unused variable is a request error';
+  like $unused_variable->{errors}[0]{message}, qr/Variable '\$unused' is never used/,
+    'the unused-variable error is exposed through execute_document';
+
+  my $unused_fragment = $runtime->execute_document(
+    'query Q { hello(name: "Ana") } fragment F on Query { hello(name: "F") }');
+  ok !exists $unused_fragment->{data}, 'an unused fragment is a request error';
+  like $unused_fragment->{errors}[0]{message}, qr/Fragment 'F' is never used/,
+    'the unused-fragment error is exposed through execute_document';
 };
 
 subtest 'valid documents that used to be false positives execute cleanly' => sub {
@@ -76,8 +95,9 @@ subtest 'valid documents that used to be false positives execute cleanly' => sub
   my %cases = (
     'non-null variable' =>
       [ 'query Q($n: String!) { hello(name: $n) }', { n => 'Ana' } ],
-    'unreferenced builtin scalar list' =>
-      [ 'query Q($n: String!, $tags: [Int!]) { hello(name: $n) }', { n => 'Ana' } ],
+    'referenced builtin scalar list' =>
+      [ 'query Q($n: String!, $tags: [Int!]) { hello(name: $n, numbers: $tags) }',
+        { n => 'Ana', tags => [ 1, 2 ] } ],
     'input object variable' =>
       [ 'query Q($n: String!, $f: Filter) { hello(name: $n, filter: $f) }',
         { n => 'Ana', f => { q => 'x' } } ],

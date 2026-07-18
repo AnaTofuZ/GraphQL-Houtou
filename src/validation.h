@@ -5,51 +5,29 @@
  */
 
 static SV *
-gql_validation_parse_ast(pTHX_ SV *document, SV *options) {
-  dSP;
-  int count;
-  SV *ret;
-  HV *opts_hv;
-
+gql_validation_parse_ast(pTHX_ SV *document, SV *options, AV *errors_av) {
   if (document && SvROK(document)) {
     return newSVsv(document);
   }
 
-  eval_pv("require GraphQL::Houtou; 1;", TRUE);
-
-  opts_hv = newHV();
-  if (options && SvROK(options) && SvTYPE(SvRV(options)) == SVt_PVHV) {
-    SV **no_location_svp = hv_fetch((HV *)SvRV(options), "no_location", 11, 0);
-    if (!no_location_svp) {
-      no_location_svp = hv_fetch((HV *)SvRV(options), "noLocation", 10, 0);
+  /* Validation owns an internal parser mode so duplicate arguments and
+   * variables can be diagnosed before the canonical hash AST overwrites the
+   * earlier entry. Public parse() remains byte-for-byte compatible. */
+  {
+    SV *no_location_sv = &PL_sv_undef;
+    if (options && SvROK(options) && SvTYPE(SvRV(options)) == SVt_PVHV) {
+      SV **svp = hv_fetch((HV *)SvRV(options), "no_location", 11, 0);
+      if (!svp) {
+        svp = hv_fetch((HV *)SvRV(options), "noLocation", 10, 0);
+      }
+      if (svp) {
+        no_location_sv = *svp;
+      }
     }
-    if (no_location_svp && SvOK(*no_location_svp)) {
-      gql_store_sv(opts_hv, "no_location", newSVsv(*no_location_svp));
-    }
+    return gql_parse_document_for_validation(
+      aTHX_ document, no_location_sv, errors_av
+    );
   }
-
-  ENTER;
-  SAVETMPS;
-  PUSHMARK(SP);
-  XPUSHs(sv_2mortal(newSVsv(document)));
-  XPUSHs(sv_2mortal(newRV_noinc((SV *)opts_hv)));
-  PUTBACK;
-
-  count = call_pv("GraphQL::Houtou::parse_with_options", G_SCALAR);
-  SPAGAIN;
-  if (count != 1) {
-    PUTBACK;
-    FREETMPS;
-    LEAVE;
-    croak("GraphQL::Houtou::parse_with_options did not return a scalar");
-  }
-
-  ret = newSVsv(POPs);
-  PUTBACK;
-  FREETMPS;
-  LEAVE;
-
-  return ret;
 }
 
 static SV *
@@ -218,6 +196,223 @@ gql_validation_build_fragments_map(pTHX_ AV *ast_av) {
   }
 
   return fragments_hv;
+}
+
+static void
+gql_validation_push_fragment_name_errors(pTHX_ AV *errors_av, AV *ast_av) {
+  HV *seen_hv = newHV();
+  I32 i;
+
+  for (i = 0; i <= av_len(ast_av); i++) {
+    SV **node_svp = av_fetch(ast_av, i, 0);
+    HV *node_hv;
+    SV **kind_svp;
+    SV **name_svp;
+    SV **location_svp;
+    STRLEN name_len;
+    const char *name;
+
+    if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) {
+      continue;
+    }
+    node_hv = (HV *)SvRV(*node_svp);
+    kind_svp = hv_fetch(node_hv, "kind", 4, 0);
+    if (!kind_svp || !SvOK(*kind_svp) || !SvPOK(*kind_svp)
+        || !strEQ(SvPV_nolen(*kind_svp), "fragment")) {
+      continue;
+    }
+    name_svp = hv_fetch(node_hv, "name", 4, 0);
+    if (!name_svp || !SvOK(*name_svp)) {
+      continue;
+    }
+    name = SvPV(*name_svp, name_len);
+    if (hv_exists(seen_hv, name, (I32)name_len)) {
+      SV *message = newSVpvf("Fragment '%s' is defined more than once.", name);
+      location_svp = hv_fetch(node_hv, "location", 8, 0);
+      av_push(errors_av, gql_validation_error(
+        aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL
+      ));
+      SvREFCNT_dec(message);
+    } else {
+      (void)hv_store(seen_hv, name, (I32)name_len, newSViv(1), 0);
+    }
+  }
+  SvREFCNT_dec((SV *)seen_hv);
+}
+
+static void
+gql_validation_collect_usage(
+  pTHX_ SV *node_sv,
+  HV *fragments_hv,
+  HV *variables_hv,
+  HV *spreads_hv,
+  HV *visited_hv
+) {
+  SV *inner_sv;
+
+  if (!node_sv || !SvROK(node_sv)) {
+    return;
+  }
+  inner_sv = SvRV(node_sv);
+  if (SvTYPE(inner_sv) != SVt_PVAV && SvTYPE(inner_sv) != SVt_PVHV
+      && !SvROK(inner_sv) && !sv_isobject(node_sv)) {
+    STRLEN name_len;
+    const char *name = SvPV(inner_sv, name_len);
+    (void)hv_store(variables_hv, name, (I32)name_len, newSViv(1), 0);
+    return;
+  }
+  if (SvTYPE(inner_sv) == SVt_PVAV) {
+    AV *items_av = (AV *)inner_sv;
+    I32 i;
+    for (i = 0; i <= av_len(items_av); i++) {
+      SV **item_svp = av_fetch(items_av, i, 0);
+      if (item_svp) {
+        gql_validation_collect_usage(
+          aTHX_ *item_svp, fragments_hv, variables_hv, spreads_hv, visited_hv
+        );
+      }
+    }
+    return;
+  }
+  if (SvTYPE(inner_sv) == SVt_PVHV) {
+    HV *node_hv = (HV *)inner_sv;
+    SV **kind_svp = hv_fetch(node_hv, "kind", 4, 0);
+    if (kind_svp && SvOK(*kind_svp) && SvPOK(*kind_svp)
+        && strEQ(SvPV_nolen(*kind_svp), "fragment_spread")) {
+      SV **name_svp = hv_fetch(node_hv, "name", 4, 0);
+      if (name_svp && SvOK(*name_svp)) {
+        STRLEN name_len;
+        const char *name = SvPV(*name_svp, name_len);
+        (void)hv_store(spreads_hv, name, (I32)name_len, newSViv(1), 0);
+        if (!hv_exists(visited_hv, name, (I32)name_len)) {
+          HE *fragment_he;
+          (void)hv_store(visited_hv, name, (I32)name_len, newSViv(1), 0);
+          fragment_he = hv_fetch_ent(fragments_hv, *name_svp, 0, 0);
+          if (fragment_he && SvROK(HeVAL(fragment_he))
+              && SvTYPE(SvRV(HeVAL(fragment_he))) == SVt_PVHV) {
+            SV **selections_svp = hv_fetch(
+              (HV *)SvRV(HeVAL(fragment_he)), "selections", 10, 0
+            );
+            if (selections_svp) {
+              gql_validation_collect_usage(
+                aTHX_ *selections_svp, fragments_hv, variables_hv,
+                spreads_hv, visited_hv
+              );
+            }
+          }
+        }
+      }
+    }
+    {
+      HE *he;
+      hv_iterinit(node_hv);
+      while ((he = hv_iternext(node_hv))) {
+        STRLEN key_len;
+        const char *key = HePV(he, key_len);
+        if ((key_len == 9 && memEQ(key, "variables", 9))
+            || (key_len == 8 && memEQ(key, "location", 8))) {
+          continue;
+        }
+        gql_validation_collect_usage(
+          aTHX_ HeVAL(he), fragments_hv, variables_hv, spreads_hv, visited_hv
+        );
+      }
+    }
+  }
+}
+
+static void
+gql_validation_push_usage_errors(
+  pTHX_ AV *errors_av, AV *ast_av, AV *operations_av, HV *fragments_hv
+) {
+  HV *reachable_hv = newHV();
+  I32 i;
+
+  for (i = 0; i <= av_len(operations_av); i++) {
+    SV **operation_svp = av_fetch(operations_av, i, 0);
+    HV *operation_hv;
+    HV *used_variables_hv = newHV();
+    HV *spreads_hv = newHV();
+    HV *visited_hv = newHV();
+    SV **variable_defs_svp;
+    HE *he;
+
+    if (!operation_svp || !SvROK(*operation_svp)
+        || SvTYPE(SvRV(*operation_svp)) != SVt_PVHV) {
+      SvREFCNT_dec((SV *)used_variables_hv);
+      SvREFCNT_dec((SV *)spreads_hv);
+      SvREFCNT_dec((SV *)visited_hv);
+      continue;
+    }
+    operation_hv = (HV *)SvRV(*operation_svp);
+    gql_validation_collect_usage(
+      aTHX_ *operation_svp, fragments_hv, used_variables_hv, spreads_hv, visited_hv
+    );
+    hv_iterinit(spreads_hv);
+    while ((he = hv_iternext(spreads_hv))) {
+      STRLEN name_len;
+      const char *name = HePV(he, name_len);
+      (void)hv_store(reachable_hv, name, (I32)name_len, newSViv(1), 0);
+    }
+
+    variable_defs_svp = hv_fetch(operation_hv, "variables", 9, 0);
+    if (variable_defs_svp && SvROK(*variable_defs_svp)
+        && SvTYPE(SvRV(*variable_defs_svp)) == SVt_PVHV) {
+      HV *defs_hv = (HV *)SvRV(*variable_defs_svp);
+      hv_iterinit(defs_hv);
+      while ((he = hv_iternext(defs_hv))) {
+        STRLEN name_len;
+        const char *name = HePV(he, name_len);
+        if (!hv_exists(used_variables_hv, name, (I32)name_len)) {
+          SV **operation_name_svp = hv_fetch(operation_hv, "name", 4, 0);
+          SV **location_svp = hv_fetch(operation_hv, "location", 8, 0);
+          const char *operation_name = operation_name_svp && SvOK(*operation_name_svp)
+            ? SvPV_nolen(*operation_name_svp) : "<anonymous>";
+          SV *message = newSVpvf(
+            "Variable '$%s' is never used in operation '%s'.", name, operation_name
+          );
+          av_push(errors_av, gql_validation_error(
+            aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL
+          ));
+          SvREFCNT_dec(message);
+        }
+      }
+    }
+    SvREFCNT_dec((SV *)used_variables_hv);
+    SvREFCNT_dec((SV *)spreads_hv);
+    SvREFCNT_dec((SV *)visited_hv);
+  }
+
+  for (i = 0; i <= av_len(ast_av); i++) {
+    SV **node_svp = av_fetch(ast_av, i, 0);
+    HV *node_hv;
+    SV **kind_svp;
+    SV **name_svp;
+    SV **location_svp;
+    STRLEN name_len;
+    const char *name;
+    if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) {
+      continue;
+    }
+    node_hv = (HV *)SvRV(*node_svp);
+    kind_svp = hv_fetch(node_hv, "kind", 4, 0);
+    name_svp = hv_fetch(node_hv, "name", 4, 0);
+    if (!kind_svp || !SvOK(*kind_svp) || !SvPOK(*kind_svp)
+        || !strEQ(SvPV_nolen(*kind_svp), "fragment")
+        || !name_svp || !SvOK(*name_svp)) {
+      continue;
+    }
+    name = SvPV(*name_svp, name_len);
+    if (!hv_exists(reachable_hv, name, (I32)name_len)) {
+      SV *message = newSVpvf("Fragment '%s' is never used.", name);
+      location_svp = hv_fetch(node_hv, "location", 8, 0);
+      av_push(errors_av, gql_validation_error(
+        aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL
+      ));
+      SvREFCNT_dec(message);
+    }
+  }
+  SvREFCNT_dec((SV *)reachable_hv);
 }
 
 static void
@@ -969,9 +1164,43 @@ gql_validation_validate_field_selection(
       SvREFCNT_dec((SV *)arg_defs_hv);
     }
 
-    if (selections_svp && SvROK(*selections_svp) && SvTYPE(SvRV(*selections_svp)) == SVt_PVAV && type_svp) {
+    if (type_svp) {
       SV *next_type_name_sv = gql_validation_named_type_name_sv(*type_svp);
-      if (next_type_name_sv) {
+      HV *next_type_hv = gql_validation_compiled_type_hv(aTHX_ compiled_sv, next_type_name_sv);
+      SV **next_kind_svp = next_type_hv ? hv_fetch(next_type_hv, "kind", 4, 0) : NULL;
+      int has_selections = selections_svp && SvROK(*selections_svp)
+        && SvTYPE(SvRV(*selections_svp)) == SVt_PVAV;
+      int is_leaf = next_kind_svp && SvOK(*next_kind_svp) && SvPOK(*next_kind_svp)
+        && (strEQ(SvPV_nolen(*next_kind_svp), "SCALAR")
+          || strEQ(SvPV_nolen(*next_kind_svp), "ENUM"));
+      int is_composite = next_kind_svp && SvOK(*next_kind_svp) && SvPOK(*next_kind_svp)
+        && (strEQ(SvPV_nolen(*next_kind_svp), "OBJECT")
+          || strEQ(SvPV_nolen(*next_kind_svp), "INTERFACE")
+          || strEQ(SvPV_nolen(*next_kind_svp), "UNION"));
+
+      if (is_leaf && has_selections) {
+        SV *message = newSVpvf(
+          "Field '%s' must not have a selection since type '%s' has no subfields.",
+          SvPV_nolen(*field_name_svp),
+          next_type_name_sv ? SvPV_nolen(next_type_name_sv) : ""
+        );
+        av_push(errors_av, gql_validation_error(
+          aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL
+        ));
+        SvREFCNT_dec(message);
+      } else if (is_composite && !has_selections) {
+        SV *message = newSVpvf(
+          "Field '%s' of type '%s' must have a selection of subfields.",
+          SvPV_nolen(*field_name_svp),
+          next_type_name_sv ? SvPV_nolen(next_type_name_sv) : ""
+        );
+        av_push(errors_av, gql_validation_error(
+          aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL
+        ));
+        SvREFCNT_dec(message);
+      }
+
+      if (has_selections && next_type_name_sv && !is_leaf) {
         gql_validation_validate_selections(
           aTHX_ errors_av,
           schema,
@@ -1260,10 +1489,10 @@ gql_validation_validate_operation(
 
 static SV *
 gql_validation_validate(pTHX_ SV *schema, SV *document, SV *options) {
-  SV *ast_sv = gql_validation_parse_ast(aTHX_ document, options);
+  AV *errors_av = newAV();
+  SV *ast_sv = gql_validation_parse_ast(aTHX_ document, options, errors_av);
   SV *compiled_sv = gql_schema_compile_schema(aTHX_ schema);
   AV *operations_av = newAV();
-  AV *errors_av = newAV();
   HV *fragments_hv;
   AV *operation_errors_av = newAV();
   AV *fragment_cycle_errors_av = newAV();
@@ -1304,6 +1533,8 @@ gql_validation_validate(pTHX_ SV *schema, SV *document, SV *options) {
 
   fragments_hv = gql_validation_build_fragments_map(aTHX_ ast_av);
   gql_validation_push_operation_errors(aTHX_ errors_av, operations_av);
+  gql_validation_push_fragment_name_errors(aTHX_ errors_av, ast_av);
+  gql_validation_push_usage_errors(aTHX_ errors_av, ast_av, operations_av, fragments_hv);
   gql_validation_push_subscription_errors(aTHX_ operation_errors_av, operations_av, fragments_hv);
   gql_validation_push_fragment_cycle_errors(aTHX_ fragment_cycle_errors_av, fragments_hv);
   gql_validation_validate_fragments(aTHX_ errors_av, compiled_sv, fragments_hv);

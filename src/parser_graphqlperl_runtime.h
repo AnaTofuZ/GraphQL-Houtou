@@ -374,6 +374,7 @@ gql_parser_init(pTHX_ gql_parser_t *p, SV *source_sv, int no_location) {
   p->ir_arena = NULL;
   p->depth = 0;
   p->token_count = 0;
+  p->validation_errors = NULL;
 
   if (p->no_location) {
     return;
@@ -644,6 +645,19 @@ gql_parse_arguments(pTHX_ gql_parser_t *p, int is_const) {
   while (p->kind != TOK_RPAREN) {
     SV *name = gql_parse_name(aTHX_ p, "Expected name");
     gql_expect(aTHX_ p, TOK_COLON, NULL);
+    if (p->validation_errors) {
+      STRLEN name_len;
+      const char *name_str = SvPV(name, name_len);
+      if (hv_exists(hv, name_str, (I32)name_len)) {
+        HV *error_hv = newHV();
+        AV *locations_av = newAV();
+        SV *message = newSVpvf("Argument '%s' is provided more than once.", name_str);
+        gql_store_sv(error_hv, "message", message);
+        av_push(locations_av, gql_make_current_location(aTHX_ p));
+        gql_store_sv(error_hv, "locations", newRV_noinc((SV *)locations_av));
+        av_push(p->validation_errors, newRV_noinc((SV *)error_hv));
+      }
+    }
     gql_store_sv(hv, SvPV_nolen(name), gql_parse_value(aTHX_ p, is_const));
     SvREFCNT_dec(name);
   }
@@ -814,6 +828,19 @@ gql_parse_variable_definitions(pTHX_ gql_parser_t *p) {
     if (p->kind == TOK_EQUALS) {
       gql_advance(aTHX_ p);
       gql_store_sv(def, "default_value", gql_parse_value(aTHX_ p, 1));
+    }
+    if (p->validation_errors) {
+      STRLEN name_len;
+      const char *name_str = SvPV(name, name_len);
+      if (hv_exists(hv, name_str, (I32)name_len)) {
+        HV *error_hv = newHV();
+        AV *locations_av = newAV();
+        SV *message = newSVpvf("Variable '$%s' is defined more than once.", name_str);
+        gql_store_sv(error_hv, "message", message);
+        av_push(locations_av, gql_make_current_location(aTHX_ p));
+        gql_store_sv(error_hv, "locations", newRV_noinc((SV *)locations_av));
+        av_push(p->validation_errors, newRV_noinc((SV *)error_hv));
+      }
     }
     gql_store_sv(hv, SvPV_nolen(name), newRV_noinc((SV *)def));
     SvREFCNT_dec(name);
@@ -1335,6 +1362,25 @@ gql_parse_document(pTHX_ SV *source_sv, SV *no_location_sv) {
   ENTER;
   SAVETMPS;
   gql_parser_init(aTHX_ &p, source_sv, SvTRUE(no_location_sv) ? 1 : 0);
+  gql_advance(aTHX_ &p);
+  ret = newRV_noinc((SV *)gql_parse_definitions(aTHX_ &p));
+  gql_parser_invalidate(&p);
+  FREETMPS;
+  LEAVE;
+  return ret;
+}
+
+static SV *
+gql_parse_document_for_validation(
+  pTHX_ SV *source_sv, SV *no_location_sv, AV *validation_errors
+) {
+  gql_parser_t p;
+  SV *ret;
+
+  ENTER;
+  SAVETMPS;
+  gql_parser_init(aTHX_ &p, source_sv, SvTRUE(no_location_sv) ? 1 : 0);
+  p.validation_errors = validation_errors;
   gql_advance(aTHX_ &p);
   ret = newRV_noinc((SV *)gql_parse_definitions(aTHX_ &p));
   gql_parser_invalidate(&p);

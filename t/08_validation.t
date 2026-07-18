@@ -153,6 +153,50 @@ subtest 'duplicate operation names are rejected' => sub {
   ];
 };
 
+subtest 'duplicate fragment names are rejected' => sub {
+  my $errors = validate($schema, q|
+    query Q { viewer { ...UserFields } }
+    fragment UserFields on User { id }
+    fragment UserFields on User { name }
+  |);
+
+  is_deeply messages($errors), [
+    "Fragment 'UserFields' is defined more than once.",
+  ];
+};
+
+subtest 'duplicate arguments and variables are rejected before hash overwrite' => sub {
+  my $errors = validate($schema, q|{
+    node(id: "first", id: "second") { id }
+  }|);
+  is_deeply messages($errors), [
+    "Argument 'id' is provided more than once.",
+  ], 'duplicate field arguments are retained as validation diagnostics';
+
+  $errors = validate($schema, q|
+    query Q($id: String, $id: String) { node(id: $id) { id } }
+  |);
+  is_deeply messages($errors), [
+    "Variable '\$id' is defined more than once.",
+  ], 'duplicate variable definitions are retained as validation diagnostics';
+};
+
+subtest 'leaf and composite fields require the correct selection shape' => sub {
+  my $errors = validate($schema, q|{
+    viewer
+  }|);
+  is_deeply messages($errors), [
+    "Field 'viewer' of type 'User' must have a selection of subfields.",
+  ], 'composite field without a selection is rejected';
+
+  $errors = validate($schema, q|{
+    viewer { name { id } }
+  }|);
+  is_deeply messages($errors), [
+    "Field 'name' must not have a selection since type 'String' has no subfields.",
+  ], 'leaf field with a selection is rejected without cascading errors';
+};
+
 subtest 'anonymous operation must be alone' => sub {
   my $errors = validate($schema, q|
     { viewer { id } }
@@ -188,6 +232,7 @@ subtest 'output types cannot be used as variables' => sub {
   |);
 
   is_deeply messages($errors), [
+    "Variable '\$user' is never used in operation 'Q'.",
     "Variable '\$user' is type 'User' which cannot be used as an input type.",
   ];
 };
@@ -202,6 +247,32 @@ subtest 'undefined variable use is rejected' => sub {
   is_deeply messages($errors), [
     "Variable '\$id' is used but not defined.",
   ];
+};
+
+subtest 'unused variables are rejected, including fragment-aware usage' => sub {
+  my $errors = validate($schema, q|
+    query Q($used: String!, $unused: String) {
+      node(id: "1") { ...UserName }
+    }
+    fragment UserName on User { name @include(if: $used) }
+  |);
+
+  is_deeply messages($errors), [
+    "Variable '\$unused' is never used in operation 'Q'.",
+  ], 'a variable used through a fragment counts as used';
+};
+
+subtest 'unused fragments are rejected using transitive operation reachability' => sub {
+  my $errors = validate($schema, q|
+    query Q { viewer { ...Outer } }
+    fragment Outer on User { ...Inner }
+    fragment Inner on User { id }
+    fragment Unused on User { name }
+  |);
+
+  is_deeply messages($errors), [
+    "Fragment 'Unused' is never used.",
+  ], 'transitively reached fragments are used';
 };
 
 subtest 'unknown fragment targets and cycles are rejected' => sub {

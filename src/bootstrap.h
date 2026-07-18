@@ -67,6 +67,10 @@ typedef struct {
    * unbounded AST from the parse() API independent of any transport-level
    * body limit (release-tasks.md S2). */
   IV token_count;
+  /* Optional validation-only sink. Public parse() leaves this NULL, so
+   * duplicate-name diagnostics do not change the canonical AST or allocate
+   * metadata on the parser hot path. */
+  AV *validation_errors;
 } gql_parser_t;
 
 /* Maximum selection-set / input-value nesting. Real documents nest a few
@@ -700,6 +704,9 @@ struct gql_ir_document {
 };
 
 static SV *gql_parse_document(pTHX_ SV *source_sv, SV *no_location_sv);
+static SV *gql_parse_document_for_validation(
+  pTHX_ SV *source_sv, SV *no_location_sv, AV *validation_errors
+);
 static void gql_advance(pTHX_ gql_parser_t *p);
 static void gql_skip_ignored(gql_parser_t *p);
 static void gql_lex_token(pTHX_ gql_parser_t *p);

@@ -746,4 +746,35 @@ subtest 'fragment directive variables use each operation context' => sub {
     'fragment directive variable position is checked per operation';
 };
 
+subtest 'fragment field variables use each operation context' => sub {
+  my $errors = validate($schema, q|
+    query Q($id: String!) { ...Lookup }
+    fragment Lookup on Query { node(id: $id) { id } }
+  |);
+  is_deeply $errors, [], 'field argument variable in a fragment is resolved'
+    or diag explain $errors;
+
+  $errors = validate($schema, q|
+    query Q($id: Boolean) { ...Outer }
+    fragment Outer on Query { ...Lookup }
+    fragment Lookup on Query { node(id: $id) { id } }
+  |);
+  like messages($errors)->[0], qr/cannot be used for argument 'id'/,
+    'nested fragment variable position is checked in the operation context';
+
+  $errors = validate($schema, q|
+    query Q { ...Lookup }
+    fragment Lookup on Query { node(id: $id) { id } }
+  |);
+  is_deeply messages($errors), ["Variable '\$id' is used but not defined."],
+    'undefined fragment variable is reported once for the operation';
+
+  $errors = validate($schema, q|
+    query Q { ...Bad }
+    fragment Bad on Query { missing }
+  |);
+  is scalar(grep { /Field 'missing' does not exist/ } @{ messages($errors) }), 1,
+    'non-variable fragment errors are not duplicated by operation traversal';
+};
+
 done_testing;

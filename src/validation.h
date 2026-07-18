@@ -1292,7 +1292,9 @@ gql_validation_validate_value(
     if (!SvROK(inner_sv) && !sv_isobject(value_sv)) {
       STRLEN name_len;
       const char *name = SvPV(inner_sv, name_len);
-      if (!variables_hv || !hv_exists(variables_hv, name, (I32)name_len)) {
+      if ((!variables_hv || !hv_exists(variables_hv, name, (I32)name_len))
+          && (!variables_hv
+            || !hv_exists(variables_hv, "__defer_fragment_variables", 26))) {
         SV *message = newSVpvf("Variable '$%s' is used but not defined.", name);
         av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
         SvREFCNT_dec(message);
@@ -1817,7 +1819,8 @@ static void gql_validation_validate_selections(
   AV *selections_av,
   SV *parent_type_name_sv,
   HV *variables_hv,
-  HV *fragments_hv
+  HV *fragments_hv,
+  HV *visited_fragments_hv
 );
 
 static void
@@ -1828,7 +1831,8 @@ gql_validation_validate_field_selection(
   HV *selection_hv,
   HV *parent_type_hv,
   HV *variables_hv,
-  HV *fragments_hv
+  HV *fragments_hv,
+  HV *visited_fragments_hv
 ) {
   SV **field_name_svp = hv_fetch(selection_hv, "name", 4, 0);
   SV **location_svp = hv_fetch(selection_hv, "location", 8, 0);
@@ -1934,7 +1938,8 @@ gql_validation_validate_field_selection(
           (AV *)SvRV(*selections_svp),
           next_type_name_sv,
           variables_hv,
-          fragments_hv
+          fragments_hv,
+          visited_fragments_hv
         );
       }
     }
@@ -1949,7 +1954,8 @@ gql_validation_validate_selections(
   AV *selections_av,
   SV *parent_type_name_sv,
   HV *variables_hv,
-  HV *fragments_hv
+  HV *fragments_hv,
+  HV *visited_fragments_hv
 ) {
   HV *parent_type_hv = gql_validation_compiled_type_hv(aTHX_ compiled_sv, parent_type_name_sv);
   I32 i;
@@ -1976,7 +1982,7 @@ gql_validation_validate_selections(
       continue;
     }
     if (strEQ(SvPV_nolen(*kind_svp), "field")) {
-      gql_validation_validate_field_selection(aTHX_ errors_av, schema, compiled_sv, selection_hv, parent_type_hv, variables_hv, fragments_hv);
+      gql_validation_validate_field_selection(aTHX_ errors_av, schema, compiled_sv, selection_hv, parent_type_hv, variables_hv, fragments_hv, visited_fragments_hv);
       continue;
     }
     if (strEQ(SvPV_nolen(*kind_svp), "fragment_spread")) {
@@ -2005,6 +2011,39 @@ gql_validation_validate_selections(
           av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL));
           SvREFCNT_dec(message);
         }
+        if (visited_fragments_hv && name_svp && SvOK(*name_svp)) {
+          STRLEN name_len;
+          const char *name = SvPV(*name_svp, name_len);
+          if (!hv_exists(visited_fragments_hv, name, (I32)name_len)) {
+            SV **fragment_selections_svp = hv_fetch(fragment_hv, "selections", 10, 0);
+            (void)hv_store(visited_fragments_hv, name, (I32)name_len, newSViv(1), 0);
+            if (on_svp && SvOK(*on_svp) && fragment_selections_svp
+                && SvROK(*fragment_selections_svp)
+                && SvTYPE(SvRV(*fragment_selections_svp)) == SVt_PVAV) {
+              AV *fragment_errors_av = newAV();
+              I32 error_i;
+              gql_validation_validate_selections(
+                aTHX_ fragment_errors_av, schema, compiled_sv,
+                (AV *)SvRV(*fragment_selections_svp), *on_svp,
+                variables_hv, fragments_hv, visited_fragments_hv
+              );
+              for (error_i = 0; error_i <= av_len(fragment_errors_av); error_i++) {
+                SV **error_svp = av_fetch(fragment_errors_av, error_i, 0);
+                SV **message_svp;
+                if (!error_svp || !SvROK(*error_svp)
+                    || SvTYPE(SvRV(*error_svp)) != SVt_PVHV) {
+                  continue;
+                }
+                message_svp = hv_fetch((HV *)SvRV(*error_svp), "message", 7, 0);
+                if (message_svp && SvOK(*message_svp) && SvCUR(*message_svp) >= 11
+                    && strnEQ(SvPV_nolen(*message_svp), "Variable '$", 11)) {
+                  av_push(errors_av, newSVsv(*error_svp));
+                }
+              }
+              SvREFCNT_dec((SV *)fragment_errors_av);
+            }
+          }
+        }
       }
       continue;
     }
@@ -2030,7 +2069,7 @@ gql_validation_validate_selections(
         continue;
       }
       if (nested_svp && SvROK(*nested_svp) && SvTYPE(SvRV(*nested_svp)) == SVt_PVAV) {
-        gql_validation_validate_selections(aTHX_ errors_av, schema, compiled_sv, (AV *)SvRV(*nested_svp), target_type_name_sv, variables_hv, fragments_hv);
+        gql_validation_validate_selections(aTHX_ errors_av, schema, compiled_sv, (AV *)SvRV(*nested_svp), target_type_name_sv, variables_hv, fragments_hv, visited_fragments_hv);
       }
     }
   }
@@ -2172,7 +2211,16 @@ gql_validation_validate_fragments(pTHX_ AV *errors_av, SV *compiled_sv, HV *frag
     {
       SV **selections_svp = hv_fetch(fragment_hv, "selections", 10, 0);
       if (selections_svp && SvROK(*selections_svp) && SvTYPE(SvRV(*selections_svp)) == SVt_PVAV) {
-        gql_validation_validate_selections(aTHX_ errors_av, NULL, compiled_sv, (AV *)SvRV(*selections_svp), *on_svp, NULL, fragments_hv);
+        HV *deferred_variables_hv = newHV();
+        (void)hv_store(
+          deferred_variables_hv, "__defer_fragment_variables", 26, newSViv(1), 0
+        );
+        gql_validation_validate_selections(
+          aTHX_ errors_av, NULL, compiled_sv,
+          (AV *)SvRV(*selections_svp), *on_svp,
+          deferred_variables_hv, fragments_hv, NULL
+        );
+        SvREFCNT_dec((SV *)deferred_variables_hv);
       }
     }
   }
@@ -2226,7 +2274,13 @@ gql_validation_validate_operation(
   {
     SV **selections_svp = hv_fetch(operation_hv, "selections", 10, 0);
     if (selections_svp && SvROK(*selections_svp) && SvTYPE(SvRV(*selections_svp)) == SVt_PVAV) {
-      gql_validation_validate_selections(aTHX_ errors_av, schema, compiled_sv, (AV *)SvRV(*selections_svp), root_type_name_sv, variables_hv, fragments_hv);
+      HV *visited_fragments_hv = newHV();
+      gql_validation_validate_selections(
+        aTHX_ errors_av, schema, compiled_sv,
+        (AV *)SvRV(*selections_svp), root_type_name_sv,
+        variables_hv, fragments_hv, visited_fragments_hv
+      );
+      SvREFCNT_dec((SV *)visited_fragments_hv);
     }
   }
 }

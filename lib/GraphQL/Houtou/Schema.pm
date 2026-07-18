@@ -49,7 +49,14 @@ my @ROOT_ATTRS = qw(query mutation subscription);
 sub from_doc {
   my ($class, $doc, %opts) = @_;
   require GraphQL::Houtou;
-  return $class->from_ast(GraphQL::Houtou::parse($doc), %opts);
+  require GraphQL::Houtou::XS::Parser;
+  my ($ast, $diagnostics) = @{
+    GraphQL::Houtou::XS::Parser::_parse_with_diagnostics_xs($doc)
+  };
+  if (@$diagnostics) {
+    die join("\n", map { $_->{message} } @$diagnostics) . "\n";
+  }
+  return $class->from_ast($ast, %opts);
 }
 
 sub from_ast {
@@ -359,10 +366,64 @@ sub validation_errors {
     return [ $error ];
   }
 
+  my %root_name;
+  for my $operation (@ROOT_ATTRS) {
+    my $root = $self->$operation or next;
+    push @errors, "The $operation root type must be an Object type, found "
+      . (ref($root) && $root->can('to_string') ? $root->to_string : "'$root'") . '.'
+      if !_is_object_type($root);
+    if (ref($root) && $root->can('name') && $root_name{ $root->name }++) {
+      push @errors, "The query, mutation, and subscription root types must be different; "
+        . "@{[$root->name]} is used more than once.";
+    }
+  }
+
+  for my $directive (@{ $self->directives || [] }) {
+    next if !ref($directive) || !$directive->can('name');
+    push @errors, _reserved_name_error('Directive', $directive->name);
+    for my $arg_name (sort keys %{ $directive->args || {} }) {
+      my $arg = $directive->args->{$arg_name};
+      push @errors, _reserved_name_error(
+        "Argument $arg_name on directive @{[$directive->name]}", $arg_name,
+      );
+      push @errors, _default_value_error(
+        "directive @{[$directive->name]} argument $arg_name", $arg,
+      );
+    }
+  }
+
   for my $type_name (sort keys %$name2type) {
     my $type = $name2type->{$type_name} or next;
     next if $type->can('is_introspection') && $type->{is_introspection};
-    next if $type_name =~ /\A__/;
+
+    push @errors, _reserved_name_error('Type', $type_name);
+    if ($type->can('fields')) {
+      my $fields = $type->fields || {};
+      for my $field_name (sort keys %$fields) {
+        my $field = $fields->{$field_name};
+        push @errors, _reserved_name_error(
+          (_is_input_type($type) ? 'Input field' : 'Field')
+            . " $type_name.$field_name",
+          $field_name,
+        );
+        for my $arg_name (sort keys %{ $field->{args} || {} }) {
+          my $arg = $field->{args}{$arg_name};
+          push @errors, _reserved_name_error(
+            "Argument $type_name.$field_name($arg_name:)", $arg_name,
+          );
+          push @errors, _default_value_error(
+            "argument $type_name.$field_name($arg_name:)", $arg,
+          );
+        }
+      }
+    }
+    if ($type->isa('GraphQL::Houtou::Type::Enum')) {
+      for my $value_name (sort keys %{ $type->values || {} }) {
+        push @errors, _reserved_name_error(
+          "Enum value $type_name.$value_name", $value_name,
+        );
+      }
+    }
 
     if (_is_object_type($type)) {
       push @errors, $self->_object_field_errors($type);
@@ -409,6 +470,9 @@ sub validation_errors {
         push @errors, "The type of @{[$type->name]}.$field_name must be Input Type"
           . (ref($field_type) ? ' but got: ' . $field_type->to_string . '.' : '.')
           if !_is_input_type($field_type);
+        push @errors, _default_value_error(
+          "input field @{[$type->name]}.$field_name", $field,
+        );
         if ($is_one_of) {
           push @errors, "OneOf input field @{[$type->name]}.$field_name must be nullable."
             if ref($field_type) && $field_type->isa('GraphQL::Houtou::Type::NonNull');
@@ -419,7 +483,117 @@ sub validation_errors {
     }
   }
 
+  push @errors, $self->_input_object_cycle_errors($name2type);
+
   return \@errors;
+}
+
+sub _input_object_cycle_errors {
+  my ($self, $name2type) = @_;
+  my (@errors, %state, @path, %path_index);
+
+  my $visit;
+  $visit = sub {
+    my ($type) = @_;
+    my $name = $type->name;
+    $state{$name} = 1;
+    $path_index{$name} = scalar @path;
+    push @path, $name;
+
+    for my $field_name (sort keys %{ $type->fields || {} }) {
+      my $next = _required_singular_input_object($type->fields->{$field_name}{type});
+      next if !$next;
+      my $next_name = $next->name;
+      if (($state{$next_name} || 0) == 1) {
+        my @cycle = (@path[$path_index{$next_name} .. $#path], $next_name);
+        push @errors, 'Input Object circular reference cannot form an unbroken chain '
+          . 'of singular Non-Null fields: ' . join(' -> ', @cycle) . '.';
+      }
+      elsif (!$state{$next_name}) {
+        $visit->($next);
+      }
+    }
+
+    pop @path;
+    delete $path_index{$name};
+    $state{$name} = 2;
+    return;
+  };
+
+  for my $name (sort keys %$name2type) {
+    my $type = $name2type->{$name};
+    next if !$type || !$type->isa('GraphQL::Houtou::Type::InputObject') || $state{$name};
+    $visit->($type);
+  }
+  return @errors;
+}
+
+sub _required_singular_input_object {
+  my ($type) = @_;
+  return if !ref($type) || !$type->isa('GraphQL::Houtou::Type::NonNull');
+  my $of = $type->of;
+  return if !ref($of) || $of->isa('GraphQL::Houtou::Type::List');
+  return $of if $of->isa('GraphQL::Houtou::Type::InputObject');
+  return;
+}
+
+sub _reserved_name_error {
+  my ($coordinate, $name) = @_;
+  return () if !defined($name) || $name !~ /\A__/;
+  return "$coordinate must not begin with '__', which is reserved for introspection.";
+}
+
+sub _default_value_error {
+  my ($coordinate, $definition) = @_;
+  return () if !exists $definition->{default_value};
+  my $type = $definition->{type};
+  return () if !_is_input_type($type);
+  if (my $detail = _missing_required_input_field(
+      $type, $definition->{default_value}, q())) {
+    return "The default value for $coordinate is invalid for type "
+      . $type->to_string . ": $detail.";
+  }
+  my $ok = eval { $type->graphql_to_perl($definition->{default_value}); 1 };
+  return () if $ok;
+  my $detail = $@ || 'invalid value';
+  $detail =~ s/\s+\z//;
+  $detail =~ s/ at \S+ line \d+\.?\z//;
+  return "The default value for $coordinate is invalid for type "
+    . $type->to_string . ": $detail.";
+}
+
+sub _missing_required_input_field {
+  my ($type, $value, $path) = @_;
+  return if !ref($type) || !defined($value);
+  $type = $type->of if $type->isa('GraphQL::Houtou::Type::NonNull');
+  if ($type->isa('GraphQL::Houtou::Type::List')) {
+    my $values = ref($value) eq 'ARRAY' ? $value : [ $value ];
+    for my $index (0 .. $#$values) {
+      my $error = _missing_required_input_field(
+        $type->of, $values->[$index], "$path\[$index\]",
+      );
+      return $error if $error;
+    }
+    return;
+  }
+  return if !$type->isa('GraphQL::Houtou::Type::InputObject')
+    || ref($value) ne 'HASH';
+
+  for my $field_name (sort keys %{ $type->fields || {} }) {
+    my $field = $type->fields->{$field_name};
+    my $field_path = length($path) ? "$path.$field_name" : $field_name;
+    if (!exists($value->{$field_name}) && !exists($field->{default_value})
+        && ref($field->{type})
+        && $field->{type}->isa('GraphQL::Houtou::Type::NonNull')) {
+      return "required input field $field_path is missing";
+    }
+    next if !exists $value->{$field_name};
+    my $error = _missing_required_input_field(
+      $field->{type}, $value->{$field_name}, $field_path,
+    );
+    return $error if $error;
+  }
+  return;
 }
 
 sub _object_field_errors {

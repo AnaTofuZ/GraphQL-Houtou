@@ -247,4 +247,144 @@ subtest 'validation errors accumulate' => sub {
   cmp_ok scalar(@$errors), '>=', 3, 'reports all missing interface fields at once';
 };
 
+subtest 'root operation types must be distinct objects' => sub {
+  my $shared = query_with(value => { type => $String });
+  my $same_roots = GraphQL::Houtou::Schema->new(
+    query => $shared,
+    mutation => $shared,
+  );
+  like join("\n", @{ $same_roots->validation_errors }),
+    qr/root types must be different; Query is used more than once/,
+    'the same object cannot be used for two operation roots';
+
+  my $scalar_root = GraphQL::Houtou::Schema->new(query => $String);
+  like join("\n", @{ $scalar_root->validation_errors }),
+    qr/query root type must be an Object type, found String/,
+    'query root must be an object type';
+};
+
+subtest 'user-defined type-system names cannot use the introspection prefix' => sub {
+  my $Bad = GraphQL::Houtou::Type::Object->new(
+    name => '__Bad',
+    fields => { __field => { type => $String } },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => query_with(
+      bad => {
+        type => $Bad,
+        args => { __arg => { type => $String } },
+      },
+    ),
+    types => [ $Bad ],
+  );
+  my $errors = join("\n", @{ $schema->validation_errors });
+  like $errors, qr/Type must not begin with '__'/, 'reserved type name rejected';
+  like $errors, qr/Field __Bad\.__field must not begin with '__'/,
+    'reserved field name rejected';
+  like $errors, qr/Argument Query\.bad\(__arg:\) must not begin with '__'/,
+    'reserved argument name rejected';
+};
+
+subtest 'unbroken required input object cycles are rejected' => sub {
+  my ($First, $Second);
+  $First = GraphQL::Houtou::Type::InputObject->new(
+    name => 'First',
+    fields => sub { { second => { type => $Second->non_null } } },
+  );
+  $Second = GraphQL::Houtou::Type::InputObject->new(
+    name => 'Second',
+    fields => sub { { first => { type => $First->non_null } } },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => query_with(
+      find => { type => $String, args => { input => { type => $First } } },
+    ),
+    types => [ $First, $Second ],
+  );
+  like join("\n", @{ $schema->validation_errors }),
+    qr/unbroken chain of singular Non-Null fields: First -> Second -> First/,
+    'mutually required singular fields cannot form a cycle';
+};
+
+subtest 'nullable and list input object cycles are allowed' => sub {
+  my $Nullable;
+  $Nullable = GraphQL::Houtou::Type::InputObject->new(
+    name => 'NullableCycle',
+    fields => sub { { next => { type => $Nullable } } },
+  );
+  my $Listed;
+  $Listed = GraphQL::Houtou::Type::InputObject->new(
+    name => 'ListCycle',
+    fields => sub { { next => { type => $Listed->non_null->list->non_null } } },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => query_with(
+      nullable => { type => $String, args => { input => { type => $Nullable } } },
+      listed => { type => $String, args => { input => { type => $Listed } } },
+    ),
+    types => [ $Nullable, $Listed ],
+  );
+  is_deeply $schema->validation_errors, [],
+    'nullable fields and lists provide a way to satisfy a recursive input type';
+};
+
+subtest 'schema default values must match their input types' => sub {
+  my $Options = GraphQL::Houtou::Type::InputObject->new(
+    name => 'Options',
+    fields => {
+      count => { type => $Int->non_null },
+      label => { type => $String },
+    },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => query_with(
+      search => {
+        type => $String,
+        args => {
+          count => { type => $Int, default_value => 'many' },
+          options => {
+            type => $Options,
+            default_value => { count => 1, unknown => 1 },
+          },
+          missing => { type => $Options, default_value => { label => 'x' } },
+          nested => {
+            type => $Options->list,
+            default_value => [ { count => 1 }, { label => 'x' } ],
+          },
+          required => { type => $String->non_null, default_value => undef },
+        },
+      },
+    ),
+    types => [ $Options ],
+  );
+  my $errors = join("\n", @{ $schema->validation_errors });
+  like $errors, qr/default value for argument Query\.search\(count:\) is invalid for type Int/,
+    'invalid scalar default rejected';
+  like $errors, qr/default value for argument Query\.search\(options:\) is invalid for type Options/,
+    'invalid nested input object default rejected';
+  like $errors,
+    qr/default value for argument Query\.search\(missing:\).*required input field count is missing/,
+    'missing required input field rejected';
+  like $errors,
+    qr/default value for argument Query\.search\(nested:\).*required input field \[1\]\.count is missing/,
+    'missing required field in a nested list element rejected';
+  like $errors, qr/default value for argument Query\.search\(required:\) is invalid for type String!/
+    , 'null default for a non-null type rejected';
+
+  my $valid = GraphQL::Houtou::Schema->new(
+    query => query_with(
+      search => {
+        type => $String,
+        args => {
+          counts => { type => $Int->list, default_value => 1 },
+          options => { type => $Options, default_value => { count => 1 } },
+        },
+      },
+    ),
+    types => [ $Options ],
+  );
+  is_deeply $valid->validation_errors, [],
+    'valid defaults and list singleton coercion are accepted';
+};
+
 done_testing;

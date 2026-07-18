@@ -80,11 +80,11 @@ must be added and tested:
 
 | Gap | Current risk |
 | --- | --- |
-| Root operation types must be Object types and must be distinct | A malformed programmatic or SDL schema may reach runtime compilation |
-| Reserved `__` names outside introspection | User-defined reserved type/field/argument names are not comprehensively rejected |
-| Duplicate SDL fields, arguments, enum values, and input fields within one definition | Canonical AST hashes may overwrite a duplicate before schema validation sees it |
-| Input-object circular references through an unbroken chain of singular Non-Null fields | An impossible-to-satisfy input schema may be accepted |
-| Schema default values must be valid for their declared input types | Invalid argument/input-field defaults are not comprehensively checked at schema build time |
+| Root operation types must be Object types and must be distinct | Implemented on `schema-validation-conformance` |
+| Reserved `__` names outside introspection | Implemented for types, fields, arguments, enum values, and directives on `schema-validation-conformance` |
+| Duplicate SDL fields, arguments, enum values, and input fields within one definition | Implemented with XS parser diagnostics on `schema-validation-conformance` |
+| Input-object circular references through an unbroken chain of singular Non-Null fields | Implemented on `schema-validation-conformance` with an O(V+E) schema-build DFS |
+| Schema default values must be valid for their declared input types | Implemented on `schema-validation-conformance` for field arguments, input fields, and directive arguments |
 | Type-system directives must be defined, valid at their location, and unique when non-repeatable | Executable directives are fully validated; applied SDL directives are not yet covered at the same level |
 | Required arguments and input fields must not be deprecated | Not comprehensively enforced by schema validation |
 | Complete uniqueness and non-empty rules for all programmatically constructed types | Some rules exist for unions, enums, and OneOf, but Section 3 is not exhaustively mapped |

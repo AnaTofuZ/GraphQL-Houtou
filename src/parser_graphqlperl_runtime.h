@@ -1026,6 +1026,13 @@ gql_parse_arguments_definition(pTHX_ gql_parser_t *p) {
     HV *ihv = (HV *)SvRV(item);
     hv_iterinit(ihv);
     HE *he = hv_iternext(ihv);
+    if (p->validation_errors && hv_exists(args, HeKEY(he), HeKLEN(he))) {
+      HV *error_hv = newHV();
+      gql_store_sv(error_hv, "message", newSVpvf(
+        "Argument '%s' is defined more than once.", HeKEY(he)
+      ));
+      av_push(p->validation_errors, newRV_noinc((SV *)error_hv));
+    }
     gql_store_sv(args, HeKEY(he), newSVsv(HeVAL(he)));
     SvREFCNT_dec(item);
   }
@@ -1167,6 +1174,14 @@ gql_parse_object_type_definition(pTHX_ gql_parser_t *p, const char *kind) {
         HV *ihv = (HV *)SvRV(item);
         hv_iterinit(ihv);
         HE *he = hv_iternext(ihv);
+        if (p->validation_errors && hv_exists(fields, HeKEY(he), HeKLEN(he))) {
+          HV *error_hv = newHV();
+          gql_store_sv(error_hv, "message", newSVpvf(
+            "%s field '%s' is defined more than once.",
+            strcmp(kind, "input") == 0 ? "Input" : "Type", HeKEY(he)
+          ));
+          av_push(p->validation_errors, newRV_noinc((SV *)error_hv));
+        }
         gql_store_sv(fields, HeKEY(he), newSVsv(HeVAL(he)));
         SvREFCNT_dec(item);
       }
@@ -1254,6 +1269,13 @@ gql_parse_enum_type_definition(pTHX_ gql_parser_t *p) {
       }
       if (p->kind == TOK_AT) {
         gql_store_sv(value_hv, "directives", gql_parse_directives(aTHX_ p));
+      }
+      if (p->validation_errors && hv_exists(values, name_str, (I32)SvCUR(name))) {
+        HV *error_hv = newHV();
+        gql_store_sv(error_hv, "message", newSVpvf(
+          "Enum value '%s' is defined more than once.", name_str
+        ));
+        av_push(p->validation_errors, newRV_noinc((SV *)error_hv));
       }
       if (SvOK(description)) {
         HV *dhv = (HV *)SvRV(description);

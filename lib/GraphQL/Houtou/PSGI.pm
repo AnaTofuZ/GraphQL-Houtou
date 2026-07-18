@@ -16,6 +16,9 @@ my $JSON = JSON::MaybeXS->new->utf8;
 sub new {
   my ($class, %args) = @_;
 
+  my $allow_introspection = exists $args{allow_introspection}
+    ? delete $args{allow_introspection} : undef;
+
   my $runtime = delete $args{runtime};
   if (!$runtime) {
     my $schema = delete $args{schema}
@@ -24,6 +27,8 @@ sub new {
     $runtime_opts{program_cache_max} = delete $args{program_cache_max}
       if exists $args{program_cache_max};
     $runtime_opts{async} = delete $args{async} if exists $args{async};
+    $runtime_opts{allow_introspection} = $allow_introspection
+      if defined $allow_introspection;
     $runtime = $schema->build_native_runtime(%runtime_opts);
   }
 
@@ -45,6 +50,7 @@ sub new {
     max_nodes => delete $args{max_nodes},
     max_cost => delete $args{max_cost},
     default_list_size => delete $args{default_list_size},
+    allow_introspection => $allow_introspection,
     max_body_size => $max_body_size,
   }, $class;
 
@@ -124,6 +130,8 @@ sub _handle_post {
   $exec_opts{max_cost} = $self->{max_cost} if defined $self->{max_cost};
   $exec_opts{default_list_size} = $self->{default_list_size}
     if defined $self->{default_list_size};
+  $exec_opts{allow_introspection} = $self->{allow_introspection}
+    if defined $self->{allow_introspection};
 
   my ($json, $error) = do {
     local $@;
@@ -338,6 +346,16 @@ C<max_nodes> caps the total field selections an operation resolves
 C<default_list_size> is the multiplier for list fields without an explicit
 C<list_size> (defaults to 10). Limits reject over-limit queries with an
 errors-only 400 response.
+
+=item allow_introspection
+
+Defaults to true. Set to C<0> on public endpoints to reject C<__schema> and
+C<__type> with an C<INTROSPECTION_DISABLED> request error. C<__typename>
+remains available. When C<schema> is supplied the option is also applied to
+the runtime built by the adapter; with a prebuilt C<runtime> it is applied to
+each document request. GraphiQL relies on schema introspection, so do not
+combine C<graphiql =E<gt> 1> with a disabled policy unless trusted requests
+override it outside this adapter.
 
 =item max_body_size
 

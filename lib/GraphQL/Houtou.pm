@@ -125,6 +125,7 @@ sub execute {
     max_nodes
     max_cost
     default_list_size
+    allow_introspection
   );
 
   if (@rest) {

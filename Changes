@@ -20,6 +20,8 @@ Revision history for Perl extension GraphQL-Houtou
       errors, as required by the GraphQL response specification.
     - Made the default field resolver invoke hash coderefs and blessed source
       methods with the graphql-perl-compatible argument contract.
+    - Added an `allow_introspection` runtime and PSGI policy for public
+      endpoints while retaining `__typename` support.
     - Added ASan, Valgrind, fuzz, soak, compiler-warning, XS ownership, POD,
       metadata, and Perl 5.24 through 5.44 CI coverage.
     - Added production-oriented examples, benchmark tooling, architecture

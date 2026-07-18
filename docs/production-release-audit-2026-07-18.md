@@ -10,7 +10,7 @@ blockers are production cost control and production-shaped load qualification.
 ## Verified baseline
 
 - The complete local suite passes on Perl 5.44 / macOS arm64: 45 files and
-  421 tests.
+  422 tests.
 - The normal CI matrix covers Perl 5.24 through 5.42 on Linux.
 - Robustness CI includes ASan with hash-seed sweeping, parser fuzzing, an RSS
   soak gate, full-suite Valgrind, compiler warnings, and XS ownership linting.
@@ -98,12 +98,14 @@ Implementation progress:
 - completed: `docs/validation-conformance.md` maps every stable September 2025
   executable-document rule to its primary regression coverage.
 
-### P0-2: cost control beyond AST node count
+### P0-2: cost control beyond AST node count (completed)
 
-`max_depth` and `max_nodes` defend against nesting and alias flooding, but a
-small query can still request very large lists at several levels. Before a
-public production claim, add weighted field cost/list multipliers or document
-and enforce strict pagination limits in schema/resolver code.
+`max_depth` and `max_nodes` defend against nesting and alias flooding. Native
+runtimes now also enforce an XS weighted-cost walk with per-field `cost`,
+per-list `list_size`, a configurable default list multiplier, early budget
+termination, and cache-limit signatures. Resolver-side pagination limits are
+still required because list size is a schema estimate rather than a runtime
+row counter.
 
 ### P0-3: production-shaped load qualification
 
@@ -129,7 +131,6 @@ not yet constitute capacity planning for a deployed service.
 
 ## Recommended order
 
-1. Add production cost controls.
-2. Qualify a realistic PSGI + database deployment under concurrent load.
-3. Finish Changes, user-facing documentation, distribution tests, and a
+1. Qualify a realistic PSGI + database deployment under concurrent load.
+2. Finish Changes, user-facing documentation, distribution tests, and a
    release candidate before publishing 0.01 to CPAN.

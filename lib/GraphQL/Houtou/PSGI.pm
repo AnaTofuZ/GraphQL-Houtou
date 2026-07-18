@@ -43,6 +43,8 @@ sub new {
     on_stall => delete $args{on_stall},
     max_depth => delete $args{max_depth},
     max_nodes => delete $args{max_nodes},
+    max_cost => delete $args{max_cost},
+    default_list_size => delete $args{default_list_size},
     max_body_size => $max_body_size,
   }, $class;
 
@@ -119,6 +121,9 @@ sub _handle_post {
   $exec_opts{on_stall} = $on_stall if defined $on_stall;
   $exec_opts{max_depth} = $self->{max_depth} if defined $self->{max_depth};
   $exec_opts{max_nodes} = $self->{max_nodes} if defined $self->{max_nodes};
+  $exec_opts{max_cost} = $self->{max_cost} if defined $self->{max_cost};
+  $exec_opts{default_list_size} = $self->{default_list_size}
+    if defined $self->{default_list_size};
 
   my ($json, $error) = do {
     local $@;
@@ -325,12 +330,14 @@ carry an C<on_stall> hook run on the async lane either way, so pure
 DataLoader apps work without it - C<async> matters when promises can
 appear without a stall-flush hook.
 
-=item root_value, max_depth, max_nodes, program_cache_max
+=item root_value, max_depth, max_nodes, max_cost, default_list_size, program_cache_max
 
 Passed through to the runtime. C<max_depth> caps query nesting;
 C<max_nodes> caps the total field selections an operation resolves
-(alias-flooding defense). Both reject over-limit queries with an
-errors-only 400.
+(alias-flooding defense). C<max_cost> caps weighted field cost;
+C<default_list_size> is the multiplier for list fields without an explicit
+C<list_size> (defaults to 10). Limits reject over-limit queries with an
+errors-only 400 response.
 
 =item max_body_size
 

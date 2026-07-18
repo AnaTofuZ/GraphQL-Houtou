@@ -116,6 +116,9 @@ sub execute {
     engine
     vm_engine
     max_depth
+    max_nodes
+    max_cost
+    default_list_size
   );
 
   if (@rest) {
@@ -458,6 +461,32 @@ same query with different variable sets, obtain a runtime once and reuse it:
 You can tune the cache size:
 
     my $runtime = build_native_runtime($schema, program_cache_max => 500);
+
+=head3 Production query cost limits
+
+Native runtimes reject weighted queries above C<max_cost> (default 10,000).
+Every field costs 1 unless its schema definition supplies C<cost>. A list
+multiplies its child selection cost by C<list_size>, or by
+C<default_list_size> (default 10) when the field has no explicit estimate:
+
+    users => {
+        type      => $User->list,
+        cost      => 2,
+        list_size => 50,
+        resolve   => sub { ... },
+    }
+
+    my $runtime = build_native_runtime(
+        $schema,
+        max_cost          => 5_000,
+        default_list_size => 20,
+    );
+
+The cost walk runs in XS on cache misses and stops as soon as the budget is
+exceeded. Cached programs retain the limit signature they passed; a stricter
+per-call override is checked again. Keep resolver-side pagination limits as a
+second line of defense because C<list_size> is an estimate, not a runtime row
+counter.
 
 =head3 Persisted queries
 

@@ -2536,6 +2536,250 @@ gql_validation_validate_document_directives(
   }
 }
 
+static int
+gql_validation_type_is_list(SV *type_sv) {
+  HV *type_hv;
+  SV **kind_svp;
+  if (!type_sv || !SvROK(type_sv) || SvTYPE(SvRV(type_sv)) != SVt_PVHV) {
+    return 0;
+  }
+  type_hv = (HV *)SvRV(type_sv);
+  kind_svp = hv_fetch(type_hv, "kind", 4, 0);
+  if (!kind_svp || !SvOK(*kind_svp) || !SvPOK(*kind_svp)) {
+    return 0;
+  }
+  if (strEQ(SvPV_nolen(*kind_svp), "LIST")) {
+    return 1;
+  }
+  if (strEQ(SvPV_nolen(*kind_svp), "NON_NULL")) {
+    SV **of_svp = hv_fetch(type_hv, "of", 2, 0);
+    return of_svp ? gql_validation_type_is_list(*of_svp) : 0;
+  }
+  return 0;
+}
+
+static UV
+gql_validation_cost_add(UV total, UV add, UV max_cost) {
+  return add > max_cost - total ? max_cost + 1 : total + add;
+}
+
+static UV gql_validation_selection_cost(
+  pTHX_ SV *compiled_sv, AV *selections_av, SV *parent_type_name_sv,
+  HV *fragments_hv, HV *visited_hv, UV default_list_size, UV max_cost
+);
+
+static UV
+gql_validation_selection_cost(
+  pTHX_ SV *compiled_sv, AV *selections_av, SV *parent_type_name_sv,
+  HV *fragments_hv, HV *visited_hv, UV default_list_size, UV max_cost
+) {
+  HV *parent_type_hv = gql_validation_compiled_type_hv(aTHX_ compiled_sv, parent_type_name_sv);
+  SV **fields_svp = parent_type_hv ? hv_fetch(parent_type_hv, "fields", 6, 0) : NULL;
+  HV *fields_hv = fields_svp && SvROK(*fields_svp)
+    && SvTYPE(SvRV(*fields_svp)) == SVt_PVHV ? (HV *)SvRV(*fields_svp) : NULL;
+  UV total = 0;
+  I32 i;
+
+  for (i = 0; i <= av_len(selections_av); i++) {
+    SV **selection_svp = av_fetch(selections_av, i, 0);
+    HV *selection_hv;
+    SV **kind_svp;
+    if (!selection_svp || !SvROK(*selection_svp)
+        || SvTYPE(SvRV(*selection_svp)) != SVt_PVHV) {
+      continue;
+    }
+    selection_hv = (HV *)SvRV(*selection_svp);
+    kind_svp = hv_fetch(selection_hv, "kind", 4, 0);
+    if (!kind_svp || !SvOK(*kind_svp) || !SvPOK(*kind_svp)) {
+      continue;
+    }
+
+    if (strEQ(SvPV_nolen(*kind_svp), "field")) {
+      SV **name_svp = hv_fetch(selection_hv, "name", 4, 0);
+      HE *field_he = name_svp && fields_hv
+        ? hv_fetch_ent(fields_hv, *name_svp, 0, 0) : NULL;
+      UV own_cost = 1;
+      UV multiplier = 1;
+      UV child_cost = 0;
+      int is_list = 0;
+      if (field_he && SvROK(HeVAL(field_he))
+          && SvTYPE(SvRV(HeVAL(field_he))) == SVt_PVHV) {
+        HV *field_hv = (HV *)SvRV(HeVAL(field_he));
+        SV **cost_svp = hv_fetch(field_hv, "cost", 4, 0);
+        SV **type_svp = hv_fetch(field_hv, "type", 4, 0);
+        SV **nested_svp = hv_fetch(selection_hv, "selections", 10, 0);
+        if (cost_svp && SvOK(*cost_svp)) {
+          own_cost = SvUV(*cost_svp);
+        }
+        if (type_svp && gql_validation_type_is_list(*type_svp)) {
+          SV **list_size_svp = hv_fetch(field_hv, "list_size", 9, 0);
+          multiplier = list_size_svp && SvOK(*list_size_svp)
+            ? SvUV(*list_size_svp) : default_list_size;
+          is_list = 1;
+        }
+        if (type_svp && nested_svp && SvROK(*nested_svp)
+            && SvTYPE(SvRV(*nested_svp)) == SVt_PVAV) {
+          SV *child_type_name_sv = gql_validation_named_type_name_sv(*type_svp);
+          child_cost = gql_validation_selection_cost(
+            aTHX_ compiled_sv, (AV *)SvRV(*nested_svp), child_type_name_sv,
+            fragments_hv, visited_hv, default_list_size, max_cost
+          );
+        }
+        if (is_list && child_cost == 0) {
+          /* A scalar/enum list still serializes each result item. Charge one
+           * unit per estimated item even though it has no sub-selection. */
+          child_cost = 1;
+        }
+      }
+      total = gql_validation_cost_add(total, own_cost, max_cost);
+      if (total > max_cost) return total;
+      if (child_cost) {
+        if (multiplier > (max_cost - total) / child_cost) return max_cost + 1;
+        total += multiplier * child_cost;
+      }
+      if (total > max_cost) return total;
+      continue;
+    }
+
+    if (strEQ(SvPV_nolen(*kind_svp), "inline_fragment")) {
+      SV **nested_svp = hv_fetch(selection_hv, "selections", 10, 0);
+      SV **on_svp = hv_fetch(selection_hv, "on", 2, 0);
+      if (nested_svp && SvROK(*nested_svp) && SvTYPE(SvRV(*nested_svp)) == SVt_PVAV) {
+        UV nested_cost = gql_validation_selection_cost(
+          aTHX_ compiled_sv, (AV *)SvRV(*nested_svp),
+          on_svp && SvOK(*on_svp) ? *on_svp : parent_type_name_sv,
+          fragments_hv, visited_hv, default_list_size, max_cost
+        );
+        total = gql_validation_cost_add(total, nested_cost, max_cost);
+        if (total > max_cost) return total;
+      }
+      continue;
+    }
+
+    if (strEQ(SvPV_nolen(*kind_svp), "fragment_spread")) {
+      SV **name_svp = hv_fetch(selection_hv, "name", 4, 0);
+      HE *fragment_he;
+      STRLEN name_len;
+      const char *name;
+      if (!name_svp || !SvOK(*name_svp)) continue;
+      name = SvPV(*name_svp, name_len);
+      if (hv_exists(visited_hv, name, (I32)name_len)) continue;
+      fragment_he = hv_fetch_ent(fragments_hv, *name_svp, 0, 0);
+      if (fragment_he && SvROK(HeVAL(fragment_he))
+          && SvTYPE(SvRV(HeVAL(fragment_he))) == SVt_PVHV) {
+        HV *fragment_hv = (HV *)SvRV(HeVAL(fragment_he));
+        SV **nested_svp = hv_fetch(fragment_hv, "selections", 10, 0);
+        SV **on_svp = hv_fetch(fragment_hv, "on", 2, 0);
+        (void)hv_store(visited_hv, name, (I32)name_len, newSViv(1), 0);
+        if (nested_svp && SvROK(*nested_svp) && SvTYPE(SvRV(*nested_svp)) == SVt_PVAV) {
+          UV nested_cost = gql_validation_selection_cost(
+            aTHX_ compiled_sv, (AV *)SvRV(*nested_svp),
+            on_svp && SvOK(*on_svp) ? *on_svp : parent_type_name_sv,
+            fragments_hv, visited_hv, default_list_size, max_cost
+          );
+          total = gql_validation_cost_add(total, nested_cost, max_cost);
+        }
+        (void)hv_delete(visited_hv, name, (I32)name_len, G_DISCARD);
+        if (total > max_cost) return total;
+      }
+    }
+  }
+  return total;
+}
+
+static SV *
+gql_validation_check_cost(pTHX_ SV *schema, SV *document, SV *options) {
+  AV *errors_av = newAV();
+  SV *ast_sv;
+  SV *compiled_sv;
+  AV *ast_av;
+  HV *fragments_hv;
+  HV *options_hv;
+  SV **max_cost_svp;
+  SV **default_list_size_svp;
+  SV **operation_name_svp;
+  UV max_cost;
+  UV default_list_size = 10;
+  I32 i;
+
+  if (!options || !SvROK(options) || SvTYPE(SvRV(options)) != SVt_PVHV) {
+    croak("query cost options must be a hash reference");
+  }
+  options_hv = (HV *)SvRV(options);
+  max_cost_svp = hv_fetch(options_hv, "max_cost", 8, 0);
+  if (!max_cost_svp || !SvOK(*max_cost_svp) || !SvIOK(*max_cost_svp)
+      || SvIV(*max_cost_svp) < 0) {
+    croak("max_cost must be a non-negative integer");
+  }
+  max_cost = SvUV(*max_cost_svp);
+  default_list_size_svp = hv_fetch(options_hv, "default_list_size", 17, 0);
+  if (default_list_size_svp) {
+    if (!SvIOK(*default_list_size_svp) || SvIV(*default_list_size_svp) < 1) {
+      croak("default_list_size must be a positive integer");
+    }
+    default_list_size = SvUV(*default_list_size_svp);
+  }
+  operation_name_svp = hv_fetch(options_hv, "operation_name", 14, 0);
+
+  ast_sv = document && SvROK(document)
+    ? newSVsv(document)
+    : gql_parse_document(aTHX_ document, &PL_sv_undef);
+  compiled_sv = gql_schema_compile_schema(aTHX_ schema);
+  ast_av = (AV *)SvRV(ast_sv);
+  fragments_hv = gql_validation_build_fragments_map(aTHX_ ast_av);
+  for (i = 0; i <= av_len(ast_av); i++) {
+    SV **node_svp = av_fetch(ast_av, i, 0);
+    HV *node_hv;
+    SV **kind_svp;
+    SV **operation_type_svp;
+    HV *compiled_hv;
+    SV **roots_svp;
+    SV **root_svp;
+    SV **selections_svp;
+    HV *visited_hv;
+    UV cost;
+    if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) continue;
+    node_hv = (HV *)SvRV(*node_svp);
+    kind_svp = hv_fetch(node_hv, "kind", 4, 0);
+    if (!kind_svp || !SvOK(*kind_svp) || !strEQ(SvPV_nolen(*kind_svp), "operation")) continue;
+    if (operation_name_svp && SvOK(*operation_name_svp)) {
+      SV **name_svp = hv_fetch(node_hv, "name", 4, 0);
+      if (!name_svp || !SvOK(*name_svp)
+          || !sv_eq(*name_svp, *operation_name_svp)) continue;
+    }
+    operation_type_svp = hv_fetch(node_hv, "operationType", 13, 0);
+    compiled_hv = gql_validation_compiled_hv_from_sv(compiled_sv);
+    roots_svp = compiled_hv ? hv_fetch(compiled_hv, "roots", 5, 0) : NULL;
+    root_svp = roots_svp && SvROK(*roots_svp) && SvTYPE(SvRV(*roots_svp)) == SVt_PVHV
+      ? hv_fetch((HV *)SvRV(*roots_svp),
+          operation_type_svp && SvOK(*operation_type_svp) ? SvPV_nolen(*operation_type_svp) : "query",
+          operation_type_svp && SvOK(*operation_type_svp) ? (I32)SvCUR(*operation_type_svp) : 5, 0)
+      : NULL;
+    selections_svp = hv_fetch(node_hv, "selections", 10, 0);
+    if (!root_svp || !selections_svp || !SvROK(*selections_svp)
+        || SvTYPE(SvRV(*selections_svp)) != SVt_PVAV) continue;
+    visited_hv = newHV();
+    cost = gql_validation_selection_cost(
+      aTHX_ compiled_sv, (AV *)SvRV(*selections_svp), *root_svp,
+      fragments_hv, visited_hv, default_list_size, max_cost
+    );
+    SvREFCNT_dec((SV *)visited_hv);
+    if (cost > max_cost) {
+      SV **name_svp = hv_fetch(node_hv, "name", 4, 0);
+      SV *message = newSVpvf(
+        "Query cost exceeds maximum of %" UVuf " in %s operation",
+        max_cost, name_svp && SvOK(*name_svp) ? SvPV_nolen(*name_svp) : "anonymous"
+      );
+      av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), NULL));
+      SvREFCNT_dec(message);
+    }
+  }
+  SvREFCNT_dec((SV *)fragments_hv);
+  SvREFCNT_dec(ast_sv);
+  SvREFCNT_dec(compiled_sv);
+  return newRV_noinc((SV *)errors_av);
+}
+
 static SV *
 gql_validation_validate(pTHX_ SV *schema, SV *document, SV *options) {
   AV *errors_av = newAV();

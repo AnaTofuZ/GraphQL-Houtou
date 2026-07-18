@@ -409,12 +409,16 @@ sub build_native_runtime {
   my $cache_max = delete $opts{program_cache_max};
   my $max_depth = delete $opts{max_depth};
   my $max_nodes = delete $opts{max_nodes};
+  my $max_cost = delete $opts{max_cost};
+  my $default_list_size = delete $opts{default_list_size};
   my $async = delete $opts{async};
   my $validate = delete $opts{validate};
   my %runtime_args;
   $runtime_args{program_cache_max} = $cache_max if defined $cache_max;
   $runtime_args{max_depth}         = $max_depth if defined $max_depth;
   $runtime_args{max_nodes}         = $max_nodes if defined $max_nodes;
+  $runtime_args{max_cost}          = $max_cost if defined $max_cost;
+  $runtime_args{default_list_size} = $default_list_size if defined $default_list_size;
   $runtime_args{async}             = $async if defined $async;
   $runtime_args{validate}          = $validate if defined $validate;
   if (%opts || %runtime_args) {
@@ -962,7 +966,8 @@ L<GraphQL::Houtou::Runtime::NativeRuntime>. Options: C<async> (declare
 that resolvers return promises; see
 L<GraphQL::Houtou/Batching resolvers (DataLoader / the on_stall hook)>),
 C<program_cache_max> (per-query program cache size, default 1000),
-C<max_depth>. With no options the compiled runtime is cached on the
+C<max_depth>, C<max_nodes>, C<max_cost>, and C<default_list_size>. With no
+options the compiled runtime is cached on the
 schema, so repeated calls are cheap.
 
 =head2 assert_valid / validation_errors

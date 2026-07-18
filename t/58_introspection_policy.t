@@ -38,6 +38,20 @@ subtest 'execute recognizes the policy as an option hash' => sub {
     'the convenience API does not mistake the option hash for variables';
 };
 
+subtest 'legacy Perl execution cannot bypass the policy' => sub {
+  my $ok = eval {
+    execute(
+      $schema,
+      '{ __schema { queryType { name } } }',
+      { allow_introspection => 0, engine => 'perl' },
+    );
+    1;
+  };
+  ok !$ok, 'the request is not executed';
+  like $@, qr/cannot enforce this request policy/,
+    'the unsupported combination fails closed with a useful message';
+};
+
 subtest 'runtime policy rejects schema introspection but permits typename' => sub {
   my $runtime = build_native_runtime(
     $schema, allow_introspection => 0, program_cache_max => 10,
@@ -56,6 +70,12 @@ subtest 'runtime policy rejects schema introspection but permits typename' => su
   is_deeply $runtime->execute_document('{ __typename hello }'), {
     data => { __typename => 'Query', hello => 'world' },
   }, '__typename remains available';
+
+  my $many = $runtime->execute_document(
+    '{ a: __schema { queryType { name } } b: __type(name: "Query") { name } }',
+  );
+  is scalar @{ $many->{errors} }, 1,
+    'the policy fails fast instead of amplifying errors per forbidden field';
 };
 
 subtest 'fragments, __type, JSON, and per-request overrides are covered' => sub {

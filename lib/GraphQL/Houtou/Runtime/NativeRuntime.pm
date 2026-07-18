@@ -154,7 +154,6 @@ sub _limit_signature {
 
 sub _introspection_errors {
   my ($ast) = @_;
-  my @errors;
   my @pending = ref($ast) eq 'ARRAY' ? @$ast : ($ast);
   for (my $cursor = 0; $cursor < @pending; $cursor++) {
     my $node = $pending[$cursor];
@@ -163,15 +162,15 @@ sub _introspection_errors {
         && (($node->{name} || q()) eq '__schema'
             || ($node->{name} || q()) eq '__type')) {
       my $field_name = $node->{name};
-      push @errors, {
+      return [ {
         message => qq{Introspection field "$field_name" is disabled},
         (defined $node->{location} ? (locations => [ $node->{location} ]) : ()),
         extensions => { code => 'INTROSPECTION_DISABLED' },
-      };
+      } ];
     }
     push @pending, @{ $node->{selections} || [] };
   }
-  return \@errors;
+  return [];
 }
 
 sub compile_bundle_for_document {

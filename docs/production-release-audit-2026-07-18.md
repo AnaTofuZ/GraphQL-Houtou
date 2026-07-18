@@ -2,17 +2,17 @@
 
 ## Decision
 
-The current tree has complete executable-document validation against the
-September 2025 stable specification. The broader conformance audit in
-`docs/spec-conformance-september-2025.md` found remaining type-system
-validation and executable-description gaps. It should not yet be presented as
-ready for an untrusted, high-traffic public GraphQL endpoint.
+The current tree has complete query/mutation validation against the September
+2025 stable specification, including executable documents and type-system
+schemas. Subscription execution is intentionally unsupported. It should not
+yet be presented as ready for an untrusted, high-traffic public GraphQL
+endpoint until production-shaped deployment qualification is complete.
 
 ## Verified baseline
 
-- The complete local suite passes on Perl 5.44 / macOS arm64: 45 files and
-  422 tests.
-- The normal CI matrix covers Perl 5.24 through 5.42 on Linux.
+- The complete local suite passes on Perl 5.44 / macOS arm64: 46 files and
+  446 tests.
+- The normal CI matrix covers Perl 5.24 through 5.44 on Linux.
 - Robustness CI includes ASan with hash-seed sweeping, parser fuzzing, an RSS
   soak gate, full-suite Valgrind, compiler warnings, and XS ownership linting.
 - Request errors, result coercion, Non-Null propagation, parser nesting and
@@ -110,13 +110,12 @@ termination, and cache-limit signatures. Resolver-side pagination limits are
 still required because list size is a schema estimate rather than a runtime
 row counter.
 
-### P0-3: complete the query/mutation conformance profile
+### P0-3: complete the query/mutation conformance profile (completed)
 
-Complete the Section 3 schema-validation gaps recorded in
-`docs/spec-conformance-september-2025.md`, then add September 2025 executable
-descriptions. Subscription execution is intentionally outside the 0.01
-profile; ordinary execution and PSGI paths must reject subscription operations
-instead of treating them as one-shot queries.
+Section 3 schema-validation gaps and September 2025 executable descriptions
+are implemented. Subscription execution is intentionally outside the 0.01
+profile; ordinary, persisted, and PSGI execution paths reject subscription
+operations instead of treating them as one-shot queries.
 
 ### P0-4: production-shaped load qualification
 
@@ -131,7 +130,7 @@ not yet constitute capacity planning for a deployed service.
 - Replace the template `Changes` entry with the actual 0.01 history.
 - Consolidate stale status documents; several older files describe features
   now implemented as missing.
-- Add a production deployment guide covering prefork operation, timeouts,
+- The production deployment guide covers prefork operation, timeouts,
   pagination/cost policy, rate limiting, logging, GraphiQL/CSP, and shutdown.
 - State unsupported features prominently: ithreads, GET query execution,
   subscriptions, defer/stream, Federation, generic

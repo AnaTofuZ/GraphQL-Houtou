@@ -2,7 +2,19 @@ Revision history for Perl extension GraphQL-Houtou
 
 {{$NEXT}}
 
-    - recreated the project with `minil new -P XS`
-    - added initial parser facade modules under `GraphQL::Houtou::*`
-    - copied the current XS parser backend and graphql-js adapter stack
-    - added basic smoke tests for graphql-perl and graphql-js parser paths
+    - Added an XS-backed GraphQL parser, schema compiler, validation engine,
+      and query/mutation runtime.
+    - Added synchronous and Promise::XS execution, DataLoader batching,
+      mutation serialization, direct JSON responses, and a PSGI adapter.
+    - Added SDL schema construction, printing, type-system extensions,
+      modern introspection, OneOf input objects, and custom directives.
+    - Implemented the September 2025 executable-document validation rules
+      and the query/mutation type-system validation profile.
+    - Added native program and persisted-bundle caches, weighted query cost,
+      depth, node, token, and request-body limits.
+    - Added fail-closed subscription handling across dynamic and persisted
+      execution paths; subscription streaming remains unsupported in 0.01.
+    - Added ASan, Valgrind, fuzz, soak, compiler-warning, XS ownership, POD,
+      metadata, and Perl 5.24 through 5.44 CI coverage.
+    - Added production-oriented examples, benchmark tooling, architecture
+      documentation, and XS memory-ownership guidance.

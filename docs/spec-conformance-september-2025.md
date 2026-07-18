@@ -23,19 +23,18 @@ The accurate 0.01 claim is:
 
 > GraphQL::Houtou implements the September 2025 query and mutation execution
 > profile, modern introspection, and all stable executable-document validation
-> rules. Subscription execution is unsupported. Type-system validation is
-> partial and must not be described as fully specification-conforming until
-> the gaps below are closed.
+> and type-system validation rules used by that profile. Subscription
+> execution and the schema-coordinate tooling API are unsupported.
 
 The project must not claim complete September 2025 conformance for 0.01 while
-Section 3 validation and Section 6 subscription execution remain incomplete.
+Section 6 subscription execution remains intentionally unsupported.
 
 ## Summary
 
 | Specification area | Status | Primary evidence | Remaining work |
 | --- | --- | --- | --- |
 | Section 2: Language | Partial | `t/45_parser_conformance.t`, parser adversarial/fuzz suites | Schema-coordinate parser API |
-| Section 3: Type System | Partial | `t/30_schema_build_validation.t`, `t/31_build_schema.t`, `t/32_print_schema.t`, `t/33_oneof_input_objects.t` | Complete normative schema validation listed below |
+| Section 3: Type System | Implemented | `t/30_schema_build_validation.t`, `t/31_build_schema.t`, `t/32_print_schema.t`, `t/33_oneof_input_objects.t` | No known query/mutation-profile gap |
 | Section 4: Introspection | Implemented | `t/26_deprecated_locations.t`, `t/27_directive_runtime.t`, `t/28_modern_introspection.t`, `t/46_introspection_meta_types.t` | Keep canonical introspection query in compatibility CI |
 | Section 5: Validation | Implemented | `docs/validation-conformance.md`, `t/08_validation.t` | No known stable-rule gap |
 | Section 6: Execution | Partial | `t/23_mutation_serial.t`, `t/44_lane_parity.t`, `t/47_request_validation.t`, `t/49_result_coercion.t`, `t/50_nonnull_propagation.t` | Subscription source/response streams and unsubscribe |
@@ -62,7 +61,7 @@ Section 3 validation and Section 6 subscription execution remain incomplete.
 
 | Requirement group | Status | Notes and evidence |
 | --- | --- | --- |
-| Schema and root operation construction | Partial | Explicit and conventional root names work; root-type validation gaps remain below |
+| Schema and root operation construction | Implemented | Explicit and conventional root names, root Object requirements, and distinct root types are validated |
 | Scalar, object, interface, union, enum, input object | Implemented | Construction, printing, introspection, and runtime compilation covered |
 | List and Non-Null wrappers | Implemented | Input and result coercion suites |
 | Interface implementation covariance | Implemented | `t/30_schema_build_validation.t` |
@@ -72,27 +71,26 @@ Section 3 validation and Section 6 subscription execution remain incomplete.
 | Repeatable directives | Implemented | Executable validation and extension merge checks |
 | Type-system extensions | Implemented in PR #60 | Merged in O(n) at schema build time before runtime compilation |
 
-### Known schema-validation gaps
+### Completed schema-validation audit
 
-The schema validator is not yet a complete implementation of the normative
-validation rules distributed throughout Section 3. At minimum, the following
-must be added and tested:
+The following normative validation areas found by the initial audit are now
+implemented and retained as regression coverage:
 
-| Gap | Current risk |
+| Validation area | Status |
 | --- | --- |
-| Root operation types must be Object types and must be distinct | Implemented on `schema-validation-conformance` |
-| Reserved `__` names outside introspection | Implemented for types, fields, arguments, enum values, and directives on `schema-validation-conformance` |
-| Duplicate SDL fields, arguments, enum values, and input fields within one definition | Implemented with XS parser diagnostics on `schema-validation-conformance` |
-| Input-object circular references through an unbroken chain of singular Non-Null fields | Implemented on `schema-validation-conformance` with an O(V+E) schema-build DFS |
+| Root operation types must be Object types and must be distinct | Implemented for SDL and programmatic schemas |
+| Reserved `__` names outside introspection | Implemented for types, fields, arguments, enum values, and directives |
+| Duplicate SDL fields, arguments, enum values, and input fields within one definition | Implemented with XS parser diagnostics |
+| Input-object circular references through an unbroken chain of singular Non-Null fields | Implemented with an O(V+E) schema-build DFS |
 | Interface implementation must not contain circular references | Implemented for direct and transitive cycles with an O(V+E) schema-build DFS |
 | Schema default values must be valid for their declared input types | Implemented on `schema-validation-conformance` for field arguments, input fields, and directive arguments |
 | Type-system directives must be defined, valid at their location, and unique when non-repeatable | Implemented for merged SDL definitions and extensions on `type-system-directive-validation`, including arguments and directive-definition locations |
 | Required arguments and input fields must not be deprecated | Implemented for field, directive, and input-object definitions, including programmatic schemas |
 | Uniqueness and non-empty rules for programmatically constructed types | Implemented for named types, directives, interfaces, unions, enums, objects, interfaces, and input objects |
 
-These are release-conformance work, even if applications normally construct a
-trusted schema at process startup. A malformed schema is an operator error, but
-it can still cause inconsistent introspection or runtime behavior.
+Schema validation runs at construction time for both SDL-built and
+programmatically constructed schemas. A malformed schema is rejected before
+runtime compilation or introspection.
 
 ## Section 4: Introspection
 
@@ -189,12 +187,6 @@ against the query/mutation core profile stated above.
 
 ## Recommended conformance order
 
-1. Merge PR #60 and retain its type-system extension tests.
-2. Complete Section 3 schema validation, starting with duplicate preservation,
-   root types, reserved names, input cycles, defaults, and SDL directives.
-3. Add September 2025 executable descriptions to the XS parser.
-4. Make subscription execution fail closed and document the 0.01 execution
-   profile.
-5. Add a cross-implementation corpus against graphql-js for parser, schema
+1. Add a cross-implementation corpus against graphql-js for parser, schema
    validation, coercion, execution, and introspection.
-6. Re-audit this matrix before claiming full query/mutation conformance.
+2. Re-audit this matrix before claiming full query/mutation conformance.

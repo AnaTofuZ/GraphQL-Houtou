@@ -87,7 +87,7 @@ must be added and tested:
 | Schema default values must be valid for their declared input types | Implemented on `schema-validation-conformance` for field arguments, input fields, and directive arguments |
 | Type-system directives must be defined, valid at their location, and unique when non-repeatable | Implemented for merged SDL definitions and extensions on `type-system-directive-validation`, including arguments and directive-definition locations |
 | Required arguments and input fields must not be deprecated | Implemented for field, directive, and input-object definitions, including programmatic schemas |
-| Complete uniqueness and non-empty rules for all programmatically constructed types | Some rules exist for unions, enums, and OneOf, but Section 3 is not exhaustively mapped |
+| Uniqueness and non-empty rules for programmatically constructed types | Implemented for named types, directives, interfaces, unions, enums, objects, interfaces, and input objects |
 
 These are release-conformance work, even if applications normally construct a
 trusted schema at process startup. A malformed schema is an operator error, but

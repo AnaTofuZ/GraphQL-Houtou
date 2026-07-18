@@ -8,7 +8,9 @@ use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::InputObject;
 use GraphQL::Houtou::Type::Union;
+use GraphQL::Houtou::Type::Enum;
 use GraphQL::Houtou::Type::Scalar qw($String $Int $ID);
+use GraphQL::Houtou::Directive;
 
 my $Node = GraphQL::Houtou::Type::Interface->new(
   name => 'Node',
@@ -385,6 +387,81 @@ subtest 'schema default values must match their input types' => sub {
   );
   is_deeply $valid->validation_errors, [],
     'valid defaults and list singleton coercion are accepted';
+};
+
+subtest 'programmatic type definitions enforce non-empty fields' => sub {
+  my $EmptyObject = GraphQL::Houtou::Type::Object->new(
+    name => 'EmptyObject', fields => {},
+  );
+  my $EmptyInterface = GraphQL::Houtou::Type::Interface->new(
+    name => 'EmptyInterface', fields => {},
+  );
+  my $EmptyInput = GraphQL::Houtou::Type::InputObject->new(
+    name => 'EmptyInput', fields => {},
+  );
+  my $EmptyEnum = GraphQL::Houtou::Type::Enum->new(
+    name => 'EmptyEnum', values => {},
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => $EmptyObject,
+    types => [ $EmptyInterface, $EmptyInput, $EmptyEnum ],
+  );
+  my $errors = join "\n", @{ $schema->validation_errors };
+  like $errors, qr/Object type EmptyObject must define one or more fields/,
+    'empty object rejected';
+  like $errors, qr/Interface type EmptyInterface must define one or more fields/,
+    'empty interface rejected';
+  like $errors, qr/Input Object type EmptyInput must define one or more fields/,
+    'empty input object rejected';
+  like $errors, qr/Enum type EmptyEnum must define one or more values/,
+    'empty enum remains covered';
+};
+
+subtest 'programmatic interface lists are unique and irreflexive' => sub {
+  my $Self;
+  $Self = GraphQL::Houtou::Type::Interface->new(
+    name => 'Self',
+    fields => { id => { type => $ID } },
+    interfaces => sub { [ $Self ] },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => { id => { type => $ID } },
+      interfaces => [ $Node, $Node ],
+    ),
+    types => [ $Self ],
+  );
+  my $errors = join "\n", @{ $schema->validation_errors };
+  like $errors, qr/Type Query can only implement Node once/,
+    'duplicate implemented interface rejected';
+  like $errors, qr/Type Self cannot implement itself/,
+    'self implementation rejected';
+};
+
+subtest 'programmatic directive definitions validate names and locations' => sub {
+  my $duplicate = GraphQL::Houtou::Directive->new(
+    name => 'tag', locations => ['FIELD'],
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => query_with(value => { type => $String }),
+    directives => [
+      $duplicate,
+      GraphQL::Houtou::Directive->new(
+        name => 'tag', locations => [ 'FIELD', 'FIELD', 'NOWHERE' ],
+      ),
+      GraphQL::Houtou::Directive->new(name => 'empty', locations => []),
+    ],
+  );
+  my $errors = join "\n", @{ $schema->validation_errors };
+  like $errors, qr/Directive '\@tag' is defined more than once/,
+    'duplicate directive name rejected';
+  like $errors, qr/Directive '\@tag' repeats location 'FIELD'/,
+    'duplicate directive location rejected';
+  like $errors, qr/Directive '\@tag' has unknown location 'NOWHERE'/,
+    'unknown directive location rejected';
+  like $errors, qr/Directive '\@empty' must include one or more locations/,
+    'empty directive locations rejected';
 };
 
 done_testing;

@@ -45,6 +45,12 @@ our %KIND2CLASS = (
   scalar => 'GraphQL::Houtou::Type::Scalar',
 );
 my @ROOT_ATTRS = qw(query mutation subscription);
+my %VALID_DIRECTIVE_LOCATION = map { ($_ => 1) } qw(
+  QUERY MUTATION SUBSCRIPTION FIELD FRAGMENT_DEFINITION FRAGMENT_SPREAD
+  INLINE_FRAGMENT VARIABLE_DEFINITION SCHEMA SCALAR OBJECT FIELD_DEFINITION
+  ARGUMENT_DEFINITION INTERFACE UNION ENUM ENUM_VALUE INPUT_OBJECT
+  INPUT_FIELD_DEFINITION
+);
 
 sub from_doc {
   my ($class, $doc, %opts) = @_;
@@ -180,12 +186,6 @@ sub _merge_type_system_extensions {
 sub _type_system_directive_errors {
   my ($ast, $directives) = @_;
   my (@errors, %name2directive, %definition_count);
-  my %valid_location = map { ($_ => 1) } qw(
-    QUERY MUTATION SUBSCRIPTION FIELD FRAGMENT_DEFINITION FRAGMENT_SPREAD
-    INLINE_FRAGMENT VARIABLE_DEFINITION SCHEMA SCALAR OBJECT FIELD_DEFINITION
-    ARGUMENT_DEFINITION INTERFACE UNION ENUM ENUM_VALUE INPUT_OBJECT
-    INPUT_FIELD_DEFINITION
-  );
   for my $directive (@$directives) {
     my $name = $directive->name;
     push @errors, "Directive '\@$name' is defined more than once."
@@ -199,7 +199,7 @@ sub _type_system_directive_errors {
       my %seen_location;
       for my $location (@{ $node->{locations} || [] }) {
         push @errors, "Directive '\@$node->{name}' has unknown location '$location'."
-          if !$valid_location{$location};
+          if !$VALID_DIRECTIVE_LOCATION{$location};
         push @errors, "Directive '\@$node->{name}' repeats location '$location'."
           if $seen_location{$location}++;
       }
@@ -507,9 +507,23 @@ sub validation_errors {
     }
   }
 
+  my %directive_name;
   for my $directive (@{ $self->directives || [] }) {
     next if !ref($directive) || !$directive->can('name');
-    push @errors, _reserved_name_error('Directive', $directive->name);
+    my $name = $directive->name;
+    push @errors, "Directive '\@$name' is defined more than once."
+      if $directive_name{$name}++;
+    push @errors, _reserved_name_error('Directive', $name);
+    my %location;
+    my $locations = $directive->locations || [];
+    push @errors, "Directive '\@$name' must include one or more locations."
+      if !@$locations;
+    for my $location (@$locations) {
+      push @errors, "Directive '\@$name' has unknown location '$location'."
+        if !$VALID_DIRECTIVE_LOCATION{$location};
+      push @errors, "Directive '\@$name' repeats location '$location'."
+        if $location{$location}++;
+    }
     for my $arg_name (sort keys %{ $directive->args || {} }) {
       my $arg = $directive->args->{$arg_name};
       push @errors, _reserved_name_error(
@@ -561,6 +575,9 @@ sub validation_errors {
     }
 
     if (_is_object_type($type)) {
+      push @errors, "Object type @{[$type->name]} must define one or more fields."
+        if !keys %{ $type->fields || {} };
+      push @errors, _implemented_interface_errors($type);
       push @errors, $self->_object_field_errors($type);
       for my $interface (@{ $type->interfaces || [] }) {
         if (!ref($interface) || !_is_interface_type($interface)) {
@@ -572,6 +589,9 @@ sub validation_errors {
       }
     }
     elsif (_is_interface_type($type)) {
+      push @errors, "Interface type @{[$type->name]} must define one or more fields."
+        if !keys %{ $type->fields || {} };
+      push @errors, _implemented_interface_errors($type);
       push @errors, $self->_object_field_errors($type);
       for my $interface (@{ $type->interfaces || [] }) {
         if (!ref($interface) || !_is_interface_type($interface)) {
@@ -598,6 +618,8 @@ sub validation_errors {
     }
     elsif ($type->isa('GraphQL::Houtou::Type::InputObject')) {
       my $fields = $type->fields || {};
+      push @errors, "Input Object type @{[$type->name]} must define one or more fields."
+        if !keys %$fields;
       my $is_one_of = $type->can('is_one_of') && $type->is_one_of;
       for my $field_name (sort keys %$fields) {
         my $field = $fields->{$field_name};
@@ -742,6 +764,20 @@ sub _required_deprecation_error {
     || (!$definition->{is_deprecated}
       && !defined($definition->{deprecation_reason}));
   return "Required $coordinate cannot be deprecated.";
+}
+
+sub _implemented_interface_errors {
+  my ($type) = @_;
+  my (@errors, %seen);
+  for my $interface (@{ $type->interfaces || [] }) {
+    next if !ref($interface) || !$interface->can('name');
+    my $name = $interface->name;
+    push @errors, "Type @{[$type->name]} can only implement $name once."
+      if $seen{$name}++;
+    push @errors, "Type @{[$type->name]} cannot implement itself."
+      if $type == $interface;
+  }
+  return @errors;
 }
 
 sub _object_field_errors {

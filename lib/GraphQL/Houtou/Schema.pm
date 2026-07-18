@@ -518,6 +518,9 @@ sub validation_errors {
       push @errors, _default_value_error(
         "directive @{[$directive->name]} argument $arg_name", $arg,
       );
+      push @errors, _required_deprecation_error(
+        'argument @' . $directive->name . "($arg_name:)", $arg,
+      );
     }
   }
 
@@ -541,6 +544,9 @@ sub validation_errors {
             "Argument $type_name.$field_name($arg_name:)", $arg_name,
           );
           push @errors, _default_value_error(
+            "argument $type_name.$field_name($arg_name:)", $arg,
+          );
+          push @errors, _required_deprecation_error(
             "argument $type_name.$field_name($arg_name:)", $arg,
           );
         }
@@ -600,6 +606,9 @@ sub validation_errors {
           . (ref($field_type) ? ' but got: ' . $field_type->to_string . '.' : '.')
           if !_is_input_type($field_type);
         push @errors, _default_value_error(
+          "input field @{[$type->name]}.$field_name", $field,
+        );
+        push @errors, _required_deprecation_error(
           "input field @{[$type->name]}.$field_name", $field,
         );
         if ($is_one_of) {
@@ -723,6 +732,16 @@ sub _missing_required_input_field {
     return $error if $error;
   }
   return;
+}
+
+sub _required_deprecation_error {
+  my ($coordinate, $definition) = @_;
+  return () if !ref($definition->{type})
+    || !$definition->{type}->isa('GraphQL::Houtou::Type::NonNull')
+    || exists($definition->{default_value})
+    || (!$definition->{is_deprecated}
+      && !defined($definition->{deprecation_reason}));
+  return "Required $coordinate cannot be deprecated.";
 }
 
 sub _object_field_errors {

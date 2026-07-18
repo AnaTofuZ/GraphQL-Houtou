@@ -97,10 +97,12 @@ sub make_field_def {
 
   my %args;
   if ($field_def->{args}) {
+    my $arg_defs = $field_def->{args};
+    $arg_defs = from_ast_field_deprecate($_, $arg_defs) for keys %$arg_defs;
     %args = (
       args => +{
-        map { make_field_def($name2type, $_, $field_def->{args}{$_}) }
-          keys %{ $field_def->{args} }
+        map { make_field_def($name2type, $_, $arg_defs->{$_}) }
+          keys %$arg_defs
       },
     );
   }

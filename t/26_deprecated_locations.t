@@ -265,4 +265,75 @@ subtest 'execution works with deprecated input field omitted' => sub {
   is $result->{data}{search}, 'results', 'correct result';
 };
 
+subtest 'required arguments and input fields cannot be deprecated' => sub {
+  my $RequiredInput = GraphQL::Houtou::Type::InputObject->new(
+    name => 'RequiredInput',
+    fields => {
+      value => {
+        type => $String->non_null,
+        deprecation_reason => 'cannot omit this field',
+      },
+    },
+  );
+  my $invalid = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'InvalidQuery',
+      fields => {
+        lookup => {
+          type => $String,
+          args => {
+            key => {
+              type => $String->non_null,
+              deprecation_reason => 'cannot omit this argument',
+            },
+          },
+        },
+      },
+    ),
+    types => [ $RequiredInput ],
+    directives => [
+      GraphQL::Houtou::Directive->new(
+        name => 'required',
+        locations => ['FIELD'],
+        args => {
+          key => {
+            type => $String->non_null,
+            deprecation_reason => 'cannot omit this directive argument',
+          },
+        },
+      ),
+    ],
+  );
+  my $errors = join "\n", @{ $invalid->validation_errors };
+  like $errors, qr/Required argument InvalidQuery\.lookup\(key:\) cannot be deprecated/,
+    'programmatic required field argument rejected';
+  like $errors, qr/Required input field RequiredInput\.value cannot be deprecated/,
+    'programmatic required input field rejected';
+  like $errors, qr/Required argument \@required\(key:\) cannot be deprecated/,
+    'programmatic required directive argument rejected';
+
+  my $sdl = GraphQL::Houtou::Schema->from_doc(<<'SDL');
+directive @required(key: String! @deprecated) on FIELD
+input RequiredInput { value: String! @deprecated }
+type Query { lookup(key: String! @deprecated): String }
+SDL
+  my $sdl_errors = join "\n", @{ $sdl->validation_errors };
+  like $sdl_errors, qr/Required argument Query\.lookup\(key:\) cannot be deprecated/,
+    'SDL required field argument rejected';
+  like $sdl_errors, qr/Required input field RequiredInput\.value cannot be deprecated/,
+    'SDL required input field rejected';
+  like $sdl_errors, qr/Required argument \@required\(key:\) cannot be deprecated/,
+    'SDL required directive argument rejected';
+};
+
+subtest 'deprecated non-null definitions with defaults are optional' => sub {
+  my $valid = GraphQL::Houtou::Schema->from_doc(<<'SDL');
+directive @legacy(flag: Boolean! = false @deprecated) on FIELD
+input Options { legacy: Boolean! = false @deprecated }
+type Query { value(legacy: Boolean! = false @deprecated): String }
+SDL
+  is_deeply $valid->validation_errors, [],
+    'non-null arguments and input fields with defaults may be deprecated';
+};
+
 done_testing;

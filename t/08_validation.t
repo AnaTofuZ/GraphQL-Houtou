@@ -12,7 +12,7 @@ use GraphQL::Houtou::Type::Scalar;
 use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 use GraphQL::Houtou::Schema qw(lookup_type);
 
-use GraphQL::Houtou::Validation qw(validate);
+use GraphQL::Houtou::Validation qw(check_query_cost validate);
 
 my $Node;
 my $User;
@@ -106,11 +106,24 @@ my $schema = GraphQL::Houtou::Schema->new(
       },
       listShapes => {
         type => $String,
+        cost => 7,
         args => {
           required => { type => $String->list->non_null },
           nested => { type => $String->non_null->list->non_null->list->non_null },
         },
         resolve => sub { 'ok' },
+      },
+      users => {
+        type => $User->list,
+        cost => 2,
+        list_size => 5,
+        resolve => sub { [] },
+      },
+      tags => {
+        type => $String->list,
+        cost => 2,
+        list_size => 100,
+        resolve => sub { [] },
       },
     },
   ),
@@ -158,8 +171,8 @@ sub messages {
 }
 
 subtest 'validation facade stays minimal' => sub {
-  is_deeply [ sort @GraphQL::Houtou::Validation::EXPORT_OK ], [qw(validate)],
-    'only validate is exported as public API';
+  is_deeply [ sort @GraphQL::Houtou::Validation::EXPORT_OK ],
+    [qw(check_query_cost validate)], 'validation and cost APIs are exported';
   ok(
     GraphQL::Houtou::Validation->can('validate'),
     'public validate entrypoint exists',
@@ -168,6 +181,59 @@ subtest 'validation facade stays minimal' => sub {
     !GraphQL::Houtou::Validation->can('validate_xs'),
     'internal XS symbol is not exposed as public facade method',
   );
+};
+
+subtest 'weighted query cost is enforced in XS' => sub {
+  my $query = q|{ users { id name } }|;
+  is_deeply check_query_cost($schema, $query, max_cost => 12), [],
+    'field cost plus list multiplier fits the exact budget';
+
+  is_deeply check_query_cost(
+    $schema,
+    q|query Cheap { shape } query Expensive { users { id name } }|,
+    max_cost => 1,
+    operation_name => 'Cheap',
+  ), [], 'only the selected operation contributes to query cost';
+
+  is_deeply messages(check_query_cost($schema, $query, max_cost => 11)), [
+    'Query cost exceeds maximum of 11 in anonymous operation',
+  ], 'list result multiplies its child selection cost';
+
+  is_deeply check_query_cost(
+    $schema, q|{ listShapes(required: ["a"], nested: [["b"]]) }|,
+    max_cost => 7,
+  ), [], 'custom leaf cost is used';
+
+  is_deeply messages(check_query_cost(
+    $schema, q|{ tags }|, max_cost => 101,
+  )), [
+    'Query cost exceeds maximum of 101 in anonymous operation',
+  ], 'scalar lists charge their estimated result item count';
+
+  my $runtime = $schema->build_native_runtime(
+    max_cost => 11,
+    validate => 0,
+    program_cache_max => 0,
+  );
+  my $result = $runtime->execute_document($query);
+  is_deeply messages($result->{errors}), [
+    'Query cost exceeds maximum of 11 in anonymous operation',
+  ], 'runtime enforces cost independently from document validation';
+
+  $result = $runtime->execute_document($query, max_cost => 12);
+  is_deeply $result->{errors}, [], 'per-call cost limit can override the runtime';
+
+  my $cached_runtime = $schema->build_native_runtime(
+    max_cost => 12,
+    validate => 0,
+    program_cache_max => 2,
+  );
+  is_deeply $cached_runtime->execute_document($query)->{errors}, [],
+    'query enters the program cache after passing its cost limit';
+  $result = $cached_runtime->execute_document($query, max_cost => 11);
+  is_deeply messages($result->{errors}), [
+    'Query cost exceeds maximum of 11 in anonymous operation',
+  ], 'a stricter per-call limit is not bypassed by a cached program';
 };
 
 subtest 'valid query passes' => sub {

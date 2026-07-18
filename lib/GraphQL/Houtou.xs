@@ -9294,6 +9294,16 @@ validate_xs(schema, document, options = NULL)
   OUTPUT:
     RETVAL
 
+SV *
+check_cost_xs(schema, document, options)
+    SV *schema
+    SV *document
+    SV *options
+  CODE:
+    RETVAL = gql_validation_check_cost(aTHX_ schema, document, options);
+  OUTPUT:
+    RETVAL
+
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::XS::VM
 
 BOOT:

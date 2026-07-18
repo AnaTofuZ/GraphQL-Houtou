@@ -17,6 +17,8 @@ use GraphQL::Houtou::Validation::NodeLimit ();
 
 use constant DEFAULT_MAX_DEPTH => GraphQL::Houtou::Validation::DepthLimit::DEFAULT_MAX_DEPTH();
 use constant DEFAULT_MAX_NODES => GraphQL::Houtou::Validation::NodeLimit::DEFAULT_MAX_NODES();
+use constant DEFAULT_MAX_COST => 10_000;
+use constant DEFAULT_LIST_SIZE => 10;
 
 sub new {
   my ($class, %args) = @_;
@@ -24,6 +26,9 @@ sub new {
   my $cache_max = exists $args{program_cache_max} ? $args{program_cache_max} : 1000;
   my $max_depth = exists $args{max_depth} ? $args{max_depth} : DEFAULT_MAX_DEPTH;
   my $max_nodes = exists $args{max_nodes} ? $args{max_nodes} : DEFAULT_MAX_NODES;
+  my $max_cost = exists $args{max_cost} ? $args{max_cost} : DEFAULT_MAX_COST;
+  my $default_list_size = exists $args{default_list_size}
+    ? $args{default_list_size} : DEFAULT_LIST_SIZE;
   return bless {
     runtime_schema => $args{runtime_schema},
     native_runtime_struct => $args{native_runtime_struct},
@@ -31,12 +36,15 @@ sub new {
     native_runtime_handle => $args{native_runtime_handle},
     _program_cache => {},
     _program_cache_order => [],
+    _limit_signatures => {},
     _program_cache_max => $cache_max,
     _specialized_program_cache => {},
     _specialized_program_cache_order => [],
     _specialized_program_cache_max => $cache_max,
     _max_depth => $max_depth,
     _max_nodes => $max_nodes,
+    _max_cost => $max_cost,
+    _default_list_size => $default_list_size,
     _validate => exists $args{validate} ? ($args{validate} ? 1 : 0) : 1,
     _async => $args{async} ? 1 : 0,
   }, $class;
@@ -119,6 +127,7 @@ sub _store_program_cache {
     my $evicted = shift @$order;
     delete $cache->{$evicted};
     delete $self->{_validated_documents}{$evicted};
+    delete $self->{_limit_signatures}{$evicted};
   }
   $cache->{$key} = $program;
   push @$order, $key;
@@ -133,6 +142,11 @@ sub clear_program_cache {
   $self->{_specialized_program_cache} = {};
   $self->{_specialized_program_cache_order} = [];
   $self->{_validated_documents} = {};
+  $self->{_limit_signatures} = {};
+}
+
+sub _limit_signature {
+  return join "\0", map { defined $_ ? $_ : 'off' } @_;
 }
 
 sub compile_bundle_for_document {
@@ -436,20 +450,24 @@ sub execute_bundle_descriptor {
 # produce an errors-only envelope (no "data" key), per the spec's
 # request-error contract.
 sub _document_request_errors {
-  my ($self, $document, $max_depth, $max_nodes, $validate, $operation_name) = @_;
-  return undef if !defined $max_depth && !defined $max_nodes && !$validate;
+  my ($self, $document, $max_depth, $max_nodes, $max_cost,
+      $default_list_size, $validate, $operation_name) = @_;
+  return undef if !defined $max_depth && !defined $max_nodes
+    && !defined $max_cost && !$validate;
 
   my $is_string = !ref($document);
   my $cache_key = $is_string
     ? _document_cache_key($document, $operation_name)
     : undef;
-  my $already_cached = $is_string
-    && $self->{_program_cache_max}
-    && $self->{_program_cache}{$cache_key};
   my $already_validated = $is_string && $self->{_validated_documents}{$cache_key};
+  my $already_limited = $is_string && $self->{_limit_signatures}{$cache_key}
+    && $self->{_limit_signatures}{$cache_key} eq _limit_signature(
+      $max_depth, $max_nodes, $max_cost, $default_list_size,
+    );
   # Depth and node caps bound the untrusted document; skip them once the
   # program is cached (a cached document already passed them once).
-  my $need_limits = (defined $max_depth || defined $max_nodes) && !$already_cached;
+  my $need_limits = (defined $max_depth || defined $max_nodes || defined $max_cost)
+    && !$already_limited;
   my $need_validate = $validate && !$already_validated;
   return undef if !$need_limits && !$need_validate;
 
@@ -466,6 +484,20 @@ sub _document_request_errors {
       $ast, max_nodes => $max_nodes,
     );
     return \@errors if @errors;
+  }
+  if ($need_limits && defined $max_cost) {
+    my $schema = $self->runtime_schema->can('schema')
+      ? $self->runtime_schema->schema : undef;
+    if ($schema) {
+      require GraphQL::Houtou::Validation;
+      my $errors = GraphQL::Houtou::Validation::check_query_cost(
+        $schema, $ast,
+        max_cost => $max_cost,
+        default_list_size => $default_list_size,
+        (defined $operation_name ? (operation_name => $operation_name) : ()),
+      );
+      return $errors if $errors && @$errors;
+    }
   }
   if ($need_validate) {
     # Validation needs the schema's type objects; a runtime inflated from
@@ -515,6 +547,9 @@ sub execute_document {
   my ($self, $document, %opts) = @_;
   my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
   my $max_nodes = exists $opts{max_nodes} ? delete $opts{max_nodes} : $self->{_max_nodes};
+  my $max_cost = exists $opts{max_cost} ? delete $opts{max_cost} : $self->{_max_cost};
+  my $default_list_size = exists $opts{default_list_size}
+    ? delete $opts{default_list_size} : $self->{_default_list_size};
   my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
   my $operation_name = delete $opts{operation_name};
 
@@ -528,7 +563,13 @@ sub execute_document {
   my $cached = defined $cache_key && $self->{_program_cache_max}
     ? $self->{_program_cache}{$cache_key}
     : undef;
-  if ($cached && (!$validate || $self->{_validated_documents}{$cache_key})) {
+  my $limit_signature = _limit_signature(
+    $max_depth, $max_nodes, $max_cost, $default_list_size,
+  );
+  my $limits_ok = $cached && $self->{_limit_signatures}{$cache_key}
+    && $self->{_limit_signatures}{$cache_key} eq $limit_signature;
+  if ($cached && $limits_ok
+      && (!$validate || $self->{_validated_documents}{$cache_key})) {
     my $result = eval { $self->execute_program($cached, %opts) };
     if (my $error = $@) {
       die $error if !_is_request_error($error);
@@ -546,10 +587,13 @@ sub execute_document {
   my ($result, $request_errors);
   my $ok = eval {
     $request_errors = $self->_document_request_errors(
-      $document, $max_depth, $max_nodes, $validate, $operation_name);
+      $document, $max_depth, $max_nodes, $max_cost,
+      $default_list_size, $validate, $operation_name);
     if (!$request_errors) {
       my $program = $self->compile_program($document, %opts,
         (defined $operation_name ? (operation_name => $operation_name) : ()));
+      $self->{_limit_signatures}{$cache_key} = $limit_signature
+        if defined $cache_key && $self->{_program_cache}{$cache_key};
       $executing = 1;
       $result = $self->execute_program($program, %opts);
     }
@@ -680,6 +724,9 @@ sub execute_document_to_json {
   my ($self, $document, %opts) = @_;
   my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
   my $max_nodes = exists $opts{max_nodes} ? delete $opts{max_nodes} : $self->{_max_nodes};
+  my $max_cost = exists $opts{max_cost} ? delete $opts{max_cost} : $self->{_max_cost};
+  my $default_list_size = exists $opts{default_list_size}
+    ? delete $opts{default_list_size} : $self->{_default_list_size};
   my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
   my $operation_name = delete $opts{operation_name};
 
@@ -690,7 +737,13 @@ sub execute_document_to_json {
   my $cached = defined $cache_key && $self->{_program_cache_max}
     ? $self->{_program_cache}{$cache_key}
     : undef;
-  if ($cached && (!$validate || $self->{_validated_documents}{$cache_key})) {
+  my $limit_signature = _limit_signature(
+    $max_depth, $max_nodes, $max_cost, $default_list_size,
+  );
+  my $limits_ok = $cached && $self->{_limit_signatures}{$cache_key}
+    && $self->{_limit_signatures}{$cache_key} eq $limit_signature;
+  if ($cached && $limits_ok
+      && (!$validate || $self->{_validated_documents}{$cache_key})) {
     my $result = eval { $self->execute_program_to_json($cached, %opts) };
     if (my $error = $@) {
       die $error if !_is_request_error($error);
@@ -703,10 +756,13 @@ sub execute_document_to_json {
   my ($result, $request_errors);
   my $ok = eval {
     $request_errors = $self->_document_request_errors(
-      $document, $max_depth, $max_nodes, $validate, $operation_name);
+      $document, $max_depth, $max_nodes, $max_cost,
+      $default_list_size, $validate, $operation_name);
     if (!$request_errors) {
       my $program = $self->compile_program($document, %opts,
         (defined $operation_name ? (operation_name => $operation_name) : ()));
+      $self->{_limit_signatures}{$cache_key} = $limit_signature
+        if defined $cache_key && $self->{_program_cache}{$cache_key};
       $executing = 1;
       $result = $self->execute_program_to_json($program, %opts);
     }

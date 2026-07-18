@@ -433,6 +433,8 @@ gql_schema_compile_fields(pTHX_ SV *fields_sv) {
     SV **args_svp;
     SV **resolve_svp;
     SV **subscribe_svp;
+    SV **cost_svp;
+    SV **list_size_svp;
 
     if (!he) {
       continue;
@@ -449,7 +451,7 @@ gql_schema_compile_fields(pTHX_ SV *fields_sv) {
     }
 
     compiled_hv = newHV();
-    hv_ksplit(compiled_hv, 10);
+    hv_ksplit(compiled_hv, 12);
     gql_store_sv(compiled_hv, "name", newSVsv(keys[i]));
     gql_store_sv(compiled_hv, "type", gql_schema_compile_type_ref(aTHX_ *type_svp));
 
@@ -484,6 +486,22 @@ gql_schema_compile_fields(pTHX_ SV *fields_sv) {
     subscribe_svp = hv_fetch(field_hv, "subscribe", 9, 0);
     if (subscribe_svp) {
       gql_store_sv(compiled_hv, "subscribe", newSVsv(*subscribe_svp));
+    }
+
+    cost_svp = hv_fetch(field_hv, "cost", 4, 0);
+    if (cost_svp) {
+      if (!SvIOK(*cost_svp) || SvIV(*cost_svp) < 0) {
+        croak("field cost must be a non-negative integer");
+      }
+      gql_store_sv(compiled_hv, "cost", newSVuv(SvUV(*cost_svp)));
+    }
+
+    list_size_svp = hv_fetch(field_hv, "list_size", 9, 0);
+    if (list_size_svp) {
+      if (!SvIOK(*list_size_svp) || SvIV(*list_size_svp) < 1) {
+        croak("field list_size must be a positive integer");
+      }
+      gql_store_sv(compiled_hv, "list_size", newSVuv(SvUV(*list_size_svp)));
     }
 
     gql_store_sv(compiled_hv, "source_field", newSVsv(field_sv));

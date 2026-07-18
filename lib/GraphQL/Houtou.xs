@@ -4717,10 +4717,41 @@ gql_runtime_vm_default_method_cv(SV *source_sv, const char *field_name)
 static int
 gql_runtime_vm_is_coderef(pTHX_ SV *value_sv)
 {
-  return value_sv && SvROK(value_sv)
-    && (SvTYPE(SvRV(value_sv)) == SVt_PVCV
-        || (SvOBJECT(SvRV(value_sv))
-            && Perl_amagic_applies(aTHX_ value_sv, to_cv_amg, 0)));
+  dSP;
+  int count;
+  int is_callable = 0;
+
+  if (!value_sv || !SvROK(value_sv)) {
+    return 0;
+  }
+  if (SvTYPE(SvRV(value_sv)) == SVt_PVCV) {
+    return 1;
+  }
+  if (!SvOBJECT(SvRV(value_sv)) || !SvAMAGIC(value_sv)) {
+    return 0;
+  }
+
+  /* Perl_amagic_applies is not exported by older supported Perls.  Keep the
+   * common real-CV path above entirely native, and use overload's public Perl
+   * API only for the uncommon blessed/magical value. */
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  PUSHMARK(SP);
+  XPUSHs(value_sv);
+  XPUSHs(sv_2mortal(newSVpvs("&{}")));
+  PUTBACK;
+  count = call_pv("overload::Method", G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (!SvTRUE(ERRSV) && count > 0) {
+    is_callable = SvTRUE(POPs) ? 1 : 0;
+  } else if (SvTRUE(ERRSV)) {
+    sv_setsv(ERRSV, &PL_sv_undef);
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return is_callable;
 }
 
 static SV *

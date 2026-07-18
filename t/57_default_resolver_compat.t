@@ -188,6 +188,21 @@ subtest 'callable overloads follow graphql-perl default resolver behavior' => su
     'an overloaded coderef receives args, context, and info';
 };
 
+subtest 'blessed coderefs stay on the native coderef path' => sub {
+  my $callback = bless sub {
+    my ($args, $context, $info) = @_;
+    return join ':', 'blessed', $args->{suffix}, $context->{request},
+      $info->{field_name};
+  }, 'Local::DefaultResolver::BlessedCoderef';
+  my $result = build_native_runtime($schema)->execute_document(
+    '{ hello(suffix: "x") }',
+    root_value => { hello => $callback },
+    context => { request => 'req' },
+  );
+  is_deeply $result, { data => { hello => 'blessed:x:req:hello' } },
+    'a blessed real CV is invoked directly';
+};
+
 subtest 'default resolver failures become field errors' => sub {
   my $result = build_native_runtime($schema)->execute_document(
     '{ failure }', root_value => { failure => sub { die "default failed\n" } },

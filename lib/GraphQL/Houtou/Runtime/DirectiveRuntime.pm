@@ -196,6 +196,13 @@ sub _default_field_resolver {
   return undef;
 }
 
+sub _resolve_default_property_value {
+  my ($value, $args, $context, $info) = @_;
+  return $value->($args, $context, $info)
+    if blessed($value) && overload::Method($value, '&{}');
+  return $value;
+}
+
 sub _program_descriptor {
   my ($program) = @_;
   return if !$program;

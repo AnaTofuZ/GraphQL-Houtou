@@ -4674,6 +4674,8 @@ gql_runtime_vm_call_default_property_sv(
   dSP;
   SV *result = NULL;
   int count;
+  int overloaded = callback_sv && SvROK(callback_sv)
+    && SvTYPE(SvRV(callback_sv)) != SVt_PVCV && SvOBJECT(SvRV(callback_sv));
 
   if (error_out) {
     *error_out = NULL;
@@ -4682,11 +4684,19 @@ gql_runtime_vm_call_default_property_sv(
   SAVETMPS;
   sv_setsv(ERRSV, &PL_sv_undef);
   PUSHMARK(SP);
+  if (overloaded) {
+    XPUSHs(callback_sv);
+  }
   XPUSHs(args_sv ? args_sv : &PL_sv_undef);
   XPUSHs(context_sv ? context_sv : &PL_sv_undef);
   XPUSHs(info_sv ? info_sv : &PL_sv_undef);
   PUTBACK;
-  count = call_sv(callback_sv, G_SCALAR | G_EVAL);
+  count = overloaded
+    ? call_pv(
+        "GraphQL::Houtou::Runtime::DirectiveRuntime::_resolve_default_property_value",
+        G_SCALAR | G_EVAL
+      )
+    : call_sv(callback_sv, G_SCALAR | G_EVAL);
   SPAGAIN;
   if (SvTRUE(ERRSV)) {
     if (error_out) {
@@ -4715,43 +4725,18 @@ gql_runtime_vm_default_method_cv(SV *source_sv, const char *field_name)
 }
 
 static int
-gql_runtime_vm_is_coderef(pTHX_ SV *value_sv)
+gql_runtime_vm_is_callable_property_candidate(pTHX_ SV *value_sv)
 {
-  dSP;
-  int count;
-  int is_callable = 0;
-
   if (!value_sv || !SvROK(value_sv)) {
     return 0;
   }
   if (SvTYPE(SvRV(value_sv)) == SVt_PVCV) {
     return 1;
   }
-  if (!SvOBJECT(SvRV(value_sv)) || !SvAMAGIC(value_sv)) {
-    return 0;
-  }
-
-  /* Perl_amagic_applies is not exported by older supported Perls.  Keep the
-   * common real-CV path above entirely native, and use overload's public Perl
-   * API only for the uncommon blessed/magical value. */
-  ENTER;
-  SAVETMPS;
-  sv_setsv(ERRSV, &PL_sv_undef);
-  PUSHMARK(SP);
-  XPUSHs(value_sv);
-  XPUSHs(sv_2mortal(newSVpvs("&{}")));
-  PUTBACK;
-  count = call_pv("overload::Method", G_SCALAR | G_EVAL);
-  SPAGAIN;
-  if (!SvTRUE(ERRSV) && count > 0) {
-    is_callable = SvTRUE(POPs) ? 1 : 0;
-  } else if (SvTRUE(ERRSV)) {
-    sv_setsv(ERRSV, &PL_sv_undef);
-  }
-  PUTBACK;
-  FREETMPS;
-  LEAVE;
-  return is_callable;
+  /* Perl_amagic_applies is not exported by older supported Perls.  Treat a
+   * blessed magical value as a rare candidate and let the Perl helper decide
+   * whether it implements &{}; real CVs remain entirely on the native path. */
+  return SvOBJECT(SvRV(value_sv)) && SvAMAGIC(value_sv) ? 1 : 0;
 }
 
 static SV *
@@ -5360,7 +5345,7 @@ gql_runtime_vm_exec_state_execute_current_op_sync_now(pTHX_ SV *state_sv, gql_ru
                    && SvTYPE(SvRV(source_sv)) == SVt_PVHV && field_name && *field_name) {
           HE *he = hv_fetch_ent((HV *)SvRV(source_sv), field_name_sv, 0, 0);
           SV *value_sv = he ? HeVAL(he) : &PL_sv_undef;
-          if (gql_runtime_vm_is_coderef(aTHX_ value_sv)) {
+          if (gql_runtime_vm_is_callable_property_candidate(aTHX_ value_sv)) {
             SV *args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
             SV *info_sv = gql_runtime_vm_new_lazy_info_sv(aTHX_ state_sv, s, NULL);
             resolved_sv = gql_runtime_vm_call_default_property_sv(
@@ -5625,7 +5610,7 @@ gql_runtime_vm_exec_state_resolve_current_value_sv(
   if (source_sv && SvOK(source_sv) && SvROK(source_sv) && SvTYPE(SvRV(source_sv)) == SVt_PVHV && field_name && *field_name) {
     SV **valp = hv_fetch((HV *)SvRV(source_sv), field_name, (I32)strlen(field_name), 0);
     if (valp && *valp) {
-      if (gql_runtime_vm_is_coderef(aTHX_ *valp)) {
+      if (gql_runtime_vm_is_callable_property_candidate(aTHX_ *valp)) {
         SV *args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
         SV *info_sv = gql_runtime_vm_new_lazy_info_for_path_sv(aTHX_ state_sv, s, path_frame);
         resolved_sv = gql_runtime_vm_call_default_property_sv(
@@ -7452,7 +7437,7 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
   if (source && SvROK(source) && SvTYPE(SvRV(source)) == SVt_PVHV) {
     HV *source_hv = (HV *)SvRV(source);
     SV **value_svp = hv_fetch(source_hv, slot->field_name, (I32)slot->field_name_len, 0);
-    if (value_svp && gql_runtime_vm_is_coderef(aTHX_ *value_svp)) {
+    if (value_svp && gql_runtime_vm_is_callable_property_candidate(aTHX_ *value_svp)) {
       SV *args = gql_runtime_vm_build_current_args_sv(aTHX_ state);
       SV *info;
       SV *resolved;

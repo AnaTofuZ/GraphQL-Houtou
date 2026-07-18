@@ -72,6 +72,8 @@ Implementation progress:
   XS, avoiding a Perl method call per literal;
 - completed: Enum literal shape and membership validation uses direct XS hash
   lookup against the compiled enum descriptor;
+- completed: variable default values are checked against their declared input
+  types using the XS literal validator;
 - completed: field merging conflicts are grouped by response key, expanded
   through named and inline fragments, and compared only across overlapping
   runtime type conditions in XS;

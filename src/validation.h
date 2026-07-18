@@ -1959,6 +1959,7 @@ static void
 gql_validation_validate_variable_definitions(
   pTHX_ AV *errors_av,
   SV *schema,
+  SV *compiled_sv,
   HV *variables_hv,
   SV *location_sv
 ) {
@@ -2022,6 +2023,17 @@ gql_validation_validate_variable_definitions(
           SvREFCNT_dec(message);
         }
         SvREFCNT_dec(type_string_sv);
+      } else if (SvROK(HeVAL(he)) && SvTYPE(SvRV(HeVAL(he))) == SVt_PVHV) {
+        HV *variable_hv = (HV *)SvRV(HeVAL(he));
+        SV **default_svp = hv_fetch(variable_hv, "default_value", 13, 0);
+        if (default_svp) {
+          SV *compiled_type_sv = gql_schema_compile_type_ref(aTHX_ type_sv);
+          gql_validation_validate_value(
+            aTHX_ errors_av, schema, compiled_sv, *default_svp,
+            compiled_type_sv, NULL, location_sv
+          );
+          SvREFCNT_dec(compiled_type_sv);
+        }
       }
     }
     SvREFCNT_dec(type_sv);
@@ -2123,6 +2135,7 @@ gql_validation_validate_operation(
       gql_validation_validate_variable_definitions(
         aTHX_ errors_av,
         schema,
+        compiled_sv,
         variables_hv,
         (hv_fetch(operation_hv, "location", 8, 0) ? *hv_fetch(operation_hv, "location", 8, 0) : NULL)
       );

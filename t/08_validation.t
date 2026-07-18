@@ -358,6 +358,20 @@ subtest 'built-in scalar literals are validated in XS' => sub {
   ];
 };
 
+subtest 'variable default values are validated in XS' => sub {
+  my $errors = validate($schema, q|
+    query Q($id: String = true) { node(id: $id) { id } }
+  |);
+  is_deeply messages($errors), [
+    'Value is not a valid String literal.',
+  ], 'a variable default must match its declared input type';
+
+  $errors = validate($schema, q|
+    query Q($id: String = "1") { node(id: $id) { id } }
+  |);
+  is_deeply $errors, [], 'a correctly typed variable default is accepted';
+};
+
 subtest 'unused variables are rejected, including fragment-aware usage' => sub {
   my $errors = validate($schema, q|
     query Q($used: String!, $unused: String) {

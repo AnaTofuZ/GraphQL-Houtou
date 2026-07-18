@@ -119,6 +119,15 @@ sub _assert_supported_operation {
   return;
 }
 
+sub assert_supported_operation_descriptor {
+  my ($descriptor) = @_;
+  return if ref($descriptor) ne 'HASH';
+  _assert_supported_operation('subscription')
+    if ($descriptor->{operation_type} || q()) eq 'subscription'
+      || ($descriptor->{operation_type_code} // q()) eq '3';
+  return;
+}
+
 sub inflate_operation {
   my ($class, $runtime_schema, $struct) = @_;
   my @blocks = map { _inflate_execution_block($_) } @{ $struct->{blocks} || [] };

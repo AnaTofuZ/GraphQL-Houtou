@@ -116,6 +116,9 @@ sub compile_program_descriptor {
 
 sub inflate_program {
   my ($self, $descriptor) = @_;
+  GraphQL::Houtou::Runtime::OperationCompiler::assert_supported_operation_descriptor(
+    $descriptor,
+  );
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::load_native_program_xs($descriptor);
 }

@@ -6,7 +6,8 @@ use warnings;
 
 use Exporter 'import';
 use JSON::MaybeXS qw(is_bool);
-use Scalar::Util qw(refaddr);
+use Scalar::Util qw(blessed refaddr reftype);
+use overload ();
 
 our @EXPORT_OK = qw(
   has_runtime_directives
@@ -85,7 +86,9 @@ sub wrap_field_resolver {
   return sub {
     my ($source, $field_args, $context, $info, $return_type) = @_;
     my $final_cb = sub {
-      return _default_field_resolver($source, $field_name, $info)
+      return _default_field_resolver(
+        $source, $field_name, $field_args, $context, $info,
+      )
         if !$base_resolver;
       return $base_resolver->($source, $field_args, $context, $info, $return_type);
     };
@@ -171,7 +174,7 @@ sub materialize_program_runtime_directives {
 }
 
 sub _default_field_resolver {
-  my ($source, $field_name, $info) = @_;
+  my ($source, $field_name, $args, $context, $info) = @_;
   return undef if !defined $field_name;
 
   if ($field_name eq '__typename') {
@@ -179,12 +182,18 @@ sub _default_field_resolver {
     return $parent_type && $parent_type->can('name') ? $parent_type->name : undef;
   }
 
-  if ($source && ref($source) eq 'HASH') {
-    return $source->{$field_name};
+  if ($source && ref($source) && eval { $source->can($field_name) }) {
+    return $source->$field_name($args, $context, $info);
   }
 
-  return undef if !$source || !ref($source) || !$source->can($field_name);
-  return $source->$field_name;
+  if ($source && (reftype($source) || '') eq 'HASH') {
+    my $value = $source->{$field_name};
+    return $value->($args, $context, $info)
+      if ref($value) eq 'CODE'
+        || (blessed($value) && overload::Method($value, '&{}'));
+    return $value;
+  }
+  return undef;
 }
 
 sub _program_descriptor {

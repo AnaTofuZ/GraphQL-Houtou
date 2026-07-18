@@ -4667,6 +4667,63 @@ gql_runtime_vm_call_resolver_sv(pTHX_ SV *resolver_sv, SV *source_sv, SV *args_s
 }
 
 static SV *
+gql_runtime_vm_call_default_property_sv(
+  pTHX_ SV *callback_sv, SV *args_sv, SV *context_sv, SV *info_sv, SV **error_out
+)
+{
+  dSP;
+  SV *result = NULL;
+  int count;
+
+  if (error_out) {
+    *error_out = NULL;
+  }
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  PUSHMARK(SP);
+  XPUSHs(args_sv ? args_sv : &PL_sv_undef);
+  XPUSHs(context_sv ? context_sv : &PL_sv_undef);
+  XPUSHs(info_sv ? info_sv : &PL_sv_undef);
+  PUTBACK;
+  count = call_sv(callback_sv, G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV)) {
+    if (error_out) {
+      *error_out = newSVsv(ERRSV);
+    }
+    sv_setsv(ERRSV, &PL_sv_undef);
+  } else if (count > 0) {
+    result = newSVsv(POPs);
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return result ? result : newSVsv(&PL_sv_undef);
+}
+
+static CV *
+gql_runtime_vm_default_method_cv(SV *source_sv, const char *field_name)
+{
+  GV *method_gv;
+  if (!source_sv || !SvROK(source_sv) || !SvOBJECT(SvRV(source_sv))
+      || !field_name || !*field_name) {
+    return NULL;
+  }
+  method_gv = gv_fetchmethod_autoload(SvSTASH(SvRV(source_sv)), field_name, 0);
+  return method_gv ? GvCV(method_gv) : NULL;
+}
+
+static int
+gql_runtime_vm_is_coderef(pTHX_ SV *value_sv)
+{
+  return value_sv && SvROK(value_sv)
+    && (SvTYPE(SvRV(value_sv)) == SVt_PVCV
+        || (SvOBJECT(SvRV(value_sv))
+            && Perl_amagic_applies(aTHX_ value_sv, to_cv_amg, 0)));
+}
+
+static SV *
 gql_runtime_vm_exec_state_execute_block_sync_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, SV *block, IV block_index, SV *source, SV *base_path)
 {
   gql_runtime_vm_cursor_t snapshot;
@@ -5258,11 +5315,34 @@ gql_runtime_vm_exec_state_execute_current_op_sync_now(pTHX_ SV *state_sv, gql_ru
         );
         SvREFCNT_dec(args_sv);
         SvREFCNT_dec(info_sv);
-      } else if (source_sv && SvOK(source_sv) && SvROK(source_sv) && SvTYPE(SvRV(source_sv)) == SVt_PVHV && field_name && *field_name) {
-        HE *he = hv_fetch_ent((HV *)SvRV(source_sv), field_name_sv, 0, 0);
-        resolved_sv = newSVsv(he ? HeVAL(he) : &PL_sv_undef);
       } else {
-        resolved_sv = newSVsv(&PL_sv_undef);
+        CV *method_cv = gql_runtime_vm_default_method_cv(source_sv, field_name);
+        if (method_cv) {
+          SV *args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
+          SV *info_sv = gql_runtime_vm_new_lazy_info_sv(aTHX_ state_sv, s, NULL);
+          resolved_sv = gql_runtime_vm_call_cb4_nonfatal(
+            aTHX_ (SV *)method_cv, source_sv, args_sv, s->context, info_sv, &error_sv
+          );
+          SvREFCNT_dec(args_sv);
+          SvREFCNT_dec(info_sv);
+        } else if (source_sv && SvOK(source_sv) && SvROK(source_sv)
+                   && SvTYPE(SvRV(source_sv)) == SVt_PVHV && field_name && *field_name) {
+          HE *he = hv_fetch_ent((HV *)SvRV(source_sv), field_name_sv, 0, 0);
+          SV *value_sv = he ? HeVAL(he) : &PL_sv_undef;
+          if (gql_runtime_vm_is_coderef(aTHX_ value_sv)) {
+            SV *args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
+            SV *info_sv = gql_runtime_vm_new_lazy_info_sv(aTHX_ state_sv, s, NULL);
+            resolved_sv = gql_runtime_vm_call_default_property_sv(
+              aTHX_ value_sv, args_sv, s->context, info_sv, &error_sv
+            );
+            SvREFCNT_dec(args_sv);
+            SvREFCNT_dec(info_sv);
+          } else {
+            resolved_sv = newSVsv(value_sv);
+          }
+        } else {
+          resolved_sv = newSVsv(&PL_sv_undef);
+        }
       }
       SvREFCNT_dec(field_name_sv);
       break;
@@ -5490,6 +5570,20 @@ gql_runtime_vm_exec_state_resolve_current_value_sv(
     return resolved_sv ? resolved_sv : newSVsv(&PL_sv_undef);
   }
 
+  {
+    CV *method_cv = gql_runtime_vm_default_method_cv(source_sv, field_name);
+    if (method_cv) {
+      SV *args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
+      SV *info_sv = gql_runtime_vm_new_lazy_info_for_path_sv(aTHX_ state_sv, s, path_frame);
+      resolved_sv = gql_runtime_vm_call_cb4_nonfatal(
+        aTHX_ (SV *)method_cv, source_sv, args_sv, s->context, info_sv, error_out
+      );
+      SvREFCNT_dec(args_sv);
+      SvREFCNT_dec(info_sv);
+      return resolved_sv ? resolved_sv : newSVsv(&PL_sv_undef);
+    }
+  }
+
   /* Default resolver: share the source hash value instead of copying it.
    * Scalar leaves are copied into the native tree immediately after (or
    * newSVsv'd by the scalar-fallback path), and hash/array refs are only
@@ -5500,6 +5594,16 @@ gql_runtime_vm_exec_state_resolve_current_value_sv(
   if (source_sv && SvOK(source_sv) && SvROK(source_sv) && SvTYPE(SvRV(source_sv)) == SVt_PVHV && field_name && *field_name) {
     SV **valp = hv_fetch((HV *)SvRV(source_sv), field_name, (I32)strlen(field_name), 0);
     if (valp && *valp) {
+      if (gql_runtime_vm_is_coderef(aTHX_ *valp)) {
+        SV *args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
+        SV *info_sv = gql_runtime_vm_new_lazy_info_for_path_sv(aTHX_ state_sv, s, path_frame);
+        resolved_sv = gql_runtime_vm_call_default_property_sv(
+          aTHX_ *valp, args_sv, s->context, info_sv, error_out
+        );
+        SvREFCNT_dec(args_sv);
+        SvREFCNT_dec(info_sv);
+        return resolved_sv;
+      }
       return SvREFCNT_inc_simple_NN(*valp);
     }
   }
@@ -7294,9 +7398,45 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
     return newSVpv((state->block && state->block->type_name) ? state->block->type_name : "", 0);
   }
 
+  {
+    CV *method_cv = gql_runtime_vm_default_method_cv(source, slot->field_name);
+    if (method_cv) {
+      SV *args = gql_runtime_vm_build_current_args_sv(aTHX_ state);
+      SV *info;
+      SV *resolved;
+      if (!args) {
+        return newSVsv(&PL_sv_undef);
+      }
+      args = sv_2mortal(args);
+      info = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+      resolved = gql_runtime_vm_call_cb4_nonfatal(
+        aTHX_ (SV *)method_cv, source, args,
+        state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
+        info, error_out
+      );
+      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ state, resolved);
+    }
+  }
+
   if (source && SvROK(source) && SvTYPE(SvRV(source)) == SVt_PVHV) {
     HV *source_hv = (HV *)SvRV(source);
     SV **value_svp = hv_fetch(source_hv, slot->field_name, (I32)slot->field_name_len, 0);
+    if (value_svp && gql_runtime_vm_is_coderef(aTHX_ *value_svp)) {
+      SV *args = gql_runtime_vm_build_current_args_sv(aTHX_ state);
+      SV *info;
+      SV *resolved;
+      if (!args) {
+        return newSVsv(&PL_sv_undef);
+      }
+      args = sv_2mortal(args);
+      info = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
+      resolved = gql_runtime_vm_call_default_property_sv(
+        aTHX_ *value_svp, args,
+        state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
+        info, error_out
+      );
+      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ state, resolved);
+    }
     return gql_runtime_vm_clone_value_sv(aTHX_ (value_svp && SvOK(*value_svp)) ? *value_svp : &PL_sv_undef);
   }
 

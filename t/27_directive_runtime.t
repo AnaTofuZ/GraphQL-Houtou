@@ -217,7 +217,7 @@ subtest 'custom directives on fragment spreads are inherited onto field resoluti
 subtest 'field-definition directives wrap the default resolver path' => sub {
   my $blocked = $schema->execute(
     '{ secret }',
-    root_value => { secret => 'shh' },
+    root_value => { secret => sub { 'shh' } },
     context => { role => 'guest' },
   );
 
@@ -226,7 +226,7 @@ subtest 'field-definition directives wrap the default resolver path' => sub {
 
   my $allowed = $schema->execute(
     '{ secret }',
-    root_value => { secret => 'shh' },
+    root_value => { secret => sub { 'shh' } },
     context => { role => 'admin' },
   );
 

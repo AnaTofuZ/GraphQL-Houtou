@@ -2,16 +2,15 @@
 
 ## Decision
 
-The current tree is suitable for a high-performance preview release, but it
-should not yet be presented as ready for an untrusted, high-traffic public
-GraphQL endpoint. The main remaining release blocker is incomplete executable
-document validation. Runtime performance and the XS robustness controls are
-already substantially stronger than the older readiness notes suggest.
+The current tree has complete executable-document validation against the
+September 2025 stable specification. It should not yet be presented as ready
+for an untrusted, high-traffic public GraphQL endpoint: the remaining release
+blockers are production cost control and production-shaped load qualification.
 
 ## Verified baseline
 
 - The complete local suite passes on Perl 5.44 / macOS arm64: 45 files and
-  403 tests.
+  420 tests.
 - The normal CI matrix covers Perl 5.24 through 5.42 on Linux.
 - Robustness CI includes ASan with hash-seed sweeping, parser fuzzing, an RSS
   soak gate, full-suite Valgrind, compiler warnings, and XS ownership linting.
@@ -21,11 +20,10 @@ already substantially stronger than the older readiness notes suggest.
 
 ## Release blockers
 
-### P0-1: complete executable document validation
+### P0-1: complete executable document validation (completed)
 
-The validator implements important structural rules, but does not yet cover
-the full GraphQL executable-document rule set. Concrete probes accepted the
-following invalid documents without request errors:
+The initial audit found that the following invalid documents were accepted.
+They are now rejected by XS validation and retained as regression coverage:
 
 ```graphql
 { user }
@@ -36,8 +34,7 @@ query Q { hello }
 query Q($x: Int) { hello }
 ```
 
-The validation work should be completed against the graphql-js validation
-corpus (adapted as fixtures), including at least:
+The completed work covers:
 
 - leaf fields must not have selection sets and composite fields must have one;
 - unique variable, argument, and fragment names;
@@ -46,12 +43,11 @@ corpus (adapted as fixtures), including at least:
   directives;
 - values of correct type;
 - overlapping fields can be merged;
-- remaining fragment and subscription-root edge cases.
+- fragment and subscription-root edge cases.
 
-The canonical AST currently stores arguments and variable definitions in
-hashes. Duplicate names are overwritten during parsing, so the two uniqueness
-rules require either parser-time duplicate metadata or a backward-compatible
-ordered representation in addition to the existing hashes.
+The canonical AST stores arguments, variable definitions, and input object
+fields in hashes. Validation-only parser diagnostics preserve duplicates
+before overwrite without changing the public AST.
 
 Implementation progress:
 
@@ -96,8 +92,11 @@ Implementation progress:
   subfield selections in XS rather than validating each occurrence in isolation;
 - performance: composite occurrences retain a linear merge list while semantic
   duplicates share one comparison representative, avoiding pairwise recursion;
-- next: custom scalar literal API, complete field merging, and the remaining
-  rules.
+- completed: executable definitions, literal container shapes, explicit null
+  for Non-Null positions, subscription response-name grouping, and the ban on
+  subscription introspection root fields;
+- completed: `docs/validation-conformance.md` maps every stable September 2025
+  executable-document rule to its primary regression coverage.
 
 ### P0-2: cost control beyond AST node count
 
@@ -130,8 +129,7 @@ not yet constitute capacity planning for a deployed service.
 
 ## Recommended order
 
-1. Complete validation and import a conformance corpus.
-2. Add production cost controls.
-3. Qualify a realistic PSGI + database deployment under concurrent load.
-4. Finish Changes, user-facing documentation, distribution tests, and a
+1. Add production cost controls.
+2. Qualify a realistic PSGI + database deployment under concurrent load.
+3. Finish Changes, user-facing documentation, distribution tests, and a
    release candidate before publishing 0.01 to CPAN.

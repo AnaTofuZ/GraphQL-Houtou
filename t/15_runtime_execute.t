@@ -116,7 +116,6 @@ subtest 'schema can execute runtime program' => sub {
         { __typename => 'User', id => 'u2' },
       ],
     },
-    errors => [],
   }, 'runtime executes object/list program';
 };
 
@@ -129,7 +128,6 @@ subtest 'runtime execute_program uses native engine by default' => sub {
     data => {
       viewer => { id => 'u1' },
     },
-    errors => [],
   }, 'default execute_program path stays on native runtime';
 };
 
@@ -152,7 +150,6 @@ subtest 'native resolver mode lets explicit resolver use native runtime' => sub 
     data => {
       nativeHello => 'native-hi',
     },
-    errors => [],
   }, 'native-safe explicit resolver still executes correctly on the auto-detect path';
 };
 
@@ -181,7 +178,6 @@ subtest 'native resolver mode supports static literal args on native runtime' =>
     data => {
       nativeGreet => 'hi vm',
     },
-    errors => [],
   }, 'auto-detect path passes static args to explicit resolver';
 };
 
@@ -193,7 +189,6 @@ subtest 'native runtime specializes variable args before bundle execution' => su
     data => {
       greet => 'hello Bob',
     },
-    errors => [],
   }, 'auto-detect path materializes variable args before execution';
 };
 
@@ -205,7 +200,6 @@ subtest 'native runtime specializes directive guards before bundle execution' =>
     data => {
       greet => 'hello Ana',
     },
-    errors => [],
   }, 'auto-detect path prunes dynamic include guard before execution';
 };
 
@@ -219,7 +213,6 @@ subtest 'runtime keeps __typename on abstract/object corridors' => sub {
         name => 'Cara',
       },
     },
-    errors => [],
   }, '__typename survives runtime abstract/object execution';
 };
 
@@ -231,7 +224,6 @@ subtest 'native runtime preserves static arg coercion and defaults' => sub {
     data => {
       describeProfile => 'Ana:20',
     },
-    errors => [],
   }, 'auto-detect path sees coerced static args with input defaults applied';
 };
 
@@ -261,7 +253,6 @@ subtest 'cached runtime program can execute on native runtime with request varia
     data => {
       greet => 'hello cached',
     },
-    errors => [],
   }, 'cached program uses request-time specialization before native execution';
   ok $called, 'cached runtime/program still reached native engine';
 };
@@ -289,7 +280,6 @@ subtest 'inflated runtime descriptor can still drive native specialization' => s
     data => {
       greet => 'hello Ana',
     },
-    errors => [],
   }, 'inflated runtime still specializes directive guards before native execution';
   ok $called, 'inflated runtime also uses native engine';
 };
@@ -300,7 +290,6 @@ subtest 'schema helper can compile and execute in one call' => sub {
     data => {
       viewer => { id => 'u1' },
     },
-    errors => [],
   }, 'schema helper executes runtime program';
 };
 
@@ -316,7 +305,6 @@ subtest 'default resolver path reads root hash values' => sub {
     data => {
       hello => 'world',
     },
-    errors => [],
   }, 'default resolver path works in runtime program';
 };
 
@@ -329,7 +317,6 @@ subtest 'abstract fields dispatch through lowered child blocks' => sub {
         name => 'Cara',
       },
     },
-    errors => [],
   }, 'abstract field resolves through runtime tag dispatch';
 };
 
@@ -339,7 +326,6 @@ subtest 'static literal args are executed through lowered payloads' => sub {
     data => {
       greet => 'hello Ana',
     },
-    errors => [],
   }, 'static args are passed to resolver';
 };
 
@@ -352,7 +338,6 @@ subtest 'variable args are materialized at execution time' => sub {
     data => {
       greet => 'hello Bob',
     },
-    errors => [],
   }, 'dynamic args are passed to resolver';
 };
 
@@ -364,7 +349,6 @@ subtest 'variable defaults are materialized from lowered program metadata' => su
     data => {
       greet => 'hello Ana',
     },
-    errors => [],
   }, 'variable defaults flow through execution program metadata';
 };
 
@@ -377,7 +361,6 @@ subtest 'variable values are coerced through lowered variable defs' => sub {
     data => {
       addOne => 42,
     },
-    errors => [],
   }, 'variable coercion uses graphql_to_perl';
 };
 
@@ -389,7 +372,6 @@ subtest 'argument values are coerced through lowered arg defs' => sub {
     data => {
       describeProfile => 'Ana:20',
     },
-    errors => [],
   }, 'static arg coercion uses input defaults';
 };
 
@@ -402,7 +384,6 @@ subtest 'dynamic argument values are coerced through lowered arg defs' => sub {
     data => {
       describeProfile => 'Bob:20',
     },
-    errors => [],
   }, 'dynamic arg coercion uses lowered arg defs';
 };
 
@@ -429,7 +410,7 @@ subtest 'resolver receives lazy info hash' => sub {
   );
 
   my $result = $info_schema->execute('{ hello }', context => { trace_id => 1 });
-  is_deeply $result, { data => { hello => 'String' }, errors => [] }, 'resolver still executes';
+  is_deeply $result, { data => { hello => 'String' } }, 'resolver still executes';
   is_deeply $saw, {
     field_name => 'hello',
     parent_type => 'InfoQuery',
@@ -478,7 +459,7 @@ subtest 'abstract callbacks receive lazy info hash' => sub {
   );
 
   my $result = $tag_schema->execute('{ node { ... on TaggedUser { id } } }');
-  is_deeply $result, { data => { node => { id => 'u1' } }, errors => [] }, 'abstract dispatch still executes';
+  is_deeply $result, { data => { node => { id => 'u1' } } }, 'abstract dispatch still executes';
   is_deeply $seen, {
     field_name => 'node',
     parent_type => 'TaggedQuery',
@@ -507,7 +488,6 @@ GRAPHQL
         name => 'Ana',
       },
     },
-    errors => [],
   }, 'fragment spread path executes in runtime program';
 };
 
@@ -527,7 +507,6 @@ subtest 'dynamic include directives execute through lowered runtime guards' => s
         name => 'Ana',
       },
     },
-    errors => [],
   }, 'dynamic include guard allows field';
 };
 
@@ -542,7 +521,6 @@ subtest 'static skip directives prune fields during lowering' => sub {
         id => 'u1',
       },
     },
-    errors => [],
   }, 'static skip removes field from runtime output';
 };
 

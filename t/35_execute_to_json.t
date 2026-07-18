@@ -61,8 +61,7 @@ sub json_matches_execute {
   my $bytes = $runtime->execute_document_to_json($query, %opts);
   my $decoded = $json->decode($bytes);
   my $reference = $runtime->execute_document($query, %opts);
-  # normalize: reference errors envelope always present
-  is_deeply $decoded, { data => $reference->{data}, errors => $reference->{errors} || [] },
+  is_deeply $decoded, $reference,
     "to_json round-trips execute for $query";
   return $bytes;
 }
@@ -130,14 +129,14 @@ subtest 'bundle variant' => sub {
 
 subtest 'top-level execute_to_json' => sub {
   my $bytes = execute_to_json($schema, '{ int }');
-  is_deeply $json->decode($bytes), { data => { int => 42 }, errors => [] }, 'convenience wrapper works';
+  is_deeply $json->decode($bytes), { data => { int => 42 } }, 'convenience wrapper works';
 };
 
 subtest 'introspection query smoke' => sub {
   require GraphQL::Houtou::Introspection;
   my $bytes = $runtime->execute_document_to_json($GraphQL::Houtou::Introspection::QUERY);
   my $decoded = $json->decode($bytes);
-  is_deeply $decoded->{errors}, [], 'no errors on full introspection';
+  ok !exists $decoded->{errors}, 'no errors on full introspection';
   ok $decoded->{data}{__schema}{types}, 'introspection tree serializes';
 };
 
@@ -158,7 +157,7 @@ subtest 'async resolvers need an async runtime' => sub {
 
   my $rt_async = build_native_runtime($async_schema, async => 1);
   my $bytes = $rt_async->execute_document_to_json('{ later }');
-  is_deeply $json->decode($bytes), { data => { later => 'x' }, errors => [] },
+  is_deeply $json->decode($bytes), { data => { later => 'x' } },
     'async runtime settles pre-resolved promises to JSON';
 };
 

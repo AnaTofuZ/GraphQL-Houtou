@@ -59,13 +59,13 @@ my $EXPECTED_JSON_RE = qr/"ship":null.*"ships":\[\{"name":"a"\},null\]/;
 subtest 'async auto lane (no variables)' => sub {
   my $runtime = build_native_runtime($schema);
   my $result = $runtime->execute_document($QUERY);
-  is_deeply $result, { data => \%EXPECTED, errors => [] }, 'nulls complete as null';
+  is_deeply $result, { data => \%EXPECTED }, 'nulls complete as null';
 };
 
 subtest 'sync fast SV lane (with variables)' => sub {
   my $runtime = build_native_runtime($schema);
   my $result = $runtime->execute_document($QUERY, variables => {});
-  is_deeply $result, { data => \%EXPECTED, errors => [] }, 'nulls complete as null';
+  is_deeply $result, { data => \%EXPECTED }, 'nulls complete as null';
 };
 
 subtest 'JSON lanes' => sub {
@@ -79,7 +79,7 @@ subtest 'JSON lanes' => sub {
 subtest 'bundle lane (native value tree)' => sub {
   my $runtime = build_native_runtime($schema);
   my $bundle = $runtime->compile_bundle_for_document($QUERY);
-  is_deeply $runtime->execute_bundle($bundle), { data => \%EXPECTED, errors => [] },
+  is_deeply $runtime->execute_bundle($bundle), { data => \%EXPECTED },
     'nulls complete as null';
   like $runtime->execute_bundle_to_json($bundle), $EXPECTED_JSON_RE, 'bundle json';
 };
@@ -114,7 +114,6 @@ subtest 'async lane with promises settling to undef' => sub {
   );
   is_deeply $result, {
     data => { ship => undef, ships => [ { name => 'a' }, undef ] },
-    errors => [],
   }, 'promise-of-undef completes as null';
 };
 

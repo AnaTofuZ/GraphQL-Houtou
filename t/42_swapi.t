@@ -643,7 +643,7 @@ subtest 'allFilms connection with totalCount, edges and pageInfo' => sub {
     { allFilms { totalCount edges { node { title episodeID } cursor }
         pageInfo { hasNextPage hasPreviousPage } films { director } } }
   ~);
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   my $conn = $result->{data}{allFilms};
   is $conn->{totalCount}, 3, 'totalCount ignores pagination';
   is_deeply [ map { $_->{node}{title} } @{ $conn->{edges} } ],
@@ -656,7 +656,7 @@ subtest 'allFilms connection with totalCount, edges and pageInfo' => sub {
 
 subtest 'forward and backward pagination over allPeople' => sub {
   my $page1 = run_query('{ allPeople(first: 2) { totalCount edges { node { name } cursor } pageInfo { hasNextPage endCursor } } }');
-  is_deeply $page1->{errors}, [], 'no errors';
+  ok !exists $page1->{errors}, 'no errors';
   my $conn1 = $page1->{data}{allPeople};
   is $conn1->{totalCount}, 5, 'totalCount is the full set';
   is_deeply [ map { $_->{node}{name} } @{ $conn1->{edges} } ],
@@ -693,7 +693,7 @@ subtest 'single lookups and cross-entity traversal' => sub {
       }
     }
   ~);
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   my $film = $result->{data}{film};
   is $film->{title}, 'A New Hope', 'film by raw SWAPI id';
   is $film->{characterConnection}{totalCount}, 5, 'connection totalCount';
@@ -726,7 +726,7 @@ subtest 'node interface refetch with global IDs' => sub {
       }
     }
   ~, variables => { lukeId => $luke_id, filmId => $film_id });
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is_deeply $result->{data}{luke}, {
     id => $luke_id,
     __typename => 'Person',
@@ -737,7 +737,7 @@ subtest 'node interface refetch with global IDs' => sub {
     'node() dispatches to Film';
 
   my $missing = run_query('{ node(id: "bm9wZTo5OTk=") { id } }'); # base64("nope:999")
-  is_deeply $missing, { data => { node => undef }, errors => [] },
+  is_deeply $missing, { data => { node => undef } },
     'unknown global id resolves to null';
 };
 
@@ -748,7 +748,6 @@ subtest 'lookup by global id on typed root fields' => sub {
   );
   is_deeply $result, {
     data => { a => { name => 'TIE Advanced x1' }, b => undef },
-    errors => [],
   }, 'global id matches its own root field only';
 };
 
@@ -762,7 +761,7 @@ subtest 'introspection exposes the transcribed descriptions' => sub {
       }
     }
   ~);
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is $result->{data}{__schema}{queryType}{name}, 'Root', 'query root is Root';
   is $result->{data}{__type}{description}, 'A single film.', 'type description';
   my %field_desc = map { ($_->{name} => $_->{description}) } @{ $result->{data}{__type}{fields} };

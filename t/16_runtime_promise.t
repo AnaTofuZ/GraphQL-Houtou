@@ -120,7 +120,6 @@ subtest 'runtime auto-detects Promise::XS values' => sub {
         name => 'async:42',
       },
     },
-    errors => [],
   }, 'runtime program resolves Promise::XS-backed scalar/object/list/abstract fields';
 };
 

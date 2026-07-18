@@ -89,7 +89,7 @@ subtest 'sync query over POST' => sub {
   });
   is $status, 200, 'status 200';
   like $headers->{'Content-Type'}, qr{application/json}, 'json content type';
-  is_deeply $res, { data => { hello => 'hello houtou' }, errors => [] }, 'envelope';
+  is_deeply $res, { data => { hello => 'hello houtou' } }, 'envelope';
 };
 
 subtest 'async DataLoader query batches per request' => sub {
@@ -135,7 +135,7 @@ subtest 'async => 1 passes through to the runtime' => sub {
     schema => $async_schema, async => 1)->to_app;
   my ($status, $res) = graphql({ query => '{ greeting }' }, app => $async_app);
   is $status, 200, 'status 200';
-  is_deeply $res, { data => { greeting => 'hi from a promise' }, errors => [] },
+  is_deeply $res, { data => { greeting => 'hi from a promise' } },
     'pre-resolved promise completes on the async lane';
 };
 

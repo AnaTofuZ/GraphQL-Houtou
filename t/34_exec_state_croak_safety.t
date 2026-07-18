@@ -47,7 +47,7 @@ subtest 'coercion die propagates and the runtime stays usable' => sub {
   }
 
   my $result = $runtime->execute_document('{ find(by: { id: "1" }) ok }');
-  is_deeply $result->{errors}, [], 'no errors after escaped dies';
+  ok !exists $result->{errors}, 'no errors after escaped dies';
   is_deeply $result->{data}, { find => 'found', ok => 'fine' },
     'same runtime executes normally after escaped dies';
 };
@@ -60,7 +60,7 @@ subtest 'coercion die via variables keeps the runtime usable' => sub {
   like $bad->{errors}[0]{message}, qr/Unknown field/, 'unknown variable input field dies';
 
   my $result = $runtime->execute_document($query, variables => { by => { id => '2' } });
-  is_deeply $result->{errors}, [], 'no errors afterwards';
+  ok !exists $result->{errors}, 'no errors afterwards';
   is $result->{data}{find}, 'found', 'variables path recovers';
 };
 

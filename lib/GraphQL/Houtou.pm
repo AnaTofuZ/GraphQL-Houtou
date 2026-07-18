@@ -371,7 +371,7 @@ never materialized and no JSON module runs:
 
     use GraphQL::Houtou qw(execute_to_json);
     my $bytes = execute_to_json($schema, '{ users { id name } }');
-    # => {"data":{"users":[...]},"errors":[]}
+    # => {"data":{"users":[...]}}
 
 The same lane is available on a reusable runtime:
 
@@ -391,7 +391,7 @@ recommends (plain C<execute()> returns Perl hashes, which cannot preserve
 order)
 
 =item * the envelope matches C<execute()>: C<"data"> plus C<"errors">
-(message and path), with C<"errors":[]> when the request succeeded
+(message and path) only when execution errors occurred
 
 =item * without C<on_stall>, the lane is synchronous - a resolver returning
 a Promise::XS promise croaks

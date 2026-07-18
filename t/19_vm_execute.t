@@ -79,7 +79,6 @@ subtest 'schema can execute VM-lowered program' => sub {
       ],
       node => { __typename => 'VmExecUser', id => 'u3' },
     },
-    errors => [],
   }, 'VM executor runs object/list/abstract fields';
 };
 
@@ -87,7 +86,6 @@ subtest 'schema helper can compile and execute VM in one call' => sub {
   my $result = $schema->execute('{ viewer { id } }');
   is_deeply $result, {
     data => { viewer => { id => 'u1' } },
-    errors => [],
   }, 'schema helper executes VM runtime';
 };
 
@@ -97,7 +95,6 @@ subtest 'VM descriptor can round-trip and still execute' => sub {
   my $result = $schema->build_runtime->execute_program($program);
   is_deeply $result, {
     data => { node => { id => 'u3' } },
-    errors => [],
   }, 'inflated VM program executes abstract child blocks';
 };
 
@@ -106,7 +103,6 @@ subtest 'native VM bundle descriptor can execute through schema helper' => sub {
   my $result = $schema->execute_native_bundle_descriptor($bundle);
   is_deeply $result, {
     data => { node => { id => 'u3' } },
-    errors => [],
   }, 'native VM bundle executes through runtime slot catalog binding';
 };
 
@@ -114,7 +110,6 @@ subtest 'schema helper can compile and execute native VM bundle in one call' => 
   my $result = $schema->execute_native('{ viewer { id } }');
   is_deeply $result, {
     data => { viewer => { id => 'u1' } },
-    errors => [],
   }, 'schema helper executes native VM bundle runtime';
 };
 
@@ -124,7 +119,6 @@ subtest 'schema helper can execute native VM runtime with specialized variables'
   );
   is_deeply $result, {
     data => { greet => 'hello dora' },
-    errors => [],
   }, 'native runtime specializes variable args before native execution';
 };
 
@@ -134,7 +128,6 @@ subtest 'schema helper can execute native VM runtime with specialized directives
   );
   is_deeply $result, {
     data => { greet => 'hello eve' },
-    errors => [],
   }, 'native runtime specializes dynamic include guard before native execution';
 };
 
@@ -142,7 +135,6 @@ subtest 'schema helper can execute native VM runtime through abstract tag dispat
   my $result = $schema->execute_native('{ node { __typename id } }');
   is_deeply $result, {
     data => { node => { __typename => 'VmExecUser', id => 'u3' } },
-    errors => [],
   }, 'native runtime keeps abstract tag dispatch on native path';
 };
 
@@ -163,7 +155,6 @@ subtest 'XS native bundle handle can execute directly' => sub {
       viewer => { id => 'u1', name => 'Alice' },
       node => { id => 'u3' },
     },
-    errors => [],
   }, 'direct XS native bundle execution works';
 };
 

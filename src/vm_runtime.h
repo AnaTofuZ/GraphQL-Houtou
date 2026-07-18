@@ -2841,7 +2841,7 @@ gql_runtime_vm_writer_materialize_errors_sv(pTHX_ const gql_runtime_vm_writer_t 
   IV i;
 
   if (!writer || writer->error_record_count == 0) {
-    return gql_runtime_vm_empty_errors_sv(aTHX);
+    return NULL;
   }
 
   errors_av = newAV();

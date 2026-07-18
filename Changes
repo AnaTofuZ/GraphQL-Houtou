@@ -16,6 +16,8 @@ Revision history for Perl extension GraphQL-Houtou
       execution paths; subscription streaming remains unsupported in 0.01.
     - Added Apollo Federation 2 subgraph schema construction, service SDL,
       bounded entity resolution, and key validation.
+    - Omitted the `errors` response entry when execution completed without
+      errors, as required by the GraphQL response specification.
     - Added ASan, Valgrind, fuzz, soak, compiler-warning, XS ownership, POD,
       metadata, and Perl 5.24 through 5.44 CI coverage.
     - Added production-oriented examples, benchmark tooling, architecture

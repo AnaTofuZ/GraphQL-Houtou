@@ -34,14 +34,14 @@ my $schema = GraphQL::Houtou::Schema->new(
 
 subtest 'aliases through top-level execute' => sub {
   my $result = execute($schema, '{ a: hello b: hello }');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is_deeply $result->{data}, { a => 'world', b => 'world' },
     'both aliases are present as response keys';
 };
 
 subtest 'aliases on nested selections' => sub {
   my $result = execute($schema, '{ u: user { n: name name } }');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is_deeply $result->{data}, { u => { n => 'alice', name => 'alice' } },
     'nested alias and plain field coexist';
 };
@@ -53,7 +53,7 @@ subtest 'aliases on meta fields' => sub {
       t: __typename
     }
   ');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is $result->{data}{q}{name}, 'Query', '__type alias respected';
   is $result->{data}{t}, 'Query', '__typename alias respected';
 };
@@ -80,7 +80,7 @@ subtest 'aliases through execute_native and bundles' => sub {
 
 subtest 'aliases in serial mutations' => sub {
   my $result = execute($schema, 'mutation { first: bump second: bump }');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is_deeply $result->{data}, { first => 'bumped', second => 'bumped' },
     'serial mutation aliases respected';
 };

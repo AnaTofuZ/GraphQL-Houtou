@@ -137,7 +137,7 @@ subtest 'execute: deep query rejected with default limit' => sub {
 
 subtest 'execute: query within default limit succeeds' => sub {
   my $result = $schema->execute('{ author { name } }');
-  is_deeply $result->{errors}, [], 'no errors for shallow query';
+  ok !exists $result->{errors}, 'no errors for shallow query';
   is $result->{data}{author}{name}, 'Alice', 'correct result';
 };
 
@@ -149,19 +149,19 @@ subtest 'execute: per-call max_depth override (stricter)' => sub {
 subtest 'execute: per-call max_depth override (permissive)' => sub {
   my $query  = _query_of_depth(15);
   my $result = $schema->execute($query, max_depth => 15);
-  is_deeply $result->{errors}, [], 'depth 15 passes when max_depth=15';
+  ok !exists $result->{errors}, 'depth 15 passes when max_depth=15';
 };
 
 subtest 'execute: max_depth=undef disables limit' => sub {
   my $query  = _query_of_depth(20);
   my $result = $schema->execute($query, max_depth => undef);
-  is_deeply $result->{errors}, [], 'max_depth=undef disables limit';
+  ok !exists $result->{errors}, 'max_depth=undef disables limit';
 };
 
 subtest 'build_native_runtime: schema-level max_depth' => sub {
   my $strict = build_native_runtime($schema, max_depth => 2);
   my $ok     = $strict->execute_document('{ author { name } }');
-  is_deeply $ok->{errors}, [], 'depth 2 passes strict runtime';
+  ok !exists $ok->{errors}, 'depth 2 passes strict runtime';
 
   my $deep   = $strict->execute_document('{ author { book { title } } }');
   ok $deep->{errors} && @{ $deep->{errors} },
@@ -173,7 +173,7 @@ subtest 'build_native_runtime: per-call max_depth overrides schema-level' => sub
   my $result = $strict->execute_document(
     '{ author { book { title } } }', max_depth => 5,
   );
-  is_deeply $result->{errors}, [], 'per-call max_depth=5 overrides schema-level 2';
+  ok !exists $result->{errors}, 'per-call max_depth=5 overrides schema-level 2';
 };
 
 subtest 'cached program skips redundant depth check' => sub {
@@ -183,8 +183,8 @@ subtest 'cached program skips redundant depth check' => sub {
   my $first  = $runtime->execute_document($query);
   my $second = $runtime->execute_document($query);
 
-  is_deeply $first->{errors},  [], 'first call succeeds';
-  is_deeply $second->{errors}, [], 'second call (cached) succeeds';
+  ok !exists $first->{errors}, 'first call succeeds';
+  ok !exists $second->{errors}, 'second call (cached) succeeds';
   is_deeply $first->{data}, $second->{data}, 'results are identical';
 };
 

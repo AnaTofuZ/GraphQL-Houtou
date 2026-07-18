@@ -55,7 +55,7 @@ subtest 'build_schema constructs an executable schema' => sub {
   isa_ok $schema, 'GraphQL::Houtou::Schema';
 
   my $result = execute($schema, '{ dog { name barkVolume } now }');
-  is_deeply $result->{errors}, [], 'no execution errors';
+  ok !exists $result->{errors}, 'no execution errors';
   is_deeply $result->{data}, {
     dog => { name => 'Rex-1', barkVolume => 3 },
     now => '2026-07-04T00:00:00Z',
@@ -130,7 +130,7 @@ subtest 'forward references across definitions work' => sub {
       user => { name => 'a', friends => [ { name => 'b' } ] },
     },
   );
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is $result->{data}{user}{friends}[0]{name}, 'b',
     'self-referencing type resolves lazily';
 };
@@ -236,7 +236,7 @@ subtest 'abstract dispatch via resolvers option' => sub {
     Pet => { resolve_type => sub { 'Dog' } },
   });
   my $result = execute($schema, '{ pets { name } }');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is $result->{data}{pets}[0]{name}, 'Rex', 'interface dispatch works';
 };
 
@@ -293,7 +293,7 @@ subtest 'custom scalars pass values through by default' => sub {
     Query => { when => sub { '2026-07-04' } },
   });
   my $result = execute($schema, '{ when }');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is $result->{data}{when}, '2026-07-04', 'identity serialize';
 };
 

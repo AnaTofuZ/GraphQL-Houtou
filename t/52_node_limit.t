@@ -59,7 +59,7 @@ subtest 'the request stage enforces the node cap' => sub {
   like $flooded->{errors}[0]{message}, qr/too many field selections/, 'the node-limit message';
 
   my $ok = $runtime->execute_document(flood(50));
-  is_deeply $ok->{errors}, [], 'under the cap: no errors';
+  ok !exists $ok->{errors}, 'under the cap: no errors';
   is scalar keys %{ $ok->{data} }, 50, 'under the cap resolves every alias';
 
   my $off = $runtime->execute_document(flood(200), max_nodes => undef);
@@ -68,8 +68,12 @@ subtest 'the request stage enforces the node cap' => sub {
 
 subtest 'the default cap admits ordinary and introspection queries' => sub {
   my $runtime = build_native_runtime($schema);
-  is_deeply $runtime->execute_document('{ hello }')->{errors}, [], 'a plain query';
-  is_deeply $runtime->execute_document('{ __schema { queryType { name } } }')->{errors}, [],
+  my $plain = $runtime->execute_document('{ hello }');
+  ok !exists $plain->{errors}, 'a plain query';
+  my $introspection = $runtime->execute_document(
+    '{ __schema { queryType { name } } }',
+  );
+  ok !exists $introspection->{errors},
     'a schema introspection query';
 };
 

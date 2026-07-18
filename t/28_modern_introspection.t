@@ -79,7 +79,7 @@ my $schema = GraphQL::Houtou::Schema->new(
 sub type_field {
   my ($type_name, $field) = @_;
   my $result = execute($schema, qq<{ __type(name: "$type_name") { $field } }>);
-  is_deeply $result->{errors}, [], "no errors introspecting $type_name.$field";
+  ok !exists $result->{errors}, "no errors introspecting $type_name.$field";
   return $result->{data}{__type}{$field};
 }
 
@@ -105,7 +105,7 @@ subtest '__Directive.isRepeatable and VARIABLE_DEFINITION location' => sub {
       }
     }
   ');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   my %directives = map { $_->{name} => $_ } @{ $result->{data}{__schema}{directives} };
   ok $directives{delay}{isRepeatable}, 'delay directive is repeatable';
   ok !$directives{skip}{isRepeatable}, 'skip directive is not repeatable';
@@ -124,7 +124,7 @@ subtest '__Directive.args supports includeDeprecated' => sub {
       }
     }
   ');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   my ($delay) = grep { $_->{name} eq 'delay' } @{ $result->{data}{__schema}{directives} };
   my %args = map { $_->{name} => $_ } @{ $delay->{args} };
   ok $args{legacyMs}, 'deprecated arg visible with includeDeprecated';
@@ -134,7 +134,7 @@ subtest '__Directive.args supports includeDeprecated' => sub {
   my $hidden = execute($schema, '
     { __schema { directives { name args { name } } } }
   ');
-  is_deeply $hidden->{errors}, [], 'no errors';
+  ok !exists $hidden->{errors}, 'no errors';
   my ($delay_hidden) = grep { $_->{name} eq 'delay' }
     @{ $hidden->{data}{__schema}{directives} };
   my @names = map { $_->{name} } @{ $delay_hidden->{args} };
@@ -144,14 +144,14 @@ subtest '__Directive.args supports includeDeprecated' => sub {
 
 subtest '__Schema.description' => sub {
   my $result = execute($schema, '{ __schema { description } }');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is $result->{data}{__schema}{description},
     'Example schema for modern introspection', 'schema description exposed';
 };
 
 subtest 'canonical introspection query executes cleanly' => sub {
   my $result = execute($schema, $GraphQL::Houtou::Introspection::QUERY);
-  is_deeply $result->{errors}, [], 'no errors running the full IntrospectionQuery';
+  ok !exists $result->{errors}, 'no errors running the full IntrospectionQuery';
   ok $result->{data}{__schema}{types}, 'types are returned';
 };
 
@@ -167,7 +167,7 @@ subtest 'native runtime handles the modern fields' => sub {
     }
   ');
   my $result = $runtime->execute_program($program);
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   ok $result->{data}{__type}{isOneOf}, 'isOneOf true through native runtime';
   is $result->{data}{__schema}{description},
     'Example schema for modern introspection', 'description through native runtime';

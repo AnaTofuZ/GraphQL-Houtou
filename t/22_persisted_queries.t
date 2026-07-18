@@ -47,7 +47,6 @@ subtest 'fixed persisted query can precompile and reuse native bundle' => sub {
 
   is_deeply $first, {
     data => { hello => 'world' },
-    errors => [],
   }, 'precompiled native bundle executes';
 
   is_deeply $second, $first,
@@ -64,7 +63,6 @@ subtest 'bundle descriptor can be used as persisted native artifact' => sub {
 
   is_deeply $result, {
     data => { hello => 'world' },
-    errors => [],
   }, 'compact native descriptor can act as persisted query artifact';
 };
 
@@ -87,12 +85,10 @@ subtest 'variable-bearing persisted query should cache lowered program' => sub {
 
   is_deeply $alice, {
     data => { greet => 'hello alice' },
-    errors => [],
   }, 'lowered program can be reused with first variable set';
 
   is_deeply $bob, {
     data => { greet => 'hello bob' },
-    errors => [],
   }, 'lowered program can be reused with second variable set';
 };
 

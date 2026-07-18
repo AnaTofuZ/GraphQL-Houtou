@@ -221,14 +221,15 @@ subtest 'weighted query cost is enforced in XS' => sub {
   ], 'runtime enforces cost independently from document validation';
 
   $result = $runtime->execute_document($query, max_cost => 12);
-  is_deeply $result->{errors}, [], 'per-call cost limit can override the runtime';
+  ok !exists $result->{errors}, 'per-call cost limit can override the runtime';
 
   my $cached_runtime = $schema->build_native_runtime(
     max_cost => 12,
     validate => 0,
     program_cache_max => 2,
   );
-  is_deeply $cached_runtime->execute_document($query)->{errors}, [],
+  $result = $cached_runtime->execute_document($query);
+  ok !exists $result->{errors},
     'query enters the program cache after passing its cost limit';
   $result = $cached_runtime->execute_document($query, max_cost => 11);
   is_deeply messages($result->{errors}), [

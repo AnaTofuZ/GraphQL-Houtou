@@ -86,7 +86,6 @@ subtest 'mutation with async resolvers returns correct values' => sub {
       second => 'second_result',
       third  => 'third_result',
     },
-    errors => [],
   }, 'all three mutation fields resolve to correct values';
 };
 
@@ -157,7 +156,6 @@ subtest 'mutation with sync resolvers still works' => sub {
 
   is_deeply $resolved, {
     data => { add => 7, greet => 'Hello, world' },
-    errors => [],
   }, 'sync mutation fields resolve correctly';
 };
 
@@ -195,7 +193,6 @@ subtest 'mutation with mixed sync and async resolvers' => sub {
 
   is_deeply $resolved, {
     data => { sync_field => 'sync_value', async_field => 'async_value' },
-    errors => [],
   }, 'mixed sync/async mutation fields resolve correctly';
 };
 

@@ -112,7 +112,7 @@ subtest 'introspection: __Field.args exposes isDeprecated for deprecated args' =
       }
     }
   ');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
 
   my ($greet) = grep { $_->{name} eq 'greet' }
     @{ $result->{data}{__type}{fields} };
@@ -141,7 +141,7 @@ subtest 'native runtime codegen handles includeDeprecated on __Field.args' => su
     }
   ));
   my $result = $runtime->execute_program($program);
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
 
   my ($greet) = grep { $_->{name} eq 'greet' }
     @{ $result->{data}{__type}{fields} };
@@ -166,7 +166,7 @@ subtest 'introspection: deprecated args hidden by default' => sub {
       }
     }
   ');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
 
   my ($greet) = grep { $_->{name} eq 'greet' }
     @{ $result->{data}{__type}{fields} };
@@ -189,7 +189,7 @@ subtest 'introspection: __Type.inputFields exposes isDeprecated' => sub {
       }
     }
   ');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
 
   my %fields = map { $_->{name} => $_ }
     @{ $result->{data}{__type}{inputFields} };
@@ -214,7 +214,7 @@ subtest 'native runtime codegen handles includeDeprecated on __Type.inputFields'
     }
   ));
   my $result = $runtime->execute_program($program);
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
 
   my %fields = map { $_->{name} => $_ }
     @{ $result->{data}{__type}{inputFields} };
@@ -235,7 +235,7 @@ subtest 'introspection: deprecated inputFields hidden by default' => sub {
       }
     }
   ');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
 
   my @names = map { $_->{name} } @{ $result->{data}{__type}{inputFields} };
   ok !grep { $_ eq 'legacyTag' } @names,
@@ -246,7 +246,7 @@ subtest 'introspection: deprecated inputFields hidden by default' => sub {
 
 subtest 'execution still works with deprecated args present in query' => sub {
   my $result = execute($schema, '{ greet(name: "world", formal: false) }');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is $result->{data}{greet}, 'hello', 'correct result';
 };
 
@@ -255,13 +255,13 @@ subtest 'native runtime codegen materializes boolean literals for deprecated arg
   my $program = $runtime->compile_program(q({ greet(name: "world", formal: false) }));
   my $result = $runtime->execute_program($program);
 
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is $result->{data}{greet}, 'hello', 'correct result';
 };
 
 subtest 'execution works with deprecated input field omitted' => sub {
   my $result = execute($schema, '{ search(input: { query: "foo" }) }');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is $result->{data}{search}, 'results', 'correct result';
 };
 

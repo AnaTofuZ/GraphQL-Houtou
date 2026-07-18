@@ -103,7 +103,7 @@ subtest 'relay connection pagination' => sub {
   ~;
 
   my $page1 = $runtime->execute_document($query, variables => { first => 3 });
-  is_deeply $page1->{errors}, [], 'page 1: no errors';
+  ok !exists $page1->{errors}, 'page 1: no errors';
   is_deeply [ map { $_->{node}{id} } @{ $page1->{data}{users}{edges} } ],
     [qw(u1 u2 u3)], 'page 1 nodes';
   ok $page1->{data}{users}{pageInfo}{hasNextPage}, 'page 1 has next';
@@ -206,7 +206,6 @@ subtest 'todo app mutations' => sub {
       milk => { id => 't1', title => 'buy milk', done => 0 },
       taxes => { id => 't2', done => 1 },
     },
-    errors => [],
   }, 'literal input objects with a defaulted field';
 
   my $via_vars = $runtime->execute_document(
@@ -227,7 +226,6 @@ subtest 'todo app mutations' => sub {
   ~);
   is_deeply $toggled, {
     data => { a => { done => 1 }, b => { done => 0 }, c => 1 },
-    errors => [],
   }, 'mutations run serially against shared state';
 
   my $err = $runtime->execute_document('mutation { toggleTodo(id: "nope") { done } }');
@@ -306,7 +304,6 @@ subtest 'union search results' => sub {
         { __typename => 'Product', id => 'p2', name => 'Desk Mat', price => 25 },
       ],
     },
-    errors => [],
   };
 
   my $sync_runtime = build_native_runtime(
@@ -388,7 +385,6 @@ subtest 'loads at different tree depths share one batch' => sub {
       shallowUser => { name => 'bob' },
       deep => { inner => { user => { name => 'alice', boss => { name => 'bob' } } } },
     },
-    errors => [],
   }, 'asymmetric-depth query resolves';
   # Loads at tree depths 1 and 3 have the same dependency depth: they must
   # land in ONE batch (level-order BFS would need two), and boss hits the

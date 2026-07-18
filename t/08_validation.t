@@ -173,6 +173,16 @@ subtest 'valid query passes' => sub {
   is_deeply $errors, [], 'no validation errors';
 };
 
+subtest 'type system definitions are not executable' => sub {
+  my $errors = validate($schema, q|
+    type LocalOnly { id: String }
+    query Q { viewer { id } }
+  |);
+  is_deeply messages($errors), [
+    "The 'type' definition is not executable.",
+  ];
+};
+
 subtest 'lookup_type resolves Houtou wrappers' => sub {
   my $type = lookup_type(
     { type => [ list => { type => [ non_null => { type => 'String' } ] } ] },
@@ -421,6 +431,13 @@ subtest 'literal shape and non-null values are validated in XS' => sub {
   is_deeply messages($errors), [
     'Input object value is not valid for a non-input-object type.',
   ], 'an empty object cannot bypass scalar validation';
+
+  $errors = validate($schema, q|{
+    lookup(input: "not-an-object") { id }
+  }|);
+  is_deeply messages($errors), [
+    'Scalar value is not valid for an input object type.',
+  ], 'a scalar cannot satisfy an input object argument';
 };
 
 subtest 'variable default values are validated in XS' => sub {

@@ -1337,6 +1337,13 @@ gql_validation_validate_value(
         return;
       }
       if (kind_svp && SvOK(*kind_svp) && SvPOK(*kind_svp)
+          && strEQ(SvPV_nolen(*kind_svp), "INPUT_OBJECT")) {
+        SV *message = newSVpv("Scalar value is not valid for an input object type.", 0);
+        av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+        SvREFCNT_dec(message);
+        return;
+      }
+      if (kind_svp && SvOK(*kind_svp) && SvPOK(*kind_svp)
           && strEQ(SvPV_nolen(*kind_svp), "SCALAR")
           && !strEQ(type_name, "Int") && !strEQ(type_name, "Float")
           && !strEQ(type_name, "String") && !strEQ(type_name, "Boolean")
@@ -2565,7 +2572,25 @@ gql_validation_validate(pTHX_ SV *schema, SV *document, SV *options) {
 
     node_hv = (HV *)SvRV(*node_svp);
     kind_svp = hv_fetch(node_hv, "kind", 4, 0);
-    if (!kind_svp || !SvOK(*kind_svp) || !SvPOK(*kind_svp) || !strEQ(SvPV_nolen(*kind_svp), "operation")) {
+    if (!kind_svp || !SvOK(*kind_svp) || !SvPOK(*kind_svp)) {
+      continue;
+    }
+
+    if (!strEQ(SvPV_nolen(*kind_svp), "operation")
+        && !strEQ(SvPV_nolen(*kind_svp), "fragment")) {
+      SV **location_svp = hv_fetch(node_hv, "location", 8, 0);
+      SV *message = newSVpvf(
+        "The '%s' definition is not executable.", SvPV_nolen(*kind_svp)
+      );
+      av_push(
+        errors_av,
+        gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL)
+      );
+      SvREFCNT_dec(message);
+      continue;
+    }
+
+    if (!strEQ(SvPV_nolen(*kind_svp), "operation")) {
       continue;
     }
 

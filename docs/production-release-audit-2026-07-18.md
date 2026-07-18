@@ -80,6 +80,10 @@ Implementation progress:
   conflict for that key, preventing quadratic same-key duplicate floods;
 - completed: field response shape validation compares Non-Null/List wrappers
   and leaf type identity in XS, including mutually-exclusive type conditions;
+- completed: compatible composite fields recursively validate their combined
+  subfield selections in XS rather than validating each occurrence in isolation;
+- performance: composite occurrences retain a linear merge list while semantic
+  duplicates share one comparison representative, avoiding pairwise recursion;
 - next: custom scalar literal API, complete field merging, and the remaining
   rules.
 

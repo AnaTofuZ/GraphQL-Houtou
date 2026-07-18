@@ -263,6 +263,26 @@ subtest 'field merging expands fragments and respects exclusive types' => sub {
   ], 'exclusive fields must still have the same response shape';
 };
 
+subtest 'merged composite fields validate their combined subfields' => sub {
+  my $errors = validate($schema, q|{
+    first: viewer { value: id }
+    first: viewer { value: name }
+  }|);
+  is_deeply messages($errors), [
+    "Fields 'value' conflict because they select different fields or arguments.",
+  ], 'subfield conflicts split across composite fields are rejected';
+
+  $errors = validate($schema, q|{
+    first: viewer { id }
+    first: viewer { name }
+  }|);
+  is_deeply $errors, [], 'compatible composite selections merge';
+
+  my $composite_flood = join ' ', ('first: viewer { id }') x 1_000;
+  $errors = validate($schema, "{ $composite_flood }");
+  is_deeply $errors, [], 'same-key composite floods stay mergeable';
+};
+
 subtest 'anonymous operation must be alone' => sub {
   my $errors = validate($schema, q|
     { viewer { id } }

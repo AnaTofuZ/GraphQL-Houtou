@@ -136,7 +136,8 @@ not yet constitute capacity planning for a deployed service.
 - State unsupported features prominently: ithreads, GET query execution,
   subscriptions, defer/stream, Federation, generic
   promise adapters, and variables with fixed bundles.
-- Add macOS and Perl 5.44 jobs plus distribution/POD/minimum-version tests.
+- Perl 5.44 and distribution/POD/minimum-version tests run in CI using the
+  Docker Official Image for Perl. A native macOS job remains to be added.
 - Consider GET query execution and stricter GraphQL-over-HTTP content
   negotiation for broad client and CDN compatibility.
 

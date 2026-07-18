@@ -23,6 +23,7 @@ our @EXPORT_OK = qw(
   compile_native_program
   compile_native_bundle
   compile_native_bundle_descriptor
+  build_subgraph_schema
 );
 
 sub _bootstrap_xs {
@@ -53,6 +54,11 @@ sub build_schema {
   my ($doc, %opts) = @_;
   require GraphQL::Houtou::Schema;
   return GraphQL::Houtou::Schema->from_doc($doc, %opts);
+}
+
+sub build_subgraph_schema {
+  require GraphQL::Houtou::Federation;
+  return GraphQL::Houtou::Federation::build_subgraph_schema(@_);
 }
 
 sub print_schema {

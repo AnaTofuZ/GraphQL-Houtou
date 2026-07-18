@@ -970,6 +970,7 @@ sub build_native_runtime {
   my $default_list_size = delete $opts{default_list_size};
   my $async = delete $opts{async};
   my $validate = delete $opts{validate};
+  my $allow_introspection = delete $opts{allow_introspection};
   my %runtime_args;
   $runtime_args{program_cache_max} = $cache_max if defined $cache_max;
   $runtime_args{max_depth}         = $max_depth if defined $max_depth;
@@ -978,6 +979,8 @@ sub build_native_runtime {
   $runtime_args{default_list_size} = $default_list_size if defined $default_list_size;
   $runtime_args{async}             = $async if defined $async;
   $runtime_args{validate}          = $validate if defined $validate;
+  $runtime_args{allow_introspection} = $allow_introspection
+    if defined $allow_introspection;
   if (%opts || %runtime_args) {
     my $runtime_schema = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
     require GraphQL::Houtou::Runtime::NativeRuntime;

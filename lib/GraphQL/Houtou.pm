@@ -125,6 +125,7 @@ sub execute {
     max_nodes
     max_cost
     default_list_size
+    allow_introspection
   );
 
   if (@rest) {
@@ -154,6 +155,11 @@ sub execute {
 
   die "promise_code is no longer supported; Promise::XS is detected automatically.\n"
     if exists $opts{promise_code};
+
+  die "allow_introspection => 0 requires the native document execution path; "
+    . "engine => 'perl' cannot enforce this request policy.\n"
+    if defined $opts{engine} && $opts{engine} eq 'perl'
+      && exists $opts{allow_introspection} && !$opts{allow_introspection};
 
   if (!defined $opts{engine} || $opts{engine} ne 'perl') {
     my $runtime = $schema->build_native_runtime;

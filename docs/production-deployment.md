@@ -95,6 +95,16 @@ Disable GraphiQL in production. The bundled page loads JavaScript and CSS from
 that CDN. If an operator UI is required, protect it with authentication and
 serve pinned assets under an explicitly reviewed CSP.
 
+For public endpoints that do not need schema discovery, construct the runtime
+or PSGI adapter with `allow_introspection => 0`. This rejects `__schema` and
+`__type` during the bounded document request stage while retaining
+`__typename`. The decision is part of the program-cache policy signature, so a
+query previously allowed by an administrative request cannot bypass a later
+disabled request. GraphiQL requires introspection and should remain disabled on
+the same public endpoint. Direct `execute_program` and bundle APIs consume trusted,
+prevalidated deployment artifacts and are intentionally outside this dynamic
+document policy; do not expose arbitrary artifact loading to clients.
+
 ## Federation subgraphs
 
 `GraphQL::Houtou::Federation` makes a Houtou schema usable behind an

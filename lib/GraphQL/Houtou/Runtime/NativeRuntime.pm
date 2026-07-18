@@ -47,6 +47,8 @@ sub new {
     _max_cost => $max_cost,
     _default_list_size => $default_list_size,
     _validate => exists $args{validate} ? ($args{validate} ? 1 : 0) : 1,
+    _allow_introspection => exists $args{allow_introspection}
+      ? ($args{allow_introspection} ? 1 : 0) : 1,
     _async => $args{async} ? 1 : 0,
   }, $class;
 }
@@ -148,6 +150,27 @@ sub clear_program_cache {
 
 sub _limit_signature {
   return join "\0", map { defined $_ ? $_ : 'off' } @_;
+}
+
+sub _introspection_errors {
+  my ($ast) = @_;
+  my @pending = ref($ast) eq 'ARRAY' ? @$ast : ($ast);
+  for (my $cursor = 0; $cursor < @pending; $cursor++) {
+    my $node = $pending[$cursor];
+    next if ref($node) ne 'HASH';
+    if (($node->{kind} || q()) eq 'field'
+        && (($node->{name} || q()) eq '__schema'
+            || ($node->{name} || q()) eq '__type')) {
+      my $field_name = $node->{name};
+      return [ {
+        message => qq{Introspection field "$field_name" is disabled},
+        (defined $node->{location} ? (locations => [ $node->{location} ]) : ()),
+        extensions => { code => 'INTROSPECTION_DISABLED' },
+      } ];
+    }
+    push @pending, @{ $node->{selections} || [] };
+  }
+  return [];
 }
 
 sub compile_bundle_for_document {
@@ -458,9 +481,9 @@ sub execute_bundle_descriptor {
 # request-error contract.
 sub _document_request_errors {
   my ($self, $document, $max_depth, $max_nodes, $max_cost,
-      $default_list_size, $validate, $operation_name) = @_;
+      $default_list_size, $validate, $operation_name, $allow_introspection) = @_;
   return undef if !defined $max_depth && !defined $max_nodes
-    && !defined $max_cost && !$validate;
+    && !defined $max_cost && !$validate && $allow_introspection;
 
   my $is_string = !ref($document);
   my $cache_key = $is_string
@@ -470,16 +493,22 @@ sub _document_request_errors {
   my $already_limited = $is_string && $self->{_limit_signatures}{$cache_key}
     && $self->{_limit_signatures}{$cache_key} eq _limit_signature(
       $max_depth, $max_nodes, $max_cost, $default_list_size,
+      $allow_introspection,
     );
   # Depth and node caps bound the untrusted document; skip them once the
   # program is cached (a cached document already passed them once).
   my $need_limits = (defined $max_depth || defined $max_nodes || defined $max_cost)
     && !$already_limited;
   my $need_validate = $validate && !$already_validated;
-  return undef if !$need_limits && !$need_validate;
+  my $need_introspection_check = !$allow_introspection && !$already_limited;
+  return undef if !$need_limits && !$need_validate && !$need_introspection_check;
 
   my $ast = $is_string ? GraphQL::Houtou::parse($document) : $document;
   $ast = _select_operation_ast($ast, $operation_name) if defined $operation_name;
+  if ($need_introspection_check) {
+    my $errors = _introspection_errors($ast);
+    return $errors if @$errors;
+  }
   if ($need_limits && defined $max_depth) {
     my @errors = GraphQL::Houtou::Validation::DepthLimit::check_query_depth(
       $ast, max_depth => $max_depth,
@@ -558,6 +587,9 @@ sub execute_document {
   my $default_list_size = exists $opts{default_list_size}
     ? delete $opts{default_list_size} : $self->{_default_list_size};
   my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
+  my $allow_introspection = exists $opts{allow_introspection}
+    ? (delete $opts{allow_introspection} ? 1 : 0)
+    : $self->{_allow_introspection};
   my $operation_name = delete $opts{operation_name};
 
   # Hot path: a cached program whose document this runtime already
@@ -572,6 +604,7 @@ sub execute_document {
     : undef;
   my $limit_signature = _limit_signature(
     $max_depth, $max_nodes, $max_cost, $default_list_size,
+    $allow_introspection,
   );
   my $limits_ok = $cached && $self->{_limit_signatures}{$cache_key}
     && $self->{_limit_signatures}{$cache_key} eq $limit_signature;
@@ -595,7 +628,7 @@ sub execute_document {
   my $ok = eval {
     $request_errors = $self->_document_request_errors(
       $document, $max_depth, $max_nodes, $max_cost,
-      $default_list_size, $validate, $operation_name);
+      $default_list_size, $validate, $operation_name, $allow_introspection);
     if (!$request_errors) {
       my $program = $self->compile_program($document, %opts,
         (defined $operation_name ? (operation_name => $operation_name) : ()));
@@ -735,6 +768,9 @@ sub execute_document_to_json {
   my $default_list_size = exists $opts{default_list_size}
     ? delete $opts{default_list_size} : $self->{_default_list_size};
   my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
+  my $allow_introspection = exists $opts{allow_introspection}
+    ? (delete $opts{allow_introspection} ? 1 : 0)
+    : $self->{_allow_introspection};
   my $operation_name = delete $opts{operation_name};
 
   # Same hot/cold structure and error taxonomy as execute_document.
@@ -746,6 +782,7 @@ sub execute_document_to_json {
     : undef;
   my $limit_signature = _limit_signature(
     $max_depth, $max_nodes, $max_cost, $default_list_size,
+    $allow_introspection,
   );
   my $limits_ok = $cached && $self->{_limit_signatures}{$cache_key}
     && $self->{_limit_signatures}{$cache_key} eq $limit_signature;
@@ -764,7 +801,7 @@ sub execute_document_to_json {
   my $ok = eval {
     $request_errors = $self->_document_request_errors(
       $document, $max_depth, $max_nodes, $max_cost,
-      $default_list_size, $validate, $operation_name);
+      $default_list_size, $validate, $operation_name, $allow_introspection);
     if (!$request_errors) {
       my $program = $self->compile_program($document, %opts,
         (defined $operation_name ? (operation_name => $operation_name) : ()));
@@ -930,6 +967,12 @@ request error (errors-only envelope).
 
 =item * C<context> / C<root_value> - passed to resolvers
 
+=item * C<allow_introspection> - defaults to true. Set false on the runtime
+or per request to reject C<__schema> and C<__type> with the
+C<INTROSPECTION_DISABLED> request-error code. C<__typename> remains available.
+The policy check is cached with the compiled document and cannot be bypassed
+with C<validate =E<gt> 0>.
+
 =item * C<on_stall> - stall-flush hook; the request runs on the
 async-capable lane and is driven to completion synchronously (see
 L<GraphQL::Houtou/Batching resolvers (DataLoader / the on_stall hook)>)
@@ -943,6 +986,9 @@ on an C<async> runtime; promise resolvers croak there
 
 Execute a program compiled with C<compile_program($query)>. Same options
 as above; this is the persisted-query path for variable-bearing queries.
+Programs and bundles are trusted prevalidated artifacts, so the
+C<allow_introspection> document policy is enforced while accepting dynamic
+documents, not while executing these direct artifact APIs.
 
 =head2 execute_bundle($bundle, %opts) / execute_bundle_to_json($bundle, %opts) / execute_bundle_descriptor($descriptor, %opts)
 

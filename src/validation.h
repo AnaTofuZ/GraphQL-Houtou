@@ -1108,11 +1108,11 @@ gql_validation_validate_value(
   HV *variables_hv,
   SV *location_sv
 ) {
-  if (!value_sv || !SvROK(value_sv)) {
+  if (!value_sv) {
     return;
   }
 
-  if (SvTYPE(SvRV(value_sv)) == SVt_PVAV) {
+  if (SvROK(value_sv) && SvTYPE(SvRV(value_sv)) == SVt_PVAV) {
     AV *value_av = (AV *)SvRV(value_sv);
     SV *item_type_sv = expected_type_sv;
     if (expected_type_sv && SvROK(expected_type_sv) && SvTYPE(SvRV(expected_type_sv)) == SVt_PVHV) {
@@ -1137,7 +1137,7 @@ gql_validation_validate_value(
     return;
   }
 
-  if (SvTYPE(SvRV(value_sv)) == SVt_PVHV) {
+  if (SvROK(value_sv) && SvTYPE(SvRV(value_sv)) == SVt_PVHV) {
     HV *value_hv = (HV *)SvRV(value_sv);
     SV *named_type_name_sv = gql_validation_named_type_name_sv(expected_type_sv);
     HV *named_type_hv = gql_validation_compiled_type_hv(aTHX_ compiled_sv, named_type_name_sv);
@@ -1243,7 +1243,7 @@ gql_validation_validate_value(
     return;
   }
 
-  {
+  if (SvROK(value_sv)) {
     SV *inner_sv = SvRV(value_sv);
     /* A variable reference is an UNBLESSED scalar ref (\'name'). Blessed
      * scalar refs are literals - JSON::PP::Boolean booleans from the
@@ -1271,6 +1271,32 @@ gql_validation_validate_value(
     int valid = 1;
     if (!SvOK(value_sv) || !type_name) {
       return;
+    }
+    {
+      HV *named_type_hv = gql_validation_compiled_type_hv(aTHX_ compiled_sv, type_name_sv);
+      SV **kind_svp = named_type_hv ? hv_fetch(named_type_hv, "kind", 4, 0) : NULL;
+      if (kind_svp && SvOK(*kind_svp) && SvPOK(*kind_svp)
+          && strEQ(SvPV_nolen(*kind_svp), "ENUM")) {
+        SV **values_svp = hv_fetch(named_type_hv, "values", 6, 0);
+        HV *values_hv = values_svp && SvROK(*values_svp)
+          && SvTYPE(SvRV(*values_svp)) == SVt_PVHV
+          ? (HV *)SvRV(*values_svp) : NULL;
+        valid = 0;
+        if (values_hv && SvROK(value_sv) && SvROK(SvRV(value_sv))) {
+          SV *enum_name_sv = SvRV(SvRV(value_sv));
+          if (!SvROK(enum_name_sv) && SvOK(enum_name_sv)) {
+            STRLEN enum_name_len;
+            const char *enum_name = SvPV(enum_name_sv, enum_name_len);
+            valid = hv_exists(values_hv, enum_name, (I32)enum_name_len);
+          }
+        }
+        if (!valid) {
+          SV *message = newSVpvf("Value is not a valid %s literal.", type_name);
+          av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+          SvREFCNT_dec(message);
+        }
+        return;
+      }
     }
     if (strEQ(type_name, "Int")) {
       valid = !SvROK(value_sv) && SvIOK(value_sv)

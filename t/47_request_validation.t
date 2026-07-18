@@ -14,6 +14,7 @@ use JSON::PP ();
 
 use GraphQL::Houtou qw(build_native_runtime);
 use GraphQL::Houtou::Schema;
+use GraphQL::Houtou::Type::Enum;
 use GraphQL::Houtou::Type::InputObject;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($Boolean $Int $String);
@@ -21,6 +22,14 @@ use GraphQL::Houtou::Type::Scalar qw($Boolean $Int $String);
 my $Filter = GraphQL::Houtou::Type::InputObject->new(
   name => 'Filter',
   fields => { q => { type => $String } },
+);
+
+my $Color = GraphQL::Houtou::Type::Enum->new(
+  name => 'Color',
+  values => {
+    RED => {},
+    GREEN => {},
+  },
 );
 
 my $Item = GraphQL::Houtou::Type::Object->new(
@@ -38,6 +47,7 @@ my $schema = GraphQL::Houtou::Schema->new(
           name => { type => $String->non_null },
           filter => { type => $Filter },
           numbers => { type => $Int->list },
+          color => { type => $Color },
           upcase => { type => $Boolean, default_value => 0 },
         },
         resolve => sub { 'hi ' . $_[1]{name} },
@@ -48,7 +58,7 @@ my $schema = GraphQL::Houtou::Schema->new(
       },
     },
   ),
-  types => [ $Filter, $Item ],
+  types => [ $Filter, $Item, $Color ],
 );
 
 # program_cache_max forces a fresh runtime instance per subtest (the
@@ -99,6 +109,16 @@ subtest 'invalid documents return an errors-only envelope' => sub {
     'query Q($bad: Boolean) { hello(name: "Ana", numbers: [$bad]) }');
   like $list_item_variable->{errors}[0]{message}, qr/cannot be used for a list item/,
     'list item variable positions are validated';
+
+  my $unknown_enum = $runtime->execute_document(
+    '{ hello(name: "Ana", color: BLUE) }');
+  like $unknown_enum->{errors}[0]{message}, qr/not a valid Color literal/,
+    'unknown enum values are rejected';
+
+  my $string_enum = $runtime->execute_document(
+    '{ hello(name: "Ana", color: "RED") }');
+  like $string_enum->{errors}[0]{message}, qr/not a valid Color literal/,
+    'strings are not accepted as enum literals';
 };
 
 subtest 'valid documents that used to be false positives execute cleanly' => sub {
@@ -114,6 +134,8 @@ subtest 'valid documents that used to be false positives execute cleanly' => sub
         { n => 'Ana', f => { q => 'x' } } ],
     'boolean literal argument' =>
       [ '{ hello(name: "Ana", upcase: true) }', {} ],
+    'enum literal argument' =>
+      [ '{ hello(name: "Ana", color: RED) }', {} ],
     'nullable variable with default into Boolean! directive arg' =>
       [ 'query Q($n: String!, $show: Boolean = true) { hello(name: $n) @include(if: $show) }',
         { n => 'Ana' } ],

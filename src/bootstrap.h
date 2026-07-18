@@ -58,7 +58,30 @@ typedef struct {
   UV *line_starts;
   I32 num_lines;
   gql_ir_arena_t *ir_arena;
+  /* Nesting depth of the recursive-descent parser (selection sets and
+   * input values). Capped so adversarial input cannot overflow the C
+   * stack: a deeply nested query used to segfault the worker before any
+   * validation ran (release-tasks.md S1). */
+  IV depth;
+  /* Total tokens lexed. Capped so a huge-but-flat document cannot force an
+   * unbounded AST from the parse() API independent of any transport-level
+   * body limit (release-tasks.md S2). */
+  IV token_count;
 } gql_parser_t;
+
+/* Maximum selection-set / input-value nesting. Real documents nest a few
+ * dozen levels; 512 is well clear of that yet far below the ~35k that
+ * overflows an 8 MB stack. Exceeding it is a request error, not a crash. */
+#ifndef GQL_PARSER_MAX_DEPTH
+#define GQL_PARSER_MAX_DEPTH 512
+#endif
+
+/* Maximum tokens per document. Real documents (including large SDL schemas
+ * and full introspection queries) stay well under this; a million tokens
+ * is a multi-MB adversarial document, not a legitimate request. */
+#ifndef GQL_PARSER_MAX_TOKENS
+#define GQL_PARSER_MAX_TOKENS 1000000
+#endif
 
 typedef struct {
   const char *src;

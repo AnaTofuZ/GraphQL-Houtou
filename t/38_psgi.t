@@ -200,4 +200,27 @@ subtest 'GET serves GraphiQL when enabled, 405 otherwise' => sub {
   is $s3, 405, 'other methods are a 405';
 };
 
+subtest 'oversized request bodies are rejected with 413' => sub {
+  my $small_app = GraphQL::Houtou::PSGI->new(
+    schema => $schema, max_body_size => 256,
+  )->to_app;
+
+  my ($ok_status) = request(
+    app => $small_app,
+    body => JSON::PP::encode_json({ query => '{ hello }' }),
+  );
+  is $ok_status, 200, 'a body under the cap is served';
+
+  my $big = JSON::PP::encode_json({ query => '{ hello }', variables => { pad => 'x' x 1024 } });
+  my ($by_length) = request(app => $small_app, body => $big);
+  is $by_length, 413, 'a body over the cap is a 413';
+
+  my $default_app = GraphQL::Houtou::PSGI->new(schema => $schema)->to_app;
+  my ($default_ok) = request(
+    app => $default_app,
+    body => JSON::PP::encode_json({ query => '{ hello }', variables => { pad => 'x' x 4096 } }),
+  );
+  is $default_ok, 200, 'the 1 MiB default admits an ordinary padded body';
+};
+
 done_testing;

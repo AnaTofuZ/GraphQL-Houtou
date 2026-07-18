@@ -275,6 +275,14 @@ typedef struct {
    * recorded), consumed by the enclosing field/item check so propagation
    * does not add one error per level. */
   U8 null_carries_error;
+  /* Deferred croak channel for the sync fast lanes: croaking from inside
+   * the lane longjmps past the recursion that owns the live path frame
+   * chain and leaks it. Detection sites (promise-returning resolver,
+   * request-time argument coercion failure) store the first error here
+   * instead - a plain string croaks as an exception, a blessed
+   * GraphQL::Houtou::Error becomes a request-error envelope at the Perl
+   * boundary - and the top-level entry croak_sv()s it after cleanup. */
+  SV *fast_lane_deferred_croak_sv;
 } gql_runtime_vm_exec_state_t;
 
 enum {
@@ -733,12 +741,20 @@ static IV gql_runtime_vm_path_frame_pool_count = 0;
 static gql_runtime_vm_block_frame_t *gql_runtime_vm_block_frame_pool_head = NULL;
 static IV gql_runtime_vm_block_frame_pool_count = 0;
 
+/* Leak instrumentation: frames handed out minus frames released (a pooled
+ * frame counts as released). A quiescent process must read zero; a positive
+ * residue after a request fully completed is an orphaned frame. Exposed via
+ * GraphQL::Houtou::XS::VM::debug_frame_live_counts_xs. */
+static IV gql_runtime_vm_path_frame_live_count = 0;
+static IV gql_runtime_vm_block_frame_live_count = 0;
+
 static gql_runtime_vm_block_frame_t *
 gql_runtime_vm_block_frame_pool_get(pTHX)
 {
   /* Pooled block frames chain through their (dead) parent_frame pointer and
    * keep their pending_entries array so refills skip the Renew ramp. */
   gql_runtime_vm_block_frame_t *ret = gql_runtime_vm_block_frame_pool_head;
+  gql_runtime_vm_block_frame_live_count++;
   if (ret) {
     gql_runtime_vm_pending_entry_t *entries = ret->pending_entries;
     IV capacity = ret->pending_capacity;
@@ -772,6 +788,7 @@ gql_runtime_vm_path_frame_pool_get(pTHX)
 {
   /* Pooled path frames chain through their (dead) parent pointer. */
   gql_runtime_vm_path_frame_t *ret = gql_runtime_vm_path_frame_pool_head;
+  gql_runtime_vm_path_frame_live_count++;
   if (ret) {
     gql_runtime_vm_path_frame_pool_head = ret->parent;
     gql_runtime_vm_path_frame_pool_count--;
@@ -2506,6 +2523,7 @@ gql_runtime_vm_path_frame_decref(gql_runtime_vm_path_frame_t *frame)
   }
   if (frame->refcount == 0) {
     gql_runtime_vm_path_frame_t *parent = frame->parent;
+    gql_runtime_vm_path_frame_live_count--;
     if (frame->key_pv && !frame->key_pv_borrowed) {
       Safefree(frame->key_pv);
     }
@@ -3312,6 +3330,24 @@ gql_runtime_vm_evaluate_runtime_guards_hv(pTHX_ SV *guards_sv, HV *variables)
   return 1;
 }
 
+/* Free an op's abstract-child member-name table. abstract_child_names is a
+ * char** whose entries are individually allocated by parse/clone, so the
+ * destroy paths must free each string, not just the array (release-tasks.md
+ * R5: valgrind found these leaking - bounded by the program cache, so the
+ * RSS soak never saw them). */
+static void
+gql_runtime_vm_free_op_abstract_child_names(pTHX_ gql_runtime_vm_native_op_t *op)
+{
+  IV i;
+  if (op->abstract_child_names) {
+    for (i = 0; i < op->abstract_child_count; i++) {
+      Safefree(op->abstract_child_names[i]);
+    }
+  }
+  Safefree(op->abstract_child_names);
+  op->abstract_child_names = NULL;
+}
+
 static void
 gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
 {
@@ -3345,7 +3381,7 @@ gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
       }
       if (bundle->blocks[i].ops) {
         for (j = 0; j < bundle->blocks[i].op_count; j++) {
-          Safefree(bundle->blocks[i].ops[j].abstract_child_names);
+          gql_runtime_vm_free_op_abstract_child_names(aTHX_ &bundle->blocks[i].ops[j]);
           Safefree(bundle->blocks[i].ops[j].abstract_child_indexes);
           gql_runtime_vm_native_args_payload_destroy(aTHX_ bundle->blocks[i].ops[j].args_payload_native);
           gql_runtime_vm_native_directives_payload_destroy(aTHX_ bundle->blocks[i].ops[j].directives_payload_native);
@@ -3414,7 +3450,7 @@ gql_runtime_vm_native_program_destroy(gql_runtime_vm_native_program_t *program)
       }
       if (program->blocks[i].ops) {
         for (j = 0; j < program->blocks[i].op_count; j++) {
-          Safefree(program->blocks[i].ops[j].abstract_child_names);
+          gql_runtime_vm_free_op_abstract_child_names(aTHX_ &program->blocks[i].ops[j]);
           Safefree(program->blocks[i].ops[j].abstract_child_indexes);
           gql_runtime_vm_native_args_payload_destroy(aTHX_ program->blocks[i].ops[j].args_payload_native);
           gql_runtime_vm_native_directives_payload_destroy(aTHX_ program->blocks[i].ops[j].directives_payload_native);
@@ -4266,7 +4302,7 @@ gql_runtime_vm_parse_native_block(pTHX_ SV *sv, gql_runtime_vm_native_block_t *o
   IV i;
   SV **svp;
   if (gql_runtime_vm_sv_to_av(aTHX_ sv, &av)) {
-    SV **name_svp = av_fetch(av, 0, 0);
+    /* index 0 is the block name; the native block keeps only type_name. */
     SV **type_svp = av_fetch(av, 1, 0);
     SV **family_svp = av_fetch(av, 2, 0);
     SV **slots_svp = av_fetch(av, 3, 0);
@@ -5200,7 +5236,7 @@ gql_runtime_vm_serialize_leaf_sv(
 }
 
 static SV *
-gql_runtime_vm_coerce_input_value_sv(pTHX_ SV *type_sv, SV *value_sv)
+gql_runtime_vm_coerce_input_value_sv(pTHX_ SV *type_sv, SV *value_sv, SV **croak_out)
 {
   dSP;
   SV *result = NULL;
@@ -5290,8 +5326,14 @@ gql_runtime_vm_coerce_input_value_sv(pTHX_ SV *type_sv, SV *value_sv)
       err = newRV_noinc((SV *)error_hv);
       sv_bless(err, gv_stashpvs("GraphQL::Houtou::Error", GV_ADD));
     }
-    /* Mortalize onto the caller's tmps so the copy is reclaimed during
+    /* With croak_out the caller defers the croak (the sync fast lanes
+     * must unwind their path frame chain first); otherwise croak here.
+     * Mortalize onto the caller's tmps so the copy is reclaimed during
      * die unwinding instead of leaking once per coercion failure. */
+    if (croak_out) {
+      *croak_out = err;
+      return newSV(0);
+    }
     croak_sv(sv_2mortal(err));
   }
   if (count > 0) {
@@ -5328,7 +5370,7 @@ gql_runtime_vm_finalize_native_arg_def(
     /* Mortal so a croak from coercion cannot leak the copies. */
     SV *default_raw_sv = sv_2mortal(newSVsv(arg_def->default_value_sv));
     SV *default_coerced_sv = sv_2mortal(gql_runtime_vm_coerce_input_value_sv(
-      aTHX_ arg_def->input_type_sv, default_raw_sv
+      aTHX_ arg_def->input_type_sv, default_raw_sv, NULL
     ));
     arg_def->default_native_value = gql_runtime_vm_native_value_from_sv(aTHX_ default_coerced_sv);
   }
@@ -5380,7 +5422,7 @@ gql_runtime_vm_prepare_program_variables_sv(
     }
 
     if (!coerced_sv) {
-      coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv);
+      coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv, NULL);
     }
     hv_store(coerced_hv, arg_def->name, (I32)name_len, coerced_sv, 0);
   }
@@ -5414,7 +5456,8 @@ gql_runtime_vm_specialize_arg_payload_sv(
   const gql_runtime_vm_native_runtime_t *runtime,
   const gql_runtime_vm_native_slot_t *slot,
   const gql_runtime_vm_native_op_t *op,
-  HV *variables_hv
+  HV *variables_hv,
+  SV **croak_out
 )
 {
   HV *coerced_hv;
@@ -5451,7 +5494,14 @@ gql_runtime_vm_specialize_arg_payload_sv(
       continue;
     }
 
-    coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv);
+    coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv, croak_out);
+    if (croak_out && *croak_out) {
+      /* Deferred coercion failure: the partial hash is reclaimed by its
+       * mortal wrapper; the caller routes the error to the state's
+       * deferred croak channel. */
+      SvREFCNT_dec(coerced_sv);
+      return NULL;
+    }
     hv_store(coerced_hv, arg_def->name, (I32)strlen(arg_def->name), coerced_sv, 0);
   }
 
@@ -5520,7 +5570,7 @@ gql_runtime_vm_specialize_arg_payload_native(
       } else {
         raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, NULL));
       }
-      coerced_sv = sv_2mortal(gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv));
+      coerced_sv = sv_2mortal(gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv, NULL));
       coerced_value = gql_runtime_vm_native_dynamic_value_from_sv(aTHX_ coerced_sv);
     } else if (arg_def->has_default && arg_def->default_native_value) {
       coerced_value = gql_runtime_vm_native_dynamic_value_from_native_value(
@@ -5528,7 +5578,7 @@ gql_runtime_vm_specialize_arg_payload_native(
       );
     } else if (arg_def->has_default && arg_def->default_value_sv) {
       SV *raw_sv = sv_2mortal(newSVsv(arg_def->default_value_sv));
-      SV *coerced_sv = sv_2mortal(gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv));
+      SV *coerced_sv = sv_2mortal(gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv, NULL));
       coerced_value = gql_runtime_vm_native_dynamic_value_from_sv(aTHX_ coerced_sv);
     } else {
       continue;
@@ -5609,7 +5659,9 @@ gql_runtime_vm_specialize_native_program_in_place(
       }
 
       if (!keep) {
-        Safefree(op->abstract_child_names);
+        /* Same asymmetry class as the destroy-path fix: the name strings
+         * are owned per entry, so freeing only the array leaks them. */
+        gql_runtime_vm_free_op_abstract_child_names(aTHX_ op);
         Safefree(op->abstract_child_indexes);
         gql_runtime_vm_native_args_payload_destroy(aTHX_ op->args_payload_native);
         op->args_payload_native = NULL;

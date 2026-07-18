@@ -328,4 +328,52 @@ subtest 'nullable and list input object cycles are allowed' => sub {
     'nullable fields and lists provide a way to satisfy a recursive input type';
 };
 
+subtest 'schema default values must match their input types' => sub {
+  my $Options = GraphQL::Houtou::Type::InputObject->new(
+    name => 'Options',
+    fields => {
+      count => { type => $Int->non_null },
+      label => { type => $String },
+    },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => query_with(
+      search => {
+        type => $String,
+        args => {
+          count => { type => $Int, default_value => 'many' },
+          options => {
+            type => $Options,
+            default_value => { count => 1, unknown => 1 },
+          },
+          required => { type => $String->non_null, default_value => undef },
+        },
+      },
+    ),
+    types => [ $Options ],
+  );
+  my $errors = join("\n", @{ $schema->validation_errors });
+  like $errors, qr/default value for argument Query\.search\(count:\) is invalid for type Int/,
+    'invalid scalar default rejected';
+  like $errors, qr/default value for argument Query\.search\(options:\) is invalid for type Options/,
+    'invalid nested input object default rejected';
+  like $errors, qr/default value for argument Query\.search\(required:\) is invalid for type String!/
+    , 'null default for a non-null type rejected';
+
+  my $valid = GraphQL::Houtou::Schema->new(
+    query => query_with(
+      search => {
+        type => $String,
+        args => {
+          counts => { type => $Int->list, default_value => 1 },
+          options => { type => $Options, default_value => { count => 1 } },
+        },
+      },
+    ),
+    types => [ $Options ],
+  );
+  is_deeply $valid->validation_errors, [],
+    'valid defaults and list singleton coercion are accepted';
+};
+
 done_testing;

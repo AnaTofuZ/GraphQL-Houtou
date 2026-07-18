@@ -382,8 +382,12 @@ sub validation_errors {
     next if !ref($directive) || !$directive->can('name');
     push @errors, _reserved_name_error('Directive', $directive->name);
     for my $arg_name (sort keys %{ $directive->args || {} }) {
+      my $arg = $directive->args->{$arg_name};
       push @errors, _reserved_name_error(
         "Argument $arg_name on directive @{[$directive->name]}", $arg_name,
+      );
+      push @errors, _default_value_error(
+        "directive @{[$directive->name]} argument $arg_name", $arg,
       );
     }
   }
@@ -403,8 +407,12 @@ sub validation_errors {
           $field_name,
         );
         for my $arg_name (sort keys %{ $field->{args} || {} }) {
+          my $arg = $field->{args}{$arg_name};
           push @errors, _reserved_name_error(
             "Argument $type_name.$field_name($arg_name:)", $arg_name,
+          );
+          push @errors, _default_value_error(
+            "argument $type_name.$field_name($arg_name:)", $arg,
           );
         }
       }
@@ -462,6 +470,9 @@ sub validation_errors {
         push @errors, "The type of @{[$type->name]}.$field_name must be Input Type"
           . (ref($field_type) ? ' but got: ' . $field_type->to_string . '.' : '.')
           if !_is_input_type($field_type);
+        push @errors, _default_value_error(
+          "input field @{[$type->name]}.$field_name", $field,
+        );
         if ($is_one_of) {
           push @errors, "OneOf input field @{[$type->name]}.$field_name must be nullable."
             if ref($field_type) && $field_type->isa('GraphQL::Houtou::Type::NonNull');
@@ -530,6 +541,20 @@ sub _reserved_name_error {
   my ($coordinate, $name) = @_;
   return () if !defined($name) || $name !~ /\A__/;
   return "$coordinate must not begin with '__', which is reserved for introspection.";
+}
+
+sub _default_value_error {
+  my ($coordinate, $definition) = @_;
+  return () if !exists $definition->{default_value};
+  my $type = $definition->{type};
+  return () if !_is_input_type($type);
+  my $ok = eval { $type->graphql_to_perl($definition->{default_value}); 1 };
+  return () if $ok;
+  my $detail = $@ || 'invalid value';
+  $detail =~ s/\s+\z//;
+  $detail =~ s/ at \S+ line \d+\.?\z//;
+  return "The default value for $coordinate is invalid for type "
+    . $type->to_string . ": $detail.";
 }
 
 sub _object_field_errors {

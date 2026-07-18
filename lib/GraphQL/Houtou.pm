@@ -119,8 +119,7 @@ sub execute {
     operation_name
     on_stall
     promise_code
-    engine
-    vm_engine
+    strict_sync
     max_depth
     max_nodes
     max_cost
@@ -156,19 +155,8 @@ sub execute {
   die "promise_code is no longer supported; Promise::XS is detected automatically.\n"
     if exists $opts{promise_code};
 
-  die "allow_introspection => 0 requires the native document execution path; "
-    . "engine => 'perl' cannot enforce this request policy.\n"
-    if defined $opts{engine} && $opts{engine} eq 'perl'
-      && exists $opts{allow_introspection} && !$opts{allow_introspection};
-
-  if (!defined $opts{engine} || $opts{engine} ne 'perl') {
-    my $runtime = $schema->build_native_runtime;
-    return $runtime->execute_document($document, %opts);
-  }
-
-  my $runtime = $schema->build_runtime;
-  my $program = $runtime->compile_program($document, %opts);
-  return $runtime->execute_program($program, %opts);
+  my $runtime = $schema->build_native_runtime;
+  return $runtime->execute_document($document, %opts);
 }
 
 1;
@@ -373,8 +361,17 @@ Without the declaration, requests with variables run on the synchronous
 fast lane, which cannot suspend. A resolver returning a Promise::XS
 promise there fails immediately with an error pointing at C<async =E<gt> 1>
 and C<on_stall> - promise objects never leak into response data.
-C<engine =E<gt> 'native'> forces the strict sync lane even on an async
-runtime.
+C<strict_sync =E<gt> 1> forces the strict sync lane even on an async runtime.
+
+=head3 Execution lane option
+
+Execution always uses the XS native runtime. Normally the runtime chooses the
+synchronous or async-capable lane from C<async>, variables, and C<on_stall>.
+
+C<strict_sync =E<gt> 1> explicitly pins a request to the strict synchronous
+fast lane, including on a runtime built with C<async =E<gt> 1>. Use it only
+when promise-returning resolvers must be rejected for that request. There is
+no supported Pure Perl execution path.
 
 =head2 Serving JSON responses directly
 

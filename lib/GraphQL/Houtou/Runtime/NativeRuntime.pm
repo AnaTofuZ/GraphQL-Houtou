@@ -185,8 +185,10 @@ sub specialize_program {
     $program,
     %opts,
   );
-  my $engine = __PACKAGE__->preferred_engine_for_program($candidate, %opts);
-  die "Program cannot be specialized into the native VM path.\n" if $engine ne 'native';
+  my $struct = _require_native_program($candidate);
+  GraphQL::Houtou::_bootstrap_xs();
+  die "Program cannot be specialized into the native VM path.\n"
+    if !GraphQL::Houtou::XS::VM::program_native_eligible_xs($struct, 0);
   return $candidate;
 }
 
@@ -219,17 +221,6 @@ sub _specialize_program_descriptor {
     : $specialized;
   _specialize_runtime_directives_payloads($descriptor, $variables);
   return GraphQL::Houtou::XS::VM::load_native_program_xs($descriptor);
-}
-
-sub preferred_engine_for_program {
-  my ($class, $program, %opts) = @_;
-  return 'perl' if !$program;
-  my $struct = _require_native_program($program);
-  GraphQL::Houtou::_bootstrap_xs();
-  return GraphQL::Houtou::XS::VM::program_native_eligible_xs(
-    $struct,
-    0,
-  ) ? 'native' : 'perl';
 }
 
 sub compile_bundle {
@@ -342,18 +333,12 @@ sub execute_program {
   my $root_value = $has_root_value ? $opts{root_value} : undef;
   my $context_value = $has_context_value ? $opts{context} : undef;
   my $variables = $has_variables ? $opts{variables} : undef;
-  my $engine = exists $opts{engine} ? $opts{engine} : undef;
+  my $strict_sync = delete $opts{strict_sync} ? 1 : 0;
 
   die "promise_code is no longer supported; Promise::XS is detected automatically.\n"
     if exists $opts{promise_code};
 
-  die "engine => 'perl' is no longer supported for sync runtime execution.\n"
-    if defined $engine && $engine eq 'perl';
-
-  if (!defined $engine && exists $opts{vm_engine}) {
-    $engine = delete $opts{vm_engine};
-  }
-  if ($on_stall && !defined $engine) {
+  if ($on_stall && !$strict_sync) {
     require GraphQL::Houtou::Promise::PromiseXS;
     # Batching resolvers return promises, so the request must run on the
     # async-capable lane regardless of variables, and the returned promise
@@ -371,9 +356,9 @@ sub execute_program {
   }
   # Runtimes built with async => 1 declare that resolvers return promises
   # (the DataLoader deployment shape); every request starts on the
-  # async-capable lane, exactly like the no-variables path. An explicit
-  # engine request still wins.
-  if ($self->{_async} && !defined $engine) {
+  # async-capable lane, exactly like the no-variables path. A strict
+  # synchronous request still wins.
+  if ($self->{_async} && !$strict_sync) {
     require GraphQL::Houtou::Promise::PromiseXS;
     return GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(
       $runtime_handle,
@@ -383,7 +368,7 @@ sub execute_program {
       $variables,
     );
   }
-  if ((defined $engine && $engine eq 'native') || (!defined $engine && $has_variables)) {
+  if ($strict_sync || $has_variables) {
     my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
       $self->runtime_schema,
       $native_program,
@@ -681,7 +666,8 @@ sub execute_program_to_json {
   my ($self, $program, %opts) = @_;
   my $native_program = _require_native_program($program);
   my $on_stall = delete $opts{on_stall};
-  if ($on_stall) {
+  my $strict_sync = delete $opts{strict_sync} ? 1 : 0;
+  if ($on_stall && !$strict_sync) {
     # Batching resolvers return promises, so run on the async lane; the
     # response frame renders JSON directly from its native value tree at
     # resolve time (query field order preserved). The auto lane prepares
@@ -696,7 +682,7 @@ sub execute_program_to_json {
     );
     return _settle_result($result, $on_stall);
   }
-  if ($self->{_async}) {
+  if ($self->{_async} && !$strict_sync) {
     return $self->_auto_json_or_die($native_program, %opts);
   }
   my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
@@ -977,8 +963,9 @@ with C<validate =E<gt> 0>.
 async-capable lane and is driven to completion synchronously (see
 L<GraphQL::Houtou/Batching resolvers (DataLoader / the on_stall hook)>)
 
-=item * C<engine =E<gt> 'native'> - force the strict sync fast lane even
-on an C<async> runtime; promise resolvers croak there
+=item * C<strict_sync> - set true to force the strict sync fast lane even on
+an C<async> runtime; promise resolvers croak there. Omit it for normal
+automatic lane selection. Execution always uses the XS native runtime.
 
 =back
 

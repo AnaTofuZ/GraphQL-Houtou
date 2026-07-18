@@ -40,7 +40,7 @@
   - native compact struct 自体の owner ではない
 - `GraphQL::Houtou::Runtime::NativeRuntime`
   - native specialization と native execute の owner
-  - engine selection と native fast path 実行の owner
+  - execution lane selection と native fast path 実行の owner
 - `GraphQL::Houtou::Runtime::ExecState`
   - promise/runtime path の thin facade
   - active path は `NativeProgram` 前提

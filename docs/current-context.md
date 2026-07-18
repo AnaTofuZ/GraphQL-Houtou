@@ -36,7 +36,7 @@
   `GraphQL::Houtou::XS::VM` に直接出す
 - `GraphQL::Houtou::Validation` は `validate` だけを公開する最小 facade として残す
 - native mainline の internal 専用 stitching は `Runtime::NativeRuntime` から XS を直接呼ぶ
-- `SchemaGraph->execute_program(...)` は public entrypoint として残すが、engine 選択と native specialization の ownership は `NativeRuntime` に寄せた
+- `SchemaGraph->execute_program(...)` は public entrypoint として残すが、execution lane 選択と native specialization の ownership は `NativeRuntime` に寄せた
 - public の `compile_program` / `inflate_program` は `NativeProgram` を返す形に揃え、`VMProgram` は internal inflate/debug 用に後退した
 - `VMCompiler` は VM lower / inflate の owner に限定し、native compact struct の ownership は `SchemaGraph` / `VMProgram` / `NativeRuntime` に寄せている
 - `GraphQL::Houtou::Validation` は `validate` のみの最小 public facade として固定した
@@ -323,10 +323,9 @@ fresh `./Build build` 済み環境で、
   `gql_runtime_vm_native_callback_catalog_t` へ分離した。resolver / abstract dispatch で
   必要な Perl object は callback 境界まで遅らせ、sync native 実行状態は slot/block 中心の
   C struct に近づける方針を取っている
-- top-level sync `execute` は `promise_code` が無く `engine => 'perl'` でもない限り、
-  `build_runtime -> compile_program -> execute_program` を通らず
-  `build_native_runtime -> execute_document` に直行する。通常系で Perl VM artifact を
-  eager に作らないための変更である
+- top-level sync `execute` は `build_runtime -> compile_program -> execute_program` を通らず
+  `build_native_runtime -> execute_document` に直行し、通常系で Perl VM artifact を
+  eager に作らない
 - `ExecState` の abstract runtime type resolution は `GraphQL::Houtou::XS::VM::resolve_runtime_type_xs(...)` に移し、
   - `tag_resolver`
   - `tag_map`
@@ -802,7 +801,7 @@ perl -Ilib t/19_vm_execute.t
   - async execution の mainline は Promise::XS 固定に寄せ、
     resolver が `Promise::XS::Promise` を返したら自動的に async path へ昇格する
   - `execute_native(...)` は explicit sync/native fast lane として維持し、
-    内部的には `engine => 'native'` を明示して native bundle / native program 実行へ入る
+    内部的には `strict_sync => 1` を明示して native program 実行へ入る
   - `ExecState` handle / XS runtime から
     - `promise_code`
     - `promise_then_cb`
@@ -1319,7 +1318,7 @@ perl -Ilib t/19_vm_execute.t
   - to_json: async lane + L2 JSON tail。pre-resolved チェーンは settled
     promise から同期に JSON を取得、真のストールは「pass on_stall」エラー、
     rejection は本来のエラーを伝播(`_auto_json_or_die`)
-  - `engine => 'native'` 明示時は async 宣言より優先して strict sync
+  - `strict_sync => 1` 明示時は async 宣言より優先して strict sync
 - ガード: resolver 呼び出し 4 箇所(default/explicit × cb4/cb5、SV/JSON 両
   fast lane 共有)に `gql_runtime_vm_fast_lane_guard_promise_sv`。
   promise が返ったら「build the runtime with async => 1 (or pass on_stall)」
@@ -1374,8 +1373,8 @@ perl -Ilib t/19_vm_execute.t
 - 経路の整理(テスト設計にも影響):
   - sync ランタイムでも variables/root/context なしの execute(SV)は
     auto lane に乗るため、pre-resolved promise 項目はこの修正で正しく完了する
-  - fast SV lane に乗るのは `engine => 'native'` 明示 or variables あり。
-    t/39 の新 subtest は `engine => 'native'` で fast lane 経由の croak を検証
+  - fast SV lane に乗るのは `strict_sync => 1` 明示 or variables あり。
+    t/39 の subtest は `strict_sync => 1` で fast lane 経由の croak を検証
   - to_json は sync ランタイムでは常に fast JSON lane → croak
 - テスト: t/36 に DataLoader 経由の list-of-promises subtest(全 data +
   1 バッチ + per-key error が errors[0] に載る)、t/39 に fast lane croak ×4 +

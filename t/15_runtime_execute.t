@@ -119,7 +119,7 @@ subtest 'schema can execute runtime program' => sub {
   }, 'runtime executes object/list program';
 };
 
-subtest 'runtime execute_program uses native engine by default' => sub {
+subtest 'runtime execute_program uses native execution by default' => sub {
   my $runtime = $schema->build_runtime;
   my $program = $runtime->compile_program('{ viewer { id } }');
   my $result = $runtime->execute_program($program);
@@ -244,7 +244,7 @@ subtest 'cached runtime program can execute on native runtime with request varia
     };
     $result = $runtime->execute_program(
       $program,
-      engine => 'native',
+      strict_sync => 1,
       variables => { name => 'cached' },
     );
   }
@@ -254,7 +254,7 @@ subtest 'cached runtime program can execute on native runtime with request varia
       greet => 'hello cached',
     },
   }, 'cached program uses request-time specialization before native execution';
-  ok $called, 'cached runtime/program still reached native engine';
+  ok $called, 'cached runtime/program still reached native execution';
 };
 
 subtest 'inflated runtime descriptor can still drive native specialization' => sub {
@@ -273,7 +273,7 @@ subtest 'inflated runtime descriptor can still drive native specialization' => s
       $called = 1;
       goto &$orig;
     };
-    $result = $inflated->execute_program($program, engine => 'native');
+    $result = $inflated->execute_program($program, strict_sync => 1);
   }
 
   is_deeply $result, {
@@ -281,7 +281,7 @@ subtest 'inflated runtime descriptor can still drive native specialization' => s
       greet => 'hello Ana',
     },
   }, 'inflated runtime still specializes directive guards before native execution';
-  ok $called, 'inflated runtime also uses native engine';
+  ok $called, 'inflated runtime also uses native execution';
 };
 
 subtest 'schema helper can compile and execute in one call' => sub {
@@ -291,12 +291,6 @@ subtest 'schema helper can compile and execute in one call' => sub {
       viewer => { id => 'u1' },
     },
   }, 'schema helper executes runtime program';
-};
-
-subtest 'schema helper rejects explicit Perl engine on sync path' => sub {
-  my $error = eval { $schema->execute('{ viewer { id } }', engine => 'perl') ; 1 } ? undef : $@;
-  like $error, qr/engine => 'perl' is no longer supported/,
-    'sync runtime no longer exposes explicit Perl engine';
 };
 
 subtest 'default resolver path reads root hash values' => sub {

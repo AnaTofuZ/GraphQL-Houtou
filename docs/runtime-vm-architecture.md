@@ -1002,7 +1002,7 @@ instead of trying to teach every child module to call XS:
 - the top-level runtime bridge remains the only native execution boundary
 
 In practice this means `Schema->execute_native(...)` should behave like
-`Runtime->execute_program(engine => 'native')`, not like a raw static bundle
+`Runtime->execute_program(strict_sync => 1)`, not like a raw static bundle
 loader. Dynamic variables and directives are resolved before native execution,
 but execution itself still happens on the native VM.
 

@@ -181,8 +181,17 @@ Without the declaration, requests with variables run on the synchronous
 fast lane, which cannot suspend. A resolver returning a Promise::XS
 promise there fails immediately with an error pointing at `async => 1`
 and `on_stall` - promise objects never leak into response data.
-`engine => 'native'` forces the strict sync lane even on an async
-runtime.
+`strict_sync => 1` forces the strict sync lane even on an async runtime.
+
+### Execution lane option
+
+Execution always uses the XS native runtime. Normally the runtime chooses the
+synchronous or async-capable lane from `async`, variables, and `on_stall`.
+
+`strict_sync => 1` explicitly pins a request to the strict synchronous
+fast lane, including on a runtime built with `async => 1`. Use it only
+when promise-returning resolvers must be rejected for that request. There is
+no supported Pure Perl execution path.
 
 ## Serving JSON responses directly
 

@@ -38,20 +38,6 @@ subtest 'execute recognizes the policy as an option hash' => sub {
     'the convenience API does not mistake the option hash for variables';
 };
 
-subtest 'legacy Perl execution cannot bypass the policy' => sub {
-  my $ok = eval {
-    execute(
-      $schema,
-      '{ __schema { queryType { name } } }',
-      { allow_introspection => 0, engine => 'perl' },
-    );
-    1;
-  };
-  ok !$ok, 'the request is not executed';
-  like $@, qr/cannot enforce this request policy/,
-    'the unsupported combination fails closed with a useful message';
-};
-
 subtest 'runtime policy rejects schema introspection but permits typename' => sub {
   my $runtime = build_native_runtime(
     $schema, allow_introspection => 0, program_cache_max => 10,

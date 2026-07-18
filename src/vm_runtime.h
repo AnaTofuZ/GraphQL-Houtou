@@ -487,10 +487,6 @@ struct gql_runtime_vm_lazy_info {
 
 static AV *gql_runtime_vm_expect_op_array(pTHX_ SV *op_sv);
 static SV *gql_runtime_vm_op_slot_sv(pTHX_ SV *op_sv, IV index);
-static SV *gql_runtime_vm_op_result_name_sv(pTHX_ SV *op_sv);
-static AV *gql_runtime_vm_cursor_ops_av(pTHX_ const gql_runtime_vm_cursor_t *cursor);
-static SV *gql_runtime_vm_cursor_current_op_borrowed_sv(pTHX_ const gql_runtime_vm_cursor_t *cursor);
-static SV *gql_runtime_vm_cursor_current_slot_borrowed_sv(pTHX_ const gql_runtime_vm_cursor_t *cursor);
 static const gql_runtime_vm_native_block_t *gql_runtime_vm_cursor_current_native_block(const gql_runtime_vm_cursor_t *cursor);
 static const gql_runtime_vm_native_op_t *gql_runtime_vm_cursor_current_native_op(const gql_runtime_vm_cursor_t *cursor);
 static const gql_runtime_vm_native_slot_t *gql_runtime_vm_cursor_current_native_slot(const gql_runtime_vm_cursor_t *cursor);
@@ -538,10 +534,8 @@ static gql_runtime_vm_pending_entry_t *gql_runtime_vm_block_frame_push_pending_e
   IV op_index
 );
 static void gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, SV *result_name, SV *outcome);
-static SV *gql_runtime_vm_program_block_by_index_sv(pTHX_ SV *program_sv, IV block_index);
 static void gql_runtime_vm_block_frame_clear_pending(pTHX_ gql_runtime_vm_block_frame_t *frame);
 static void gql_runtime_vm_path_frame_decref(gql_runtime_vm_path_frame_t *frame);
-static SV *gql_runtime_vm_call_cb4(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV *arg3);
 static SV *gql_runtime_vm_call_cb4_nonfatal(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV *arg3, SV **error_out);
 static SV *gql_runtime_vm_call_cb5_nonfatal(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV *arg3, SV *arg4, SV **error_out);
 static SV *gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_state_t *state);
@@ -640,12 +634,6 @@ gql_runtime_vm_op_slot_sv(pTHX_ SV *op_sv, IV index)
   return (svp && SvOK(*svp)) ? *svp : NULL;
 }
 
-static SV *
-gql_runtime_vm_op_result_name_sv(pTHX_ SV *op_sv)
-{
-  return gql_runtime_vm_op_slot_sv(aTHX_ op_sv, 7);
-}
-
 static const gql_runtime_vm_native_block_t *
 gql_runtime_vm_cursor_current_native_block(const gql_runtime_vm_cursor_t *cursor)
 {
@@ -682,52 +670,6 @@ gql_runtime_vm_cursor_current_native_slot(const gql_runtime_vm_cursor_t *cursor)
     return NULL;
   }
   return &block->slots[cursor->slot_index];
-}
-
-static AV *
-gql_runtime_vm_cursor_ops_av(pTHX_ const gql_runtime_vm_cursor_t *cursor)
-{
-  (void)cursor;
-  return NULL;
-}
-
-static SV *
-gql_runtime_vm_cursor_current_op_borrowed_sv(pTHX_ const gql_runtime_vm_cursor_t *cursor)
-{
-  (void)cursor;
-  return NULL;
-}
-
-static SV *
-gql_runtime_vm_cursor_current_slot_borrowed_sv(pTHX_ const gql_runtime_vm_cursor_t *cursor)
-{
-  (void)cursor;
-  return NULL;
-}
-
-static SV *
-gql_runtime_vm_program_block_by_index_sv(pTHX_ SV *program_sv, IV block_index)
-{
-  AV *program_av;
-  SV **blocks_svp;
-  AV *blocks_av;
-  SV **block_svp;
-
-  if (!program_sv || !SvOK(program_sv) || !SvROK(program_sv) || SvTYPE(SvRV(program_sv)) != SVt_PVAV) {
-    return NULL;
-  }
-  if (block_index < 0) {
-    return NULL;
-  }
-
-  program_av = (AV *)SvRV(program_sv);
-  blocks_svp = av_fetch(program_av, 4, 0);
-  if (!blocks_svp || !*blocks_svp || !SvOK(*blocks_svp) || !SvROK(*blocks_svp) || SvTYPE(SvRV(*blocks_svp)) != SVt_PVAV) {
-    return NULL;
-  }
-  blocks_av = (AV *)SvRV(*blocks_svp);
-  block_svp = av_fetch(blocks_av, block_index, 0);
-  return (block_svp && *block_svp && SvOK(*block_svp)) ? *block_svp : NULL;
 }
 
 /*
@@ -2334,35 +2276,6 @@ gql_runtime_vm_block_frame_push_pending_entry_with_meta(
 }
 
 static void
-gql_runtime_vm_block_frame_push_pending_pvn_with_kind(
-  pTHX_
-  gql_runtime_vm_block_frame_t *frame,
-  const char *result_name_pv,
-  STRLEN result_name_len,
-  SV *outcome,
-  U8 payload_kind
-)
-{
-  if (!frame || !result_name_pv || result_name_len == 0 || !outcome) {
-    return;
-  }
-
-  gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
-    aTHX_
-    frame,
-    result_name_pv,
-    result_name_len,
-    0,
-    outcome,
-    payload_kind,
-    NULL,
-    -1,
-    -1,
-    -1
-  );
-}
-
-static void
 gql_runtime_vm_block_frame_push_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, SV *result_name, SV *outcome)
 {
   STRLEN result_name_len = 0;
@@ -2531,18 +2444,6 @@ gql_runtime_vm_new_error_record_struct_for_path(
     record->path_frame = NULL;
   }
   return record;
-}
-
-static gql_runtime_vm_error_record_t *
-gql_runtime_vm_new_error_record_struct(pTHX_ SV *message, SV *path_frame)
-{
-  gql_runtime_vm_path_frame_t *path_ptr = NULL;
-
-  if (path_frame && SvOK(path_frame) && SvROK(path_frame) && SvIOK(SvRV(path_frame)) && SvUV(SvRV(path_frame)) != 0) {
-    path_ptr = INT2PTR(gql_runtime_vm_path_frame_t *, SvUV(SvRV(path_frame)));
-  }
-
-  return gql_runtime_vm_new_error_record_struct_for_path(aTHX_ message, path_ptr);
 }
 
 static SV *
@@ -4985,34 +4886,6 @@ gql_runtime_vm_clone_native_program(pTHX_ gql_runtime_vm_native_program_t *src)
     }
   }
   return dst;
-}
-
-static SV *
-gql_runtime_vm_lookup_type_object_by_name_from_schema_sv(pTHX_ SV *runtime_schema, const char *type_name)
-{
-  SV *runtime_cache_sv;
-  SV *name2type_sv;
-  HV *schema_hv;
-  HV *runtime_cache_hv;
-  HV *name2type_hv;
-  SV **svp;
-
-  if (!runtime_schema || !SvROK(runtime_schema) || SvTYPE(SvRV(runtime_schema)) != SVt_PVHV || !type_name) {
-    return NULL;
-  }
-  schema_hv = (HV *)SvRV(runtime_schema);
-  runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ schema_hv, "runtime_cache", 13);
-  if (!runtime_cache_sv || !SvROK(runtime_cache_sv) || SvTYPE(SvRV(runtime_cache_sv)) != SVt_PVHV) {
-    return NULL;
-  }
-  runtime_cache_hv = (HV *)SvRV(runtime_cache_sv);
-  name2type_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "name2type", 9);
-  if (!name2type_sv || !SvROK(name2type_sv) || SvTYPE(SvRV(name2type_sv)) != SVt_PVHV) {
-    return NULL;
-  }
-  name2type_hv = (HV *)SvRV(name2type_sv);
-  svp = hv_fetch(name2type_hv, type_name, (I32)strlen(type_name), 0);
-  return (svp && SvOK(*svp)) ? *svp : NULL;
 }
 
 static SV *

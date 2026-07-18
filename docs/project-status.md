@@ -57,15 +57,9 @@ runtime / VM で既に入っているもの:
 
 ## Legacy Artifacts
 
-旧実装のテスト資産は `legacy-tests/` に退避済みです。
-
-意図:
-
-- 旧仕様との差分確認
-- 必要なケースだけ将来の runtime / VM テストへ再移植
-- 旧実装コードを大胆に削除するための保険
-
-active suite は `legacy-tests/` を基準にはしていません。
+旧実装のテスト資産(`legacy-tests/`)は削除済みです。現行アーキテクチャで
+意味を持つケースは active suite に移植済み(introspection メタ型 → t/46、
+kitchen-sink parse / unicode escape → t/45)。原本は Git 履歴を参照します。
 
 ## Current Direction
 

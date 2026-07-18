@@ -450,14 +450,6 @@ gql_make_location(pTHX_ gql_parser_t *p) {
   return newRV_noinc((SV *)hv);
 }
 
-static void
-gql_store_location(pTHX_ gql_parser_t *p, HV *hv) {
-  if (p->no_location) {
-    return;
-  }
-  gql_store_sv(hv, "location", gql_make_location(aTHX_ p));
-}
-
 static SV *
 gql_make_current_location(pTHX_ gql_parser_t *p) {
   HV *hv;
@@ -533,77 +525,6 @@ gql_make_type_wrapper(pTHX_ SV *type_sv, const char *kind) {
   gql_store_sv(inner, "type", type_sv);
   av_push(av, newRV_noinc((SV *)inner));
   return newRV_noinc((SV *)av);
-}
-
-static SV *
-gql_tokenize_source(pTHX_ SV *source_sv) {
-  gql_parser_t p;
-  AV *tokens = newAV();
-
-  ENTER;
-  SAVETMPS;
-  gql_parser_init(aTHX_ &p, source_sv, 0);
-  gql_advance(aTHX_ &p);
-  while (p.kind != TOK_EOF) {
-    HV *hv = newHV();
-    IV line;
-    IV column;
-    HV *loc_hv = newHV();
-
-    gql_line_column_from_pos(&p, p.tok_start, &line, &column, 1);
-    gql_store_sv(loc_hv, "line", newSViv(line));
-    gql_store_sv(loc_hv, "column", newSViv(column));
-
-    gql_store_sv(hv, "kind", newSVpv(gql_token_kind_name(p.kind), 0));
-    gql_store_sv(hv, "text", gql_copy_token_sv(aTHX_ &p));
-    gql_store_sv(hv, "start", newSVuv((UV)p.tok_start));
-    gql_store_sv(hv, "end", newSVuv((UV)p.tok_end));
-    gql_store_sv(hv, "loc", newRV_noinc((SV *)loc_hv));
-    av_push(tokens, newRV_noinc((SV *)hv));
-
-    gql_advance(aTHX_ &p);
-  }
-
-  gql_parser_invalidate(&p);
-  FREETMPS;
-  LEAVE;
-  return newRV_noinc((SV *)tokens);
-}
-
-static SV *
-gql_graphqlperl_find_legacy_empty_object_location(pTHX_ SV *source_sv) {
-  gql_parser_t p;
-  ENTER;
-  SAVETMPS;
-  gql_parser_init(aTHX_ &p, source_sv, 0);
-  gql_advance(aTHX_ &p);
-  while (p.kind != TOK_EOF) {
-    if (p.kind == TOK_COLON || p.kind == TOK_EQUALS) {
-      gql_advance(aTHX_ &p);
-      if (p.kind == TOK_LBRACE) {
-        gql_advance(aTHX_ &p);
-        if (p.kind == TOK_RBRACE) {
-          IV line;
-          IV column;
-          HV *loc_hv = newHV();
-          gql_line_column_from_pos(&p, p.tok_start, &line, &column, 1);
-          gql_store_sv(loc_hv, "line", newSViv(line));
-          gql_store_sv(loc_hv, "column", newSViv(column));
-          gql_parser_invalidate(&p);
-          FREETMPS;
-          LEAVE;
-          return newRV_noinc((SV *)loc_hv);
-        }
-      }
-      continue;
-    }
-    gql_advance(aTHX_ &p);
-  }
-
-  gql_parser_invalidate(&p);
-  FREETMPS;
-  LEAVE;
-  return &PL_sv_undef;
 }
 
 static SV *

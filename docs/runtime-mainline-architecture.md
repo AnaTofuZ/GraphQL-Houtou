@@ -208,10 +208,8 @@ active tree からは次を削除済みです。
 - `Runtime::ProgramSpecializer`
 - `Runtime::NativeBundle` Perl wrapper
 
-旧テストと履歴は次を参照します。
-
-- `legacy-tests/original-t/`
-- Git history
+旧テストと履歴は Git history を参照します(`legacy-tests/original-t/` は
+削除済み。現行アーキテクチャで有効なケースは active suite に移植済み)。
 
 ## 今後の主戦場
 

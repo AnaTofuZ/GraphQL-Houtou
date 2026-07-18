@@ -79,6 +79,7 @@ Cases: `parser_public`, `execution`, `vm_execute`, `promise`, `aliases`,
 ## History
 
 - 2026-04-05: original harness pass on the pre-runtime-reboot suite
-  (t/03, t/04, t/11, t/12 — since moved to `legacy-tests/`).
+  (t/03, t/04, t/11, t/12 — since removed; see git history under
+  `legacy-tests/`).
 - 2026-07-05: cases refreshed to the active mainline suite; soak harness,
   ASan CI gate, and CLONE_SKIP guards added (performance plan Phase B).

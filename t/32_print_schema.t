@@ -20,7 +20,7 @@ type Dog implements Pet {
 }
 
 type Query {
-  dog(id: ID = "1"): Dog
+  dog(id: ID = "1", legacyId: ID @deprecated(reason: "use id")): Dog
   pets: [Pet!]
   find(by: LookupBy): String
   color: Color
@@ -40,12 +40,13 @@ union Thing = Dog
 input LookupBy @oneOf {
   id: ID
   email: String
+  legacyName: String @deprecated(reason: "use email")
 }
 
 """A point in time"""
 scalar DateTime @specifiedBy(url: "https://example.com/dt")
 
-directive @slow(ms: Int) repeatable on FIELD | VARIABLE_DEFINITION
+directive @slow(ms: Int, legacyMs: Int @deprecated(reason: "use ms")) repeatable on FIELD | VARIABLE_DEFINITION
 
 directive @pure on FIELD
 SDL
@@ -56,7 +57,9 @@ subtest 'print_schema renders every type kind' => sub {
   like $printed, qr/^"A pet"\ninterface Pet \{\n  name: String!\n\}/m,
     'interface with description';
   like $printed, qr/^type Dog implements Pet \{/m, 'implements clause';
-  like $printed, qr/^  dog\(id: ID = "1"\): Dog$/m, 'argument with default value';
+  like $printed,
+    qr/^  dog\(id: ID = "1", legacyId: ID \@deprecated\(reason: "use id"\)\): Dog$/m,
+    'argument defaults and deprecation are printed';
   like $printed, qr/^  old: String \@deprecated\(reason: "gone"\)$/m,
     'deprecated field with reason';
   like $printed, qr/^enum Color \{$/m, 'enum header';
@@ -64,10 +67,14 @@ subtest 'print_schema renders every type kind' => sub {
   like $printed, qr/^  "green things"\n  GREEN$/m, 'enum value description';
   like $printed, qr/^union Thing = Dog$/m, 'union members';
   like $printed, qr/^input LookupBy \@oneOf \{$/m, 'oneOf input object';
+  like $printed,
+    qr/^  legacyName: String \@deprecated\(reason: "use email"\)$/m,
+    'deprecated input field is printed';
   like $printed, qr/^"A point in time"\nscalar DateTime \@specifiedBy\(url: "https:\/\/example\.com\/dt"\)$/m,
     'scalar with description and specifiedBy';
-  like $printed, qr/^directive \@slow\(ms: Int\) repeatable on FIELD \| VARIABLE_DEFINITION$/m,
-    'repeatable directive with args';
+  like $printed,
+    qr/^directive \@slow\(legacyMs: Int \@deprecated\(reason: "use ms"\), ms: Int\) repeatable on FIELD \| VARIABLE_DEFINITION$/m,
+    'repeatable directive with deprecated args';
   like $printed, qr/^directive \@pure on FIELD$/m,
     'argument-less directive omits empty parens';
 

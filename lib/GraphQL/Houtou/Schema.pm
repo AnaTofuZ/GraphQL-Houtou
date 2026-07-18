@@ -45,6 +45,12 @@ our %KIND2CLASS = (
   scalar => 'GraphQL::Houtou::Type::Scalar',
 );
 my @ROOT_ATTRS = qw(query mutation subscription);
+my %VALID_DIRECTIVE_LOCATION = map { ($_ => 1) } qw(
+  QUERY MUTATION SUBSCRIPTION FIELD FRAGMENT_DEFINITION FRAGMENT_SPREAD
+  INLINE_FRAGMENT VARIABLE_DEFINITION SCHEMA SCALAR OBJECT FIELD_DEFINITION
+  ARGUMENT_DEFINITION INTERFACE UNION ENUM ENUM_VALUE INPUT_OBJECT
+  INPUT_FIELD_DEFINITION
+);
 
 sub from_doc {
   my ($class, $doc, %opts) = @_;
@@ -180,12 +186,6 @@ sub _merge_type_system_extensions {
 sub _type_system_directive_errors {
   my ($ast, $directives) = @_;
   my (@errors, %name2directive, %definition_count);
-  my %valid_location = map { ($_ => 1) } qw(
-    QUERY MUTATION SUBSCRIPTION FIELD FRAGMENT_DEFINITION FRAGMENT_SPREAD
-    INLINE_FRAGMENT VARIABLE_DEFINITION SCHEMA SCALAR OBJECT FIELD_DEFINITION
-    ARGUMENT_DEFINITION INTERFACE UNION ENUM ENUM_VALUE INPUT_OBJECT
-    INPUT_FIELD_DEFINITION
-  );
   for my $directive (@$directives) {
     my $name = $directive->name;
     push @errors, "Directive '\@$name' is defined more than once."
@@ -199,7 +199,7 @@ sub _type_system_directive_errors {
       my %seen_location;
       for my $location (@{ $node->{locations} || [] }) {
         push @errors, "Directive '\@$node->{name}' has unknown location '$location'."
-          if !$valid_location{$location};
+          if !$VALID_DIRECTIVE_LOCATION{$location};
         push @errors, "Directive '\@$node->{name}' repeats location '$location'."
           if $seen_location{$location}++;
       }
@@ -507,9 +507,23 @@ sub validation_errors {
     }
   }
 
+  my %directive_name;
   for my $directive (@{ $self->directives || [] }) {
     next if !ref($directive) || !$directive->can('name');
-    push @errors, _reserved_name_error('Directive', $directive->name);
+    my $name = $directive->name;
+    push @errors, "Directive '\@$name' is defined more than once."
+      if $directive_name{$name}++;
+    push @errors, _reserved_name_error('Directive', $name);
+    my %location;
+    my $locations = $directive->locations || [];
+    push @errors, "Directive '\@$name' must include one or more locations."
+      if !@$locations;
+    for my $location (@$locations) {
+      push @errors, "Directive '\@$name' has unknown location '$location'."
+        if !$VALID_DIRECTIVE_LOCATION{$location};
+      push @errors, "Directive '\@$name' repeats location '$location'."
+        if $location{$location}++;
+    }
     for my $arg_name (sort keys %{ $directive->args || {} }) {
       my $arg = $directive->args->{$arg_name};
       push @errors, _reserved_name_error(
@@ -517,6 +531,9 @@ sub validation_errors {
       );
       push @errors, _default_value_error(
         "directive @{[$directive->name]} argument $arg_name", $arg,
+      );
+      push @errors, _required_deprecation_error(
+        'argument @' . $directive->name . "($arg_name:)", $arg,
       );
     }
   }
@@ -543,6 +560,9 @@ sub validation_errors {
           push @errors, _default_value_error(
             "argument $type_name.$field_name($arg_name:)", $arg,
           );
+          push @errors, _required_deprecation_error(
+            "argument $type_name.$field_name($arg_name:)", $arg,
+          );
         }
       }
     }
@@ -555,6 +575,9 @@ sub validation_errors {
     }
 
     if (_is_object_type($type)) {
+      push @errors, "Object type @{[$type->name]} must define one or more fields."
+        if !keys %{ $type->fields || {} };
+      push @errors, _implemented_interface_errors($type);
       push @errors, $self->_object_field_errors($type);
       for my $interface (@{ $type->interfaces || [] }) {
         if (!ref($interface) || !_is_interface_type($interface)) {
@@ -566,6 +589,9 @@ sub validation_errors {
       }
     }
     elsif (_is_interface_type($type)) {
+      push @errors, "Interface type @{[$type->name]} must define one or more fields."
+        if !keys %{ $type->fields || {} };
+      push @errors, _implemented_interface_errors($type);
       push @errors, $self->_object_field_errors($type);
       for my $interface (@{ $type->interfaces || [] }) {
         if (!ref($interface) || !_is_interface_type($interface)) {
@@ -592,6 +618,8 @@ sub validation_errors {
     }
     elsif ($type->isa('GraphQL::Houtou::Type::InputObject')) {
       my $fields = $type->fields || {};
+      push @errors, "Input Object type @{[$type->name]} must define one or more fields."
+        if !keys %$fields;
       my $is_one_of = $type->can('is_one_of') && $type->is_one_of;
       for my $field_name (sort keys %$fields) {
         my $field = $fields->{$field_name};
@@ -600,6 +628,9 @@ sub validation_errors {
           . (ref($field_type) ? ' but got: ' . $field_type->to_string . '.' : '.')
           if !_is_input_type($field_type);
         push @errors, _default_value_error(
+          "input field @{[$type->name]}.$field_name", $field,
+        );
+        push @errors, _required_deprecation_error(
           "input field @{[$type->name]}.$field_name", $field,
         );
         if ($is_one_of) {
@@ -613,8 +644,48 @@ sub validation_errors {
   }
 
   push @errors, $self->_input_object_cycle_errors($name2type);
+  push @errors, $self->_interface_cycle_errors($name2type);
 
   return \@errors;
+}
+
+sub _interface_cycle_errors {
+  my ($self, $name2type) = @_;
+  my (@errors, %state, @path, %path_index);
+
+  my $visit;
+  $visit = sub {
+    my ($type) = @_;
+    my $name = $type->name;
+    $state{$name} = 1;
+    $path_index{$name} = scalar @path;
+    push @path, $name;
+
+    for my $next (@{ $type->interfaces || [] }) {
+      next if !ref($next) || !_is_interface_type($next);
+      my $next_name = $next->name;
+      if (($state{$next_name} || 0) == 1) {
+        my @cycle = (@path[$path_index{$next_name} .. $#path], $next_name);
+        push @errors, 'Interface implementation cannot contain a circular reference: '
+          . join(' -> ', @cycle) . '.';
+      }
+      elsif (!$state{$next_name}) {
+        $visit->($next);
+      }
+    }
+
+    pop @path;
+    delete $path_index{$name};
+    $state{$name} = 2;
+    return;
+  };
+
+  for my $name (sort keys %$name2type) {
+    my $type = $name2type->{$name};
+    next if !$type || !_is_interface_type($type) || $state{$name};
+    $visit->($type);
+  }
+  return @errors;
 }
 
 sub _input_object_cycle_errors {
@@ -723,6 +794,30 @@ sub _missing_required_input_field {
     return $error if $error;
   }
   return;
+}
+
+sub _required_deprecation_error {
+  my ($coordinate, $definition) = @_;
+  return () if !ref($definition->{type})
+    || !$definition->{type}->isa('GraphQL::Houtou::Type::NonNull')
+    || exists($definition->{default_value})
+    || (!$definition->{is_deprecated}
+      && !defined($definition->{deprecation_reason}));
+  return "Required $coordinate cannot be deprecated.";
+}
+
+sub _implemented_interface_errors {
+  my ($type) = @_;
+  my (@errors, %seen);
+  for my $interface (@{ $type->interfaces || [] }) {
+    next if !ref($interface) || !$interface->can('name');
+    my $name = $interface->name;
+    push @errors, "Type @{[$type->name]} can only implement $name once."
+      if $seen{$name}++;
+    push @errors, "Type @{[$type->name]} cannot implement itself."
+      if $type == $interface;
+  }
+  return @errors;
 }
 
 sub _object_field_errors {

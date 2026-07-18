@@ -61,6 +61,8 @@ Implementation progress:
 - completed: no unused fragments, using transitive operation reachability;
 - completed: duplicate argument/variable detection through a validation-only
   parser error sink, without changing the public canonical AST;
+- completed: duplicate input object fields use the same validation-only parser
+  diagnostics before the canonical hash representation overwrites them;
 - completed: unused variable/fragment graph traversal moved from Pure Perl to
   XS; cached documents still bypass validation entirely;
 - performance check: the existing kitchen-sink parser benchmark measured

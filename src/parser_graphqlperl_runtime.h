@@ -567,6 +567,19 @@ gql_parse_object_value(pTHX_ gql_parser_t *p, int is_const) {
   while (p->kind != TOK_RBRACE) {
     SV *name = gql_parse_name(aTHX_ p, "Expected name");
     gql_expect(aTHX_ p, TOK_COLON, NULL);
+    if (p->validation_errors) {
+      STRLEN name_len;
+      const char *name_str = SvPV(name, name_len);
+      if (hv_exists(hv, name_str, (I32)name_len)) {
+        HV *error_hv = newHV();
+        AV *locations_av = newAV();
+        SV *message = newSVpvf("Input field '%s' is provided more than once.", name_str);
+        gql_store_sv(error_hv, "message", message);
+        av_push(locations_av, gql_make_current_location(aTHX_ p));
+        gql_store_sv(error_hv, "locations", newRV_noinc((SV *)locations_av));
+        av_push(p->validation_errors, newRV_noinc((SV *)error_hv));
+      }
+    }
     gql_store_sv(hv, SvPV_nolen(name), gql_parse_value(aTHX_ p, is_const));
     SvREFCNT_dec(name);
   }

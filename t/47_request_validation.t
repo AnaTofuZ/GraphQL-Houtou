@@ -201,4 +201,22 @@ subtest 'the JSON lane returns the same errors-only envelope' => sub {
   like $decoded->{errors}[0]{message}, qr/does not exist/, 'error message';
 };
 
+subtest 'executable descriptions do not affect validation or execution' => sub {
+  my $runtime = runtime();
+  my $result = $runtime->execute_document(<<'GRAPHQL', variables => { name => 'Ana' });
+"Operation docs"
+query Described("Variable docs" $name: String!) {
+  hello(name: $name)
+  ...Greeting
+}
+"Fragment docs"
+fragment Greeting on Query {
+  item { name }
+}
+GRAPHQL
+  is_deeply $result->{errors}, [], 'described document passes validation'
+    or diag explain $result->{errors};
+  is $result->{data}{hello}, 'hi Ana', 'descriptions are execution-neutral';
+};
+
 done_testing;

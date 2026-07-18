@@ -34,7 +34,7 @@ Section 3 validation and Section 6 subscription execution remain incomplete.
 
 | Specification area | Status | Primary evidence | Remaining work |
 | --- | --- | --- | --- |
-| Section 2: Language | Partial | `t/45_parser_conformance.t`, parser adversarial/fuzz suites | Executable descriptions; schema-coordinate parser API |
+| Section 2: Language | Partial | `t/45_parser_conformance.t`, parser adversarial/fuzz suites | Schema-coordinate parser API |
 | Section 3: Type System | Partial | `t/30_schema_build_validation.t`, `t/31_build_schema.t`, `t/32_print_schema.t`, `t/33_oneof_input_objects.t` | Complete normative schema validation listed below |
 | Section 4: Introspection | Implemented | `t/26_deprecated_locations.t`, `t/27_directive_runtime.t`, `t/28_modern_introspection.t`, `t/46_introspection_meta_types.t` | Keep canonical introspection query in compatibility CI |
 | Section 5: Validation | Implemented | `docs/validation-conformance.md`, `t/08_validation.t` | No known stable-rule gap |
@@ -53,7 +53,7 @@ Section 3 validation and Section 6 subscription execution remain incomplete.
 | Type-system definitions | Implemented | `build_schema` and `print_schema` coverage |
 | Type-system extensions | Implemented in PR #60 | Object, interface, union, enum, input object, scalar, and schema extensions; empty extensions rejected in XS |
 | Descriptions on type-system definitions | Implemented | SDL builder/printer and introspection preserve descriptions |
-| Descriptions on executable definitions | **Unsupported** | September 2025 permits descriptions on operations, fragments, and variable definitions. The parser currently routes a leading string to the type-system parser. |
+| Descriptions on executable definitions | Implemented | XS parsing preserves descriptions on operations, fragments, and variable definitions; descriptions remain execution-neutral. |
 | Schema-coordinate syntax | Not applicable to execution; unsupported as tooling API | Houtou does not expose a `parse_schema_coordinate` utility. This does not affect request execution, but prevents claiming the complete language/tooling surface. |
 
 ## Section 3: Type System

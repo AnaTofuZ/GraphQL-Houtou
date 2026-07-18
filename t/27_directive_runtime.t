@@ -138,7 +138,7 @@ subtest 'introspection exposes specifiedByURL and __Directive.isRepeatable' => s
     }
   });
 
-  is_deeply $result->{errors}, [], 'introspection has no errors';
+  ok !exists $result->{errors}, 'introspection has no errors';
   is $result->{data}{__type}{specifiedByURL},
     'https://example.com/spec/url-scalar',
     'scalar specifiedByURL is exposed';
@@ -156,7 +156,6 @@ subtest 'custom executable field directive materializes variable arguments on na
 
   is_deeply $result, {
     data => { hello => '***' },
-    errors => [],
   }, 'FIELD directive middleware sees materialized variable args';
 };
 
@@ -165,7 +164,6 @@ subtest 'post-resolve directive API preserves directive order' => sub {
 
   is_deeply $result, {
     data => { hello => '[hello!]' },
-    errors => [],
   }, 'post-resolve directives compose in source order';
 };
 
@@ -213,7 +211,6 @@ subtest 'custom directives on fragment spreads are inherited onto field resoluti
         name => 'ANA',
       },
     },
-    errors => [],
   }, 'fragment-spread directive is applied when the field resolves';
 };
 
@@ -235,7 +232,6 @@ subtest 'field-definition directives wrap the default resolver path' => sub {
 
   is_deeply $allowed, {
     data => { secret => 'shh' },
-    errors => [],
   }, 'field-definition directive can allow the default resolver';
 };
 

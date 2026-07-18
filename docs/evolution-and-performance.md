@@ -334,7 +334,7 @@ flowchart TD
     FIELD --> DECISION["runtime 判断 (C)\nタイプを決定"]
     DECISION --> CORRIDOR["corridor に入る (C)"]
     CORRIDOR --> EDGE["corridor の端"]
-    EDGE -->|"汎用ケースに落ちる"| PERL_WRAP["Perl HashRef を生成 (C→Perl)\n{data => $result, errors => []}"]
+    EDGE -->|"汎用ケースに落ちる"| PERL_WRAP["Perl HashRef を生成 (C→Perl)\n{data => $result}"]
     PERL_WRAP -->|"Perl 側の汎用関数を呼ぶ\n(Perl→C 境界を再度越える)"| GENERIC_XS["XS 汎用完成処理"]
     GENERIC_XS -->|"また HashRef から取り出す"| NEXT["次の処理へ"]
 
@@ -442,7 +442,7 @@ classDiagram
 ```mermaid
 flowchart LR
     subgraph "旧: 処理の中間状態 = Perl HashRef"
-        H1["{data => 'R2-D2', errors => []}"]
+        H1["{data => 'R2-D2'}"]
         H1 --> H2["Perl の参照カウント管理\n生成・破棄が高コスト"]
     end
     subgraph "新: 処理の中間状態 = C 構造体"

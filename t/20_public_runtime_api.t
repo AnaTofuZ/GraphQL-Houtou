@@ -51,7 +51,6 @@ subtest 'top-level execute uses runtime-backed API' => sub {
   my $result = execute($schema, '{ hello }');
   is_deeply $result, {
     data => { hello => 'world' },
-    errors => [],
   }, 'top-level execute returns runtime result';
 };
 
@@ -63,7 +62,6 @@ subtest 'top-level execute accepts variable hashref as third arg' => sub {
   );
   is_deeply $result, {
     data => { greet => 'hello alice' },
-    errors => [],
   }, 'top-level execute treats third hashref as variables';
 };
 
@@ -75,7 +73,6 @@ subtest 'top-level compile_runtime returns schema runtime' => sub {
   my $result = $runtime->execute_program($program);
   is_deeply $result, {
     data => { hello => 'world' },
-    errors => [],
   }, 'compiled runtime can execute operation';
 };
 
@@ -90,7 +87,6 @@ subtest 'schema runtime descriptor helpers prefer program/native names' => sub {
   ok $program_descriptor->{blocks_compact}, 'program descriptor payload is written to disk';
   is_deeply $schema->build_runtime->execute_program($program), {
     data => { hello => 'world' },
-    errors => [],
   }, 'program descriptor helpers round-trip through file boundary';
 
   my ($runtime_fh, $runtime_path) = tempfile();
@@ -134,7 +130,6 @@ subtest 'top-level build_native_runtime returns cached native runtime wrapper' =
 
   is_deeply $result, {
     data => { greet => 'hello cached' },
-    errors => [],
   }, 'cached native runtime executes request-specialized program';
 };
 
@@ -159,7 +154,6 @@ subtest 'native runtime can compile reusable bundle from cached program' => sub 
 
   is_deeply $result, {
     data => { hello => 'world' },
-    errors => [],
   }, 'compiled native bundle executes through wrapper';
 };
 
@@ -182,7 +176,6 @@ subtest 'native runtime can round-trip bundle descriptors' => sub {
   ok $descriptor->{program}, 'bundle descriptor keeps native program payload';
   is_deeply $result, {
     data => { greet => 'hello persisted' },
-    errors => [],
   }, 'dumped and loaded native bundle descriptor still executes';
 };
 
@@ -193,7 +186,6 @@ subtest 'top-level compile_native_bundle returns executable bundle' => sub {
   my $result = $native->execute_bundle($bundle);
   is_deeply $result, {
     data => { hello => 'world' },
-    errors => [],
   }, 'top-level bundle compile returns executable native bundle';
 };
 
@@ -204,7 +196,6 @@ subtest 'top-level compile_native_program returns executable native program hand
   my $result = $native->execute_program($program);
   is_deeply $result, {
     data => { hello => 'world' },
-    errors => [],
   }, 'top-level native program compile returns executable handle';
 };
 
@@ -231,11 +222,9 @@ subtest 'schema execute_native reuses cached native runtime handle' => sub {
 
     is_deeply $first, {
       data => { hello => 'world' },
-      errors => [],
     }, 'first native runtime execution succeeds';
     is_deeply $second, {
       data => { hello => 'world' },
-      errors => [],
     }, 'second native runtime execution succeeds';
   }
 
@@ -246,7 +235,6 @@ subtest 'top-level execute_native uses cached native path' => sub {
   my $result = execute_native($schema, '{ hello }');
   is_deeply $result, {
     data => { hello => 'world' },
-    errors => [],
   }, 'top-level execute_native delegates to schema native runtime';
 };
 

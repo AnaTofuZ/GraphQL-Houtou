@@ -7,12 +7,10 @@
 #include "schema_compiler.h"
 #include "validation.h"
 static SV *gql_runtime_vm_empty_args_sv(pTHX);
-static SV *gql_runtime_vm_empty_errors_sv(pTHX);
 static SV *gql_runtime_vm_named_coderef_sv(pTHX_ const char *name);
 #include "vm_runtime.h"
 
 static SV *gql_runtime_vm_global_empty_args_sv = NULL;
-static SV *gql_runtime_vm_global_empty_errors_sv = NULL;
 static SV *gql_runtime_vm_global_identity_callback_sv = NULL;
 static HV *gql_runtime_vm_outcome_stash = NULL;
 static HV *gql_runtime_vm_promise_xs_stash = NULL;
@@ -107,15 +105,6 @@ gql_runtime_vm_empty_args_sv(pTHX)
 }
 
 static SV *
-gql_runtime_vm_empty_errors_sv(pTHX)
-{
-  if (!gql_runtime_vm_global_empty_errors_sv) {
-    gql_runtime_vm_global_empty_errors_sv = newRV_noinc((SV *)newAV());
-  }
-  return SvREFCNT_inc_simple_NN(gql_runtime_vm_global_empty_errors_sv);
-}
-
-static SV *
 gql_runtime_vm_wrap_object_outcome_callback_sv(pTHX)
 {
   if (gql_runtime_vm_global_wrap_object_outcome_callback_sv) {
@@ -182,13 +171,15 @@ gql_runtime_vm_exec_state_materialize_response_sv(
 {
   HV *response_hv = newHV();
   hv_store(response_hv, "data", 4, data_sv ? newSVsv(data_sv) : newSV(0), 0);
-  hv_store(
-    response_hv,
-    "errors",
-    6,
-    gql_runtime_vm_writer_materialize_errors_sv(aTHX_ s ? s->writer : NULL),
-    0
-  );
+  if (s && s->writer && s->writer->error_record_count > 0) {
+    hv_store(
+      response_hv,
+      "errors",
+      6,
+      gql_runtime_vm_writer_materialize_errors_sv(aTHX_ s->writer),
+      0
+    );
+  }
   return newRV_noinc((SV *)response_hv);
 }
 
@@ -201,13 +192,15 @@ gql_runtime_vm_fast_response_sv(
 {
   HV *response_hv = newHV();
   hv_store(response_hv, "data", 4, data_sv ? data_sv : newSV(0), 0);
-  hv_store(
-    response_hv,
-    "errors",
-    6,
-    gql_runtime_vm_writer_materialize_errors_sv(aTHX_ writer),
-    0
-  );
+  if (writer && writer->error_record_count > 0) {
+    hv_store(
+      response_hv,
+      "errors",
+      6,
+      gql_runtime_vm_writer_materialize_errors_sv(aTHX_ writer),
+      0
+    );
+  }
   return newRV_noinc((SV *)response_hv);
 }
 
@@ -9101,8 +9094,10 @@ gql_runtime_vm_response_json_from_native_sv(pTHX_ const gql_runtime_vm_writer_t 
 
   sv_setpvs(out, "{\"data\":");
   gql_runtime_vm_native_value_cat_json(aTHX_ out, value);
-  sv_catpvs(out, ",\"errors\":");
-  gql_runtime_vm_json_cat_errors(aTHX_ out, writer);
+  if (writer && writer->error_record_count > 0) {
+    sv_catpvs(out, ",\"errors\":");
+    gql_runtime_vm_json_cat_errors(aTHX_ out, writer);
+  }
   sv_catpvs(out, "}");
   return out;
 }
@@ -9114,8 +9109,10 @@ gql_runtime_vm_response_json_from_data_sv(pTHX_ const gql_runtime_vm_writer_t *w
 
   sv_setpvs(out, "{\"data\":");
   gql_runtime_vm_json_cat_sv_data(aTHX_ out, data_sv);
-  sv_catpvs(out, ",\"errors\":");
-  gql_runtime_vm_json_cat_errors(aTHX_ out, writer);
+  if (writer && writer->error_record_count > 0) {
+    sv_catpvs(out, ",\"errors\":");
+    gql_runtime_vm_json_cat_errors(aTHX_ out, writer);
+  }
   sv_catpvs(out, "}");
   return out;
 }
@@ -9169,8 +9166,10 @@ gql_runtime_vm_execute_bundle_fast_response_json(
     sv_catpvs(out, "null");
   }
 
-  sv_catpvs(out, ",\"errors\":");
-  gql_runtime_vm_json_cat_errors(aTHX_ out, &writer_storage);
+  if (writer_storage.error_record_count > 0) {
+    sv_catpvs(out, ",\"errors\":");
+    gql_runtime_vm_json_cat_errors(aTHX_ out, &writer_storage);
+  }
   sv_catpvs(out, "}");
 
   SvREFCNT_dec(empty_args_sv);
@@ -9354,9 +9353,6 @@ BOOT:
     }
     if (!gql_runtime_vm_global_empty_args_sv) {
       gql_runtime_vm_global_empty_args_sv = newRV_noinc((SV *)newHV());
-    }
-    if (!gql_runtime_vm_global_empty_errors_sv) {
-      gql_runtime_vm_global_empty_errors_sv = newRV_noinc((SV *)newAV());
     }
     if (!gql_runtime_vm_global_identity_callback_sv) {
       CV *cv = get_cv("GraphQL::Houtou::XS::VM::identity_callback_xs", 0);

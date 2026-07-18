@@ -36,7 +36,7 @@ sub lookup_schema {
 subtest '@oneOf is a specified directive' => sub {
   my $schema = lookup_schema();
   my $result = execute($schema, '{ __schema { directives { name locations } } }');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   my %directives = map { $_->{name} => $_ } @{ $result->{data}{__schema}{directives} };
   ok $directives{oneOf}, '@oneOf appears in introspection';
   is_deeply $directives{oneOf}{locations}, ['INPUT_OBJECT'], 'INPUT_OBJECT location';
@@ -48,7 +48,7 @@ subtest '@oneOf is a specified directive' => sub {
 
 subtest 'introspection isOneOf reflects the SDL directive' => sub {
   my $result = execute(lookup_schema(), '{ __type(name: "LookupBy") { isOneOf } }');
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   ok $result->{data}{__type}{isOneOf}, 'isOneOf true';
 };
 
@@ -97,7 +97,7 @@ subtest 'literal values are enforced at execution' => sub {
   # this is the lane persisted/pre-validated deployments run on.
   my $runtime = build_native_runtime(lookup_schema(), validate => 0);
   my $ok = $runtime->execute_document('{ find(by: { email: "x@example.com" }) }');
-  is_deeply $ok->{errors}, [], 'no errors for exactly one field';
+  ok !exists $ok->{errors}, 'no errors for exactly one field';
   is $ok->{data}{find}, 'email=x@example.com', 'value resolved';
 
   my $two = $runtime->execute_document('{ find(by: { id: "1", email: "x" }) }');
@@ -114,7 +114,7 @@ subtest 'variable values are enforced at execution' => sub {
   my $query = 'query Q($by: LookupBy) { find(by: $by) }';
 
   my $ok = $runtime->execute_document($query, variables => { by => { id => '7' } });
-  is_deeply $ok->{errors}, [], 'no errors';
+  ok !exists $ok->{errors}, 'no errors';
   is $ok->{data}{find}, 'id=7', 'exactly one key accepted';
 
   # Variable coercion failures are request errors: an errors-only
@@ -138,7 +138,7 @@ subtest 'variable nested inside a literal object is enforced' => sub {
   my $query = 'query Q($id: ID) { find(by: { id: $id }) }';
 
   my $ok = $runtime->execute_document($query, variables => { id => '9' });
-  is_deeply $ok->{errors}, [], 'no errors';
+  ok !exists $ok->{errors}, 'no errors';
   is $ok->{data}{find}, 'id=9', 'variable-fed member accepted';
 
   my $missing = $runtime->execute_document($query, variables => {});

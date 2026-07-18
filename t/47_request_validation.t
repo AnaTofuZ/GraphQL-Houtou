@@ -143,7 +143,7 @@ subtest 'valid documents that used to be false positives execute cleanly' => sub
   for my $label (sort keys %cases) {
     my ($query, $variables) = @{ $cases{$label} };
     my $result = $runtime->execute_document($query, variables => $variables);
-    is_deeply $result->{errors}, [], "$label passes validation"
+    ok !exists $result->{errors}, "$label passes validation"
       or diag explain $result->{errors};
     is $result->{data}{hello}, 'hi Ana', "$label executes";
   }
@@ -155,7 +155,7 @@ subtest 'introspection meta fields validate on the query root only' => sub {
   my $meta = $runtime->execute_document(
     '{ __schema { queryType { name } } __type(name: "Item") { name } item { __typename } }',
   );
-  is_deeply $meta->{errors}, [], 'meta fields on the root pass'
+  ok !exists $meta->{errors}, 'meta fields on the root pass'
     or diag explain $meta->{errors};
   is $meta->{data}{item}{__typename}, 'Item', '__typename anywhere';
 
@@ -167,12 +167,12 @@ subtest 'introspection meta fields validate on the query root only' => sub {
 subtest 'validation can be disabled per runtime and per call' => sub {
   my $off = runtime(validate => 0);
   my $result = $off->execute_document('{ nope }');
-  is_deeply $result, { data => {}, errors => [] },
+  is_deeply $result, { data => {} },
     'validate => 0 runtime skips request validation';
 
   my $on = runtime();
   my $skipped = $on->execute_document('{ nope }', validate => 0);
-  is_deeply $skipped, { data => {}, errors => [] }, 'per-call validate => 0 override';
+  is_deeply $skipped, { data => {} }, 'per-call validate => 0 override';
 
   my $forced = $off->execute_document('{ nope }', validate => 1);
   like $forced->{errors}[0]{message}, qr/does not exist/, 'per-call validate => 1 override';
@@ -214,7 +214,7 @@ fragment Greeting on Query {
   item { name }
 }
 GRAPHQL
-  is_deeply $result->{errors}, [], 'described document passes validation'
+  ok !exists $result->{errors}, 'described document passes validation'
     or diag explain $result->{errors};
   is $result->{data}{hello}, 'hi Ana', 'descriptions are execution-neutral';
 };

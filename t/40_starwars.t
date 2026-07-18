@@ -215,14 +215,12 @@ sub run_query {
 subtest 'hero of the saga' => sub {
   is_deeply run_query('{ hero { name } }'), {
     data => { hero => { name => 'R2-D2' } },
-    errors => [],
   }, 'R2-D2 is the hero';
 };
 
 subtest 'hero with enum argument' => sub {
   is_deeply run_query('{ hero(episode: EMPIRE) { name } }'), {
     data => { hero => { name => 'Luke Skywalker' } },
-    errors => [],
   }, 'Luke is the hero of EMPIRE';
 
   is_deeply run_query(
@@ -230,7 +228,6 @@ subtest 'hero with enum argument' => sub {
     variables => { ep => 'EMPIRE' },
   ), {
     data => { hero => { name => 'Luke Skywalker' } },
-    errors => [],
   }, 'enum argument through variables';
 };
 
@@ -238,7 +235,7 @@ subtest 'nested friends (two levels) with __typename and enum list output' => su
   my $result = run_query(q~
     { hero { __typename id name appearsIn friends { name friends { name } } } }
   ~);
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is $result->{data}{hero}{__typename}, 'Droid', 'abstract type resolves to Droid';
   is_deeply $result->{data}{hero}{appearsIn}, [qw(NEWHOPE EMPIRE JEDI)],
     'enum list serializes to names';
@@ -258,7 +255,6 @@ subtest 'aliases fetch the same field twice' => sub {
       empireHero => { name => 'Luke Skywalker' },
       jediHero => { name => 'R2-D2' },
     },
-    errors => [],
   }, 'aliased heroes';
 };
 
@@ -274,7 +270,6 @@ subtest 'named fragment shared by two selections' => sub {
       leia => { name => 'Leia Organa', homePlanet => 'Alderaan' },
       han => { name => 'Han Solo', homePlanet => undef },
     },
-    errors => [],
   }, 'fragment reuse and a nullable field left null';
 };
 
@@ -296,7 +291,6 @@ subtest 'inline fragments discriminate interface members' => sub {
       hero => { name => 'R2-D2', primaryFunction => 'Astromech' },
       luke => { name => 'Luke Skywalker', homePlanet => 'Tatooine' },
     },
-    errors => [],
   }, 'per-type fragments apply only to matching members';
 };
 
@@ -311,10 +305,9 @@ subtest '@include and @skip with variables' => sub {
   ~;
   is_deeply run_query($query, variables => { withFriends => 0, skipName => 0 }), {
     data => { hero => { name => 'R2-D2' } },
-    errors => [],
   }, 'friends excluded';
   my $with = run_query($query, variables => { withFriends => 1, skipName => 1 });
-  is_deeply $with->{errors}, [], 'no errors';
+  ok !exists $with->{errors}, 'no errors';
   ok !exists $with->{data}{hero}{name}, 'name skipped';
   is scalar @{ $with->{data}{hero}{friends} }, 3, 'friends included';
 };
@@ -339,12 +332,10 @@ subtest 'error inside a list item carries the index in its path' => sub {
 subtest 'unknown id returns null without an error' => sub {
   is_deeply run_query('{ human(id: "9999") { name } }'), {
     data => { human => undef },
-    errors => [],
   }, 'missing human is null';
 
   is_deeply run_query('{ droid(id: "1000") { name } }'), {
     data => { droid => undef },
-    errors => [],
   }, 'a human asked for as droid is null';
 };
 
@@ -352,7 +343,7 @@ subtest 'introspection sees the interface' => sub {
   my $result = run_query(q~
     { __type(name: "Droid") { name kind interfaces { name } } }
   ~);
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is $result->{data}{__type}{name}, 'Droid', 'type name';
   is $result->{data}{__type}{kind}, 'OBJECT', 'kind';
   is_deeply $result->{data}{__type}{interfaces}, [ { name => 'Character' } ],

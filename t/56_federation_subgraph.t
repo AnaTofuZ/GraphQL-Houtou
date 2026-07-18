@@ -70,7 +70,6 @@ subtest '_entities resolves representations in input order' => sub {
         { upc => 'b', name => 'entity-b' },
       ],
     },
-    errors => [],
   }, 'entity results preserve representation order';
 };
 

@@ -153,4 +153,25 @@ for my $label (sort keys %CASES) {
   };
 }
 
+subtest 'successful responses omit errors in every lane' => sub {
+  my $query = '{ ships { name } }';
+  my $runtime = build_native_runtime($schema);
+  my $bundle = $runtime->compile_bundle_for_document($query);
+  my %lanes = (
+    'async auto (no variables)' => $runtime->execute_document($query),
+    'fast SV (with variables)' => $runtime->execute_document($query, variables => {}),
+    'fast JSON (no variables)' => $json->decode(
+      $runtime->execute_document_to_json($query),
+    ),
+    'fast JSON (with variables)' => $json->decode(
+      $runtime->execute_document_to_json($query, variables => {}),
+    ),
+    'bundle envelope' => $runtime->execute_bundle($bundle),
+    'bundle JSON' => $json->decode($runtime->execute_bundle_to_json($bundle)),
+  );
+  for my $lane (sort keys %lanes) {
+    ok !exists $lanes{$lane}{errors}, $lane;
+  }
+};
+
 done_testing;

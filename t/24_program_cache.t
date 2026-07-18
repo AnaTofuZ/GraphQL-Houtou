@@ -58,8 +58,8 @@ subtest 'cached program produces correct results' => sub {
   my $r1 = $runtime->execute_document('{ hello }');
   my $r2 = $runtime->execute_document('{ hello }');
 
-  is_deeply $r1, { data => { hello => 'world' }, errors => [] }, 'first call correct';
-  is_deeply $r2, { data => { hello => 'world' }, errors => [] }, 'second call (cached) correct';
+  is_deeply $r1, { data => { hello => 'world' } }, 'first call correct';
+  is_deeply $r2, { data => { hello => 'world' } }, 'second call (cached) correct';
 };
 
 subtest 'variables do not affect cache key – compiled once, executed with different vars' => sub {
@@ -91,7 +91,7 @@ subtest 'clear_program_cache empties the cache' => sub {
   is $runtime->program_cache_size, 0, 'cache is empty after clear';
 
   my $result = $runtime->execute_document('{ hello }');
-  is_deeply $result, { data => { hello => 'world' }, errors => [] },
+  is_deeply $result, { data => { hello => 'world' } },
     'execution still works after clear';
 };
 
@@ -136,7 +136,7 @@ subtest 'variable-invariant programs skip the specialized program cache' => sub 
 
   for my $name (qw(alice bob carol)) {
     my $result = $runtime->execute_document($query, variables => { name => $name });
-    is_deeply $result, { data => { greet => "hi $name" }, errors => [] },
+    is_deeply $result, { data => { greet => "hi $name" } },
       "fresh variables ($name) execute correctly";
   }
 

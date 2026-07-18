@@ -64,7 +64,6 @@ subtest 'async runtime: variables + promise resolvers execute once, correctly' =
     $runtime->execute_document($QUERY, variables => { id => 'u1' }));
   is_deeply $r, {
     data => { counted => 'counted', asyncUser => { name => 'nu1' } },
-    errors => [],
   }, 'no promise objects or undefs leak into data';
   is $calls{counted}, 1, 'sync resolver ran exactly once';
   is $calls{asyncUser}, 1, 'promise resolver ran exactly once';

@@ -44,7 +44,7 @@ subtest 'public execution APIs fail closed before resolving fields' => sub {
   is $subscription_calls, 0, 'subscription resolver was never called';
 
   my $query = execute($schema, '{ ping }');
-  is_deeply $query, { data => { ping => 'pong' }, errors => [] },
+  is_deeply $query, { data => { ping => 'pong' } },
     'query execution remains available';
 };
 

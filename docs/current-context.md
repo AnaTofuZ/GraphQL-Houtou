@@ -1210,7 +1210,7 @@ perl -Ilib t/19_vm_execute.t
   - abstract dispatch は `gql_runtime_vm_select_abstract_child_block_fast(...)`
     として SV 版から分離し、両レーンで共有する
   - envelope は `execute()` と同一(`data` + `errors`(message/path)、
-    成功時は `"errors":[]`)
+    成功時は `errors` エントリを省略)
   - response key は query の field 順で出力される(SV 版は Perl hash のため
     順序を保持できない)
   - Boolean 型の leaf は resolver が 0/1 を返しても JSON boolean で出す

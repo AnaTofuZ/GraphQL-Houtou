@@ -71,7 +71,6 @@ subtest 'async request renders JSON directly' => sub {
       b => { name => 'user-u2' },
       plain => 'sync-value',
     },
-    errors => [],
   }, 'envelope matches the SV lane result';
   is scalar @batch_calls, 1, 'N+1 collapsed into a single batch';
   is_deeply [ sort @{ $batch_calls[0] } ], [qw(u1 u2)], 'both keys batched together';
@@ -116,7 +115,7 @@ subtest 'all-sync request with on_stall still returns JSON' => sub {
     '{ plain }',
     on_stall => sub { 0 },
   );
-  is_deeply decode($json), { data => { plain => 'sync-value' }, errors => [] },
+  is_deeply decode($json), { data => { plain => 'sync-value' } },
     'sync completion renders the same envelope';
 };
 
@@ -181,7 +180,6 @@ subtest 'nested structures behind a promise keep their shape in JSON' => sub {
       ],
       row => { inner => { city => 'c1' } },
     },
-    errors => [],
   }, 'promise-of-list and promise-of-object serialize nested children';
 };
 
@@ -196,7 +194,6 @@ subtest 'top-level execute_to_json accepts on_stall' => sub {
   );
   is_deeply decode($json), {
     data => { user => { name => 'user-u5' } },
-    errors => [],
   }, 'sugar entrypoint drives the async JSON lane';
 };
 

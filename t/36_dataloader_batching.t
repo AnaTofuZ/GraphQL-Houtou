@@ -122,7 +122,7 @@ subtest 'N+1 collapses to one batch per level' => sub {
     context => { users => $users, teams => $teams },
     on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users, $teams),
   );
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is scalar @{ $result->{data}{posts} }, 4, 'all posts';
   is $result->{data}{posts}[0]{author}{name}, 'alice', 'author resolved';
   is $result->{data}{posts}[0]{author}{team}{name}, 'core', 'nested team resolved';
@@ -154,7 +154,7 @@ subtest 'per-request cache dedupes and prime seeds it' => sub {
     context => { users => $users, teams => $teams },
     on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users, $teams),
   );
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is $result->{data}{a}{author}{name}, 'cached-alice', 'primed value used';
   is $result->{data}{b}{author}{name}, 'cached-alice', 'cache dedupes same key';
   is scalar @user_batches, 0, 'no batch needed when everything was primed';
@@ -357,7 +357,7 @@ subtest 'one loader shared across types, several loaders per type' => sub {
     on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users, $entries),
   );
 
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is_deeply $result->{data}{blogs}, [
     { title => 'blog-one', author => { name => 'alice' },
       latestEntry => { title => 'entry-one', author => { name => 'carol' } } },
@@ -436,7 +436,7 @@ subtest 'late-resolving list whose items queue more loads (grouping loader)' => 
     on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users, $comments),
   );
 
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is_deeply $result->{data}{posts}, [
     { title => 'first', author => { name => 'alice' },
       comments => [
@@ -458,7 +458,7 @@ subtest 'runtime execute_document accepts on_stall directly' => sub {
     context => { users => $users, teams => $teams },
     on_stall => GraphQL::Houtou::DataLoader->on_stall_for($users, $teams),
   );
-  is_deeply $result->{errors}, [], 'no errors';
+  ok !exists $result->{errors}, 'no errors';
   is scalar @user_batches, 1, 'single batch through the runtime API';
 };
 
@@ -514,7 +514,6 @@ subtest 'list field resolving to an array of promises (issue #33)' => sub {
       ],
       tags => [ 'tag-x', 'tag-y' ],
     },
-    errors => [],
   }, 'object and scalar promise items complete after settling';
   is scalar @batches, 1, 'all item keys collapse into one batch';
 
@@ -585,7 +584,6 @@ subtest 'preresolved promise next to a loader promise in one object' => sub {
     );
     is_deeply $result, {
       data => { parent => { fast => 'fast-value', slow => 'alice' } },
-      errors => [],
     }, "both fields resolve for $selection";
   }
 };

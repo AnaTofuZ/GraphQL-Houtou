@@ -868,6 +868,78 @@ static void gql_validation_validate_value(
   SV *location_sv
 );
 
+static int
+gql_validation_variable_type_is_kind(SV *type_sv, const char *wanted) {
+  if (!type_sv || !SvROK(type_sv) || SvTYPE(SvRV(type_sv)) != SVt_PVAV) {
+    return 0;
+  }
+  {
+    SV **kind_svp = av_fetch((AV *)SvRV(type_sv), 0, 0);
+    return kind_svp && SvOK(*kind_svp) && strEQ(SvPV_nolen(*kind_svp), wanted);
+  }
+}
+
+static SV *
+gql_validation_variable_type_inner(SV *type_sv) {
+  SV **wrapper_svp;
+  SV **inner_svp;
+  if (!type_sv || !SvROK(type_sv) || SvTYPE(SvRV(type_sv)) != SVt_PVAV) {
+    return NULL;
+  }
+  wrapper_svp = av_fetch((AV *)SvRV(type_sv), 1, 0);
+  if (!wrapper_svp || !SvROK(*wrapper_svp) || SvTYPE(SvRV(*wrapper_svp)) != SVt_PVHV) {
+    return NULL;
+  }
+  inner_svp = hv_fetch((HV *)SvRV(*wrapper_svp), "type", 4, 0);
+  return inner_svp ? *inner_svp : NULL;
+}
+
+static int
+gql_validation_variable_type_compatible(SV *variable_type, SV *location_type) {
+  HV *location_hv;
+  SV **kind_svp;
+  const char *kind;
+  if (!variable_type || !location_type || !SvROK(location_type)
+      || SvTYPE(SvRV(location_type)) != SVt_PVHV) {
+    return 0;
+  }
+  location_hv = (HV *)SvRV(location_type);
+  kind_svp = hv_fetch(location_hv, "kind", 4, 0);
+  if (!kind_svp || !SvOK(*kind_svp)) {
+    return 0;
+  }
+  kind = SvPV_nolen(*kind_svp);
+  if (strEQ(kind, "NON_NULL")) {
+    SV **of_svp = hv_fetch(location_hv, "of", 2, 0);
+    return gql_validation_variable_type_is_kind(variable_type, "non_null")
+      && of_svp
+      && gql_validation_variable_type_compatible(
+        gql_validation_variable_type_inner(variable_type), *of_svp
+      );
+  }
+  if (gql_validation_variable_type_is_kind(variable_type, "non_null")) {
+    return gql_validation_variable_type_compatible(
+      gql_validation_variable_type_inner(variable_type), location_type
+    );
+  }
+  if (strEQ(kind, "LIST")) {
+    SV **of_svp = hv_fetch(location_hv, "of", 2, 0);
+    return gql_validation_variable_type_is_kind(variable_type, "list")
+      && of_svp
+      && gql_validation_variable_type_compatible(
+        gql_validation_variable_type_inner(variable_type), *of_svp
+      );
+  }
+  if (gql_validation_variable_type_is_kind(variable_type, "list")) {
+    return 0;
+  }
+  if (strEQ(kind, "NAMED") && !SvROK(variable_type)) {
+    SV **name_svp = hv_fetch(location_hv, "name", 4, 0);
+    return name_svp && SvOK(*name_svp) && sv_eq(variable_type, *name_svp);
+  }
+  return 0;
+}
+
 static void
 gql_validation_validate_arguments(
   pTHX_ AV *errors_av,
@@ -895,6 +967,47 @@ gql_validation_validate_arguments(
       }
       if (arg_he && SvROK(HeVAL(def_he)) && SvTYPE(SvRV(HeVAL(def_he))) == SVt_PVHV) {
         SV **type_svp = hv_fetch((HV *)SvRV(HeVAL(def_he)), "type", 4, 0);
+        SV *arg_value = HeVAL(arg_he);
+        if (type_svp && arg_value && SvROK(arg_value)
+            && SvOK(SvRV(arg_value))
+            && !SvROK(SvRV(arg_value)) && !sv_isobject(arg_value)) {
+          STRLEN variable_name_len;
+          const char *variable_name = SvPV(SvRV(arg_value), variable_name_len);
+          HE *variable_he = variables_hv
+            ? hv_fetch_ent(variables_hv, SvRV(arg_value), 0, 0) : NULL;
+          if (variable_he && SvROK(HeVAL(variable_he))
+              && SvTYPE(SvRV(HeVAL(variable_he))) == SVt_PVHV) {
+            HV *variable_hv = (HV *)SvRV(HeVAL(variable_he));
+            SV **variable_type_svp = hv_fetch(variable_hv, "type", 4, 0);
+            SV *location_type = *type_svp;
+            int compatible;
+            if (gql_validation_type_is_non_null(location_type)
+                && variable_type_svp
+                && !gql_validation_variable_type_is_kind(*variable_type_svp, "non_null")) {
+              SV **variable_default_svp = hv_fetch(variable_hv, "default_value", 13, 0);
+              SV **location_default_svp = hv_fetch(
+                (HV *)SvRV(HeVAL(def_he)), "has_default_value", 17, 0
+              );
+              if ((variable_default_svp && SvOK(*variable_default_svp))
+                  || (location_default_svp && SvTRUE(*location_default_svp))) {
+                SV **of_svp = hv_fetch((HV *)SvRV(location_type), "of", 2, 0);
+                if (of_svp) {
+                  location_type = *of_svp;
+                }
+              }
+            }
+            compatible = variable_type_svp
+              && gql_validation_variable_type_compatible(*variable_type_svp, location_type);
+            if (!compatible) {
+              SV *message = newSVpvf(
+                "Variable '$%s' cannot be used for argument '%s' because its type is incompatible.",
+                variable_name, SvPV_nolen(argument_keys[i])
+              );
+              av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+              SvREFCNT_dec(message);
+            }
+          }
+        }
         gql_validation_validate_value(
           aTHX_ errors_av,
           schema,

@@ -174,7 +174,7 @@ subtest 'duplicate arguments and variables are rejected before hash overwrite' =
   ], 'duplicate field arguments are retained as validation diagnostics';
 
   $errors = validate($schema, q|
-    query Q($id: String, $id: String) { node(id: $id) { id } }
+    query Q($id: String!, $id: String!) { node(id: $id) { id } }
   |);
   is_deeply messages($errors), [
     "Variable '\$id' is defined more than once.",
@@ -247,6 +247,20 @@ subtest 'undefined variable use is rejected' => sub {
   is_deeply messages($errors), [
     "Variable '\$id' is used but not defined.",
   ];
+};
+
+subtest 'field arguments enforce variable positions in XS' => sub {
+  my $errors = validate($schema, q|
+    query Q($id: Boolean) { node(id: $id) { id } }
+  |);
+  is_deeply messages($errors), [
+    "Variable '\$id' cannot be used for argument 'id' because its type is incompatible.",
+  ];
+
+  $errors = validate($schema, q|
+    query Q($id: String = "1") { node(id: $id) { id } }
+  |);
+  is_deeply $errors, [], 'a non-null variable default permits a nullable variable';
 };
 
 subtest 'unused variables are rejected, including fragment-aware usage' => sub {

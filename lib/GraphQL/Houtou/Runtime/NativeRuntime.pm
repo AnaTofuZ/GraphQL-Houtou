@@ -8,6 +8,7 @@ use Scalar::Util qw(blessed refaddr);
 
 use GraphQL::Houtou::Runtime::InputCoercion ();
 use GraphQL::Houtou::Runtime::DirectiveRuntime ();
+use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
 use GraphQL::Houtou::Schema ();
 use JSON::MaybeXS qw(decode_json encode_json is_bool);
@@ -261,12 +262,18 @@ sub _require_native_program {
 
 sub load_bundle_descriptor {
   my ($self, $descriptor) = @_;
+  GraphQL::Houtou::Runtime::OperationCompiler::assert_supported_operation_descriptor(
+    ref($descriptor) eq 'HASH' ? $descriptor->{program} : undef,
+  );
   GraphQL::Houtou::_bootstrap_xs();
   return GraphQL::Houtou::XS::VM::load_native_bundle_xs($descriptor);
 }
 
 sub inflate_bundle_descriptor {
   my ($self, $descriptor) = @_;
+  GraphQL::Houtou::Runtime::OperationCompiler::assert_supported_operation_descriptor(
+    ref($descriptor) eq 'HASH' ? $descriptor->{program} : undef,
+  );
   return GraphQL::Houtou::Runtime::VMCompiler->inflate_native_bundle(
     $self->runtime_schema,
     $descriptor,

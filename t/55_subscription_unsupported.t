@@ -83,4 +83,34 @@ subtest 'PSGI maps unsupported subscriptions to a request error' => sub {
   is $subscription_calls, 0, 'PSGI path did not call the resolver';
 };
 
+subtest 'persisted descriptors cannot bypass the subscription guard' => sub {
+  my $runtime = $schema->build_native_runtime;
+  my $program_descriptor = $runtime->compile_program_descriptor_for_document('{ ping }');
+  $program_descriptor->{operation_type_code} = 3;
+
+  my $ok = eval {
+    $schema->build_runtime->inflate_program($program_descriptor);
+    1;
+  };
+  ok !$ok, 'subscription program descriptor rejected before XS loading';
+  isa_ok $@, 'GraphQL::Houtou::Error';
+  is $@->extensions->{code}, 'SUBSCRIPTION_NOT_SUPPORTED',
+    'program descriptor rejection keeps the public error code';
+
+  my $bundle_descriptor = $runtime->compile_bundle_descriptor_for_document('{ ping }');
+  $bundle_descriptor->{program}{operation_type_code} = 3;
+  for my $case (
+    [ load => sub { $runtime->load_bundle_descriptor($bundle_descriptor) } ],
+    [ inflate => sub { $runtime->inflate_bundle_descriptor($bundle_descriptor) } ],
+    [ execute => sub { $runtime->execute_bundle_descriptor($bundle_descriptor) } ],
+  ) {
+    my ($label, $run) = @$case;
+    my $loaded = eval { $run->(); 1 };
+    ok !$loaded, "$label rejects a subscription bundle descriptor";
+    isa_ok $@, 'GraphQL::Houtou::Error';
+    is $@->extensions->{code}, 'SUBSCRIPTION_NOT_SUPPORTED',
+      "$label keeps the public error code";
+  }
+};
+
 done_testing;

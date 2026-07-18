@@ -2,6 +2,10 @@
 
 `GraphQL::Houtou` の current mainline では、Persisted Queries は次の 2 形態に分けて考えるのが実務的です。
 
+なお、subscription operation typeを持つprogram／bundle descriptorはload時に
+拒否されます。事前コンパイル済みartifactから0.01のsubscription非対応境界を
+迂回することはできません。
+
 ## 1. 固定クエリ・固定 specialization を native bundle として保持する
 
 変数を request ごとに差し替えない query なら、`compile_native_bundle` または

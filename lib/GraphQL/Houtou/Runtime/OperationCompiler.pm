@@ -7,6 +7,7 @@ use Scalar::Util qw(refaddr);
 use JSON::MaybeXS qw(is_bool);
 
 use GraphQL::Houtou ();
+use GraphQL::Houtou::Error ();
 use GraphQL::Houtou::Runtime::Slot ();
 use GraphQL::Houtou::Runtime::VMBlock ();
 use GraphQL::Houtou::Runtime::VMOp ();
@@ -34,6 +35,7 @@ sub compile_operation {
     grep { ($_->{kind} || '') eq 'fragment' } @{ $ast || [] };
 
   my $operation_type = $operation->{operation} || $operation->{operationType} || 'query';
+  _assert_supported_operation($operation_type);
   my $schema_block = $runtime_schema->root_block($operation_type)
     or die "No root block for operation type '$operation_type'.\n";
 
@@ -73,6 +75,7 @@ sub compile_operation_native_compact {
     grep { ($_->{kind} || '') eq 'fragment' } @{ $ast || [] };
 
   my $operation_type = $operation->{operation} || $operation->{operationType} || 'query';
+  _assert_supported_operation($operation_type);
   my $schema_block = $runtime_schema->root_block($operation_type)
     or die "No root block for operation type '$operation_type'.\n";
 
@@ -105,6 +108,15 @@ sub compile_operation_native_compact {
     root_block_index => $root_block_index,
     blocks_compact => $state{blocks_compact},
   };
+}
+
+sub _assert_supported_operation {
+  my ($operation_type) = @_;
+  die GraphQL::Houtou::Error->new(
+    message => 'Subscription execution is not supported.',
+    extensions => { code => 'SUBSCRIPTION_NOT_SUPPORTED' },
+  ) if $operation_type eq 'subscription';
+  return;
 }
 
 sub inflate_operation {

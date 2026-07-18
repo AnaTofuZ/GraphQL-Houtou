@@ -686,6 +686,21 @@ gql_parse_directives(pTHX_ gql_parser_t *p) {
 }
 
 static SV *
+gql_parse_const_directives(pTHX_ gql_parser_t *p) {
+  AV *av = newAV();
+  while (p->kind == TOK_AT) {
+    HV *hv = newHV();
+    gql_expect(aTHX_ p, TOK_AT, NULL);
+    gql_store_sv(hv, "name", gql_parse_name(aTHX_ p, "Expected name"));
+    if (p->kind == TOK_LPAREN) {
+      gql_store_sv(hv, "arguments", gql_parse_arguments(aTHX_ p, 1));
+    }
+    av_push(av, newRV_noinc((SV *)hv));
+  }
+  return newRV_noinc((SV *)av);
+}
+
+static SV *
 gql_parse_selection_set(pTHX_ gql_parser_t *p) {
   HV *hv;
   AV *av;
@@ -828,6 +843,9 @@ gql_parse_variable_definitions(pTHX_ gql_parser_t *p) {
     if (p->kind == TOK_EQUALS) {
       gql_advance(aTHX_ p);
       gql_store_sv(def, "default_value", gql_parse_value(aTHX_ p, 1));
+    }
+    if (p->kind == TOK_AT) {
+      gql_store_sv(def, "directives", gql_parse_const_directives(aTHX_ p));
     }
     if (p->validation_errors) {
       STRLEN name_len;

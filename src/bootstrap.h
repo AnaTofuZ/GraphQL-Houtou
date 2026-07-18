@@ -726,6 +726,7 @@ static SV *gql_parse_value(pTHX_ gql_parser_t *p, int is_const);
 static SV *gql_parse_object_value(pTHX_ gql_parser_t *p, int is_const);
 static SV *gql_parse_list_value(pTHX_ gql_parser_t *p, int is_const);
 static SV *gql_parse_directives(pTHX_ gql_parser_t *p);
+static SV *gql_parse_const_directives(pTHX_ gql_parser_t *p);
 static SV *gql_parse_directive(pTHX_ gql_parser_t *p);
 static SV *gql_parse_variable_definitions(pTHX_ gql_parser_t *p);
 static SV *gql_parse_type_reference(pTHX_ gql_parser_t *p);

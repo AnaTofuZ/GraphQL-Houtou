@@ -80,8 +80,8 @@ Implementation progress:
 - completed: directive literals retain directive-specific errors, custom scalar
   callbacks use the compiled CV fallback, and fragment variable positions are
   validated in each operation context;
-- remaining parser parity: directives on variable definitions are currently
-  rejected syntactically before validation and need executable grammar support;
+- completed: executable grammar and XS validation support directives on
+  variable definitions, including constant directive arguments;
 - completed: field merging conflicts are grouped by response key, expanded
   through named and inline fragments, and compared only across overlapping
   runtime type conditions in XS;

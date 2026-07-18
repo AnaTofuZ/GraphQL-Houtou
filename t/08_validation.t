@@ -125,6 +125,11 @@ my $schema = GraphQL::Houtou::Schema->new(
       locations => [ qw(FIELD) ],
       args => { values => { type => $Boolean->list } },
     ),
+    GraphQL::Houtou::Directive->new(
+      name => 'variableTag',
+      locations => [ qw(VARIABLE_DEFINITION) ],
+      args => { enabled => { type => $Boolean->non_null } },
+    ),
   ],
 );
 
@@ -487,6 +492,22 @@ subtest 'directive validation rejects unknown directives and invalid locations' 
     "Directive '\@skip' may not be used on QUERY.",
     "Unknown directive '\@unknown'.",
   ];
+};
+
+subtest 'variable definition directives parse and validate' => sub {
+  my $errors = validate($schema, q|
+    query Q($id: String! @variableTag(enabled: true)) {
+      node(id: $id) { id }
+    }
+  |);
+  is_deeply $errors, [], 'valid variable definition directive passes';
+
+  $errors = validate($schema, q|
+    query Q($id: String! @skip(if: true)) { node(id: $id) { id } }
+  |);
+  is_deeply messages($errors), [
+    "Directive '\@skip' may not be used on VARIABLE_DEFINITION.",
+  ], 'directive location is enforced on variable definitions';
 };
 
 subtest 'directive validation rejects duplicate non-repeatable directives' => sub {

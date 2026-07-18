@@ -9196,6 +9196,22 @@ parse_xs(source, no_location = &PL_sv_undef)
     RETVAL
 
 SV *
+_parse_with_diagnostics_xs(source)
+    SV *source
+  CODE:
+    {
+      AV *errors_av = newAV();
+      AV *result_av = newAV();
+      av_push(result_av, gql_parse_document_for_validation(
+        aTHX_ source, &PL_sv_undef, errors_av
+      ));
+      av_push(result_av, newRV_noinc((SV *)errors_av));
+      RETVAL = newRV_noinc((SV *)result_av);
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 _materialize_arguments_xs(state, ptr)
     SV *state
     UV ptr

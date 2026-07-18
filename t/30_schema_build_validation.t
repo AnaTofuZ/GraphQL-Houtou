@@ -247,4 +247,42 @@ subtest 'validation errors accumulate' => sub {
   cmp_ok scalar(@$errors), '>=', 3, 'reports all missing interface fields at once';
 };
 
+subtest 'root operation types must be distinct objects' => sub {
+  my $shared = query_with(value => { type => $String });
+  my $same_roots = GraphQL::Houtou::Schema->new(
+    query => $shared,
+    mutation => $shared,
+  );
+  like join("\n", @{ $same_roots->validation_errors }),
+    qr/root types must be different; Query is used more than once/,
+    'the same object cannot be used for two operation roots';
+
+  my $scalar_root = GraphQL::Houtou::Schema->new(query => $String);
+  like join("\n", @{ $scalar_root->validation_errors }),
+    qr/query root type must be an Object type, found String/,
+    'query root must be an object type';
+};
+
+subtest 'user-defined type-system names cannot use the introspection prefix' => sub {
+  my $Bad = GraphQL::Houtou::Type::Object->new(
+    name => '__Bad',
+    fields => { __field => { type => $String } },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => query_with(
+      bad => {
+        type => $Bad,
+        args => { __arg => { type => $String } },
+      },
+    ),
+    types => [ $Bad ],
+  );
+  my $errors = join("\n", @{ $schema->validation_errors });
+  like $errors, qr/Type must not begin with '__'/, 'reserved type name rejected';
+  like $errors, qr/Field __Bad\.__field must not begin with '__'/,
+    'reserved field name rejected';
+  like $errors, qr/Argument Query\.bad\(__arg:\) must not begin with '__'/,
+    'reserved argument name rejected';
+};
+
 done_testing;

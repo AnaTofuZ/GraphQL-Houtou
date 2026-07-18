@@ -49,7 +49,14 @@ my @ROOT_ATTRS = qw(query mutation subscription);
 sub from_doc {
   my ($class, $doc, %opts) = @_;
   require GraphQL::Houtou;
-  return $class->from_ast(GraphQL::Houtou::parse($doc), %opts);
+  require GraphQL::Houtou::XS::Parser;
+  my ($ast, $diagnostics) = @{
+    GraphQL::Houtou::XS::Parser::_parse_with_diagnostics_xs($doc)
+  };
+  if (@$diagnostics) {
+    die join("\n", map { $_->{message} } @$diagnostics) . "\n";
+  }
+  return $class->from_ast($ast, %opts);
 }
 
 sub from_ast {
@@ -359,10 +366,56 @@ sub validation_errors {
     return [ $error ];
   }
 
+  my %root_name;
+  for my $operation (@ROOT_ATTRS) {
+    my $root = $self->$operation or next;
+    push @errors, "The $operation root type must be an Object type, found "
+      . (ref($root) && $root->can('to_string') ? $root->to_string : "'$root'") . '.'
+      if !_is_object_type($root);
+    if (ref($root) && $root->can('name') && $root_name{ $root->name }++) {
+      push @errors, "The query, mutation, and subscription root types must be different; "
+        . "@{[$root->name]} is used more than once.";
+    }
+  }
+
+  for my $directive (@{ $self->directives || [] }) {
+    next if !ref($directive) || !$directive->can('name');
+    push @errors, _reserved_name_error('Directive', $directive->name);
+    for my $arg_name (sort keys %{ $directive->args || {} }) {
+      push @errors, _reserved_name_error(
+        "Argument $arg_name on directive @{[$directive->name]}", $arg_name,
+      );
+    }
+  }
+
   for my $type_name (sort keys %$name2type) {
     my $type = $name2type->{$type_name} or next;
     next if $type->can('is_introspection') && $type->{is_introspection};
-    next if $type_name =~ /\A__/;
+
+    push @errors, _reserved_name_error('Type', $type_name);
+    if ($type->can('fields')) {
+      my $fields = $type->fields || {};
+      for my $field_name (sort keys %$fields) {
+        my $field = $fields->{$field_name};
+        push @errors, _reserved_name_error(
+          (_is_input_type($type) ? 'Input field' : 'Field')
+            . " $type_name.$field_name",
+          $field_name,
+        );
+        for my $arg_name (sort keys %{ $field->{args} || {} }) {
+          push @errors, _reserved_name_error(
+            "Argument $type_name.$field_name($arg_name:)", $arg_name,
+          );
+        }
+      }
+    }
+    if ($type->isa('GraphQL::Houtou::Type::Enum')) {
+      for my $value_name (sort keys %{ $type->values || {} }) {
+        push @errors, _reserved_name_error(
+          "Enum value $type_name.$value_name", $value_name,
+        );
+      }
+    }
 
     if (_is_object_type($type)) {
       push @errors, $self->_object_field_errors($type);
@@ -420,6 +473,12 @@ sub validation_errors {
   }
 
   return \@errors;
+}
+
+sub _reserved_name_error {
+  my ($coordinate, $name) = @_;
+  return () if !defined($name) || $name !~ /\A__/;
+  return "$coordinate must not begin with '__', which is reserved for introspection.";
 }
 
 sub _object_field_errors {

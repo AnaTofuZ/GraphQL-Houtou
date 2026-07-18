@@ -271,6 +271,18 @@ subtest 'build errors' => sub {
 
   eval { build_schema('type Query { a: String }', resolvers => { Query => { nope => sub {} } }) };
   like $@, qr/Cannot attach a field resolver to 'Query\.nope'/, 'unknown resolver field';
+
+  eval { build_schema('type Query { a: String a: Int }') };
+  like $@, qr/Type field 'a' is defined more than once/, 'duplicate SDL field';
+
+  eval { build_schema('type Query { a(x: String, x: Int): String }') };
+  like $@, qr/Argument 'x' is defined more than once/, 'duplicate SDL argument';
+
+  eval { build_schema('type Query { a(input: Filter): String } input Filter { x: String x: Int }') };
+  like $@, qr/Input field 'x' is defined more than once/, 'duplicate SDL input field';
+
+  eval { build_schema('type Query { color: Color } enum Color { RED RED }') };
+  like $@, qr/Enum value 'RED' is defined more than once/, 'duplicate SDL enum value';
 };
 
 subtest 'custom scalars pass values through by default' => sub {

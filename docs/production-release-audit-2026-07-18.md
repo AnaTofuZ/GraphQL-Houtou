@@ -74,6 +74,11 @@ Implementation progress:
   lookup against the compiled enum descriptor;
 - completed: variable default values are checked against their declared input
   types using the XS literal validator;
+- completed: executable directive validation now performs definition lookup,
+  location/repeatability checks, argument validation, and selection traversal
+  in XS; the validation facade no longer performs a second Pure Perl AST walk;
+- remaining parser parity: directives on variable definitions are currently
+  rejected syntactically before validation and need executable grammar support;
 - completed: field merging conflicts are grouped by response key, expanded
   through named and inline fragments, and compared only across overlapping
   runtime type conditions in XS;

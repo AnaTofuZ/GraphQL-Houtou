@@ -513,7 +513,7 @@ subtest 'directive validation checks literal argument types' => sub {
   |);
 
   is_deeply messages($errors), [
-    q{Argument 'if' on directive '@skip' has invalid value: Not a Boolean.},
+    q{Value is not a valid Boolean literal.},
   ];
 };
 

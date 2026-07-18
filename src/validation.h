@@ -2151,6 +2151,214 @@ gql_validation_validate_operation(
 }
 
 static SV *
+gql_validation_compiled_directives_sv(SV *compiled_sv) {
+  HV *compiled_hv = gql_validation_compiled_hv_from_sv(compiled_sv);
+  SV **directives_svp = compiled_hv ? hv_fetch(compiled_hv, "directives", 10, 0) : NULL;
+  return directives_svp ? *directives_svp : NULL;
+}
+
+static int
+gql_validation_directive_has_location(HV *directive_hv, const char *location) {
+  SV **locations_svp = hv_fetch(directive_hv, "locations", 9, 0);
+  I32 i;
+  if (!locations_svp || !SvROK(*locations_svp) || SvTYPE(SvRV(*locations_svp)) != SVt_PVAV) {
+    return 0;
+  }
+  for (i = 0; i <= av_len((AV *)SvRV(*locations_svp)); i++) {
+    SV **item_svp = av_fetch((AV *)SvRV(*locations_svp), i, 0);
+    if (item_svp && SvOK(*item_svp) && strEQ(SvPV_nolen(*item_svp), location)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static void
+gql_validation_validate_directive_list(
+  pTHX_ AV *errors_av, SV *compiled_sv, SV *directives_sv,
+  const char *location, HV *variables_hv
+) {
+  SV *compiled_directives_sv = gql_validation_compiled_directives_sv(compiled_sv);
+  HV *compiled_directives_hv;
+  AV *directives_av;
+  HV *seen_hv;
+  I32 i;
+  if (!directives_sv || !SvROK(directives_sv) || SvTYPE(SvRV(directives_sv)) != SVt_PVAV
+      || !compiled_directives_sv || !SvROK(compiled_directives_sv)
+      || SvTYPE(SvRV(compiled_directives_sv)) != SVt_PVHV) {
+    return;
+  }
+  directives_av = (AV *)SvRV(directives_sv);
+  compiled_directives_hv = (HV *)SvRV(compiled_directives_sv);
+  seen_hv = newHV();
+  for (i = 0; i <= av_len(directives_av); i++) {
+    SV **directive_svp = av_fetch(directives_av, i, 0);
+    HV *directive_hv;
+    SV **name_svp;
+    SV **location_svp;
+    HE *def_he;
+    HV *def_hv;
+    STRLEN name_len;
+    const char *name;
+    if (!directive_svp || !SvROK(*directive_svp) || SvTYPE(SvRV(*directive_svp)) != SVt_PVHV) continue;
+    directive_hv = (HV *)SvRV(*directive_svp);
+    name_svp = hv_fetch(directive_hv, "name", 4, 0);
+    location_svp = hv_fetch(directive_hv, "location", 8, 0);
+    if (!name_svp || !SvOK(*name_svp)) continue;
+    name = SvPV(*name_svp, name_len);
+    def_he = hv_fetch_ent(compiled_directives_hv, *name_svp, 0, 0);
+    if (!def_he || !SvROK(HeVAL(def_he)) || SvTYPE(SvRV(HeVAL(def_he))) != SVt_PVHV) {
+      SV *message = newSVpvf("Unknown directive '@%s'.", name);
+      av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL));
+      SvREFCNT_dec(message);
+      continue;
+    }
+    def_hv = (HV *)SvRV(HeVAL(def_he));
+    if (!gql_validation_directive_has_location(def_hv, location)) {
+      SV *message = newSVpvf("Directive '@%s' may not be used on %s.", name, location);
+      av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL));
+      SvREFCNT_dec(message);
+    }
+    {
+      SV **repeatable_svp = hv_fetch(def_hv, "repeatable", 10, 0);
+      if (hv_exists(seen_hv, name, (I32)name_len) && !(repeatable_svp && SvTRUE(*repeatable_svp))) {
+        SV *message = newSVpvf("Directive '@%s' is not repeatable and cannot be used more than once at this location.", name);
+        av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL));
+        SvREFCNT_dec(message);
+      }
+      (void)hv_store(seen_hv, name, (I32)name_len, newSViv(1), 0);
+    }
+    {
+      SV **arguments_svp = hv_fetch(directive_hv, "arguments", 9, 0);
+      SV **arg_defs_svp = hv_fetch(def_hv, "args", 4, 0);
+      HV *arguments_hv = arguments_svp && SvROK(*arguments_svp) ? (HV *)SvRV(*arguments_svp) : NULL;
+      HV *arg_defs_hv = arg_defs_svp && SvROK(*arg_defs_svp) ? (HV *)SvRV(*arg_defs_svp) : NULL;
+      I32 count = 0;
+      SV **keys;
+      I32 j;
+      if (!arg_defs_hv) continue;
+      if (arguments_hv) {
+        keys = gql_parser_sorted_hash_keys(aTHX_ arguments_hv, &count);
+        for (j = 0; keys && j < count; j++) {
+          if (!hv_fetch_ent(arg_defs_hv, keys[j], 0, 0)) {
+            SV *message = newSVpvf("Unknown argument '%s' on directive '@%s'.", SvPV_nolen(keys[j]), name);
+            av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL));
+            SvREFCNT_dec(message);
+          }
+        }
+        gql_parser_free_sorted_hash_keys(keys, count);
+      }
+      keys = gql_parser_sorted_hash_keys(aTHX_ arg_defs_hv, &count);
+      for (j = 0; keys && j < count; j++) {
+        HE *arg_he = hv_fetch_ent(arg_defs_hv, keys[j], 0, 0);
+        HV *arg_hv = arg_he && SvROK(HeVAL(arg_he)) ? (HV *)SvRV(HeVAL(arg_he)) : NULL;
+        HE *value_he = arguments_hv ? hv_fetch_ent(arguments_hv, keys[j], 0, 0) : NULL;
+        SV **type_svp = arg_hv ? hv_fetch(arg_hv, "type", 4, 0) : NULL;
+        SV **default_svp = arg_hv ? hv_fetch(arg_hv, "has_default_value", 17, 0) : NULL;
+        if (!value_he && type_svp && gql_validation_type_is_non_null(*type_svp)
+            && !(default_svp && SvTRUE(*default_svp))) {
+          SV *message = newSVpvf("Required argument '%s' was not provided to directive '@%s'.", SvPV_nolen(keys[j]), name);
+          av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL));
+          SvREFCNT_dec(message);
+        } else if (value_he && type_svp) {
+          SV *directive_value_sv = HeVAL(value_he);
+          if (!variables_hv && SvROK(directive_value_sv)
+              && !SvROK(SvRV(directive_value_sv))
+              && !sv_isobject(directive_value_sv)) {
+            continue;
+          }
+          gql_validation_validate_nested_variable_position(
+            aTHX_ errors_av, directive_value_sv, *type_svp, variables_hv,
+            default_svp && SvTRUE(*default_svp), "a directive argument",
+            location_svp ? *location_svp : NULL
+          );
+          gql_validation_validate_value(aTHX_ errors_av, NULL, compiled_sv, directive_value_sv, *type_svp, variables_hv, location_svp ? *location_svp : NULL);
+        }
+      }
+      gql_parser_free_sorted_hash_keys(keys, count);
+    }
+  }
+  SvREFCNT_dec((SV *)seen_hv);
+}
+
+static void
+gql_validation_validate_directives_in_selections(
+  pTHX_ AV *errors_av, SV *compiled_sv, AV *selections_av, HV *variables_hv
+) {
+  I32 i;
+  for (i = 0; selections_av && i <= av_len(selections_av); i++) {
+    SV **selection_svp = av_fetch(selections_av, i, 0);
+    HV *selection_hv;
+    SV **kind_svp;
+    SV **directives_svp;
+    SV **nested_svp;
+    const char *location;
+    if (!selection_svp || !SvROK(*selection_svp) || SvTYPE(SvRV(*selection_svp)) != SVt_PVHV) continue;
+    selection_hv = (HV *)SvRV(*selection_svp);
+    kind_svp = hv_fetch(selection_hv, "kind", 4, 0);
+    if (!kind_svp || !SvOK(*kind_svp)) continue;
+    location = strEQ(SvPV_nolen(*kind_svp), "field") ? "FIELD"
+      : strEQ(SvPV_nolen(*kind_svp), "fragment_spread") ? "FRAGMENT_SPREAD"
+      : "INLINE_FRAGMENT";
+    directives_svp = hv_fetch(selection_hv, "directives", 10, 0);
+    gql_validation_validate_directive_list(aTHX_ errors_av, compiled_sv, directives_svp ? *directives_svp : NULL, location, variables_hv);
+    nested_svp = hv_fetch(selection_hv, "selections", 10, 0);
+    if (nested_svp && SvROK(*nested_svp) && SvTYPE(SvRV(*nested_svp)) == SVt_PVAV)
+      gql_validation_validate_directives_in_selections(aTHX_ errors_av, compiled_sv, (AV *)SvRV(*nested_svp), variables_hv);
+  }
+}
+
+static void
+gql_validation_validate_document_directives(pTHX_ AV *errors_av, SV *compiled_sv, AV *ast_av) {
+  I32 i;
+  for (i = 0; i <= av_len(ast_av); i++) {
+    SV **node_svp = av_fetch(ast_av, i, 0);
+    HV *node_hv;
+    SV **kind_svp;
+    SV **directives_svp;
+    SV **selections_svp;
+    HV *variables_hv = NULL;
+    const char *location;
+    if (!node_svp || !SvROK(*node_svp) || SvTYPE(SvRV(*node_svp)) != SVt_PVHV) continue;
+    node_hv = (HV *)SvRV(*node_svp);
+    kind_svp = hv_fetch(node_hv, "kind", 4, 0);
+    if (!kind_svp || !SvOK(*kind_svp)) continue;
+    if (strEQ(SvPV_nolen(*kind_svp), "operation")) {
+      SV **operation_type_svp = hv_fetch(node_hv, "operationType", 13, 0);
+      SV **variables_svp = hv_fetch(node_hv, "variables", 9, 0);
+      location = operation_type_svp && SvOK(*operation_type_svp)
+        && strEQ(SvPV_nolen(*operation_type_svp), "mutation") ? "MUTATION"
+        : operation_type_svp && SvOK(*operation_type_svp)
+          && strEQ(SvPV_nolen(*operation_type_svp), "subscription") ? "SUBSCRIPTION"
+          : "QUERY";
+      if (variables_svp && SvROK(*variables_svp)) variables_hv = (HV *)SvRV(*variables_svp);
+      if (variables_hv) {
+        HE *variable_he;
+        hv_iterinit(variables_hv);
+        while ((variable_he = hv_iternext(variables_hv))) {
+          SV *variable_sv = HeVAL(variable_he);
+          if (variable_sv && SvROK(variable_sv) && SvTYPE(SvRV(variable_sv)) == SVt_PVHV) {
+            SV **variable_directives_svp = hv_fetch((HV *)SvRV(variable_sv), "directives", 10, 0);
+            gql_validation_validate_directive_list(
+              aTHX_ errors_av, compiled_sv,
+              variable_directives_svp ? *variable_directives_svp : NULL,
+              "VARIABLE_DEFINITION", variables_hv
+            );
+          }
+        }
+      }
+    } else {
+      location = "FRAGMENT_DEFINITION";
+    }
+    directives_svp = hv_fetch(node_hv, "directives", 10, 0);
+    gql_validation_validate_directive_list(aTHX_ errors_av, compiled_sv, directives_svp ? *directives_svp : NULL, location, variables_hv);
+    selections_svp = hv_fetch(node_hv, "selections", 10, 0);
+    if (selections_svp && SvROK(*selections_svp) && SvTYPE(SvRV(*selections_svp)) == SVt_PVAV)
+      gql_validation_validate_directives_in_selections(aTHX_ errors_av, compiled_sv, (AV *)SvRV(*selections_svp), variables_hv);
+  }
+}
+
+static SV *
 gql_validation_validate(pTHX_ SV *schema, SV *document, SV *options) {
   AV *errors_av = newAV();
   SV *ast_sv = gql_validation_parse_ast(aTHX_ document, options, errors_av);
@@ -2201,6 +2409,7 @@ gql_validation_validate(pTHX_ SV *schema, SV *document, SV *options) {
   gql_validation_push_subscription_errors(aTHX_ operation_errors_av, operations_av, fragments_hv);
   gql_validation_push_fragment_cycle_errors(aTHX_ fragment_cycle_errors_av, fragments_hv);
   gql_validation_validate_fragments(aTHX_ errors_av, compiled_sv, fragments_hv);
+  gql_validation_validate_document_directives(aTHX_ errors_av, compiled_sv, ast_av);
 
   {
     I32 fragment_len = av_len(fragment_cycle_errors_av);

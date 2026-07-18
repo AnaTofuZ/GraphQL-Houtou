@@ -15,10 +15,8 @@ our @EXPORT_OK = qw(
 sub validate {
   my ($schema, $source_or_ast, @rest) = @_;
   GraphQL::Houtou::_bootstrap_xs();
-  my $errors = GraphQL::Houtou::XS::Validation::validate_xs($schema, $source_or_ast, @rest);
-  my $document = ref($source_or_ast) ? $source_or_ast : GraphQL::Houtou::parse($source_or_ast);
-  push @$errors, @{ _validate_directives($schema, $document) };
-  return $errors;
+  require GraphQL::Houtou::XS::Parser if !ref($source_or_ast);
+  return GraphQL::Houtou::XS::Validation::validate_xs($schema, $source_or_ast, @rest);
 }
 
 sub _validate_directives {

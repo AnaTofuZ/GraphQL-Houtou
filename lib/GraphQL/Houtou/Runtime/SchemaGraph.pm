@@ -590,7 +590,14 @@ sub _dispatch_family_for_type {
   my ($type) = @_;
   return _dispatch_family_for_type($type->of) if $type && $type->isa('GraphQL::Houtou::Type::NonNull');
   return 'TAG' if $type && ($type->isa('GraphQL::Houtou::Type::Interface') || $type->isa('GraphQL::Houtou::Type::Union'));
-  return 'LIST' if $type && $type->isa('GraphQL::Houtou::Type::List');
+  if ($type && $type->isa('GraphQL::Houtou::Type::List')) {
+    # A list of an interface/union dispatches per item: the op must carry
+    # the abstract dispatch family or the runtime's member-block selection
+    # never runs for the items.
+    my $inner = _dispatch_family_for_type($type->of);
+    return $inner if $inner eq 'TAG' || $inner eq 'RESOLVE_TYPE' || $inner eq 'ABSTRACT';
+    return 'LIST';
+  }
   return 'OBJECT' if $type && $type->isa('GraphQL::Houtou::Type::Object');
   return 'ABSTRACT' if $type && ($type->isa('GraphQL::Houtou::Type::Interface') || $type->isa('GraphQL::Houtou::Type::Union'));
   return 'GENERIC';

@@ -165,6 +165,17 @@ sub _lower_selection_block {
           $base_name . q(.) . $field_name,
         );
       }
+      elsif (@{ $state->{runtime_schema}->runtime_cache->{possible_types}{$child_type_name} || [] }) {
+        # A list of an interface/union: the inner type has no object block
+        # of its own, so lower one member block per possible type and let
+        # the runtime pick per item.
+        $abstract_child_blocks = _lower_abstract_child_blocks(
+          $state,
+          $child_type_name,
+          $selection->{selections},
+          $base_name . q(.) . $field_name,
+        );
+      }
     }
 
     my $resolve_family = _resolve_op_for_slot($slot);
@@ -288,6 +299,17 @@ sub _lower_selection_block_compact {
           $state,
           $child_type_name,
           $child_schema_block,
+          $selection->{selections},
+          $base_name . q(.) . $field_name,
+        );
+      }
+      elsif (@{ $state->{runtime_schema}->runtime_cache->{possible_types}{$child_type_name} || [] }) {
+        # A list of an interface/union: the inner type has no object block
+        # of its own, so lower one member block per possible type and let
+        # the runtime pick per item.
+        $abstract_child_block_indexes = _lower_abstract_child_blocks_compact(
+          $state,
+          $child_type_name,
           $selection->{selections},
           $base_name . q(.) . $field_name,
         );
@@ -738,7 +760,11 @@ sub _contains_variable_refs {
   my $ref = ref($value);
   return 0 if !$ref;
   return 1 if $ref eq 'SCALAR';
-  return _contains_variable_refs($$value) if $ref eq 'REF';
+  # A REF (\\'NAME') is the parser's enum-literal marker, not a variable:
+  # recursing into it would misread the inner scalar ref as a variable and
+  # send the argument down the dynamic path, where 'NAME' gets looked up
+  # as a (missing) variable and the argument silently becomes undef.
+  return 0 if $ref eq 'REF';
   if ($ref eq 'ARRAY') {
     for my $item (@$value) {
       return 1 if _contains_variable_refs($item);

@@ -94,6 +94,10 @@ sub from_ast {
 
   my @directives = map { GraphQL::Houtou::Directive->from_ast(\%name2type, $_) }
     grep { ($_->{kind} || q()) eq 'directive' } @$merged_ast;
+  my @all_directives = (@GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES, @directives);
+  my $ast_validation_errors = _type_system_directive_errors(
+    $merged_ast, \@all_directives,
+  );
 
   my $schema = $class->new(
     (map {
@@ -104,10 +108,11 @@ sub from_ast {
     } @ROOT_ATTRS),
     ($schema_node->{description} ? (description => $schema_node->{description}) : ()),
     (@directives
-      ? (directives => [ @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES, @directives ])
+      ? (directives => \@all_directives)
       : ()),
     types => [ values %name2type ],
   );
+  $schema->{_ast_validation_errors} = $ast_validation_errors;
   $schema->_apply_resolvers($opts{resolvers}) if $opts{resolvers};
   $schema->name2type;
   return $schema;
@@ -170,6 +175,124 @@ sub _merge_type_system_extensions {
     _merge_type_extension($target, $extension, \%repeatable);
   }
   return \@result;
+}
+
+sub _type_system_directive_errors {
+  my ($ast, $directives) = @_;
+  my (@errors, %name2directive, %definition_count);
+  my %valid_location = map { ($_ => 1) } qw(
+    QUERY MUTATION SUBSCRIPTION FIELD FRAGMENT_DEFINITION FRAGMENT_SPREAD
+    INLINE_FRAGMENT VARIABLE_DEFINITION SCHEMA SCALAR OBJECT FIELD_DEFINITION
+    ARGUMENT_DEFINITION INTERFACE UNION ENUM ENUM_VALUE INPUT_OBJECT
+    INPUT_FIELD_DEFINITION
+  );
+  for my $directive (@$directives) {
+    my $name = $directive->name;
+    push @errors, "Directive '\@$name' is defined more than once."
+      if $definition_count{$name}++;
+    $name2directive{$name} ||= $directive;
+  }
+
+  for my $node (@$ast) {
+    my $kind = $node->{kind} || q();
+    if ($kind eq 'directive') {
+      my %seen_location;
+      for my $location (@{ $node->{locations} || [] }) {
+        push @errors, "Directive '\@$node->{name}' has unknown location '$location'."
+          if !$valid_location{$location};
+        push @errors, "Directive '\@$node->{name}' repeats location '$location'."
+          if $seen_location{$location}++;
+      }
+      next;
+    }
+    my %location = (
+      schema => 'SCHEMA', scalar => 'SCALAR', type => 'OBJECT',
+      interface => 'INTERFACE', union => 'UNION', enum => 'ENUM',
+      input => 'INPUT_OBJECT',
+    );
+    push @errors, _applied_directive_errors(
+      $node->{directives}, $location{$kind},
+      $kind eq 'schema' ? 'schema' : "$kind @{[$node->{name} || q()]}",
+      \%name2directive,
+    ) if $location{$kind};
+
+    if ($kind eq 'type' || $kind eq 'interface') {
+      for my $field_name (sort keys %{ $node->{fields} || {} }) {
+        my $field = $node->{fields}{$field_name};
+        push @errors, _applied_directive_errors(
+          $field->{directives}, 'FIELD_DEFINITION',
+          "$kind $node->{name}.$field_name", \%name2directive,
+        );
+        for my $arg_name (sort keys %{ $field->{args} || {} }) {
+          push @errors, _applied_directive_errors(
+            $field->{args}{$arg_name}{directives}, 'ARGUMENT_DEFINITION',
+            "$kind $node->{name}.$field_name($arg_name:)", \%name2directive,
+          );
+        }
+      }
+    }
+    elsif ($kind eq 'input') {
+      for my $field_name (sort keys %{ $node->{fields} || {} }) {
+        push @errors, _applied_directive_errors(
+          $node->{fields}{$field_name}{directives}, 'INPUT_FIELD_DEFINITION',
+          "input $node->{name}.$field_name", \%name2directive,
+        );
+      }
+    }
+    elsif ($kind eq 'enum') {
+      for my $value_name (sort keys %{ $node->{values} || {} }) {
+        push @errors, _applied_directive_errors(
+          $node->{values}{$value_name}{directives}, 'ENUM_VALUE',
+          "enum $node->{name}.$value_name", \%name2directive,
+        );
+      }
+    }
+  }
+  return \@errors;
+}
+
+sub _applied_directive_errors {
+  my ($applications, $location, $coordinate, $name2directive) = @_;
+  my (@errors, %seen);
+  for my $application (@{ $applications || [] }) {
+    my $name = $application->{name} || q();
+    my $directive = $name2directive->{$name};
+    if (!$directive) {
+      push @errors, "Unknown directive '\@$name' on $coordinate.";
+      next;
+    }
+    push @errors, "Directive '\@$name' is not repeatable and cannot be used more than once on $coordinate."
+      if $seen{$name}++ && !$directive->repeatable;
+    push @errors, "Directive '\@$name' cannot be used at $location on $coordinate."
+      if !grep { $_ eq $location } @{ $directive->locations || [] };
+
+    my $arguments = $application->{arguments} || {};
+    my $definitions = $directive->args || {};
+    for my $arg_name (sort keys %$arguments) {
+      my $definition = $definitions->{$arg_name};
+      if (!$definition) {
+        push @errors, "Unknown argument '$arg_name' on directive '\@$name' at $coordinate.";
+        next;
+      }
+      my $ok = eval { $definition->{type}->graphql_to_perl($arguments->{$arg_name}); 1 };
+      if (!$ok) {
+        my $detail = $@ || 'invalid value';
+        $detail =~ s/\s+\z//;
+        $detail =~ s/ at \S+ line \d+\.?\z//;
+        push @errors, "Argument '$arg_name' on directive '\@$name' at $coordinate "
+          . "is invalid for type @{[$definition->{type}->to_string]}: $detail.";
+      }
+    }
+    for my $arg_name (sort keys %$definitions) {
+      my $definition = $definitions->{$arg_name};
+      push @errors, "Required argument '$arg_name' was not provided to directive '\@$name' at $coordinate."
+        if !exists($arguments->{$arg_name})
+          && ref($definition->{type})
+          && $definition->{type}->isa('GraphQL::Houtou::Type::NonNull')
+          && !exists($definition->{default_value});
+    }
+  }
+  return @errors;
 }
 
 sub _extension_target_copy {
@@ -357,7 +480,7 @@ sub assert_valid {
 
 sub validation_errors {
   my ($self) = @_;
-  my @errors;
+  my @errors = @{ $self->{_ast_validation_errors} || [] };
   my $name2type = eval { $self->name2type };
   if (!$name2type) {
     my $error = $@ || 'unknown error';

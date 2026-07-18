@@ -67,6 +67,8 @@ sub from_ast_field_deprecate {
 
   my ($deprecated) = grep { $_->{name} eq 'deprecated' } @$directives;
   return $values if !$deprecated;
+  my @remaining = grep { $_->{name} ne 'deprecated' } @$directives;
+  $value->{directives} = \@remaining if @remaining;
 
   require GraphQL::Houtou::Directive;
   my $reason = $deprecated->{arguments}{reason}

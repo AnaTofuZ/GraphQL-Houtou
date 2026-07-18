@@ -9,6 +9,13 @@
 # gql_* frames.
 
 {
+   perl-cwd-abs-path-overlapping-copy
+   Memcheck:Overlap
+   fun:__memcpy_chk
+   fun:XS_Cwd_abs_path
+}
+
+{
    perl-interpreter-startup-reachable
    Memcheck:Leak
    match-leak-kinds: reachable

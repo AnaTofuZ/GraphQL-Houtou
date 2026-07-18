@@ -1134,7 +1134,8 @@ gql_parse_object_type_definition(pTHX_ gql_parser_t *p, const char *kind) {
   int had_body = 0;
   gql_advance(aTHX_ p);
   gql_store_sv(hv, "name", gql_parse_name(aTHX_ p, "Expected name"));
-  if (strcmp(kind, "type") == 0 && gql_peek_name(p, "implements")) {
+  if ((strcmp(kind, "type") == 0 || strcmp(kind, "interface") == 0)
+      && gql_peek_name(p, "implements")) {
     AV *interfaces = newAV();
     gql_advance(aTHX_ p);
     if (p->kind == TOK_AMP) {
@@ -1345,6 +1346,36 @@ gql_parse_type_system_definition(pTHX_ gql_parser_t *p, SV *description) {
   } else {
     gql_throw(aTHX_ p, p->tok_start, "Expected type system definition");
     return &PL_sv_undef;
+  }
+  if (is_extend) {
+    HV *node_hv = (HV *)SvRV(node);
+    SV **kind_svp = hv_fetch(node_hv, "kind", 4, 0);
+    int has_content = 0;
+    const char *array_keys[] = { "directives", "interfaces", "types" };
+    const I32 array_lens[] = { 10, 10, 5 };
+    const char *hash_keys[] = { "fields", "values" };
+    const I32 hash_lens[] = { 6, 6 };
+    int i;
+    for (i = 0; i < 3 && !has_content; i++) {
+      SV **svp = hv_fetch(node_hv, array_keys[i], array_lens[i], 0);
+      has_content = svp && SvROK(*svp) && SvTYPE(SvRV(*svp)) == SVt_PVAV
+        && av_len((AV *)SvRV(*svp)) >= 0;
+    }
+    for (i = 0; i < 2 && !has_content; i++) {
+      SV **svp = hv_fetch(node_hv, hash_keys[i], hash_lens[i], 0);
+      has_content = svp && SvROK(*svp) && SvTYPE(SvRV(*svp)) == SVt_PVHV
+        && HvTOTALKEYS((HV *)SvRV(*svp)) > 0;
+    }
+    if (kind_svp && SvOK(*kind_svp) && strEQ(SvPV_nolen(*kind_svp), "schema")) {
+      has_content = has_content || hv_exists(node_hv, "query", 5)
+        || hv_exists(node_hv, "mutation", 8)
+        || hv_exists(node_hv, "subscription", 12);
+    }
+    if (!has_content) {
+      SvREFCNT_dec(node);
+      gql_throw(aTHX_ p, p->tok_start, "Type system extension must add a directive or member");
+    }
+    gql_store_sv(node_hv, "extension", newSViv(1));
   }
   if (SvOK(description)) {
     HV *node_hv = (HV *)SvRV(node);

@@ -652,8 +652,11 @@ gql_schema_compile_named_type(pTHX_ SV *type_sv) {
       }
     }
   } else if (strEQ(kind, "INTERFACE")) {
+    SV *interfaces_sv = gql_schema_call_method0(aTHX_ type_sv, "interfaces");
     fields_sv = gql_schema_call_method0(aTHX_ type_sv, "fields");
+    gql_store_sv(compiled_hv, "interfaces", gql_schema_compile_type_name_array(aTHX_ interfaces_sv));
     gql_store_sv(compiled_hv, "fields", gql_schema_compile_fields(aTHX_ fields_sv));
+    SvREFCNT_dec(interfaces_sv);
     SvREFCNT_dec(fields_sv);
     {
       SV *resolve_type_sv = gql_schema_call_method0(aTHX_ type_sv, "resolve_type");

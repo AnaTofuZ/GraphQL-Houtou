@@ -11,6 +11,7 @@ use GraphQL::Houtou::Internal::TypeSupport qw(
   apply_fields_deprecation
   description_doc_lines
   from_ast_fields
+  from_ast_maptype
   make_fieldtuples
   named_from_ast
 );
@@ -44,6 +45,7 @@ sub new {
   $self->{name} = $args{name};
   $self->{description} = $args{description};
   $self->{fields} = $args{fields};
+  $self->{interfaces} = $args{interfaces} || [];
   $self->{resolve_type} = $args{resolve_type};
   $self->{tag_resolver} = $args{tag_resolver};
   $self->{tag_map} = $args{tag_map};
@@ -57,10 +59,19 @@ sub resolve_type { return $_[0]->{resolve_type} }
 sub tag_resolver { return $_[0]->{tag_resolver} }
 sub tag_map { return $_[0]->{tag_map} }
 
+sub interfaces {
+  my ($self) = @_;
+  if (ref($self->{interfaces}) eq 'CODE') {
+    $self->{interfaces} = $self->{interfaces}->();
+  }
+  return $self->{interfaces};
+}
+
 sub from_ast {
   my ($class, $name2type, $ast_node) = @_;
   return $class->new(
     named_from_ast($ast_node),
+    from_ast_maptype($name2type, $ast_node, 'interfaces'),
     from_ast_fields($name2type, $ast_node, 'fields'),
   );
 }
@@ -86,7 +97,9 @@ sub to_doc {
   } make_fieldtuples($self->fields);
   return $self->{to_doc} = join '', map "$_\n",
     description_doc_lines($self->description),
-    "interface @{[$self->name]} {",
+    "interface @{[$self->name]}"
+      . (@{ $self->interfaces } ? ' implements ' . join(' & ', map $_->name, @{ $self->interfaces }) : '')
+      . " {",
     (map length() ? "  $_" : "", @fieldlines),
     "}";
 }

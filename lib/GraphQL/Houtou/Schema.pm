@@ -56,8 +56,12 @@ sub from_ast {
   my ($class, $ast, %opts) = @_;
   my $kind2class = $opts{kind2class} || \%KIND2CLASS;
 
-  my @type_nodes = grep { $kind2class->{$_->{kind} || q()} } @$ast;
-  my ($schema_node, $extra_schema_node) = grep { ($_->{kind} || q()) eq 'schema' } @$ast;
+  my ($merged_ast, $merge_error) = eval { (_merge_type_system_extensions($ast, $kind2class), undef) };
+  $merge_error = $@ if $@;
+  die $merge_error if $merge_error;
+
+  my @type_nodes = grep { $kind2class->{$_->{kind} || q()} } @$merged_ast;
+  my ($schema_node, $extra_schema_node) = grep { ($_->{kind} || q()) eq 'schema' } @$merged_ast;
   die "Must provide only one schema definition.\n" if $extra_schema_node;
 
   my %name2type;
@@ -82,7 +86,7 @@ sub from_ast {
     if !$schema_node->{query};
 
   my @directives = map { GraphQL::Houtou::Directive->from_ast(\%name2type, $_) }
-    grep { ($_->{kind} || q()) eq 'directive' } @$ast;
+    grep { ($_->{kind} || q()) eq 'directive' } @$merged_ast;
 
   my $schema = $class->new(
     (map {
@@ -100,6 +104,145 @@ sub from_ast {
   $schema->_apply_resolvers($opts{resolvers}) if $opts{resolvers};
   $schema->name2type;
   return $schema;
+}
+
+sub _merge_type_system_extensions {
+  my ($ast, $kind2class) = @_;
+  my @result;
+  my %definitions;
+  my @extensions;
+  my $schema_definition;
+  my %repeatable = map { ($_ => 0) } qw(include skip deprecated specifiedBy oneOf);
+
+  for my $node (@$ast) {
+    if (!$node->{extension}) {
+      push @result, $node;
+      if ($kind2class->{ $node->{kind} || q() }) {
+        $definitions{ $node->{name} } = $node
+          if !exists $definitions{ $node->{name} };
+      } elsif (($node->{kind} || q()) eq 'schema' && !$schema_definition) {
+        $schema_definition = $node;
+      }
+      next;
+    }
+    push @extensions, $node;
+  }
+  for my $node (@$ast) {
+    next if ($node->{kind} || q()) ne 'directive';
+    $repeatable{ $node->{name} } = $node->{repeatable} ? 1 : 0;
+  }
+  return \@result if !@extensions;
+
+  # Copy only nodes that receive extensions. This keeps from_ast from
+  # modifying a caller-owned parser AST while avoiding a full deep clone.
+  my %copies;
+  for my $extension (@extensions) {
+    my $kind = $extension->{kind} || q();
+    if ($kind eq 'schema') {
+      if (!$schema_definition) {
+        $schema_definition = {
+          kind => 'schema',
+          map { $definitions{ ucfirst $_ } ? ($_ => ucfirst $_) : () } @ROOT_ATTRS
+        };
+        push @result, $schema_definition;
+      }
+      $schema_definition = _extension_target_copy(
+        \@result, $schema_definition, \%copies,
+      );
+      _merge_schema_extension($schema_definition, $extension, \%repeatable);
+      next;
+    }
+
+    my $name = $extension->{name};
+    my $target = $definitions{$name}
+      // die "Cannot extend type '$name' because it is not defined.\n";
+    die "Cannot extend type '$name' as $kind because it is a '$target->{kind}' type.\n"
+      if ($target->{kind} ne $kind);
+    $target = _extension_target_copy(\@result, $target, \%copies);
+    $definitions{$name} = $target;
+    _merge_type_extension($target, $extension, \%repeatable);
+  }
+  return \@result;
+}
+
+sub _extension_target_copy {
+  my ($result, $target, $copies) = @_;
+  my $key = "$target";
+  return $copies->{$key} if $copies->{$key};
+  my $copy = { %$target };
+  for my $i (0 .. $#$result) {
+    if ($result->[$i] == $target) {
+      $result->[$i] = $copy;
+      last;
+    }
+  }
+  return $copies->{$key} = $copy;
+}
+
+sub _merge_named_hash {
+  my ($target, $extension, $key, $type_name) = @_;
+  return if !$extension->{$key};
+  my %merged = %{ $target->{$key} || {} };
+  for my $name (keys %{ $extension->{$key} }) {
+    die "Type extension for '$type_name' redefines $key '$name'.\n"
+      if exists $merged{$name};
+    $merged{$name} = $extension->{$key}{$name};
+  }
+  $target->{$key} = \%merged;
+}
+
+sub _merge_named_array {
+  my ($target, $extension, $key, $type_name) = @_;
+  return if !$extension->{$key};
+  my @merged = @{ $target->{$key} || [] };
+  my %seen = map { ($_ => 1) } @merged;
+  for my $name (@{ $extension->{$key} }) {
+    die "Type extension for '$type_name' repeats $key member '$name'.\n"
+      if $seen{$name}++;
+    push @merged, $name;
+  }
+  $target->{$key} = \@merged;
+}
+
+sub _merge_directives {
+  my ($target, $extension, $repeatable) = @_;
+  return if !$extension->{directives};
+  my %seen;
+  for my $directive (@{ $target->{directives} || [] }, @{ $extension->{directives} }) {
+    my $name = $directive->{name};
+    die "Type-system extension repeats non-repeatable directive '\@$name'.\n"
+      if $seen{$name}++ && !$repeatable->{$name};
+  }
+  $target->{directives} = [
+    @{ $target->{directives} || [] },
+    @{ $extension->{directives} },
+  ];
+}
+
+sub _merge_type_extension {
+  my ($target, $extension, $repeatable) = @_;
+  my $name = $target->{name};
+  _merge_directives($target, $extension, $repeatable);
+  _merge_named_hash($target, $extension, 'fields', $name)
+    if $target->{kind} eq 'type' || $target->{kind} eq 'interface'
+      || $target->{kind} eq 'input';
+  _merge_named_hash($target, $extension, 'values', $name)
+    if $target->{kind} eq 'enum';
+  _merge_named_array($target, $extension, 'interfaces', $name)
+    if $target->{kind} eq 'type' || $target->{kind} eq 'interface';
+  _merge_named_array($target, $extension, 'types', $name)
+    if $target->{kind} eq 'union';
+}
+
+sub _merge_schema_extension {
+  my ($target, $extension, $repeatable) = @_;
+  _merge_directives($target, $extension, $repeatable);
+  for my $operation (@ROOT_ATTRS) {
+    next if !$extension->{$operation};
+    die "Schema extension redefines $operation root type.\n"
+      if $target->{$operation};
+    $target->{$operation} = $extension->{$operation};
+  }
 }
 
 sub _apply_resolvers {
@@ -234,6 +377,14 @@ sub validation_errors {
     }
     elsif (_is_interface_type($type)) {
       push @errors, $self->_object_field_errors($type);
+      for my $interface (@{ $type->interfaces || [] }) {
+        if (!ref($interface) || !_is_interface_type($interface)) {
+          push @errors, "Type @{[$type->name]} must only implement Interface types, "
+            . 'found ' . (ref($interface) ? $interface->to_string : "'$interface'") . '.';
+          next;
+        }
+        push @errors, $self->_interface_conformance_errors($type, $interface);
+      }
     }
     elsif ($type->isa('GraphQL::Houtou::Type::Union')) {
       my $members = $type->types || [];
@@ -296,6 +447,14 @@ sub _interface_conformance_errors {
   my @errors;
   my $interface_fields = $interface->fields || {};
   my $object_fields = $object->fields || {};
+
+  my %implemented = map { ($_->name => 1) }
+    grep { ref($_) } @{ $object->interfaces || [] };
+  for my $inherited (@{ $interface->interfaces || [] }) {
+    push @errors, "Type @{[$object->name]} must implement @{[$inherited->name]} "
+      . "because it is implemented by @{[$interface->name]}."
+      if !$implemented{ $inherited->name };
+  }
 
   for my $field_name (sort keys %$interface_fields) {
     my $interface_field = $interface_fields->{$field_name};
@@ -367,7 +526,7 @@ sub _is_sub_type {
   }
   return 0 if $maybe->isa('GraphQL::Houtou::Type::List');
   return 1 if $maybe->name eq $super->name;
-  if (_is_object_type($maybe)) {
+  if (_is_object_type($maybe) || _is_interface_type($maybe)) {
     return 1 if _is_interface_type($super)
       && grep { ref($_) && $_->name eq $super->name } @{ $maybe->interfaces || [] };
     return 1 if $super->isa('GraphQL::Houtou::Type::Union')
@@ -797,7 +956,13 @@ sub _build__interface2types {
 
   for my $type (values %$name2type) {
     next if !($type->isa('GraphQL::Type::Object') || $type->isa('GraphQL::Houtou::Type::Object'));
-    push @{ $interface2types{ $_->name } }, $type for @{ $type->interfaces || [] };
+    my @queue = @{ $type->interfaces || [] };
+    my %seen;
+    while (my $interface = shift @queue) {
+      next if !$interface || $seen{ $interface->name }++;
+      push @{ $interface2types{ $interface->name } }, $type;
+      push @queue, @{ $interface->can('interfaces') ? $interface->interfaces : [] };
+    }
   }
 
   return \%interface2types;

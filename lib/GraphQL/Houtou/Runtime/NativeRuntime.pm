@@ -406,6 +406,10 @@ sub _settle_result {
   while (!$settled) {
     my $progressed = $on_stall->();
     if (!$settled && !$progressed) {
+      # The request is being abandoned while promises are pending; cancel
+      # it so the pending machinery (a reference cycle while armed) is
+      # torn down instead of leaking with the abandoned frames.
+      GraphQL::Houtou::XS::VM::cancel_pending_response_xs($result);
       die "GraphQL execution stalled: promises are pending but on_stall made no progress"
         . " (a resolver returned a promise that no registered loader will resolve)\n";
     }
@@ -654,8 +658,10 @@ sub _auto_json_or_die {
     };
     if (my $err = $@) {
       # A rejected response promise carries a real request error; only the
-      # still-pending case earns the on_stall hint.
+      # still-pending case earns the on_stall hint. The pending request is
+      # abandoned here, so cancel it (see _settle_result).
       die $err if $err !~ /did not resolve synchronously/;
+      GraphQL::Houtou::XS::VM::cancel_pending_response_xs($result);
       die "resolvers returned pending promises; pass on_stall (see GraphQL::Houtou::DataLoader)"
         . " so execute_document_to_json can drive them to completion\n";
     }

@@ -314,7 +314,12 @@ static SV *gql_runtime_vm_response_json_from_data_sv(pTHX_ const gql_runtime_vm_
 static int gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_explicit_generic_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
-static SV *gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ SV *resolved);
+static SV *gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *resolved);
+
+/* Shared by the mid-lane detection sites and the top-level croak so the
+ * deferred error keeps the exact wording tests and users rely on. */
+#define GQL_RUNTIME_VM_FAST_LANE_PROMISE_ERROR \
+  "a resolver returned a Promise::XS promise in the synchronous fast lane; build the runtime with async => 1 (or pass on_stall) so requests start on the async lane"
 static SV *gql_runtime_vm_promise_xs_new_deferred_sv(pTHX);
 static SV *gql_runtime_vm_promise_xs_deferred_promise_sv(pTHX_ SV *deferred_sv);
 static void gql_runtime_vm_promise_xs_deferred_resolve_sv(pTHX_ SV *deferred_sv, SV *value_sv);
@@ -392,6 +397,7 @@ gql_runtime_vm_free_block_frame(pTHX_ gql_runtime_vm_block_frame_t *frame)
   if (--frame->refcount > 0) {
     return;
   }
+  gql_runtime_vm_block_frame_live_count--;
   gql_runtime_vm_native_value_destroy(aTHX_ frame->values_value);
   gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);
   if (frame->deferred_sv) {
@@ -4584,7 +4590,7 @@ gql_runtime_vm_state_resolve_args_sv(pTHX_ SV *state_sv)
     return newSVsv(s && s->empty_args ? s->empty_args : &PL_sv_undef);
   }
 
-  args_sv = gql_runtime_vm_specialize_arg_payload_sv(aTHX_ runtime, slot, op, variables_hv);
+  args_sv = gql_runtime_vm_specialize_arg_payload_sv(aTHX_ runtime, slot, op, variables_hv, NULL);
   return args_sv ? args_sv : newSVsv(s && s->empty_args ? s->empty_args : &PL_sv_undef);
 }
 
@@ -6196,6 +6202,106 @@ gql_runtime_vm_new_exec_state_handle_sv(
   return gql_runtime_vm_new_handle_sv(aTHX_ pkg, state);
 }
 
+/*
+ * R5 leak 2: a request abandoned while promises are pending frees nothing,
+ * because the live structures form a reference cycle:
+ *
+ *   block frame --(pending entry holds the resolver's promise)-->
+ *   promise --(then callbacks)--> armed callback ctx --(strong state_sv)-->
+ *   exec state --(frame_stack / response frame)--> block frame
+ *
+ * The response promise handed to the Perl driver carries this magic (a
+ * strong ref to the exec state) so the driver can break the cycle when it
+ * gives up on the request (deadlocked stall, missing on_stall): clearing
+ * the pending entries drops the promise references, which frees the armed
+ * callback pairs, which releases their exec-state references - the
+ * ordinary DESTROY chain then reclaims every frame. A callback that still
+ * fires later (a loader settling after abandonment) hits the entry-index
+ * bounds check against the cleared pending array and no-ops.
+ */
+static MGVTBL gql_runtime_vm_response_state_magic_vtbl;
+
+static void
+gql_runtime_vm_attach_response_state_magic(pTHX_ SV *promise_rv, SV *state_sv)
+{
+  if (!promise_rv || !SvROK(promise_rv) || !state_sv) {
+    return;
+  }
+  /* sv_magicext increments state_sv's refcount (MGf_REFCOUNTED). */
+  sv_magicext(SvRV(promise_rv), state_sv, PERL_MAGIC_ext,
+              &gql_runtime_vm_response_state_magic_vtbl, NULL, 0);
+}
+
+/* Cancel a suspended frame and its pending subtree, depth-first. A
+ * BLOCK_FRAME_PTR payload is a suspended child that still owns its
+ * allocation reference (resolve_frame, which would have released it, never
+ * ran), so each child gets one extra release beyond the entry reference
+ * that clear_pending drops. Entries form a tree, so the recursion
+ * terminates. */
+static void
+gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
+{
+  IV i;
+  if (!frame) {
+    return;
+  }
+  for (i = 0; i < frame->pending_count; i++) {
+    if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_BLOCK_FRAME_PTR
+        && frame->pending_entries[i].payload.block_frame_ptr) {
+      gql_runtime_vm_block_frame_t *child =
+        frame->pending_entries[i].payload.block_frame_ptr;
+      gql_runtime_vm_cancel_frame_tree(aTHX_ child);
+      gql_runtime_vm_free_block_frame(aTHX_ child);
+    }
+  }
+  gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);
+}
+
+static void
+gql_runtime_vm_cancel_pending_response_sv(pTHX_ SV *promise_rv)
+{
+  MAGIC *mg;
+  gql_runtime_vm_exec_state_handle_t *state;
+  IV i;
+
+  if (!promise_rv || !SvROK(promise_rv)) {
+    return;
+  }
+  mg = mg_findext(SvRV(promise_rv), PERL_MAGIC_ext,
+                  &gql_runtime_vm_response_state_magic_vtbl);
+  if (!mg || !mg->mg_obj) {
+    return;
+  }
+  state = gql_runtime_vm_expect_exec_state_handle(aTHX_ mg->mg_obj);
+  if (state) {
+    if (state->response_frame) {
+      gql_runtime_vm_cancel_frame_tree(aTHX_ state->response_frame);
+    }
+    if (state->frame && state->frame != state->response_frame) {
+      gql_runtime_vm_cancel_frame_tree(aTHX_ state->frame);
+    }
+    for (i = 0; i < state->frame_stack_count; i++) {
+      if (state->frame_stack[i] && state->frame_stack[i] != state->response_frame) {
+        gql_runtime_vm_cancel_frame_tree(aTHX_ state->frame_stack[i]);
+      }
+    }
+    /* Request-scoped user data can close a second cycle around the exec
+     * state (context -> DataLoader -> queued deferred -> promise -> armed
+     * callback -> exec state -> context), so a cancelled request drops
+     * these references too. Cancelled continuations no-op before touching
+     * any of them, and ExecState DESTROY's SvREFCNT_dec is NULL-safe. */
+    SvREFCNT_dec(state->context);
+    state->context = NULL;
+    SvREFCNT_dec(state->root_value);
+    state->root_value = NULL;
+    SvREFCNT_dec(state->variables);
+    state->variables = NULL;
+  }
+  /* Drop the magic so the promise no longer pins the exec state. */
+  sv_unmagicext(SvRV(promise_rv), PERL_MAGIC_ext,
+                &gql_runtime_vm_response_state_magic_vtbl);
+}
+
 static SV *
 gql_runtime_vm_execute_native_program_auto_impl_sv(
   pTHX_
@@ -6295,6 +6401,9 @@ gql_runtime_vm_execute_native_program_auto_impl_sv(
     state->completed_response_sv = NULL;
     SvREFCNT_dec(data_sv);
   } else if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ state, data_sv)) {
+    /* A genuinely pending response: let the Perl driver reach the exec
+     * state for cancellation (see the magic's comment block). */
+    gql_runtime_vm_attach_response_state_magic(aTHX_ data_sv, state_sv);
     ret = data_sv;
   } else if (json_mode) {
     ret = gql_runtime_vm_response_json_from_data_sv(aTHX_ state->writer, data_sv);
@@ -6582,7 +6691,15 @@ gql_runtime_vm_apply_runtime_directives_nonfatal(
   ENTER;
   SAVETMPS;
   sv_setsv(ERRSV, &PL_sv_undef);
-  args_sv = sv_2mortal(gql_runtime_vm_build_current_args_sv(aTHX_ state));
+  args_sv = gql_runtime_vm_build_current_args_sv(aTHX_ state);
+  if (!args_sv) {
+    /* Argument coercion failed and armed the deferred croak channel:
+     * skip the directive application, the response is discarded anyway. */
+    FREETMPS;
+    LEAVE;
+    return newSVsv(resolved ? resolved : &PL_sv_undef);
+  }
+  args_sv = sv_2mortal(args_sv);
   info_sv = sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state));
   PUSHMARK(SP);
   XPUSHs(runtime_schema_sv);
@@ -6834,6 +6951,11 @@ gql_runtime_vm_execute_bundle_fast_response_sv(
   response_sv = gql_runtime_vm_fast_response_sv(aTHX_ data_sv, &writer_storage);
   SvREFCNT_dec(empty_args_sv);
   gql_runtime_vm_clear_writer_struct(aTHX_ &writer_storage);
+  if (state.fast_lane_deferred_croak_sv) {
+    /* Deferred from mid-lane so the path frame chain unwound normally. */
+    SvREFCNT_dec(response_sv);
+    croak_sv(sv_2mortal(state.fast_lane_deferred_croak_sv));
+  }
   return response_sv;
 }
 
@@ -7066,7 +7188,25 @@ gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
       }
       return gql_runtime_vm_native_args_payload_materialize_sv(aTHX_ op->args_payload_native);
     }
-    specialized_sv = gql_runtime_vm_specialize_arg_payload_sv(aTHX_ runtime, slot, op, variables_hv);
+    {
+      SV *coercion_croak_sv = NULL;
+      specialized_sv = gql_runtime_vm_specialize_arg_payload_sv(
+        aTHX_ runtime, slot, op, variables_hv,
+        state ? &coercion_croak_sv : NULL
+      );
+      if (coercion_croak_sv) {
+        /* Request-time argument coercion failed (e.g. a null non-null
+         * variable). Route it to the deferred croak channel and return
+         * NULL so the caller skips the resolver; the top-level entry
+         * re-raises it after the lane unwound its path frames. */
+        if (!state->fast_lane_deferred_croak_sv) {
+          state->fast_lane_deferred_croak_sv = coercion_croak_sv;
+        } else {
+          SvREFCNT_dec(coercion_croak_sv);
+        }
+        return NULL;
+      }
+    }
     if (specialized_sv) {
       return specialized_sv;
     }
@@ -7110,11 +7250,17 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
     : NULL;
 
   if (resolver_sv && SvOK(resolver_sv)) {
-    SV *args = sv_2mortal(gql_runtime_vm_build_current_args_sv(aTHX_ state));
+    SV *args = gql_runtime_vm_build_current_args_sv(aTHX_ state);
+    if (!args) {
+      /* Argument coercion failed and armed the deferred croak channel:
+       * skip the resolver and complete the field as null. */
+      return newSVsv(&PL_sv_undef);
+    }
+    args = sv_2mortal(args);
 
     if (gql_runtime_vm_slot_uses_native_fast_abi(slot)) {
       return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
-      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ gql_runtime_vm_call_cb4_nonfatal(
+      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ state, gql_runtime_vm_call_cb4_nonfatal(
         aTHX_
         resolver_sv,
         source,
@@ -7137,7 +7283,7 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
       croak("native VM slot type object is missing for explicit generic callback");
     }
 
-    return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ gql_runtime_vm_call_cb5_nonfatal(
+    return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ state, gql_runtime_vm_call_cb5_nonfatal(
       aTHX_
       resolver_sv,
       source,
@@ -7166,18 +7312,25 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
 
 
 static SV *
-gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ SV *resolved)
+gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *resolved)
 {
   /* The sync fast lanes cannot suspend, so a promise-returning resolver
    * is a routing misconfiguration: async schemas declare themselves with
-   * async => 1 on the runtime (or pass on_stall per request). Failing
-   * loudly here keeps promise objects out of response data. */
+   * async => 1 on the runtime (or pass on_stall per request). Croaking
+   * from mid-lane would leak the live path frame chain (each recursion
+   * level holds one reference the unwind never releases - R5 leak 3), so
+   * this completes the field as null, records the deferred croak, and the
+   * top-level entry raises it after the lane unwound normally. */
   if (resolved
       && SvROK(resolved)
       && SvOBJECT(SvRV(resolved))
       && sv_derived_from(resolved, "Promise::XS::Promise")) {
-    sv_2mortal(resolved);
-    croak("a resolver returned a Promise::XS promise in the synchronous fast lane; build the runtime with async => 1 (or pass on_stall) so requests start on the async lane");
+    SvREFCNT_dec(resolved);
+    if (state && !state->fast_lane_deferred_croak_sv) {
+      state->fast_lane_deferred_croak_sv =
+        newSVpv(GQL_RUNTIME_VM_FAST_LANE_PROMISE_ERROR, 0);
+    }
+    return newSVsv(&PL_sv_undef);
   }
   return resolved;
 }
@@ -7207,11 +7360,17 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
   }
 
   {
-    SV *args = sv_2mortal(gql_runtime_vm_build_current_args_sv(aTHX_ state));
+    SV *args = gql_runtime_vm_build_current_args_sv(aTHX_ state);
+    if (!args) {
+      /* Argument coercion failed and armed the deferred croak channel:
+       * skip the resolver and complete the field as null. */
+      return newSVsv(&PL_sv_undef);
+    }
+    args = sv_2mortal(args);
 
     if (gql_runtime_vm_slot_uses_native_fast_abi(slot)) {
       return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
-      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ gql_runtime_vm_call_cb4_nonfatal(
+      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ state, gql_runtime_vm_call_cb4_nonfatal(
         aTHX_
         resolver_sv,
         source,
@@ -7231,7 +7390,7 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
       );
     }
 
-    return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ gql_runtime_vm_call_cb5_nonfatal(
+    return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ state, gql_runtime_vm_call_cb5_nonfatal(
       aTHX_
       resolver_sv,
       source,
@@ -7623,8 +7782,19 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
       SV *completed;
       SV *sel_error = NULL;
       gql_runtime_vm_path_frame_t *item_path = NULL;
-      IV item_block_index = (has_child_block && SvOK(item)) ? op->child_block_index : -1;
-      gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ item);
+      IV item_block_index;
+      if (gql_runtime_vm_sv_is_promise_xs(aTHX_ item)) {
+        /* Promise list item on the sync lane: complete it as null and
+         * record the deferred croak; the top-level entry raises it after
+         * cleanup. The item SV is borrowed from the resolver's array,
+         * so no decref. */
+        if (!state->fast_lane_deferred_croak_sv) {
+          state->fast_lane_deferred_croak_sv =
+            newSVpv(GQL_RUNTIME_VM_FAST_LANE_PROMISE_ERROR, 0);
+        }
+        item = &PL_sv_undef;
+      }
+      item_block_index = (has_child_block && SvOK(item)) ? op->child_block_index : -1;
       if (base_path) {
         SV *item_key = newSViv(i);
         item_path = gql_runtime_vm_new_path_frame_struct(aTHX_ base_path, item_key);
@@ -8198,7 +8368,7 @@ gql_runtime_vm_json_cat_string(pTHX_ SV *out, const char *pv, STRLEN len)
 }
 
 static void
-gql_runtime_vm_json_cat_scalar(pTHX_ SV *out, SV *value)
+gql_runtime_vm_json_cat_scalar(pTHX_ gql_runtime_vm_exec_state_t *state, SV *out, SV *value)
 {
   if (!value || !SvOK(value)) {
     sv_catpvs(out, "null");
@@ -8218,7 +8388,19 @@ gql_runtime_vm_json_cat_scalar(pTHX_ SV *out, SV *value)
       return;
     }
     if (sv_isobject(value) && sv_derived_from(value, "Promise::XS::Promise")) {
-      croak("a resolver returned a Promise::XS promise in the synchronous fast lane; build the runtime with async => 1 (or pass on_stall) so requests start on the async lane");
+      /* A promise that slipped past the resolve/item guards (e.g. inside
+       * a source hash). On the fast lanes, defer the croak so the live
+       * path frame chain unwinds; the native-value writer (async tail,
+       * state == NULL) never sees promises, so croaking there is safe. */
+      if (state) {
+        if (!state->fast_lane_deferred_croak_sv) {
+          state->fast_lane_deferred_croak_sv =
+            newSVpv(GQL_RUNTIME_VM_FAST_LANE_PROMISE_ERROR, 0);
+        }
+        sv_catpvs(out, "null");
+        return;
+      }
+      croak("%s", GQL_RUNTIME_VM_FAST_LANE_PROMISE_ERROR);
     }
     /* Unexpected reference in a leaf position: stringify. */
     {
@@ -8313,7 +8495,7 @@ gql_runtime_vm_complete_current_list_fast_json(
   const gql_runtime_vm_native_op_t *op = state->op;
 
   if (op->complete_code != GQL_VM_COMPLETE_LIST) {
-    gql_runtime_vm_json_cat_scalar(aTHX_ out, value);
+    gql_runtime_vm_json_cat_scalar(aTHX_ state, out, value);
     return 0;
   }
   if (!value || !SvOK(value)) {
@@ -8369,7 +8551,17 @@ gql_runtime_vm_complete_current_list_fast_json(
         sv_catpvs(out, ",");
       }
       item_start = SvCUR(out);
-      gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ item);
+      if (gql_runtime_vm_sv_is_promise_xs(aTHX_ item)) {
+        /* Promise list item on the sync lane: complete it as null and
+         * record the deferred croak; the top-level entry raises it after
+         * cleanup. The item SV is borrowed from the resolver's array,
+         * so no decref. */
+        if (!state->fast_lane_deferred_croak_sv) {
+          state->fast_lane_deferred_croak_sv =
+            newSVpv(GQL_RUNTIME_VM_FAST_LANE_PROMISE_ERROR, 0);
+        }
+        item = &PL_sv_undef;
+      }
       if (base_path) {
         SV *item_key = newSViv(i);
         item_path = gql_runtime_vm_new_path_frame_struct(aTHX_ base_path, item_key);
@@ -8442,7 +8634,7 @@ gql_runtime_vm_complete_current_list_fast_json(
             && strEQ(state->slot->return_type_name, "Boolean")) {
           sv_catpv(out, SvTRUE(serialized) ? "true" : "false");
         } else {
-          gql_runtime_vm_json_cat_scalar(aTHX_ out, serialized);
+          gql_runtime_vm_json_cat_scalar(aTHX_ state, out, serialized);
         }
         if (serialized) {
           SvREFCNT_dec(serialized);
@@ -8609,7 +8801,7 @@ gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state,
              * resolver returned a plain 0/1. */
             sv_catpv(out, SvTRUE(serialized) ? "true" : "false");
           } else {
-            gql_runtime_vm_json_cat_scalar(aTHX_ out, serialized);
+            gql_runtime_vm_json_cat_scalar(aTHX_ state, out, serialized);
           }
           SvREFCNT_dec(serialized);
           break;
@@ -8620,7 +8812,7 @@ gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state,
               sv_catpvs(out, "null");
             }
           } else if (resolved && SvOK(resolved)) {
-            gql_runtime_vm_json_cat_scalar(aTHX_ out, resolved);
+            gql_runtime_vm_json_cat_scalar(aTHX_ state, out, resolved);
           } else {
             sv_catpvs(out, "null");
           }
@@ -8765,7 +8957,7 @@ gql_runtime_vm_json_cat_errors(pTHX_ SV *out, const gql_runtime_vm_writer_t *wri
           if (j) {
             sv_catpvs(out, ",");
           }
-          gql_runtime_vm_json_cat_scalar(aTHX_ out, item_svp ? *item_svp : NULL);
+          gql_runtime_vm_json_cat_scalar(aTHX_ NULL, out, item_svp ? *item_svp : NULL);
         }
         sv_catpvs(out, "]");
       }
@@ -8850,7 +9042,7 @@ gql_runtime_vm_native_value_cat_json(pTHX_ SV *out, const gql_runtime_vm_native_
           return;
         case GQL_VM_NATIVE_SCALAR_FALLBACK_SV:
         default:
-          gql_runtime_vm_json_cat_scalar(aTHX_ out, value->scalar_fallback_sv);
+          gql_runtime_vm_json_cat_scalar(aTHX_ NULL, out, value->scalar_fallback_sv);
           return;
       }
   }
@@ -8899,7 +9091,7 @@ gql_runtime_vm_json_cat_sv_data(pTHX_ SV *out, SV *value)
     sv_catpvs(out, "]");
     return;
   }
-  gql_runtime_vm_json_cat_scalar(aTHX_ out, value);
+  gql_runtime_vm_json_cat_scalar(aTHX_ NULL, out, value);
 }
 
 static SV *
@@ -8983,6 +9175,11 @@ gql_runtime_vm_execute_bundle_fast_response_json(
 
   SvREFCNT_dec(empty_args_sv);
   gql_runtime_vm_clear_writer_struct(aTHX_ &writer_storage);
+  if (state.fast_lane_deferred_croak_sv) {
+    /* Deferred from mid-lane so the path frame chain unwound normally. */
+    SvREFCNT_dec(out);
+    croak_sv(sv_2mortal(state.fast_lane_deferred_croak_sv));
+  }
   return out;
 }
 
@@ -9190,6 +9387,27 @@ native_codes_xs()
       hv_store(hv, "optype_query", 12, newSViv(GQL_VM_OPTYPE_QUERY), 0);
       hv_store(hv, "optype_mutation", 15, newSViv(GQL_VM_OPTYPE_MUTATION), 0);
       hv_store(hv, "optype_subscription", 18, newSViv(GQL_VM_OPTYPE_SUBSCRIPTION), 0);
+      RETVAL = newRV_noinc((SV *)hv);
+    }
+  OUTPUT:
+    RETVAL
+
+void
+cancel_pending_response_xs(promise)
+    SV *promise
+  CODE:
+    gql_runtime_vm_cancel_pending_response_sv(aTHX_ promise);
+
+SV *
+debug_frame_live_counts_xs()
+  CODE:
+    {
+      /* Leak instrumentation (R5): frames handed out minus frames released.
+       * Both counts must be zero whenever no request is executing and no
+       * promise is pending; a positive residue is an orphaned frame. */
+      HV *hv = newHV();
+      hv_store(hv, "block_frame", 11, newSViv(gql_runtime_vm_block_frame_live_count), 0);
+      hv_store(hv, "path_frame", 10, newSViv(gql_runtime_vm_path_frame_live_count), 0);
       RETVAL = newRV_noinc((SV *)hv);
     }
   OUTPUT:
@@ -10811,6 +11029,23 @@ DESTROY(self)
           gql_runtime_vm_native_runtime_destroy(state->native_runtime);
         }
         gql_runtime_vm_cursor_decref(aTHX_ state->cursor);
+        /* A suspended response frame lives only in response_frame: the
+         * scheduler popped it off frame_stack, and resolve_frame (which
+         * pairs the field's NULLing with releasing the allocation
+         * reference) never ran for an abandoned request. Release that
+         * reference here - unless the frame is still on the stack, whose
+         * teardown below owns it (R5 leak 2). */
+        if (state->response_frame) {
+          IV rf_i;
+          int rf_on_stack = (state->frame == state->response_frame);
+          for (rf_i = 0; !rf_on_stack && rf_i < state->frame_stack_count; rf_i++) {
+            rf_on_stack = (state->frame_stack[rf_i] == state->response_frame);
+          }
+          if (!rf_on_stack) {
+            gql_runtime_vm_free_block_frame(aTHX_ state->response_frame);
+          }
+          state->response_frame = NULL;
+        }
         if (state->frame && state->frame_stack_count == 0) {
           gql_runtime_vm_free_block_frame(aTHX_ state->frame);
         }

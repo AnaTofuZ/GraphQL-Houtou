@@ -626,7 +626,7 @@ static SV *
 gql_parser_build_value_from_ir(pTHX_ gql_parser_loc_context_t *ctx, gql_ir_document_t *document, gql_ir_value_t *value, SV *state_sv) {
   HV *hv;
   I32 i;
-  SV *node_sv;
+  SV *node_sv = &PL_sv_undef;
   SV *name_sv;
 
   if (!value) {

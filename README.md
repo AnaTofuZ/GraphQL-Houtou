@@ -450,9 +450,10 @@ execute a subscription fails closed with a `SUBSCRIPTION_NOT_SUPPORTED`
 request error.
 
 The PSGI adapter accepts GraphQL execution requests over POST. GET query
-execution, `@defer`, `@stream`, WebSocket/SSE subscriptions, Federation,
-and generic promise adapters are outside the 0.01 profile. Only
-`Promise::XS` promises are recognized.
+execution, `@defer`, `@stream`, WebSocket/SSE subscriptions, a Federation
+Gateway/Router, and generic promise adapters are outside the 0.01 profile.
+Federation 2 subgraph execution is provided by
+[GraphQL::Houtou::Federation](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3AFederation). Only `Promise::XS` promises are recognized.
 
 Fixed native bundles are for variable-free queries. Use compiled native
 programs for persisted queries that accept variables.
@@ -472,6 +473,7 @@ for parallelism.
 - [GraphQL::Houtou::Runtime::NativeRuntime](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3ARuntime%3A%3ANativeRuntime) - the request-time execution API
 - [GraphQL::Houtou::DataLoader](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3ADataLoader) - bundled batching loader
 - [GraphQL::Houtou::PSGI](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3APSGI) - GraphQL over HTTP endpoint
+- [GraphQL::Houtou::Federation](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3AFederation) - Apollo Federation 2 subgraph support
 - `docs/` in the distribution - architecture, benchmarks, and design history
 - `docs/production-deployment.md` - prefork deployment and operations checklist
 

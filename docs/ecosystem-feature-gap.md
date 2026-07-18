@@ -75,6 +75,10 @@ GraphiQL、codegen、schema registry 等のツールとの統合に必要な API
 
 ## 3. Apollo Federation（サブグラフ化に必要）
 
+**現在の状況:** Federation 2 subgraph execution は
+`GraphQL::Houtou::Federation` で実装済み。Gateway/Router と supergraph
+composition は外部サービスを利用する。詳細は `docs/federation.md`。
+
 Apollo Federation は公式仕様ではないが、マイクロサービス構成での GraphQL 統合の
 事実上の標準として広く採用されている。
 [Open Federation Spec](https://specs.apollo.dev/federation/) として公開されており、
@@ -84,21 +88,21 @@ Apollo 以外のサーバーも実装可能。
 
 | ディレクティブ | 用途 | 状況 |
 |--------------|------|------|
-| `@key` | エンティティのプライマリキー指定 | ❌ |
-| `@external` | 他サービスが所有するフィールドのマーク | ❌ |
-| `@requires` | 外部フィールドへの依存宣言 | ❌ |
-| `@provides` | 解決可能な外部フィールドの宣言 | ❌ |
-| `@shareable` | 複数サブグラフで解決可能なフィールド（v2） | ❌ |
-| `@inaccessible` | スーパーグラフへの非公開フィールド（v2） | ❌ |
-| `@override` | 別サービスからのフィールド移行（v2） | ❌ |
-| `@link` | 外部仕様の import（v2） | ❌ |
+| `@key` | エンティティのプライマリキー指定 | ✅ |
+| `@external` | 他サービスが所有するフィールドのマーク | ✅ |
+| `@requires` | 外部フィールドへの依存宣言 | ✅ |
+| `@provides` | 解決可能な外部フィールドの宣言 | ✅ |
+| `@shareable` | 複数サブグラフで解決可能なフィールド（v2） | ✅ |
+| `@inaccessible` | スーパーグラフへの非公開フィールド（v2） | ✅ |
+| `@override` | 別サービスからのフィールド移行（v2） | ✅ |
+| `@link` | 外部仕様の import（v2） | ✅（標準名） |
 
 ### Federation 必須クエリ
 
 | クエリ | 用途 | 状況 |
 |--------|------|------|
-| `_service { sdl }` | ゲートウェイへのスキーマ公開 | ❌ |
-| `_entities(representations: [...])` | エンティティの解決 | ❌ |
+| `_service { sdl }` | ゲートウェイへのスキーマ公開 | ✅ |
+| `_entities(representations: [...])` | エンティティの解決 | ✅ |
 
 ### 現実的な対応策
 

@@ -658,9 +658,10 @@ execute a subscription fails closed with a C<SUBSCRIPTION_NOT_SUPPORTED>
 request error.
 
 The PSGI adapter accepts GraphQL execution requests over POST. GET query
-execution, C<@defer>, C<@stream>, WebSocket/SSE subscriptions, Federation,
-and generic promise adapters are outside the 0.01 profile. Only
-C<Promise::XS> promises are recognized.
+execution, C<@defer>, C<@stream>, WebSocket/SSE subscriptions, a Federation
+Gateway/Router, and generic promise adapters are outside the 0.01 profile.
+Federation 2 subgraph execution is provided by
+L<GraphQL::Houtou::Federation>. Only C<Promise::XS> promises are recognized.
 
 Fixed native bundles are for variable-free queries. Use compiled native
 programs for persisted queries that accept variables.
@@ -685,6 +686,8 @@ for parallelism.
 =item * L<GraphQL::Houtou::DataLoader> - bundled batching loader
 
 =item * L<GraphQL::Houtou::PSGI> - GraphQL over HTTP endpoint
+
+=item * L<GraphQL::Houtou::Federation> - Apollo Federation 2 subgraph support
 
 =item * C<docs/> in the distribution - architecture, benchmarks, and design history
 

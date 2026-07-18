@@ -14,6 +14,8 @@ Revision history for Perl extension GraphQL-Houtou
       depth, node, token, and request-body limits.
     - Added fail-closed subscription handling across dynamic and persisted
       execution paths; subscription streaming remains unsupported in 0.01.
+    - Added Apollo Federation 2 subgraph schema construction, service SDL,
+      bounded entity resolution, and key validation.
     - Added ASan, Valgrind, fuzz, soak, compiler-warning, XS ownership, POD,
       metadata, and Perl 5.24 through 5.44 CI coverage.
     - Added production-oriented examples, benchmark tooling, architecture

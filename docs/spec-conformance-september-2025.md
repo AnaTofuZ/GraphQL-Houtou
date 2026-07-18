@@ -178,12 +178,16 @@ The following are intentionally excluded from this conformance claim:
 - `@defer` and `@stream` incremental delivery;
 - GraphQL over HTTP details such as GET execution and strict media negotiation;
 - WebSocket and SSE subscription protocols;
-- Apollo Federation and APQ;
+- APQ;
 - Relay Connection conventions;
 - multipart file upload.
 
 These may matter for ecosystem compatibility, but they are not evidence for or
 against the query/mutation core profile stated above.
+
+Federation 2 subgraph execution is provided as an ecosystem extension by
+`GraphQL::Houtou::Federation`. Gateway/Router and supergraph composition remain
+external responsibilities and are not part of core specification conformance.
 
 ## Recommended conformance order
 

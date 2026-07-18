@@ -3,7 +3,7 @@ use strict;
 use warnings;
 
 use Test::More;
-use Test::Deep qw(cmp_deeply superhashof);
+use Test::Deep qw(cmp_deeply);
 
 use GraphQL::Houtou qw(build_subgraph_schema execute);
 
@@ -102,10 +102,63 @@ subtest 'unknown entity types fail closed' => sub {
   like $result->{errors}[0]{message}, qr/Unknown Federation entity type/, 'type is rejected';
 };
 
+subtest 'representations must satisfy a declared key' => sub {
+  my $result = execute(
+    $schema,
+    'query Entities($representations: [_Any!]!) {'
+      . ' _entities(representations: $representations) { ... on Product { upc } }'
+      . '}',
+    { representations => [ { __typename => 'Product', name => 'no-key' } ] },
+  );
+  ok exists $result->{errors}, 'missing key reports an execution error';
+  like $result->{errors}[0]{message}, qr/does not satisfy any \@key/,
+    'key failure is explicit';
+};
+
 subtest 'resolvable entities require resolvers' => sub {
   my $ok = eval { build_subgraph_schema($SDL); 1 };
   ok !$ok, 'schema construction fails';
   like $@, qr/Missing entity resolver for 'Product'/, 'missing resolver is named';
+};
+
+subtest 'builder does not mutate caller resolver maps' => sub {
+  my $resolvers = { Query => { product => sub { return } } };
+  build_subgraph_schema(
+    $SDL,
+    resolvers => $resolvers,
+    entity_resolvers => { Product => sub { return } },
+  );
+  is_deeply [ sort keys %{ $resolvers->{Query} } ], ['product'],
+    'Federation fields were added to a private copy';
+};
+
+subtest 'Promise::XS entity resolvers stay on the async lane' => sub {
+  plan skip_all => 'Promise::XS is not available'
+    if !eval { require Promise::XS; 1 };
+  my $async_schema = build_subgraph_schema(
+    $SDL,
+    entity_resolvers => {
+      Product => sub {
+        my ($representation) = @_;
+        return Promise::XS::resolved({
+          upc => $representation->{upc}, name => 'promised',
+        });
+      },
+    },
+  );
+  my $runtime = $async_schema->build_native_runtime(async => 1);
+  my $result = $runtime->execute_document(
+    'query Entities($representations: [_Any!]!) {'
+      . ' _entities(representations: $representations) {'
+      . '   ... on Product { upc name }'
+      . ' }'
+      . '}',
+    variables => {
+      representations => [ { __typename => 'Product', upc => 'p' } ],
+    },
+  );
+  is $result->{data}{_entities}[0]{name}, 'promised',
+    'promise result is tagged and completed';
 };
 
 subtest 'key FieldSets are validated when the schema is built' => sub {

@@ -79,7 +79,13 @@ sub build_subgraph_schema {
     if @entity_names;
   $entity_sdl .= "}\n";
 
-  my %resolvers = %{ delete($opts{resolvers}) || {} };
+  my $user_resolvers = delete($opts{resolvers}) || {};
+  die "resolvers must be a hash reference\n"
+    if ref($user_resolvers) ne 'HASH';
+  my %resolvers = map {
+    my $spec = $user_resolvers->{$_};
+    ($_ => ref($spec) eq 'HASH' ? { %$spec } : $spec)
+  } keys %$user_resolvers;
   _reserve_resolver(
     \%resolvers, '_Any', 'parse_value',
     sub {
@@ -134,7 +140,7 @@ sub build_subgraph_schema {
     %opts,
     resolvers => \%resolvers,
   );
-  _validate_entity_keys($schema, $entities);
+  $entities = _validate_entity_keys($schema, $entities);
   $schema->{_federation_subgraph_sdl} = $document;
   $schema->{_federation_max_representations} = 0 + $max_representations;
   return $schema;
@@ -182,6 +188,7 @@ sub _subgraph_shape {
 sub _validate_entity_keys {
   my ($schema, $entities) = @_;
   my $name2type = $schema->name2type;
+  my %compiled;
   for my $entity_name (sort keys %$entities) {
     my $entity_type = $name2type->{$entity_name};
     for my $fieldset (@{ $entities->{$entity_name} }) {
@@ -195,9 +202,10 @@ sub _validate_entity_keys {
       _validate_fieldset_selections(
         $entity_name, $entity_type, $document->[0]{selections} || [],
       );
+      push @{ $compiled{$entity_name} }, $document->[0]{selections};
     }
   }
-  return;
+  return \%compiled;
 }
 
 sub _validate_fieldset_selections {
@@ -238,11 +246,27 @@ sub _resolve_representation {
     if !defined($typename) || ref($typename) || $typename eq '';
   die "Unknown Federation entity type '$typename'\n"
     if !$entities->{$typename};
+  die "Federation representation for '$typename' does not satisfy any \@key\n"
+    if !grep { _representation_has_fields($representation, $_) }
+      @{ $entities->{$typename} };
   my $value = $entity_resolvers->{$typename}->($representation, $context);
   if (is_promise_xs_value($value)) {
     return $value->then(sub { _tag_entity_result($typename, $_[0]) });
   }
   return _tag_entity_result($typename, $value);
+}
+
+sub _representation_has_fields {
+  my ($representation, $selections) = @_;
+  return 0 if ref($representation) ne 'HASH';
+  for my $selection (@$selections) {
+    my $name = $selection->{name};
+    return 0 if !exists $representation->{$name};
+    my $children = $selection->{selections} || [];
+    return 0 if @$children
+      && !_representation_has_fields($representation->{$name}, $children);
+  }
+  return 1;
 }
 
 sub _tag_entity_result {
@@ -289,5 +313,32 @@ this module.
 Subgraph endpoints expose schema and entity lookup facilities and should only
 be reachable by the trusted Router. C<max_representations> defaults to 100 and
 limits work performed by one C<_entities> field.
+
+C<entity_resolvers> maps each resolvable entity type to a callback. The
+callback receives C<($representation, $context)> and returns a hash reference,
+C<undef>, or a C<Promise::XS> for either. Results are emitted in representation
+order, so callbacks can return request-scoped DataLoader promises to batch
+database access.
+
+Every representation must contain a string C<__typename> and satisfy at least
+one resolvable C<@key> declared for that type. FieldSet syntax and field paths
+are validated once when the schema is built. Request dispatch is a single
+linear pass with constant-time type lookup.
+
+The authored SDL returned by C<_service.sdl> is preserved verbatim. Include a
+Federation 2 C<@link> application and imports in that SDL so the Router can
+compose it. Directive renaming through C<< @link(as:) >> is not yet supported;
+use the standard imported directive names. Houtou validates entity keys, but
+semantic validation of composition directives such as C<@external>,
+C<@requires>, and C<@override> remains the responsibility of Rover or the
+deployment's composition pipeline.
+
+=head1 SECURITY
+
+Do not expose a subgraph directly to untrusted clients. C<_service> publishes
+the service SDL and C<_entities> provides a cross-type lookup surface. Restrict
+network access to the Router, authenticate Router-to-subgraph requests, keep
+C<max_representations> bounded, and apply the ordinary Houtou body, depth,
+node, cost, timeout, and rate limits.
 
 =cut

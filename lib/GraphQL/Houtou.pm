@@ -682,6 +682,8 @@ for parallelism.
 
 =item * C<docs/> in the distribution - architecture, benchmarks, and design history
 
+=item * C<docs/production-deployment.md> - prefork deployment and operations checklist
+
 =back
 
 =head1 NAME ORIGIN

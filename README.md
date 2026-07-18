@@ -473,6 +473,7 @@ for parallelism.
 - [GraphQL::Houtou::DataLoader](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3ADataLoader) - bundled batching loader
 - [GraphQL::Houtou::PSGI](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3APSGI) - GraphQL over HTTP endpoint
 - `docs/` in the distribution - architecture, benchmarks, and design history
+- `docs/production-deployment.md` - prefork deployment and operations checklist
 
 # NAME ORIGIN
 

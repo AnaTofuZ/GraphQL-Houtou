@@ -130,7 +130,7 @@ not yet constitute capacity planning for a deployed service.
 - Replace the template `Changes` entry with the actual 0.01 history.
 - Consolidate stale status documents; several older files describe features
   now implemented as missing.
-- Add a production deployment guide covering prefork operation, timeouts,
+- The production deployment guide covers prefork operation, timeouts,
   pagination/cost policy, rate limiting, logging, GraphiQL/CSP, and shutdown.
 - State unsupported features prominently: ithreads, GET query execution,
   subscriptions, defer/stream, Federation, generic

@@ -227,6 +227,10 @@ subtest 'direct fields with the same response key must merge' => sub {
     viewer { value: name value: name }
   }|);
   is_deeply $errors, [], 'identical fields can merge';
+
+  my $duplicate_flood = join ' ', ('value: name') x 1_000;
+  $errors = validate($schema, "{ viewer { $duplicate_flood } }");
+  is_deeply $errors, [], 'same-key duplicate floods stay mergeable';
 };
 
 subtest 'field merging expands fragments and respects exclusive types' => sub {

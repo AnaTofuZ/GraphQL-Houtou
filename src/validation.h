@@ -1476,8 +1476,10 @@ gql_validation_validate_field_merging(
     SV **alias_svp;
     SV *response_key_sv;
     HE *previous_he;
+    HV *bucket_hv;
     AV *previous_av;
     I32 j;
+    int keep_entry = 1;
     if (!entry_svp || !SvROK(*entry_svp) || SvTYPE(SvRV(*entry_svp)) != SVt_PVHV) {
       continue;
     }
@@ -1497,10 +1499,20 @@ gql_validation_validate_field_merging(
     response_key_sv = alias_svp && SvOK(*alias_svp) ? *alias_svp : *name_svp;
     previous_he = hv_fetch_ent(fields_by_key_hv, response_key_sv, 0, 0);
     if (!previous_he) {
+      bucket_hv = newHV();
       previous_av = newAV();
-      (void)hv_store_ent(fields_by_key_hv, response_key_sv, newRV_noinc((SV *)previous_av), 0);
+      gql_store_sv(bucket_hv, "entries", newRV_noinc((SV *)previous_av));
+      (void)hv_store_ent(fields_by_key_hv, response_key_sv, newRV_noinc((SV *)bucket_hv), 0);
     } else {
-      previous_av = (AV *)SvRV(HeVAL(previous_he));
+      SV **entries_svp;
+      SV **conflicted_svp;
+      bucket_hv = (HV *)SvRV(HeVAL(previous_he));
+      conflicted_svp = hv_fetch(bucket_hv, "conflicted", 10, 0);
+      if (conflicted_svp && SvTRUE(*conflicted_svp)) {
+        continue;
+      }
+      entries_svp = hv_fetch(bucket_hv, "entries", 7, 0);
+      previous_av = (AV *)SvRV(*entries_svp);
     }
     for (j = 0; j <= av_len(previous_av); j++) {
       SV **previous_svp = av_fetch(previous_av, j, 0);
@@ -1521,6 +1533,9 @@ gql_validation_validate_field_merging(
         && gql_validation_selection_types_overlap(
           aTHX_ compiled_sv, *parent_svp, *previous_parent_svp
         );
+      if (sv_eq(*parent_svp, *previous_parent_svp) && same_name && same_arguments) {
+        keep_entry = 0;
+      }
       if (types_overlap && (!same_name || !same_arguments)) {
         SV **location_svp = hv_fetch(selection_hv, "location", 8, 0);
         SV *message = newSVpvf(
@@ -1529,9 +1544,14 @@ gql_validation_validate_field_merging(
         );
         av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL));
         SvREFCNT_dec(message);
+        gql_store_sv(bucket_hv, "conflicted", newSViv(1));
+        keep_entry = 0;
+        break;
       }
     }
-    av_push(previous_av, newSVsv(*entry_svp));
+    if (keep_entry) {
+      av_push(previous_av, newSVsv(*entry_svp));
+    }
   }
   SvREFCNT_dec((SV *)fields_av);
   SvREFCNT_dec((SV *)visited_fragments_hv);

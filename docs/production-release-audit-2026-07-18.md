@@ -75,6 +75,9 @@ Implementation progress:
 - completed: field merging conflicts are grouped by response key, expanded
   through named and inline fragments, and compared only across overlapping
   runtime type conditions in XS;
+- performance: identical fields in a response-key bucket collapse to one
+  representative per type condition, and comparison stops after the first
+  conflict for that key, preventing quadratic same-key duplicate floods;
 - next: custom scalar literal API, complete field merging, and the remaining
   rules.
 

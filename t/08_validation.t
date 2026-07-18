@@ -263,6 +263,15 @@ subtest 'field arguments enforce variable positions in XS' => sub {
   is_deeply $errors, [], 'a non-null variable default permits a nullable variable';
 };
 
+subtest 'built-in scalar literals are validated in XS' => sub {
+  my $errors = validate($schema, q|{
+    node(id: true) { id }
+  }|);
+  is_deeply messages($errors), [
+    'Value is not a valid String literal.',
+  ];
+};
+
 subtest 'unused variables are rejected, including fragment-aware usage' => sub {
   my $errors = validate($schema, q|
     query Q($used: String!, $unused: String) {

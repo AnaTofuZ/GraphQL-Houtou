@@ -1260,6 +1260,39 @@ gql_validation_validate_value(
       return;
     }
   }
+
+  /* Built-in literal coercion stays in XS. The parser preserves literal
+   * categories in the SV flags (and blesses JSON booleans), so validation
+   * does not need a Perl method call per scalar literal. */
+  {
+    SV *type_name_sv = gql_validation_named_type_name_sv(expected_type_sv);
+    const char *type_name = type_name_sv && SvOK(type_name_sv)
+      ? SvPV_nolen(type_name_sv) : NULL;
+    int valid = 1;
+    if (!SvOK(value_sv) || !type_name) {
+      return;
+    }
+    if (strEQ(type_name, "Int")) {
+      valid = !SvROK(value_sv) && SvIOK(value_sv)
+        && SvIV(value_sv) >= -2147483648LL && SvIV(value_sv) <= 2147483647LL;
+    } else if (strEQ(type_name, "Float")) {
+      valid = !SvROK(value_sv) && (SvIOK(value_sv) || SvNOK(value_sv));
+    } else if (strEQ(type_name, "String")) {
+      valid = !SvROK(value_sv) && SvPOK(value_sv)
+        && !SvIOK(value_sv) && !SvNOK(value_sv);
+    } else if (strEQ(type_name, "Boolean")) {
+      valid = sv_isobject(value_sv);
+    } else if (strEQ(type_name, "ID")) {
+      valid = !SvROK(value_sv) && (SvPOK(value_sv) || SvIOK(value_sv));
+    } else {
+      return;
+    }
+    if (!valid) {
+      SV *message = newSVpvf("Value is not a valid %s literal.", type_name);
+      av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+      SvREFCNT_dec(message);
+    }
+  }
 }
 
 static void gql_validation_validate_selections(

@@ -68,7 +68,9 @@ Implementation progress:
   development macOS arm64 host after these changes;
 - completed: variables in allowed positions for direct arguments, list items,
   and input object fields, including default-value exceptions, in XS;
-- next: literal value validation, field merging, and the remaining rules.
+- in progress: built-in scalar literal validation uses SV flags directly in
+  XS, avoiding a Perl method call per literal;
+- next: Enum/custom scalar literals, field merging, and the remaining rules.
 
 ### P0-2: cost control beyond AST node count
 

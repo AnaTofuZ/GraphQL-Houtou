@@ -104,6 +104,14 @@ my $schema = GraphQL::Houtou::Schema->new(
         args => { input => { type => $LookupInput->non_null } },
         resolve => sub { +{} },
       },
+      listShapes => {
+        type => $String,
+        args => {
+          required => { type => $String->list->non_null },
+          nested => { type => $String->non_null->list->non_null->list->non_null },
+        },
+        resolve => sub { 'ok' },
+      },
     },
   ),
   mutation => $Mutation,
@@ -171,6 +179,16 @@ subtest 'valid query passes' => sub {
   }|);
 
   is_deeply $errors, [], 'no validation errors';
+};
+
+subtest 'type system definitions are not executable' => sub {
+  my $errors = validate($schema, q|
+    type LocalOnly { id: String }
+    query Q { viewer { id } }
+  |);
+  is_deeply messages($errors), [
+    "The 'type' definition is not executable.",
+  ];
 };
 
 subtest 'lookup_type resolves Houtou wrappers' => sub {
@@ -400,6 +418,55 @@ subtest 'built-in scalar literals are validated in XS' => sub {
   ];
 };
 
+subtest 'literal shape and non-null values are validated in XS' => sub {
+  my $errors = validate($schema, q|{
+    node(id: null) { id }
+  }|);
+  is_deeply messages($errors), [
+    "Null is not a valid value for non-null type 'String'.",
+  ], 'an explicit null cannot satisfy a non-null argument';
+
+  $errors = validate($schema, q|{
+    node(id: []) { id }
+  }|);
+  is_deeply messages($errors), [
+    'List value is not valid for a non-list type.',
+  ], 'an empty list cannot bypass scalar validation';
+
+  $errors = validate($schema, q|{
+    node(id: {}) { id }
+  }|);
+  is_deeply messages($errors), [
+    'Input object value is not valid for a non-input-object type.',
+  ], 'an empty object cannot bypass scalar validation';
+
+  $errors = validate($schema, q|{
+    lookup(input: "not-an-object") { id }
+  }|);
+  is_deeply messages($errors), [
+    'Scalar value is not valid for an input object type.',
+  ], 'a scalar cannot satisfy an input object argument';
+};
+
+subtest 'non-null list wrappers validate compiled schema types' => sub {
+  my $errors = validate($schema, q|{
+    listShapes(required: ["a", "b"], nested: [["a"], ["b"]])
+  }|);
+  is_deeply $errors, [], 'non-null and nested list literals are accepted';
+
+  $errors = validate($schema, q|{
+    listShapes(required: "a", nested: "b")
+  }|);
+  is_deeply $errors, [], 'a single value is promoted through list wrappers';
+
+  $errors = validate($schema, q|{
+    listShapes(required: ["a"], nested: [[null]])
+  }|);
+  is_deeply messages($errors), [
+    "Null is not a valid value for non-null type 'String'.",
+  ], 'nested non-null list items are enforced';
+};
+
 subtest 'variable default values are validated in XS' => sub {
   my $errors = validate($schema, q|
     query Q($id: String = true) { node(id: $id) { id } }
@@ -497,6 +564,21 @@ subtest 'subscription must have a single top-level field' => sub {
   is_deeply messages($errors), [
     'Subscription needs to have only one field; got (importantUser otherUser)',
   ];
+
+  $errors = validate($schema, q|
+    subscription S {
+      user: importantUser { id }
+      user: importantUser { name }
+    }
+  |);
+  is_deeply $errors, [], 'one merged response name is one subscription root field';
+
+  $errors = validate($schema, q|
+    subscription S { __typename }
+  |);
+  is_deeply messages($errors), [
+    'Subscription root field must not be an introspection field.',
+  ], 'subscription root cannot select introspection';
 };
 
 subtest 'directive validation rejects unknown directives and invalid locations' => sub {

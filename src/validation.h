@@ -416,7 +416,7 @@ gql_validation_push_usage_errors(
 }
 
 static void
-gql_validation_collect_subscription_fields(pTHX_ AV *names_av, SV *selections_sv, HV *fragments_hv, HV *visited_hv) {
+gql_validation_collect_subscription_fields(pTHX_ HV *fields_hv, SV *selections_sv, HV *fragments_hv, HV *visited_hv) {
   AV *selections_av;
   I32 selection_len;
   I32 i;
@@ -445,7 +445,9 @@ gql_validation_collect_subscription_fields(pTHX_ AV *names_av, SV *selections_sv
     if (strEQ(SvPV_nolen(*kind_svp), "field")) {
       SV **name_svp = hv_fetch(selection_hv, "name", 4, 0);
       if (name_svp && SvOK(*name_svp)) {
-        av_push(names_av, newSVsv(*name_svp));
+        SV **alias_svp = hv_fetch(selection_hv, "alias", 5, 0);
+        SV *response_name_sv = alias_svp && SvOK(*alias_svp) ? *alias_svp : *name_svp;
+        (void)hv_store_ent(fields_hv, response_name_sv, newSVsv(*name_svp), 0);
       }
       continue;
     }
@@ -482,7 +484,7 @@ gql_validation_collect_subscription_fields(pTHX_ AV *names_av, SV *selections_sv
       fragment_hv = (HV *)SvRV(fragment_sv);
       fragment_selections_svp = hv_fetch(fragment_hv, "selections", 10, 0);
       gql_validation_collect_subscription_fields(
-        aTHX_ names_av,
+        aTHX_ fields_hv,
         fragment_selections_svp ? *fragment_selections_svp : NULL,
         fragments_hv,
         visited_hv
@@ -494,7 +496,7 @@ gql_validation_collect_subscription_fields(pTHX_ AV *names_av, SV *selections_sv
     if (strEQ(SvPV_nolen(*kind_svp), "inline_fragment")) {
       SV **nested_svp = hv_fetch(selection_hv, "selections", 10, 0);
       gql_validation_collect_subscription_fields(
-        aTHX_ names_av,
+        aTHX_ fields_hv,
         nested_svp ? *nested_svp : NULL,
         fragments_hv,
         visited_hv
@@ -662,31 +664,29 @@ gql_validation_push_subscription_errors(pTHX_ AV *operation_errors_av, AV *opera
     operation_type_svp = hv_fetch(operation_hv, "operationType", 13, 0);
     if (operation_type_svp && SvOK(*operation_type_svp) && SvPOK(*operation_type_svp)
         && strEQ(SvPV_nolen(*operation_type_svp), "subscription")) {
-      AV *field_names_av = newAV();
+      HV *fields_hv = newHV();
       HV *visited_hv = newHV();
       SV **selections_svp = hv_fetch(operation_hv, "selections", 10, 0);
       SV **location_svp = hv_fetch(operation_hv, "location", 8, 0);
-      I32 field_len;
+      I32 field_count;
 
       gql_validation_collect_subscription_fields(
-        aTHX_ field_names_av,
+        aTHX_ fields_hv,
         selections_svp ? *selections_svp : NULL,
         fragments_hv,
         visited_hv
       );
-      field_len = av_len(field_names_av);
-      if (field_len != 0) {
+      field_count = (I32)HvUSEDKEYS(fields_hv);
+      if (field_count != 1) {
         SV *message = newSVpv("Subscription needs to have only one field; got (", 0);
+        I32 sorted_count = 0;
+        SV **keys = gql_parser_sorted_hash_keys(aTHX_ fields_hv, &sorted_count);
         I32 j;
-        for (j = 0; j <= field_len; j++) {
-          SV **name_svp = av_fetch(field_names_av, j, 0);
-          if (!name_svp || !SvOK(*name_svp)) {
-            continue;
-          }
+        for (j = 0; j < sorted_count; j++) {
           if (j > 0) {
             sv_catpvn(message, " ", 1);
           }
-          sv_catsv(message, *name_svp);
+          sv_catsv(message, keys[j]);
         }
         sv_catpvn(message, ")", 1);
         av_push(
@@ -694,10 +694,24 @@ gql_validation_push_subscription_errors(pTHX_ AV *operation_errors_av, AV *opera
           gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL)
         );
         SvREFCNT_dec(message);
+        gql_parser_free_sorted_hash_keys(keys, sorted_count);
+      } else {
+        HE *field_he;
+        hv_iterinit(fields_hv);
+        field_he = hv_iternext(fields_hv);
+        if (field_he && HeVAL(field_he) && SvOK(HeVAL(field_he))
+            && strnEQ(SvPV_nolen(HeVAL(field_he)), "__", 2)) {
+          SV *message = newSVpv("Subscription root field must not be an introspection field.", 0);
+          av_push(
+            errors_av,
+            gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL)
+          );
+          SvREFCNT_dec(message);
+        }
       }
 
       SvREFCNT_dec((SV *)visited_hv);
-      SvREFCNT_dec((SV *)field_names_av);
+      SvREFCNT_dec((SV *)fields_hv);
     }
   }
 }
@@ -1112,16 +1126,39 @@ gql_validation_validate_value(
     return;
   }
 
+  if (!SvOK(value_sv)) {
+    if (gql_validation_type_is_non_null(expected_type_sv)) {
+      SV *type_name_sv = gql_validation_named_type_name_sv(expected_type_sv);
+      SV *message = newSVpvf(
+        "Null is not a valid value for non-null type '%s'.",
+        type_name_sv && SvOK(type_name_sv) ? SvPV_nolen(type_name_sv) : ""
+      );
+      av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+      SvREFCNT_dec(message);
+    }
+    return;
+  }
+
   if (SvROK(value_sv) && SvTYPE(SvRV(value_sv)) == SVt_PVAV) {
     AV *value_av = (AV *)SvRV(value_sv);
     SV *item_type_sv = expected_type_sv;
-    if (expected_type_sv && SvROK(expected_type_sv) && SvTYPE(SvRV(expected_type_sv)) == SVt_PVHV) {
-      SV **kind_svp = hv_fetch((HV *)SvRV(expected_type_sv), "kind", 4, 0);
+    SV *list_type_sv = expected_type_sv;
+    if (gql_validation_type_is_non_null(list_type_sv)) {
+      SV **of_svp = hv_fetch((HV *)SvRV(list_type_sv), "of", 2, 0);
+      list_type_sv = of_svp ? *of_svp : NULL;
+    }
+    if (list_type_sv && SvROK(list_type_sv) && SvTYPE(SvRV(list_type_sv)) == SVt_PVHV) {
+      SV **kind_svp = hv_fetch((HV *)SvRV(list_type_sv), "kind", 4, 0);
       if (kind_svp && SvOK(*kind_svp) && SvPOK(*kind_svp) && strEQ(SvPV_nolen(*kind_svp), "LIST")) {
-        SV **of_svp = hv_fetch((HV *)SvRV(expected_type_sv), "of", 2, 0);
+        SV **of_svp = hv_fetch((HV *)SvRV(list_type_sv), "of", 2, 0);
         if (of_svp) {
           item_type_sv = *of_svp;
         }
+      } else {
+        SV *message = newSVpv("List value is not valid for a non-list type.", 0);
+        av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+        SvREFCNT_dec(message);
+        return;
       }
     }
     for (I32 i = 0; i <= av_len(value_av); i++) {
@@ -1147,6 +1184,9 @@ gql_validation_validate_value(
     }
     kind_svp = hv_fetch(named_type_hv, "kind", 4, 0);
     if (!kind_svp || !SvOK(*kind_svp) || !SvPOK(*kind_svp) || !strEQ(SvPV_nolen(*kind_svp), "INPUT_OBJECT")) {
+      SV *message = newSVpv("Input object value is not valid for a non-input-object type.", 0);
+      av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+      SvREFCNT_dec(message);
       return;
     }
     {
@@ -1295,6 +1335,13 @@ gql_validation_validate_value(
           av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
           SvREFCNT_dec(message);
         }
+        return;
+      }
+      if (kind_svp && SvOK(*kind_svp) && SvPOK(*kind_svp)
+          && strEQ(SvPV_nolen(*kind_svp), "INPUT_OBJECT")) {
+        SV *message = newSVpv("Scalar value is not valid for an input object type.", 0);
+        av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+        SvREFCNT_dec(message);
         return;
       }
       if (kind_svp && SvOK(*kind_svp) && SvPOK(*kind_svp)
@@ -2526,7 +2573,25 @@ gql_validation_validate(pTHX_ SV *schema, SV *document, SV *options) {
 
     node_hv = (HV *)SvRV(*node_svp);
     kind_svp = hv_fetch(node_hv, "kind", 4, 0);
-    if (!kind_svp || !SvOK(*kind_svp) || !SvPOK(*kind_svp) || !strEQ(SvPV_nolen(*kind_svp), "operation")) {
+    if (!kind_svp || !SvOK(*kind_svp) || !SvPOK(*kind_svp)) {
+      continue;
+    }
+
+    if (!strEQ(SvPV_nolen(*kind_svp), "operation")
+        && !strEQ(SvPV_nolen(*kind_svp), "fragment")) {
+      SV **location_svp = hv_fetch(node_hv, "location", 8, 0);
+      SV *message = newSVpvf(
+        "The '%s' definition is not executable.", SvPV_nolen(*kind_svp)
+      );
+      av_push(
+        errors_av,
+        gql_validation_error(aTHX_ SvPV_nolen(message), location_svp ? *location_svp : NULL)
+      );
+      SvREFCNT_dec(message);
+      continue;
+    }
+
+    if (!strEQ(SvPV_nolen(*kind_svp), "operation")) {
       continue;
     }
 

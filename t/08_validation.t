@@ -400,6 +400,29 @@ subtest 'built-in scalar literals are validated in XS' => sub {
   ];
 };
 
+subtest 'literal shape and non-null values are validated in XS' => sub {
+  my $errors = validate($schema, q|{
+    node(id: null) { id }
+  }|);
+  is_deeply messages($errors), [
+    "Null is not a valid value for non-null type 'String'.",
+  ], 'an explicit null cannot satisfy a non-null argument';
+
+  $errors = validate($schema, q|{
+    node(id: []) { id }
+  }|);
+  is_deeply messages($errors), [
+    'List value is not valid for a non-list type.',
+  ], 'an empty list cannot bypass scalar validation';
+
+  $errors = validate($schema, q|{
+    node(id: {}) { id }
+  }|);
+  is_deeply messages($errors), [
+    'Input object value is not valid for a non-input-object type.',
+  ], 'an empty object cannot bypass scalar validation';
+};
+
 subtest 'variable default values are validated in XS' => sub {
   my $errors = validate($schema, q|
     query Q($id: String = true) { node(id: $id) { id } }

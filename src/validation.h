@@ -1112,16 +1112,38 @@ gql_validation_validate_value(
     return;
   }
 
+  if (!SvOK(value_sv)) {
+    if (gql_validation_type_is_non_null(expected_type_sv)) {
+      SV *type_name_sv = gql_validation_named_type_name_sv(expected_type_sv);
+      SV *message = newSVpvf(
+        "Null is not a valid value for non-null type '%s'.",
+        type_name_sv && SvOK(type_name_sv) ? SvPV_nolen(type_name_sv) : ""
+      );
+      av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+      SvREFCNT_dec(message);
+    }
+    return;
+  }
+
   if (SvROK(value_sv) && SvTYPE(SvRV(value_sv)) == SVt_PVAV) {
     AV *value_av = (AV *)SvRV(value_sv);
     SV *item_type_sv = expected_type_sv;
-    if (expected_type_sv && SvROK(expected_type_sv) && SvTYPE(SvRV(expected_type_sv)) == SVt_PVHV) {
-      SV **kind_svp = hv_fetch((HV *)SvRV(expected_type_sv), "kind", 4, 0);
+    SV *list_type_sv = expected_type_sv;
+    if (gql_validation_variable_type_is_kind(list_type_sv, "non_null")) {
+      list_type_sv = gql_validation_variable_type_inner(list_type_sv);
+    }
+    if (list_type_sv && SvROK(list_type_sv) && SvTYPE(SvRV(list_type_sv)) == SVt_PVHV) {
+      SV **kind_svp = hv_fetch((HV *)SvRV(list_type_sv), "kind", 4, 0);
       if (kind_svp && SvOK(*kind_svp) && SvPOK(*kind_svp) && strEQ(SvPV_nolen(*kind_svp), "LIST")) {
-        SV **of_svp = hv_fetch((HV *)SvRV(expected_type_sv), "of", 2, 0);
+        SV **of_svp = hv_fetch((HV *)SvRV(list_type_sv), "of", 2, 0);
         if (of_svp) {
           item_type_sv = *of_svp;
         }
+      } else {
+        SV *message = newSVpv("List value is not valid for a non-list type.", 0);
+        av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+        SvREFCNT_dec(message);
+        return;
       }
     }
     for (I32 i = 0; i <= av_len(value_av); i++) {
@@ -1147,6 +1169,9 @@ gql_validation_validate_value(
     }
     kind_svp = hv_fetch(named_type_hv, "kind", 4, 0);
     if (!kind_svp || !SvOK(*kind_svp) || !SvPOK(*kind_svp) || !strEQ(SvPV_nolen(*kind_svp), "INPUT_OBJECT")) {
+      SV *message = newSVpv("Input object value is not valid for a non-input-object type.", 0);
+      av_push(errors_av, gql_validation_error(aTHX_ SvPV_nolen(message), location_sv));
+      SvREFCNT_dec(message);
       return;
     }
     {

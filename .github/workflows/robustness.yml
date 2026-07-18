@@ -5,11 +5,11 @@ jobs:
     name: ASan test suite
     runs-on: ubuntu-latest
     container:
-      image: perldocker/perl-tester:5.42
+      image: perl:5.44
     steps:
       - uses: actions/checkout@v3
       - name: Install dependencies
-        run: cpm install -g --with-all --show-build-log-on-failure -v
+        run: cpanm --notest --installdeps .
       - name: Build with ASan
         run: |
           perl Build.PL --config optimize="-O2 -g -fsanitize=address -fno-omit-frame-pointer" --config lddlflags="-shared -fsanitize=address"
@@ -44,11 +44,11 @@ jobs:
     name: RSS soak
     runs-on: ubuntu-latest
     container:
-      image: perldocker/perl-tester:5.42
+      image: perl:5.44
     steps:
       - uses: actions/checkout@v3
       - name: Install dependencies
-        run: cpm install -g --with-all --show-build-log-on-failure -v
+        run: cpanm --notest --installdeps .
       - name: Build
         run: |
           perl Build.PL
@@ -59,12 +59,12 @@ jobs:
     name: Valgrind leak gate
     runs-on: ubuntu-latest
     container:
-      image: perldocker/perl-tester:5.42
+      image: perl:5.44
     steps:
       - uses: actions/checkout@v3
       - name: Install dependencies
         run: |
-          cpm install -g --with-all --show-build-log-on-failure -v
+          cpanm --notest --installdeps .
           apt-get update -qq && apt-get install -y -qq valgrind
       - name: Build
         run: |
@@ -90,7 +90,7 @@ jobs:
     name: XS ownership lint
     runs-on: ubuntu-latest
     container:
-      image: perldocker/perl-tester:5.42
+      image: perl:5.44
     steps:
       - uses: actions/checkout@v3
       - name: Run lint
@@ -99,11 +99,11 @@ jobs:
     name: Compiler warning gate
     runs-on: ubuntu-latest
     container:
-      image: perldocker/perl-tester:5.42
+      image: perl:5.44
     steps:
       - uses: actions/checkout@v3
       - name: Install dependencies
-        run: cpm install -g --with-all --show-build-log-on-failure -v
+        run: cpanm --notest --installdeps .
       # Generate the XS .c (Build creates lib/GraphQL/Houtou.c), then
       # recompile it with warnings as errors. Unused parameters, static
       # helper functions, and static variables are expected in the generated

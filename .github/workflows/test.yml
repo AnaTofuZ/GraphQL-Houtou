@@ -7,6 +7,7 @@ jobs:
       matrix:
         perl:
           [
+            "5.44",
             "5.42",
             "5.40",
             "5.38",
@@ -20,14 +21,29 @@ jobs:
           ]
     name: Perl ${{ matrix.perl }}
     container:
-      image: perldocker/perl-tester:${{ matrix.perl }}
+      image: perl:${{ matrix.perl }}
     steps:
       - uses: actions/checkout@v3
       - name: Install dependencies
-        run: cpm install -g --with-all --show-build-log-on-failure -v
+        run: cpanm --notest --installdeps .
       - name: Build XS distribution
         run: |
           perl Build.PL
           ./Build build
       - name: Run test
         run: ./Build test
+  release-tests:
+    name: Distribution release tests
+    runs-on: ubuntu-latest
+    container:
+      image: perl:5.44
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Minilla and dependencies
+        run: |
+          cpanm --notest Minilla Test::CPAN::Meta \
+            Test::MinimumVersion::Fast Test::PAUSE::Permissions \
+            Test::Pod Test::Spellunker
+          cpanm --notest --with-develop --installdeps .
+      - name: Run distribution and author tests
+        run: RELEASE_TESTING=1 minil test

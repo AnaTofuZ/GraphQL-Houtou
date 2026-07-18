@@ -77,6 +77,9 @@ Implementation progress:
 - completed: executable directive validation now performs definition lookup,
   location/repeatability checks, argument validation, and selection traversal
   in XS; the validation facade no longer performs a second Pure Perl AST walk;
+- completed: directive literals retain directive-specific errors, custom scalar
+  callbacks use the compiled CV fallback, and fragment variable positions are
+  validated in each operation context;
 - remaining parser parity: directives on variable definitions are currently
   rejected syntactically before validation and need executable grammar support;
 - completed: field merging conflicts are grouped by response key, expanded

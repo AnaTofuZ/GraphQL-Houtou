@@ -7,6 +7,7 @@ use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Directive;
 use GraphQL::Houtou::Type::Interface;
 use GraphQL::Houtou::Type::Object;
+use GraphQL::Houtou::Type::Scalar;
 use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 use GraphQL::Houtou::Schema qw(lookup_type);
 
@@ -70,6 +71,12 @@ my $Subscription = GraphQL::Houtou::Type::Object->new(
   },
 );
 
+my $Odd = GraphQL::Houtou::Type::Scalar->new(
+  name => 'Odd',
+  serialize => sub { $_[0] },
+  parse_value => sub { $_[0] eq 'odd' ? $_[0] : die "Not odd.\n" },
+);
+
 my $schema = GraphQL::Houtou::Schema->new(
   query => GraphQL::Houtou::Type::Object->new(
     name => 'Query',
@@ -90,7 +97,7 @@ my $schema = GraphQL::Houtou::Schema->new(
   ),
   mutation => $Mutation,
   subscription => $Subscription,
-  types => [ $User, $Page, $Node ],
+  types => [ $User, $Page, $Node, $Odd ],
   directives => [
     @GraphQL::Houtou::Directive::SPECIFIED_DIRECTIVES,
     GraphQL::Houtou::Directive->new(
@@ -107,6 +114,16 @@ my $schema = GraphQL::Houtou::Schema->new(
       args => {
         name => { type => $String->non_null },
       },
+    ),
+    GraphQL::Houtou::Directive->new(
+      name => 'odd',
+      locations => [ qw(FIELD) ],
+      args => { value => { type => $Odd->non_null } },
+    ),
+    GraphQL::Houtou::Directive->new(
+      name => 'flags',
+      locations => [ qw(FIELD) ],
+      args => { values => { type => $Boolean->list } },
     ),
   ],
 );
@@ -374,7 +391,7 @@ subtest 'variable default values are validated in XS' => sub {
 
 subtest 'unused variables are rejected, including fragment-aware usage' => sub {
   my $errors = validate($schema, q|
-    query Q($used: String!, $unused: String) {
+    query Q($used: Boolean!, $unused: String) {
       node(id: "1") { ...UserName }
     }
     fragment UserName on User { name @include(if: $used) }
@@ -513,8 +530,31 @@ subtest 'directive validation checks literal argument types' => sub {
   |);
 
   is_deeply messages($errors), [
-    q{Value is not a valid Boolean literal.},
+    q{Argument 'if' on directive '@skip' has invalid value: Not a Boolean.},
   ];
+};
+
+subtest 'directive validation preserves custom scalar callbacks' => sub {
+  my $errors = validate($schema, q|{
+    viewer { id @odd(value: "even") }
+  }|);
+  like messages($errors)->[0], qr/^Argument 'value'.*Not odd\./,
+    'custom scalar parse_value rejects an invalid directive literal';
+};
+
+subtest 'fragment directive variables use each operation context' => sub {
+  my $errors = validate($schema, q|
+    query Q($enabled: Boolean) { viewer { ...Names } }
+    fragment Names on User { name @flags(values: [$enabled]) }
+  |);
+  is_deeply $errors, [], 'nested directive variable in a fragment is resolved';
+
+  $errors = validate($schema, q|
+    query Q($enabled: String) { viewer { ...Names } }
+    fragment Names on User { name @flags(values: [$enabled]) }
+  |);
+  like messages($errors)->[0], qr/cannot be used for a list item/,
+    'fragment directive variable position is checked per operation';
 };
 
 done_testing;

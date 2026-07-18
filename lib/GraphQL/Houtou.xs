@@ -331,13 +331,14 @@ static void gql_runtime_vm_promise_xs_deferred_resolve_sv(pTHX_ SV *deferred_sv,
 static void gql_runtime_vm_async_scheduler_enqueue_frame(gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_block_frame_t *frame);
 static void gql_runtime_vm_async_scheduler_arm_frame(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_block_frame_t *frame);
 static void gql_runtime_vm_async_scheduler_drain(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s);
+static void gql_runtime_vm_record_nonnull_violation(pTHX_ gql_runtime_vm_writer_t *writer, const char *parent_type_name, const char *field_name, gql_runtime_vm_path_frame_t *path_frame);
 static void gql_runtime_vm_async_scheduler_resolve_frame(pTHX_ gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_block_frame_t *frame);
 static SV *gql_runtime_vm_exec_state_execute_block_serial_mutation_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, gql_runtime_vm_path_frame_t *base_path_ptr);
 static void gql_runtime_vm_execute_serial_mutation_steps(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_serial_mutation_ctx_t *ctx, U8 *all_sync_out, SV **sync_result_out);
 static SV *gql_runtime_vm_new_serial_mutation_step_callback_sv(pTHX_ gql_runtime_vm_serial_mutation_ctx_t *ctx);
 static XS(gql_runtime_vm_xs_serial_mutation_step_callback);
-static void gql_runtime_vm_push_pending_block_frame(pTHX_ gql_runtime_vm_block_frame_t *frame, const char *result_name_pv, STRLEN result_name_len, gql_runtime_vm_path_frame_t *path_frame, gql_runtime_vm_block_frame_t *child_frame);
-static void gql_runtime_vm_push_pending_list_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, const char *result_name_pv, STRLEN result_name_len, gql_runtime_vm_path_frame_t *path_frame, gql_runtime_vm_list_pending_t *list_pending);
+static void gql_runtime_vm_push_pending_block_frame(pTHX_ gql_runtime_vm_block_frame_t *frame, const char *result_name_pv, STRLEN result_name_len, gql_runtime_vm_path_frame_t *path_frame, gql_runtime_vm_block_frame_t *child_frame, IV block_index, IV slot_index, IV op_index);
+static void gql_runtime_vm_push_pending_list_pending(pTHX_ gql_runtime_vm_block_frame_t *frame, const char *result_name_pv, STRLEN result_name_len, gql_runtime_vm_path_frame_t *path_frame, gql_runtime_vm_list_pending_t *list_pending, IV block_index, IV slot_index, IV op_index);
 static void gql_runtime_vm_native_list_store_at(pTHX_ gql_runtime_vm_native_value_t *value, IV index, gql_runtime_vm_native_value_t *child);
 static gql_runtime_vm_native_value_t *gql_runtime_vm_native_value_from_list_pending_sv(pTHX_ SV *value_sv);
 static gql_runtime_vm_list_pending_t *gql_runtime_vm_expect_list_pending(pTHX_ SV *self);
@@ -1200,13 +1201,33 @@ gql_runtime_vm_consume_current_outcome_now(pTHX_ gql_runtime_vm_exec_state_handl
    * leave_field_now would drop the reference three lines later anyway.
    * Keeping the caller as sole owner also lets the consume below transfer
    * the native subtree instead of cloning it. */
-  gql_runtime_vm_consume_outcome_native_object(
-    aTHX_ frame->values_value,
-    result_name_pv ? result_name_pv : "",
-    result_name_pv ? 1 : 0,
-    outcome,
-    writer
-  );
+  {
+    /* Capture null-ness before consume transfers the value away. */
+    int vnull = gql_runtime_vm_native_value_is_null(outcome->value);
+    int carries = outcome->null_carries_error || outcome->error_record_count > 0;
+    gql_runtime_vm_consume_outcome_native_object(
+      aTHX_ frame->values_value,
+      result_name_pv ? result_name_pv : "",
+      result_name_pv ? 1 : 0,
+      outcome,
+      writer
+    );
+    /* Non-Null propagation (spec 6.4.4) for a synchronously completed
+     * field: a null in a non-null position nulls this frame. */
+    if (vnull && native_slot && native_slot->return_type_kind_code == 8) {
+      if (!carries) {
+        const gql_runtime_vm_native_block_t *parent_block =
+          s->cursor ? gql_runtime_vm_cursor_current_native_block(s->cursor) : NULL;
+        gql_runtime_vm_record_nonnull_violation(
+          aTHX_ writer,
+          parent_block ? parent_block->type_name : NULL,
+          native_slot->field_name,
+          s->field_frame ? s->field_frame->path_frame : NULL
+        );
+      }
+      frame->self_nulled = 1;
+    }
+  }
   gql_runtime_vm_leave_field_now(aTHX_ s);
 }
 
@@ -1246,7 +1267,10 @@ gql_runtime_vm_consume_current_result_now(pTHX_ SV *state_sv, gql_runtime_vm_exe
       result_name_pv,
       result_name_len,
       s->field_frame ? s->field_frame->path_frame : NULL,
-      child_frame
+      child_frame,
+      s->cursor ? s->cursor->block_index : -1,
+      s->cursor ? s->cursor->slot_index : -1,
+      s->cursor ? s->cursor->op_index : -1
     );
     if (s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS
         && child_frame
@@ -1269,7 +1293,10 @@ gql_runtime_vm_consume_current_result_now(pTHX_ SV *state_sv, gql_runtime_vm_exe
       result_name_pv,
       result_name_len,
       s->field_frame ? s->field_frame->path_frame : NULL,
-      list_pending
+      list_pending,
+      s->cursor ? s->cursor->block_index : -1,
+      s->cursor ? s->cursor->slot_index : -1,
+      s->cursor ? s->cursor->op_index : -1
     );
     gql_runtime_vm_leave_field_now(aTHX_ s);
     return;
@@ -1329,7 +1356,9 @@ gql_runtime_vm_finalize_current_block_now(pTHX_ SV *state_sv, gql_runtime_vm_exe
       return_pending_handle
     );
   } else {
-    result = gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
+    result = frame->self_nulled
+      ? newSVsv(&PL_sv_undef)
+      : gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
   }
 
   if (s->cursor && snapshot && SvOK(snapshot)) {
@@ -1377,6 +1406,20 @@ gql_runtime_vm_block_frame_finalize_sv(
     return newSVsv(&PL_sv_undef);
   }
   if (frame->pending_count == 0) {
+    /* Non-Null propagation: a violated frame completes as null (the
+     * error is already recorded), not as its partial object. */
+    if (frame->self_nulled) {
+      if (return_pending_handle) {
+        gql_runtime_vm_outcome_t *o =
+          gql_runtime_vm_new_outcome_struct(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, &PL_sv_undef);
+        SV *ret;
+        o->null_carries_error = 1;
+        ret = gql_runtime_vm_wrap_outcome_sv(aTHX_ o);
+        gql_runtime_vm_outcome_decref(aTHX_ o);
+        return ret;
+      }
+      return newSVsv(&PL_sv_undef);
+    }
     if (return_pending_handle) {
       SV *ret = gql_runtime_vm_new_outcome_from_owned_native_value_handle_sv(
         aTHX_
@@ -1790,7 +1833,10 @@ gql_runtime_vm_push_pending_block_frame(
   const char *result_name_pv,
   STRLEN result_name_len,
   gql_runtime_vm_path_frame_t *path_frame,
-  gql_runtime_vm_block_frame_t *child_frame
+  gql_runtime_vm_block_frame_t *child_frame,
+  IV block_index,
+  IV slot_index,
+  IV op_index
 )
 {
   gql_runtime_vm_pending_entry_t *entry;
@@ -1806,9 +1852,9 @@ gql_runtime_vm_push_pending_block_frame(
     result_name_len,
     1,
     path_frame,
-    -1,
-    -1,
-    -1
+    block_index,
+    slot_index,
+    op_index
   );
   if (!entry) {
     return;
@@ -1832,7 +1878,10 @@ gql_runtime_vm_push_pending_list_pending(
   const char *result_name_pv,
   STRLEN result_name_len,
   gql_runtime_vm_path_frame_t *path_frame,
-  gql_runtime_vm_list_pending_t *list_pending
+  gql_runtime_vm_list_pending_t *list_pending,
+  IV block_index,
+  IV slot_index,
+  IV op_index
 )
 {
   gql_runtime_vm_pending_entry_t *entry;
@@ -1848,9 +1897,9 @@ gql_runtime_vm_push_pending_list_pending(
     result_name_len,
     1,
     path_frame,
-    -1,
-    -1,
-    -1
+    block_index,
+    slot_index,
+    op_index
   );
   if (!entry) {
     return;
@@ -2001,12 +2050,20 @@ gql_runtime_vm_async_scheduler_resolve_frame(
            frame->parent_entry_index);
     }
 
-    outcome = gql_runtime_vm_new_outcome_from_owned_native_value_struct(
-      aTHX_
-      GQL_VM_KIND_OBJECT,
-      frame->values_value
-    );
-    frame->values_value = NULL;
+    if (frame->self_nulled) {
+      /* A non-null field of this frame was null: the frame resolves to
+       * null (the originating error is already recorded), and the null
+       * keeps propagating to this frame's own parent. */
+      outcome = gql_runtime_vm_new_outcome_struct(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, &PL_sv_undef);
+      outcome->null_carries_error = 1;
+    } else {
+      outcome = gql_runtime_vm_new_outcome_from_owned_native_value_struct(
+        aTHX_
+        GQL_VM_KIND_OBJECT,
+        frame->values_value
+      );
+      frame->values_value = NULL;
+    }
 
     if (entry) {
       gql_runtime_vm_async_pending_entry_store_outcome_ptr(aTHX_ entry, outcome);
@@ -2037,6 +2094,13 @@ gql_runtime_vm_async_scheduler_resolve_frame(
     gql_runtime_vm_outcome_decref(aTHX_ outcome);
     gql_runtime_vm_free_block_frame(aTHX_ frame);
     return;
+  }
+
+  /* Non-Null propagation reached the operation root: data is null (spec
+   * 6.4.4). Drop the partial object so both response tails emit null. */
+  if (frame->self_nulled && frame->values_value) {
+    gql_runtime_vm_native_value_destroy(aTHX_ frame->values_value);
+    frame->values_value = NULL;
   }
 
   if (frame->deferred_resolves_response && s->response_json_mode) {
@@ -2155,6 +2219,138 @@ gql_runtime_vm_async_scheduler_arm_frame(
       }
     }
   }
+}
+
+/* Record the spec's "Cannot return null for non-nullable field
+ * Parent.field." error at `path_frame` on the async lane's writer. */
+static void
+gql_runtime_vm_record_nonnull_violation(
+  pTHX_
+  gql_runtime_vm_writer_t *writer,
+  const char *parent_type_name,
+  const char *field_name,
+  gql_runtime_vm_path_frame_t *path_frame
+)
+{
+  SV *msg_sv;
+  gql_runtime_vm_outcome_t *err;
+  IV j;
+
+  if (!writer) {
+    return;
+  }
+  msg_sv = newSVpvf(
+    "Cannot return null for non-nullable field %s.%s.",
+    parent_type_name ? parent_type_name : "(unknown)",
+    field_name ? field_name : "(unknown)"
+  );
+  err = gql_runtime_vm_new_error_outcome_struct_for_path(aTHX_ msg_sv, path_frame);
+  SvREFCNT_dec(msg_sv);
+  if (err) {
+    for (j = 0; j < err->error_record_count; j++) {
+      gql_runtime_vm_writer_push_error_record(writer, err->error_records[j]);
+    }
+    gql_runtime_vm_outcome_decref(aTHX_ err);
+  }
+}
+
+/* Non-Null list items ([T!]) for a list settled through the list_pending
+ * machinery: a null item nulls the whole list. Records one error per null
+ * item (with the item index in its path) and converts the outcome to a
+ * null that carries its error, so the field-level check below propagates
+ * it without stacking another message. */
+static void
+gql_runtime_vm_outcome_enforce_list_item_nonnull(
+  pTHX_
+  gql_runtime_vm_exec_state_handle_t *s,
+  const gql_runtime_vm_pending_entry_t *entry,
+  gql_runtime_vm_outcome_t *outcome
+)
+{
+  const gql_runtime_vm_native_block_t *block;
+  const gql_runtime_vm_native_slot_t *slot;
+  int violated = 0;
+  IV i;
+
+  if (!s || !s->native_program || !outcome || !outcome->value
+      || outcome->value->kind_code != GQL_VM_NATIVE_VALUE_LIST) {
+    return;
+  }
+  if (entry->block_index < 0 || entry->block_index >= s->native_program->block_count) {
+    return;
+  }
+  block = &s->native_program->blocks[entry->block_index];
+  if (entry->slot_index < 0 || entry->slot_index >= block->slot_count) {
+    return;
+  }
+  slot = &block->slots[entry->slot_index];
+  if (!slot->item_non_null) {
+    return;
+  }
+
+  for (i = 0; i < outcome->value->list.count; i++) {
+    if (!gql_runtime_vm_native_value_is_null(outcome->value->list.items[i])) {
+      continue;
+    }
+    violated = 1;
+    {
+      SV *item_key = newSViv(i);
+      gql_runtime_vm_path_frame_t *item_path =
+        gql_runtime_vm_new_path_frame_struct(aTHX_ entry->path_frame, item_key);
+      gql_runtime_vm_record_nonnull_violation(
+        aTHX_ s->writer, block->type_name, slot->field_name, item_path
+      );
+      gql_runtime_vm_path_frame_decref(item_path);
+      SvREFCNT_dec(item_key);
+    }
+  }
+  if (violated) {
+    gql_runtime_vm_native_value_destroy(aTHX_ outcome->value);
+    outcome->value = NULL;
+    outcome->kind_code = GQL_VM_KIND_SCALAR;
+    outcome->null_carries_error = 1;
+  }
+}
+
+/* Non-Null propagation for the async lane (spec 6.4.4). After a field
+ * value is stored into `frame`, if the field position is non-null and the
+ * value is null, record "Cannot return null" (unless the null already
+ * carried an error) and mark the frame to resolve as null. `entry` locates
+ * the field's slot in native_program->blocks and carries its response
+ * path. */
+static void
+gql_runtime_vm_frame_field_enforce_nonnull(
+  pTHX_
+  gql_runtime_vm_exec_state_handle_t *s,
+  gql_runtime_vm_block_frame_t *frame,
+  const gql_runtime_vm_pending_entry_t *entry,
+  int value_is_null,
+  int null_carries_error
+)
+{
+  const gql_runtime_vm_native_block_t *block;
+  const gql_runtime_vm_native_slot_t *slot;
+
+  if (!value_is_null || !s || !s->native_program || !frame) {
+    return;
+  }
+  if (entry->block_index < 0 || entry->block_index >= s->native_program->block_count) {
+    return;
+  }
+  block = &s->native_program->blocks[entry->block_index];
+  if (entry->slot_index < 0 || entry->slot_index >= block->slot_count) {
+    return;
+  }
+  slot = &block->slots[entry->slot_index];
+  if (slot->return_type_kind_code != 8) {
+    return;
+  }
+  if (!null_carries_error) {
+    gql_runtime_vm_record_nonnull_violation(
+      aTHX_ s->writer, block->type_name, slot->field_name, entry->path_frame
+    );
+  }
+  frame->self_nulled = 1;
 }
 
 static void
@@ -2290,20 +2486,31 @@ gql_runtime_vm_async_scheduler_process_frame(
           entry->payload.list_pending_ptr->values_value
         );
         entry->payload.list_pending_ptr->values_value = NULL;
-        gql_runtime_vm_consume_outcome_native_object(
-          aTHX_
-          frame->values_value,
-          entry->result_name_pv,
-          entry->result_name_pv_borrowed,
-          outcome,
-          s->writer
-        );
+        gql_runtime_vm_outcome_enforce_list_item_nonnull(aTHX_ s, entry, outcome);
+        {
+          int vnull = gql_runtime_vm_native_value_is_null(outcome->value);
+          int carries = outcome->null_carries_error || outcome->error_record_count > 0;
+          gql_runtime_vm_consume_outcome_native_object(
+            aTHX_
+            frame->values_value,
+            entry->result_name_pv,
+            entry->result_name_pv_borrowed,
+            outcome,
+            s->writer
+          );
+          gql_runtime_vm_frame_field_enforce_nonnull(aTHX_ s, frame, entry, vnull, carries);
+        }
         gql_runtime_vm_outcome_decref(aTHX_ outcome);
         continue;
       }
 
       if (entry->state_code == GQL_VM_PENDING_STATE_READY_OUTCOME
           || entry->payload_kind == GQL_VM_PENDING_OUTCOME_PTR) {
+        int vnull = entry->payload.outcome_ptr
+          && gql_runtime_vm_native_value_is_null(entry->payload.outcome_ptr->value);
+        int carries = entry->payload.outcome_ptr
+          && (entry->payload.outcome_ptr->null_carries_error
+              || entry->payload.outcome_ptr->error_record_count > 0);
         gql_runtime_vm_consume_outcome_native_object(
           aTHX_
           frame->values_value,
@@ -2312,6 +2519,7 @@ gql_runtime_vm_async_scheduler_process_frame(
           entry->payload.outcome_ptr,
           s->writer
         );
+        gql_runtime_vm_frame_field_enforce_nonnull(aTHX_ s, frame, entry, vnull, carries);
         continue;
       }
 
@@ -2330,6 +2538,9 @@ gql_runtime_vm_async_scheduler_process_frame(
         );
 
         if (completed_outcome) {
+          int vnull = gql_runtime_vm_native_value_is_null(completed_outcome->value);
+          int carries = completed_outcome->null_carries_error
+            || completed_outcome->error_record_count > 0;
           gql_runtime_vm_consume_outcome_native_object(
             aTHX_
             frame->values_value,
@@ -2338,16 +2549,21 @@ gql_runtime_vm_async_scheduler_process_frame(
             completed_outcome,
             s->writer
           );
+          gql_runtime_vm_frame_field_enforce_nonnull(aTHX_ s, frame, entry, vnull, carries);
           gql_runtime_vm_outcome_decref(aTHX_ completed_outcome);
         } else if (completed_sv && SvOK(completed_sv) && gql_runtime_vm_sv_is_outcome(aTHX_ completed_sv)) {
+          gql_runtime_vm_outcome_t *co = gql_runtime_vm_expect_outcome(aTHX_ completed_sv);
+          int vnull = gql_runtime_vm_native_value_is_null(co->value);
+          int carries = co->null_carries_error || co->error_record_count > 0;
           gql_runtime_vm_consume_outcome_native_object(
             aTHX_
             frame->values_value,
             entry->result_name_pv,
             entry->result_name_pv_borrowed,
-            gql_runtime_vm_expect_outcome(aTHX_ completed_sv),
+            co,
             s->writer
           );
+          gql_runtime_vm_frame_field_enforce_nonnull(aTHX_ s, frame, entry, vnull, carries);
         } else if (completed_sv && SvOK(completed_sv)
                    && gql_runtime_vm_is_block_frame_value_sv(completed_sv)) {
           /* Mode 1: completion produced a pending child block. Link it into
@@ -2432,6 +2648,7 @@ gql_runtime_vm_async_scheduler_process_frame(
 
       if (entry->payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
           || entry->payload_kind == GQL_VM_PENDING_PROMISE_SV) {
+        int vnull = !entry->payload.promise_sv || !SvOK(entry->payload.promise_sv);
         gql_runtime_vm_consume_value_native_object(
           aTHX_
           frame->values_value,
@@ -2439,6 +2656,9 @@ gql_runtime_vm_async_scheduler_process_frame(
           entry->result_name_pv_borrowed,
           entry->payload.promise_sv
         );
+        /* A settled leaf value: a plain null in a non-null position needs
+         * the error (nothing produced one upstream). */
+        gql_runtime_vm_frame_field_enforce_nonnull(aTHX_ s, frame, entry, vnull, 0);
       }
     }
 
@@ -2922,7 +3142,18 @@ static XS(gql_runtime_vm_xs_list_item_child_callback)
         XSRETURN(1);
       }
     }
-    if (item_block_index < 0) {
+    if (item_block_index < 0 && !ctx->op && ctx->slot) {
+      /* Leaf list item settled from a promise: result coercion against
+       * the inner type (armed with a slot but no op / block index). */
+      SV *leaf_error = NULL;
+      ret = gql_runtime_vm_serialize_leaf_sv(
+        aTHX_ gql_runtime_vm_exec_state_native_runtime(aTHX_ s), ctx->slot, resolved_sv, &leaf_error
+      );
+      if (leaf_error) {
+        ret = gql_runtime_vm_new_error_outcome_for_path_sv(aTHX_ leaf_error, ctx->path_frame);
+        SvREFCNT_dec(leaf_error);
+      }
+    } else if (item_block_index < 0) {
       ret = newSVsv(resolved_sv);
     } else {
       /* Mode 2: sync completion yields a native outcome; the list_pending
@@ -3776,8 +4007,41 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
           }
           gql_runtime_vm_path_frame_decref(item_path);
           SvREFCNT_dec(item_key);
+        } else if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, item_sv)) {
+          /* Leaf list with a per-item promise: defer result coercion to
+           * settle time (the list-item callback with block index -1 and a
+           * slot but no op runs serialize_leaf_sv on the settled value). */
+          SV *item_key = newSViv(i);
+          gql_runtime_vm_path_frame_t *item_path =
+            gql_runtime_vm_new_path_frame_struct(aTHX_ path_frame, item_key);
+          SV *child_cb = gql_runtime_vm_new_list_item_child_callback_sv(
+            aTHX_ state_sv, item_path, -1, NULL, slot
+          );
+          SV *error_cb = gql_runtime_vm_new_error_callback_sv(aTHX_ item_path);
+          item_result = gql_runtime_vm_call_then_promise_for_state_sv(
+            aTHX_ s, item_sv, child_cb, error_cb, item_path
+          );
+          SvREFCNT_dec(child_cb);
+          SvREFCNT_dec(error_cb);
+          gql_runtime_vm_path_frame_decref(item_path);
+          SvREFCNT_dec(item_key);
         } else {
-          item_result = newSVsv(item_sv);
+          /* Leaf list item: result coercion against the inner type. */
+          SV *leaf_error = NULL;
+          item_result = gql_runtime_vm_serialize_leaf_sv(
+            aTHX_ gql_runtime_vm_exec_state_native_runtime(aTHX_ s), slot, item_sv, &leaf_error
+          );
+          if (leaf_error) {
+            SV *item_key = newSViv(i);
+            gql_runtime_vm_path_frame_t *item_path =
+              gql_runtime_vm_new_path_frame_struct(aTHX_ path_frame, item_key);
+            item_result = gql_runtime_vm_new_error_outcome_for_path_sv(
+              aTHX_ leaf_error, item_path
+            );
+            SvREFCNT_dec(leaf_error);
+            gql_runtime_vm_path_frame_decref(item_path);
+            SvREFCNT_dec(item_key);
+          }
         }
 
         if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, item_result)) {
@@ -3803,9 +4067,11 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
          * scalars): assemble the native list directly instead of wrapping
          * the SV array and reconverting it. */
         gql_runtime_vm_native_value_t *list_value = gql_runtime_vm_new_native_value_list();
+        int item_null_violation = 0;
         for (i = 0; i <= av_len(resolved_items_av); i++) {
           SV **item_svp = av_fetch(resolved_items_av, i, 0);
           SV *completed_item_sv = (item_svp && *item_svp) ? *item_svp : &PL_sv_undef;
+          gql_runtime_vm_native_value_t *item_native;
           /* Outcomes carry error records (unresolvable member types);
            * surface them before the value is flattened into the list,
            * mirroring the list_pending settle path. */
@@ -3819,12 +4085,62 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
               gql_runtime_vm_writer_push_error_record(s->writer, item_outcome->error_records[k]);
             }
           }
-          gql_runtime_vm_native_list_push(
-            list_value,
-            gql_runtime_vm_native_value_take_completed_item_sv(aTHX_ completed_item_sv)
-          );
+          item_native = gql_runtime_vm_native_value_take_completed_item_sv(aTHX_ completed_item_sv);
+
+          /* Non-Null list items ([T!]): a null item nulls the whole list.
+           * The item's own error (if any) is already surfaced above; add
+           * "Cannot return null" only when the null carries no error. */
+          if (slot->item_non_null && gql_runtime_vm_native_value_is_null(item_native)) {
+            int carries = SvOK(completed_item_sv)
+              && gql_runtime_vm_sv_is_outcome(aTHX_ completed_item_sv)
+              && (gql_runtime_vm_expect_outcome(aTHX_ completed_item_sv)->null_carries_error
+                  || gql_runtime_vm_expect_outcome(aTHX_ completed_item_sv)->error_record_count > 0);
+            if (!carries && s->writer) {
+              const gql_runtime_vm_native_block_t *parent_block =
+                (s && s->cursor) ? gql_runtime_vm_cursor_current_native_block(s->cursor) : NULL;
+              SV *item_key = newSViv(i);
+              gql_runtime_vm_path_frame_t *item_path =
+                gql_runtime_vm_new_path_frame_struct(aTHX_ path_frame, item_key);
+              SV *msg_sv = newSVpvf(
+                "Cannot return null for non-nullable field %s.%s.",
+                parent_block && parent_block->type_name ? parent_block->type_name : "(unknown)",
+                slot && slot->field_name ? slot->field_name : "(unknown)"
+              );
+              gql_runtime_vm_outcome_t *err = gql_runtime_vm_new_error_outcome_struct_for_path(
+                aTHX_ msg_sv, item_path
+              );
+              IV k;
+              for (k = 0; err && k < err->error_record_count; k++) {
+                gql_runtime_vm_writer_push_error_record(s->writer, err->error_records[k]);
+              }
+              if (err) {
+                gql_runtime_vm_outcome_decref(aTHX_ err);
+              }
+              SvREFCNT_dec(msg_sv);
+              gql_runtime_vm_path_frame_decref(item_path);
+              SvREFCNT_dec(item_key);
+            }
+            item_null_violation = 1;
+          }
+          gql_runtime_vm_native_list_push(list_value, item_native);
         }
         SvREFCNT_dec((SV *)resolved_items_av);
+        if (item_null_violation) {
+          /* The whole list nulls; the null carries its error upward. */
+          gql_runtime_vm_outcome_t *o =
+            gql_runtime_vm_new_outcome_struct(aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, &PL_sv_undef);
+          o->null_carries_error = 1;
+          gql_runtime_vm_native_value_destroy(aTHX_ list_value);
+          if (outcome_out) {
+            *outcome_out = o;
+            return NULL;
+          }
+          {
+            SV *ret = gql_runtime_vm_wrap_outcome_sv(aTHX_ o);
+            gql_runtime_vm_outcome_decref(aTHX_ o);
+            return ret;
+          }
+        }
         if (outcome_out) {
           *outcome_out = gql_runtime_vm_new_outcome_from_owned_native_value_struct(
             aTHX_ GQL_VM_KIND_LIST, list_value
@@ -3926,7 +4242,23 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
     }
     case GQL_VM_COMPLETE_GENERIC:
     default:
-      return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, outcome_out);
+    {
+      /* Leaf result coercion; a failure is a field error + null. */
+      SV *leaf_error = NULL;
+      SV *serialized = gql_runtime_vm_serialize_leaf_sv(
+        aTHX_ runtime, slot, resolved_sv, &leaf_error
+      );
+      if (leaf_error) {
+        SV *ret = gql_runtime_vm_new_error_outcome_for_path_sv(aTHX_ leaf_error, path_frame);
+        SvREFCNT_dec(leaf_error);
+        return ret;
+      }
+      {
+        SV *ret = gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, serialized, outcome_out);
+        SvREFCNT_dec(serialized);
+        return ret;
+      }
+    }
   }
 }
 
@@ -5340,7 +5672,16 @@ gql_runtime_vm_then_complete_current_sv(
       result_name_len,
       1,
       promise_sv,
+      /* GENERIC_VALUE_SV stores the settled value without running
+       * completion, so leaf-typed slots park as RESOLVED_VALUE_SV to get
+       * result coercion at settle time. */
       complete_code == GQL_VM_COMPLETE_GENERIC
+          && gql_runtime_vm_slot_leaf_kind(
+               gql_runtime_vm_exec_state_native_runtime(aTHX_ s),
+               gql_runtime_vm_effective_slot(
+                 gql_runtime_vm_exec_state_native_runtime(aTHX_ s), slot
+               )
+             ) == GQL_VM_LEAF_NONE
         ? GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
         : GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV,
       path_frame,
@@ -5647,6 +5988,8 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
     Newxz(runtime->callback_catalog->slot_tag_entry_counts, runtime->runtime_slot_count, IV);
     Newxz(runtime->callback_catalog->slot_possible_type_entries, runtime->runtime_slot_count, gql_runtime_vm_native_possible_type_entry_t *);
     Newxz(runtime->callback_catalog->slot_possible_type_entry_counts, runtime->runtime_slot_count, IV);
+    Newxz(runtime->callback_catalog->slot_leaf_kinds, runtime->runtime_slot_count, IV);
+    Newxz(runtime->callback_catalog->slot_leaf_payloads, runtime->runtime_slot_count, SV *);
     for (i = 0; i < runtime->runtime_slot_count; i++) {
       SV **slot_svp = av_fetch(catalog_av, i, 0);
       HV *slot_hv;
@@ -5694,6 +6037,9 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
     HV *resolve_type_map_hv = NULL;
     HV *possible_types_hv = NULL;
     HV *is_type_of_map_hv = NULL;
+    HV *leaf_kind_map_hv = NULL;
+    HV *enum_values_map_hv = NULL;
+    HV *serialize_map_hv = NULL;
 
     if ((runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "name2type", 9))) {
       name2type_hv = gql_runtime_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache name2type");
@@ -5713,6 +6059,15 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
     if ((runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "is_type_of_map", 14))) {
       is_type_of_map_hv = gql_runtime_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache is_type_of_map");
     }
+    if ((runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "leaf_kind_map", 13))) {
+      leaf_kind_map_hv = gql_runtime_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache leaf_kind_map");
+    }
+    if ((runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "enum_values_map", 15))) {
+      enum_values_map_hv = gql_runtime_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache enum_values_map");
+    }
+    if ((runtime_cache_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ runtime_cache_hv, "serialize_map", 13))) {
+      serialize_map_hv = gql_runtime_vm_expect_hashref(aTHX_ runtime_cache_sv, "runtime_cache serialize_map");
+    }
 
     if (runtime->runtime_slot_count > 0 && name2type_hv) {
       for (i = 0; i < runtime->runtime_slot_count; i++) {
@@ -5731,6 +6086,24 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
           SV **svp = hv_fetch(tag_resolver_map_hv, return_type_name, (I32)strlen(return_type_name), 0);
           if (svp && SvOK(*svp)) {
             runtime->callback_catalog->slot_tag_resolvers[i] = newSVsv(*svp);
+          }
+        }
+        if (leaf_kind_map_hv) {
+          SV **svp = hv_fetch(leaf_kind_map_hv, return_type_name, (I32)strlen(return_type_name), 0);
+          if (svp && SvOK(*svp)) {
+            IV leaf_kind = SvIV(*svp);
+            runtime->callback_catalog->slot_leaf_kinds[i] = leaf_kind;
+            if (leaf_kind == GQL_VM_LEAF_ENUM && enum_values_map_hv) {
+              SV **payload_svp = hv_fetch(enum_values_map_hv, return_type_name, (I32)strlen(return_type_name), 0);
+              if (payload_svp && SvOK(*payload_svp)) {
+                runtime->callback_catalog->slot_leaf_payloads[i] = newSVsv(*payload_svp);
+              }
+            } else if (leaf_kind == GQL_VM_LEAF_CUSTOM && serialize_map_hv) {
+              SV **payload_svp = hv_fetch(serialize_map_hv, return_type_name, (I32)strlen(return_type_name), 0);
+              if (payload_svp && SvOK(*payload_svp)) {
+                runtime->callback_catalog->slot_leaf_payloads[i] = newSVsv(*payload_svp);
+              }
+            }
           }
         }
         if (runtime_tag_map_hv) {
@@ -7223,19 +7596,21 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
 }
 
 static SV *
-gql_runtime_vm_complete_current_generic_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *value)
+gql_runtime_vm_complete_current_generic_fast_sv(
+  pTHX_
+  gql_runtime_vm_exec_state_t *state,
+  SV *value,
+  SV **error_out
+)
 {
-  PERL_UNUSED_ARG(state);
   /*
-   * Fast generic completion assumes resolver fast paths return an owned SV.
-   * We transfer ownership by taking one extra ref here, then the dispatch
-   * loop drops the original "resolved" ref after completion.
-   *
-   * If resolver helpers ever return borrowed SVs, this must go back to
-   * cloning instead of refcount transfer.
+   * Leaf result coercion: serialize_leaf_sv returns an owned SV (the input
+   * with an extra ref when it already conforms, matching this lane's
+   * ownership-transfer contract; the dispatch loop drops the original
+   * "resolved" ref after completion). A coercion failure sets *error_out
+   * and the loop records a field error + null.
    */
-  SvREFCNT_inc_simple_NN(value);
-  return value;
+  return gql_runtime_vm_serialize_leaf_sv(aTHX_ state->runtime, state->slot, value, error_out);
 }
 
 static SV *
@@ -7338,15 +7713,107 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
           aTHX_ state, item, &sel_error
         );
       }
+      int item_had_error = 0;
       if (sel_error) {
         /* Unresolvable member type: field error + null item. */
         gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, sel_error, item_path);
         SvREFCNT_dec(sel_error);
         completed = newSVsv(&PL_sv_undef);
+        item_had_error = 1;
       } else if (item_block_index >= 0) {
         completed = gql_runtime_vm_execute_block_fast_sv(aTHX_ state, item_block_index, item);
+        if (!completed) {
+          /* The item block nulled itself (non-null propagation). */
+          item_had_error = state->null_carries_error;
+          state->null_carries_error = 0;
+        }
       } else {
-        completed = gql_runtime_vm_clone_value_sv(aTHX_ item);
+        /* Leaf list item: result coercion against the inner type
+         * (slot->return_type_name is the list's inner name). Errors get
+         * a lazily built field+index path since leaf lists skip the
+         * per-item frames. */
+        SV *leaf_error = NULL;
+        completed = gql_runtime_vm_serialize_leaf_sv(
+          aTHX_ state->runtime, state->slot, item, &leaf_error
+        );
+        if (leaf_error) {
+          gql_runtime_vm_path_frame_t *error_path = item_path;
+          gql_runtime_vm_path_frame_t *lazy_field = NULL;
+          gql_runtime_vm_path_frame_t *lazy_item = NULL;
+          if (!error_path) {
+            SV *item_key = newSViv(i);
+            lazy_field = state->path_frame_is_current_field
+              ? NULL
+              : gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
+            lazy_item = gql_runtime_vm_new_path_frame_struct(
+              aTHX_ lazy_field ? lazy_field : state->path_frame, item_key
+            );
+            SvREFCNT_dec(item_key);
+            error_path = lazy_item;
+          }
+          gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, leaf_error, error_path);
+          SvREFCNT_dec(leaf_error);
+          if (lazy_item) {
+            gql_runtime_vm_path_frame_decref(lazy_item);
+          }
+          if (lazy_field) {
+            gql_runtime_vm_path_frame_decref(lazy_field);
+          }
+          completed = newSVsv(&PL_sv_undef);
+          item_had_error = 1;
+        }
+      }
+
+      /* Non-Null list items ([T!]): a null item nulls the whole list
+       * (spec 6.4.4); whether the null then travels further is the
+       * enclosing field check's call (return_type_kind_code == 8). */
+      if (state->slot->item_non_null && (!completed || !SvOK(completed))) {
+        if (!item_had_error) {
+          SV *msg_sv = newSVpvf(
+            "Cannot return null for non-nullable field %s.%s.",
+            state->block->type_name ? state->block->type_name : "(unknown)",
+            state->slot->field_name ? state->slot->field_name : "(unknown)"
+          );
+          gql_runtime_vm_path_frame_t *error_path = item_path;
+          gql_runtime_vm_path_frame_t *lazy_field = NULL;
+          gql_runtime_vm_path_frame_t *lazy_item = NULL;
+          if (!error_path) {
+            SV *item_key = newSViv(i);
+            lazy_field = state->path_frame_is_current_field
+              ? NULL
+              : gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
+            lazy_item = gql_runtime_vm_new_path_frame_struct(
+              aTHX_ lazy_field ? lazy_field : state->path_frame, item_key
+            );
+            SvREFCNT_dec(item_key);
+            error_path = lazy_item;
+          }
+          gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, msg_sv, error_path);
+          SvREFCNT_dec(msg_sv);
+          if (lazy_item) {
+            gql_runtime_vm_path_frame_decref(lazy_item);
+          }
+          if (lazy_field) {
+            gql_runtime_vm_path_frame_decref(lazy_field);
+          }
+        }
+        if (completed) {
+          SvREFCNT_dec(completed);
+        }
+        if (item_path) {
+          state->path_frame = base_path;
+          gql_runtime_vm_path_frame_decref(item_path);
+        }
+        if (field_path) {
+          state->path_frame = saved_path_frame;
+          gql_runtime_vm_path_frame_decref(field_path);
+        }
+        SvREFCNT_dec((SV *)out_av);
+        state->null_carries_error = 1;
+        return newSVsv(&PL_sv_undef);
+      }
+      if (!completed) {
+        completed = newSVsv(&PL_sv_undef);
       }
       if (item_path) {
         state->path_frame = base_path;
@@ -7404,7 +7871,7 @@ OP_DEFAULT_GENERIC:
     SvREFCNT_dec(resolved);
     resolved = applied;
   }
-  completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved);
+  completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved, &error_sv);
   goto DISPATCH_DONE;
 OP_DEFAULT_OBJECT:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
@@ -7449,7 +7916,7 @@ OP_EXPLICIT_GENERIC:
     SvREFCNT_dec(resolved);
     resolved = applied;
   }
-  completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved);
+  completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved, &error_sv);
   goto DISPATCH_DONE;
 OP_EXPLICIT_OBJECT:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
@@ -7497,7 +7964,7 @@ DISPATCH_DONE:
         SvREFCNT_dec(resolved);
         resolved = applied;
       }
-      completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved);
+      completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved, &error_sv);
       break;
     case 1:
       resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
@@ -7541,7 +8008,7 @@ DISPATCH_DONE:
         SvREFCNT_dec(resolved);
         resolved = applied;
       }
-      completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved);
+      completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved, &error_sv);
       break;
     case 5:
       resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
@@ -7682,11 +8149,6 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
       error_sv = NULL;
     }
 
-    if (field_path) {
-      gql_runtime_vm_path_frame_decref(field_path);
-      field_path = NULL;
-    }
-
     if (error_outcome) {
       if (state->writer) {
         IV j;
@@ -7695,6 +8157,56 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
         }
       }
       gql_runtime_vm_outcome_decref(aTHX_ error_outcome);
+      error_outcome = NULL;
+      completed = newSVsv(&PL_sv_undef);
+      /* The null below carries this field error. */
+      state->null_carries_error = 1;
+    }
+
+    /* Non-Null propagation (spec 6.4.4): a null in a non-null position
+     * nulls this block. Add the "Cannot return null" error only when the
+     * null did not already come with one (a field error above, or a
+     * propagated child null). */
+    if ((!completed || !SvOK(completed)) && slot->return_type_kind_code == 8) {
+      if (!state->null_carries_error) {
+        SV *msg_sv = newSVpvf(
+          "Cannot return null for non-nullable field %s.%s.",
+          block->type_name ? block->type_name : "(unknown)",
+          slot->field_name ? slot->field_name : "(unknown)"
+        );
+        gql_runtime_vm_path_frame_t *error_path = field_path
+          ? field_path
+          : gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, slot);
+        gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, msg_sv, error_path);
+        SvREFCNT_dec(msg_sv);
+        if (error_path != field_path) {
+          gql_runtime_vm_path_frame_decref(error_path);
+        }
+      }
+      if (field_path) {
+        gql_runtime_vm_path_frame_decref(field_path);
+      }
+      if (completed) {
+        SvREFCNT_dec(completed);
+      }
+      SvREFCNT_dec((SV *)data_hv);
+      state->block = saved_block;
+      state->op = saved_op;
+      state->slot = saved_slot;
+      state->path_frame = saved_path_frame;
+      state->path_frame_is_current_field = saved_path_is_current_field;
+      state->block_index = saved_block_index;
+      state->op_index = saved_op_index;
+      state->null_carries_error = 1;
+      return NULL;
+    }
+    state->null_carries_error = 0;
+
+    if (field_path) {
+      gql_runtime_vm_path_frame_decref(field_path);
+      field_path = NULL;
+    }
+    if (!completed) {
       completed = newSVsv(&PL_sv_undef);
     }
     hv_store(data_hv, slot->result_name, (I32)slot->result_name_len, completed, 0);
@@ -7718,7 +8230,7 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
  * order, i.e. the query's field order. Output is UTF-8 encoded octets.
  */
 
-static void gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source, SV *out);
+static int gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source, SV *out);
 
 static void
 gql_runtime_vm_json_cat_string(pTHX_ SV *out, const char *pv, STRLEN len)
@@ -7826,7 +8338,10 @@ gql_runtime_vm_json_cat_scalar(pTHX_ SV *out, SV *value)
   }
 }
 
-static void
+/* Returns 1 when the block nulled itself over a non-null violation; the
+ * callee has already truncated its own bytes from `out` and the caller
+ * writes "null" or keeps propagating. */
+static int
 gql_runtime_vm_execute_child_block_fast_json(
   pTHX_
   gql_runtime_vm_exec_state_t *state,
@@ -7838,10 +8353,11 @@ gql_runtime_vm_execute_child_block_fast_json(
   gql_runtime_vm_path_frame_t *saved_path_frame = state ? state->path_frame : NULL;
   int saved_path_is_current_field = state ? state->path_frame_is_current_field : 0;
   gql_runtime_vm_path_frame_t *field_path;
+  int propagated;
 
   if (!state) {
     sv_catpvs(out, "null");
-    return;
+    return 0;
   }
 
   if (state->path_frame_is_current_field) {
@@ -7851,15 +8367,18 @@ gql_runtime_vm_execute_child_block_fast_json(
     state->path_frame = field_path;
     state->path_frame_is_current_field = 1;
   }
-  gql_runtime_vm_execute_block_fast_json(aTHX_ state, block_index, source, out);
+  propagated = gql_runtime_vm_execute_block_fast_json(aTHX_ state, block_index, source, out);
   state->path_frame = saved_path_frame;
   state->path_frame_is_current_field = saved_path_is_current_field;
   if (field_path) {
     gql_runtime_vm_path_frame_decref(field_path);
   }
+  return propagated;
 }
 
-static void
+/* Returns 1 when a non-null list item ([T!]) was null: the list's bytes
+ * are truncated from `out` and the caller emits null / propagates. */
+static int
 gql_runtime_vm_complete_current_list_fast_json(
   pTHX_
   gql_runtime_vm_exec_state_t *state,
@@ -7871,11 +8390,11 @@ gql_runtime_vm_complete_current_list_fast_json(
 
   if (op->complete_code != GQL_VM_COMPLETE_LIST) {
     gql_runtime_vm_json_cat_scalar(aTHX_ out, value);
-    return;
+    return 0;
   }
   if (!value || !SvOK(value)) {
     sv_catpvs(out, "null");
-    return;
+    return 0;
   }
   if (!SvROK(value) || SvTYPE(SvRV(value)) != SVt_PVAV) {
     /* Non-list resolver result for a list field: field error + null,
@@ -7892,7 +8411,8 @@ gql_runtime_vm_complete_current_list_fast_json(
       gql_runtime_vm_path_frame_decref(field_path);
     }
     sv_catpvs(out, "null");
-    return;
+    state->null_carries_error = 1;
+    return 0;
   }
   {
     AV *in_av = (AV *)SvRV(value);
@@ -7901,6 +8421,7 @@ gql_runtime_vm_complete_current_list_fast_json(
     gql_runtime_vm_path_frame_t *base_path = NULL;
     int has_child_block = op->child_block_index >= 0;
     int has_abstract_items = (!has_child_block && op->abstract_child_count > 0);
+    STRLEN list_start = SvCUR(out);
     IV i;
 
     if (has_child_block || has_abstract_items) {
@@ -7918,9 +8439,12 @@ gql_runtime_vm_complete_current_list_fast_json(
       SV **item_svp = av_fetch(in_av, i, 0);
       SV *item = (item_svp && SvOK(*item_svp)) ? *item_svp : &PL_sv_undef;
       gql_runtime_vm_path_frame_t *item_path = NULL;
+      STRLEN item_start;
+      int item_had_error = 0;
       if (i) {
         sv_catpvs(out, ",");
       }
+      item_start = SvCUR(out);
       gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ item);
       if (base_path) {
         SV *item_key = newSViv(i);
@@ -7939,24 +8463,114 @@ gql_runtime_vm_complete_current_list_fast_json(
           gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, sel_error, item_path);
           SvREFCNT_dec(sel_error);
           sv_catpvs(out, "null");
+          item_had_error = 1;
         } else if (item_block_index >= 0) {
-          gql_runtime_vm_execute_block_fast_json(aTHX_ state, item_block_index, item, out);
+          if (gql_runtime_vm_execute_block_fast_json(aTHX_ state, item_block_index, item, out)) {
+            sv_catpvs(out, "null");
+            item_had_error = 1;
+          }
         } else {
           sv_catpvs(out, "null");
         }
       } else if (has_abstract_items) {
         sv_catpvs(out, "null");
       } else if (has_child_block && SvOK(item)) {
-        gql_runtime_vm_execute_block_fast_json(aTHX_ state, op->child_block_index, item, out);
+        if (gql_runtime_vm_execute_block_fast_json(aTHX_ state, op->child_block_index, item, out)) {
+          sv_catpvs(out, "null");
+          item_had_error = 1;
+        }
       } else if (has_child_block) {
         sv_catpvs(out, "null");
-      } else if (SvOK(item) && !SvROK(item)
-          && state->slot && state->slot->return_type_name
-          && strEQ(state->slot->return_type_name, "Boolean")) {
-        sv_catpv(out, SvTRUE(item) ? "true" : "false");
       } else {
-        gql_runtime_vm_json_cat_scalar(aTHX_ out, item);
+        /* Leaf list item: result coercion against the inner type before
+         * serialization; a failure is a per-item field error + null. */
+        SV *leaf_error = NULL;
+        SV *serialized = gql_runtime_vm_serialize_leaf_sv(
+          aTHX_ state->runtime, state->slot, item, &leaf_error
+        );
+        if (leaf_error) {
+          gql_runtime_vm_path_frame_t *error_path = item_path;
+          gql_runtime_vm_path_frame_t *lazy_field = NULL;
+          gql_runtime_vm_path_frame_t *lazy_item = NULL;
+          if (!error_path) {
+            SV *item_key = newSViv(i);
+            lazy_field = state->path_frame_is_current_field
+              ? NULL
+              : gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
+            lazy_item = gql_runtime_vm_new_path_frame_struct(
+              aTHX_ lazy_field ? lazy_field : state->path_frame, item_key
+            );
+            SvREFCNT_dec(item_key);
+            error_path = lazy_item;
+          }
+          gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, leaf_error, error_path);
+          SvREFCNT_dec(leaf_error);
+          if (lazy_item) {
+            gql_runtime_vm_path_frame_decref(lazy_item);
+          }
+          if (lazy_field) {
+            gql_runtime_vm_path_frame_decref(lazy_field);
+          }
+          sv_catpvs(out, "null");
+          item_had_error = 1;
+        } else if (SvOK(serialized) && !SvROK(serialized)
+            && state->slot && state->slot->return_type_name
+            && strEQ(state->slot->return_type_name, "Boolean")) {
+          sv_catpv(out, SvTRUE(serialized) ? "true" : "false");
+        } else {
+          gql_runtime_vm_json_cat_scalar(aTHX_ out, serialized);
+        }
+        if (serialized) {
+          SvREFCNT_dec(serialized);
+        }
       }
+
+      /* Non-Null list items ([T!]): a null item nulls the whole list. */
+      if (state->slot->item_non_null
+          && SvCUR(out) - item_start == 4
+          && memEQ(SvPVX(out) + item_start, "null", 4)) {
+        if (!item_had_error && !state->null_carries_error) {
+          SV *msg_sv = newSVpvf(
+            "Cannot return null for non-nullable field %s.%s.",
+            state->block->type_name ? state->block->type_name : "(unknown)",
+            state->slot->field_name ? state->slot->field_name : "(unknown)"
+          );
+          gql_runtime_vm_path_frame_t *error_path = item_path;
+          gql_runtime_vm_path_frame_t *lazy_field = NULL;
+          gql_runtime_vm_path_frame_t *lazy_item = NULL;
+          if (!error_path) {
+            SV *item_key = newSViv(i);
+            lazy_field = state->path_frame_is_current_field
+              ? NULL
+              : gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
+            lazy_item = gql_runtime_vm_new_path_frame_struct(
+              aTHX_ lazy_field ? lazy_field : state->path_frame, item_key
+            );
+            SvREFCNT_dec(item_key);
+            error_path = lazy_item;
+          }
+          gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, msg_sv, error_path);
+          SvREFCNT_dec(msg_sv);
+          if (lazy_item) {
+            gql_runtime_vm_path_frame_decref(lazy_item);
+          }
+          if (lazy_field) {
+            gql_runtime_vm_path_frame_decref(lazy_field);
+          }
+        }
+        if (item_path) {
+          state->path_frame = base_path;
+          gql_runtime_vm_path_frame_decref(item_path);
+        }
+        if (field_path) {
+          state->path_frame = saved_path_frame;
+          gql_runtime_vm_path_frame_decref(field_path);
+        }
+        SvCUR_set(out, list_start);
+        state->null_carries_error = 1;
+        return 1;
+      }
+      state->null_carries_error = 0;
       if (item_path) {
         state->path_frame = base_path;
         gql_runtime_vm_path_frame_decref(item_path);
@@ -7968,13 +8582,15 @@ gql_runtime_vm_complete_current_list_fast_json(
       gql_runtime_vm_path_frame_decref(field_path);
     }
   }
+  return 0;
 }
 
-static void
+static int
 gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source, SV *out)
 {
   gql_runtime_vm_native_block_t *block;
   IV i;
+  STRLEN block_start = SvCUR(out);
   gql_runtime_vm_native_block_t *saved_block = (gql_runtime_vm_native_block_t *)state->block;
   const gql_runtime_vm_native_op_t *saved_op = state->op;
   const gql_runtime_vm_native_slot_t *saved_slot = state->slot;
@@ -8002,6 +8618,7 @@ gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state,
     int eager_path_frame;
     IV dispatch_index;
     IV family;
+    STRLEN value_start;
 
     if (op->slot_index < 0 || op->slot_index >= block->slot_count) {
       croak("native VM op slot_index %ld is invalid in block %ld", (long)op->slot_index, (long)block_index);
@@ -8023,6 +8640,7 @@ gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state,
     sv_catpvs(out, "\"");
     sv_catpvn(out, slot->result_name, slot->result_name_len);
     sv_catpvs(out, "\":");
+    value_start = SvCUR(out);
 
     eager_path_frame = !gql_runtime_vm_slot_can_delay_field_path(state->runtime, slot, op);
     if (eager_path_frame) {
@@ -8050,18 +8668,33 @@ gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state,
     if (!error_sv) {
       switch (family) {
         case 0: /* GENERIC */
-          if (resolved && SvOK(resolved) && !SvROK(resolved)
+        {
+          /* Leaf result coercion before serialization; a failure becomes
+           * a field error + null via the shared error_sv tail. */
+          SV *serialized = gql_runtime_vm_serialize_leaf_sv(
+            aTHX_ state->runtime, slot, resolved, &error_sv
+          );
+          if (error_sv) {
+            /* The shared error tail records the field error and emits the
+             * null for this field. */
+            break;
+          }
+          if (serialized && SvOK(serialized) && !SvROK(serialized)
               && slot->return_type_name && strEQ(slot->return_type_name, "Boolean")) {
             /* Boolean-typed leaves serialize as JSON booleans even when the
              * resolver returned a plain 0/1. */
-            sv_catpv(out, SvTRUE(resolved) ? "true" : "false");
+            sv_catpv(out, SvTRUE(serialized) ? "true" : "false");
           } else {
-            gql_runtime_vm_json_cat_scalar(aTHX_ out, resolved);
+            gql_runtime_vm_json_cat_scalar(aTHX_ out, serialized);
           }
+          SvREFCNT_dec(serialized);
           break;
+        }
         case 1: /* OBJECT */
           if (resolved && SvOK(resolved) && op->complete_code == GQL_VM_COMPLETE_OBJECT && op->child_block_index >= 0) {
-            gql_runtime_vm_execute_child_block_fast_json(aTHX_ state, op->child_block_index, resolved, out);
+            if (gql_runtime_vm_execute_child_block_fast_json(aTHX_ state, op->child_block_index, resolved, out)) {
+              sv_catpvs(out, "null");
+            }
           } else if (resolved && SvOK(resolved)) {
             gql_runtime_vm_json_cat_scalar(aTHX_ out, resolved);
           } else {
@@ -8069,7 +8702,9 @@ gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state,
           }
           break;
         case 2: /* LIST */
-          gql_runtime_vm_complete_current_list_fast_json(aTHX_ state, resolved, out);
+          if (gql_runtime_vm_complete_current_list_fast_json(aTHX_ state, resolved, out)) {
+            sv_catpvs(out, "null");
+          }
           break;
         case 3: /* ABSTRACT */
         default:
@@ -8081,7 +8716,9 @@ gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state,
             );
             if (!error_sv) {
               if (abstract_child_block_index >= 0) {
-                gql_runtime_vm_execute_child_block_fast_json(aTHX_ state, abstract_child_block_index, resolved, out);
+                if (gql_runtime_vm_execute_child_block_fast_json(aTHX_ state, abstract_child_block_index, resolved, out)) {
+                  sv_catpvs(out, "null");
+                }
               } else {
                 sv_catpvs(out, "null");
               }
@@ -8102,10 +8739,6 @@ gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state,
       SvREFCNT_dec(error_sv);
       error_sv = NULL;
     }
-    if (field_path) {
-      gql_runtime_vm_path_frame_decref(field_path);
-      field_path = NULL;
-    }
     if (error_outcome) {
       if (state->writer) {
         IV j;
@@ -8114,10 +8747,56 @@ gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state,
         }
       }
       gql_runtime_vm_outcome_decref(aTHX_ error_outcome);
+      error_outcome = NULL;
       sv_catpvs(out, "null");
+      /* The null just emitted carries this field error. */
+      state->null_carries_error = 1;
     }
     if (resolved) {
       SvREFCNT_dec(resolved);
+      resolved = NULL;
+    }
+
+    /* Non-Null propagation (spec 6.4.4): a null value in a non-null
+     * position nulls this block. The emitted value region being exactly
+     * the token "null" identifies a null field value. */
+    if (slot->return_type_kind_code == 8
+        && SvCUR(out) - value_start == 4
+        && memEQ(SvPVX(out) + value_start, "null", 4)) {
+      if (!state->null_carries_error) {
+        SV *msg_sv = newSVpvf(
+          "Cannot return null for non-nullable field %s.%s.",
+          block->type_name ? block->type_name : "(unknown)",
+          slot->field_name ? slot->field_name : "(unknown)"
+        );
+        gql_runtime_vm_path_frame_t *error_path = field_path
+          ? field_path
+          : gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, slot);
+        gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, msg_sv, error_path);
+        SvREFCNT_dec(msg_sv);
+        if (error_path != field_path) {
+          gql_runtime_vm_path_frame_decref(error_path);
+        }
+      }
+      if (field_path) {
+        gql_runtime_vm_path_frame_decref(field_path);
+      }
+      SvCUR_set(out, block_start);
+      state->block = saved_block;
+      state->op = saved_op;
+      state->slot = saved_slot;
+      state->path_frame = saved_path_frame;
+      state->path_frame_is_current_field = saved_path_is_current_field;
+      state->block_index = saved_block_index;
+      state->op_index = saved_op_index;
+      state->null_carries_error = 1;
+      return 1;
+    }
+    state->null_carries_error = 0;
+
+    if (field_path) {
+      gql_runtime_vm_path_frame_decref(field_path);
+      field_path = NULL;
     }
   }
 
@@ -8130,6 +8809,7 @@ gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state,
   state->path_frame_is_current_field = saved_path_is_current_field;
   state->block_index = saved_block_index;
   state->op_index = saved_op_index;
+  return 0;
 }
 
 static void
@@ -8362,13 +9042,16 @@ gql_runtime_vm_execute_bundle_fast_response_json(
   out = newSV(1024);
   sv_setpvs(out, "{\"data\":");
 
-  gql_runtime_vm_execute_block_fast_json(
-    aTHX_
-    &state,
-    bundle->root_block_index,
-    root_value,
-    out
-  );
+  if (gql_runtime_vm_execute_block_fast_json(
+        aTHX_
+        &state,
+        bundle->root_block_index,
+        root_value,
+        out
+      )) {
+    /* Non-null propagation reached the root: data is null. */
+    sv_catpvs(out, "null");
+  }
 
   sv_catpvs(out, ",\"errors\":");
   gql_runtime_vm_json_cat_errors(aTHX_ out, &writer_storage);

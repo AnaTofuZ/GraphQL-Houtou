@@ -118,11 +118,18 @@ subtest 'async => 1 passes through to the runtime' => sub {
   );
 
   # Without the declaration the sync JSON lane refuses promise resolvers.
+  # That is a server misconfiguration, not a request error: a 500 with a
+  # generic body, with the async => 1 / on_stall hint warned to the logs.
   my $sync_app = GraphQL::Houtou::PSGI->new(schema => $async_schema)->to_app;
-  my ($bad_status, $bad_res) = graphql({ query => '{ greeting }' }, app => $sync_app);
-  is $bad_status, 400, 'promise resolver without the declaration is refused';
-  like $bad_res->{errors}[0]{message}, qr/async|on_stall/,
-    'error points at async => 1 / on_stall';
+  my @warnings;
+  my ($bad_status, $bad_res) = do {
+    local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+    graphql({ query => '{ greeting }' }, app => $sync_app);
+  };
+  is $bad_status, 500, 'promise resolver without the declaration is refused';
+  is $bad_res->{errors}[0]{message}, 'Internal server error',
+    'response body stays generic';
+  like "@warnings", qr/async|on_stall/, 'the log line points at async => 1 / on_stall';
 
   my $async_app = GraphQL::Houtou::PSGI->new(
     schema => $async_schema, async => 1)->to_app;

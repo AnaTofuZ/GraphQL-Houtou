@@ -512,8 +512,11 @@ GRAPHQL
 };
 
 subtest 'dynamic include directives execute through lowered runtime guards' => sub {
+  # $show must be Boolean! (or carry a default): a nullable variable
+  # without a default is not allowed for @include(if: Boolean!) per the
+  # spec's AllowedVariableUsage, and request validation now enforces it.
   my $result = $schema->execute(
-    'query Q($show: Boolean) { viewer { id name @include(if: $show) } }',
+    'query Q($show: Boolean!) { viewer { id name @include(if: $show) } }',
     variables => { show => JSON::MaybeXS::true() },
   );
 

@@ -92,17 +92,20 @@ subtest 'literal values validate statically' => sub {
 };
 
 subtest 'literal values are enforced at execution' => sub {
-  my $schema = lookup_schema();
-  my $ok = execute($schema, '{ find(by: { email: "x@example.com" }) }');
+  # validate => 0 keeps these requests on the execution-time enforcement
+  # path (the request-stage validator would reject them first otherwise);
+  # this is the lane persisted/pre-validated deployments run on.
+  my $runtime = build_native_runtime(lookup_schema(), validate => 0);
+  my $ok = $runtime->execute_document('{ find(by: { email: "x@example.com" }) }');
   is_deeply $ok->{errors}, [], 'no errors for exactly one field';
   is $ok->{data}{find}, 'email=x@example.com', 'value resolved';
 
-  eval { execute($schema, '{ find(by: { id: "1", email: "x" }) }') };
-  like $@, qr/OneOf Input Object 'LookupBy' must specify exactly one key/,
+  my $two = $runtime->execute_document('{ find(by: { id: "1", email: "x" }) }');
+  like $two->{errors}[0]{message}, qr/OneOf Input Object 'LookupBy' must specify exactly one key/,
     'two keys rejected';
 
-  eval { execute($schema, '{ find(by: { id: null }) }') };
-  like $@, qr/OneOf Input Object 'LookupBy' field 'id' must be non-null/,
+  my $null_value = $runtime->execute_document('{ find(by: { id: null }) }');
+  like $null_value->{errors}[0]{message}, qr/OneOf Input Object 'LookupBy' field 'id' must be non-null/,
     'null value rejected';
 };
 
@@ -114,14 +117,20 @@ subtest 'variable values are enforced at execution' => sub {
   is_deeply $ok->{errors}, [], 'no errors';
   is $ok->{data}{find}, 'id=7', 'exactly one key accepted';
 
-  eval { $runtime->execute_document($query, variables => { by => { id => '7', email => 'x' } }) };
-  like $@, qr/must specify exactly one key/, 'two keys rejected via variables';
+  # Variable coercion failures are request errors: an errors-only
+  # envelope (no data key), not an exception.
+  my $two = $runtime->execute_document($query, variables => { by => { id => '7', email => 'x' } });
+  ok !exists $two->{data}, 'request error has no data key';
+  like $two->{errors}[0]{message}, qr/must specify exactly one key/,
+    'two keys rejected via variables';
 
-  eval { $runtime->execute_document($query, variables => { by => {} }) };
-  like $@, qr/must specify exactly one key/, 'empty object rejected via variables';
+  my $empty = $runtime->execute_document($query, variables => { by => {} });
+  like $empty->{errors}[0]{message}, qr/must specify exactly one key/,
+    'empty object rejected via variables';
 
-  eval { $runtime->execute_document($query, variables => { by => { email => undef } }) };
-  like $@, qr/field 'email' must be non-null/, 'null member rejected via variables';
+  my $null_member = $runtime->execute_document($query, variables => { by => { email => undef } });
+  like $null_member->{errors}[0]{message}, qr/field 'email' must be non-null/,
+    'null member rejected via variables';
 };
 
 subtest 'variable nested inside a literal object is enforced' => sub {
@@ -132,8 +141,8 @@ subtest 'variable nested inside a literal object is enforced' => sub {
   is_deeply $ok->{errors}, [], 'no errors';
   is $ok->{data}{find}, 'id=9', 'variable-fed member accepted';
 
-  eval { $runtime->execute_document($query, variables => {}) };
-  like $@, qr/OneOf Input Object 'LookupBy'/,
+  my $missing = $runtime->execute_document($query, variables => {});
+  like $missing->{errors}[0]{message}, qr/OneOf Input Object 'LookupBy'/,
     'missing nested variable rejected';
 };
 

@@ -33,6 +33,7 @@ sub new {
     _specialized_program_cache_order => [],
     _specialized_program_cache_max => $cache_max,
     _max_depth => $max_depth,
+    _validate => exists $args{validate} ? ($args{validate} ? 1 : 0) : 1,
     _async => $args{async} ? 1 : 0,
   }, $class;
 }
@@ -79,6 +80,7 @@ sub _store_program_cache {
   if (scalar(@$order) >= $self->{_program_cache_max}) {
     my $evicted = shift @$order;
     delete $cache->{$evicted};
+    delete $self->{_validated_documents}{$evicted};
   }
   $cache->{$key} = $program;
   push @$order, $key;
@@ -92,6 +94,7 @@ sub clear_program_cache {
   $self->{_program_cache_order} = [];
   $self->{_specialized_program_cache} = {};
   $self->{_specialized_program_cache_order} = [];
+  $self->{_validated_documents} = {};
 }
 
 sub compile_bundle_for_document {
@@ -382,26 +385,121 @@ sub execute_bundle_descriptor {
   return $self->execute_bundle($bundle, %opts);
 }
 
+# Request-stage checks shared by execute_document and its JSON sibling:
+# depth limit and full query validation. The depth check is skipped for
+# documents already in the program cache; validation is skipped only for
+# documents this runtime has actually validated before (a cache entry
+# stored under validate => 0 proves nothing). Returns an arrayref of
+# request errors, or undef when execution may proceed. Request errors
+# produce an errors-only envelope (no "data" key), per the spec's
+# request-error contract.
+sub _document_request_errors {
+  my ($self, $document, $max_depth, $validate) = @_;
+  return undef if !defined $max_depth && !$validate;
+
+  my $is_string = !ref($document);
+  my $already_cached = $is_string
+    && $self->{_program_cache_max}
+    && $self->{_program_cache}{$document};
+  my $already_validated = $is_string && $self->{_validated_documents}{$document};
+  my $need_depth = defined $max_depth && !$already_cached;
+  my $need_validate = $validate && !$already_validated;
+  return undef if !$need_depth && !$need_validate;
+
+  my $ast = $is_string ? GraphQL::Houtou::parse($document) : $document;
+  if ($need_depth) {
+    my @errors = GraphQL::Houtou::Validation::DepthLimit::check_query_depth(
+      $ast, max_depth => $max_depth,
+    );
+    return \@errors if @errors;
+  }
+  if ($need_validate) {
+    # Validation needs the schema's type objects; a runtime inflated from
+    # a descriptor (persisted deployments) has none, and its documents
+    # were validated when the descriptor was built.
+    my $schema = $self->runtime_schema->can('schema') ? $self->runtime_schema->schema : undef;
+    if ($schema) {
+      require GraphQL::Houtou::Validation;
+      my $errors = GraphQL::Houtou::Validation::validate($schema, $ast);
+      return $errors if $errors && @$errors;
+      # Only remember validated documents that the program cache can also
+      # hold, so the set stays bounded by the cache's eviction.
+      $self->{_validated_documents}{$document} = 1
+        if $is_string && $self->{_program_cache_max};
+    }
+  }
+  return undef;
+}
+
+# Convert a caught exception into GraphQL error entries for an errors-only
+# envelope. Houtou error objects keep their locations/extensions; the
+# parser's graphql-perl-style message is reduced to a spec-style syntax
+# error line (the parse() API keeps raising the full legacy format).
+sub _request_error_entries {
+  my ($error) = @_;
+  if (blessed($error) && $error->isa('GraphQL::Houtou::Error')) {
+    my $entry = $error->to_json;
+    if (($entry->{message} // '') =~ /\AError parsing Pegex document:\s*\n\s*msg:\s*(.+?)\s*\n/) {
+      $entry->{message} = "Syntax Error: $1";
+    }
+    return [ $entry ];
+  }
+  my $message = "$error";
+  $message =~ s/\s+\z//;
+  return [ { message => $message } ];
+}
+
+# True for exceptions that represent GraphQL request errors (client-caused:
+# syntax, validation, input coercion). Anything else - configuration or
+# internal errors - must keep propagating as an exception.
+sub _is_request_error {
+  my ($error) = @_;
+  return blessed($error) && $error->isa('GraphQL::Houtou::Error');
+}
+
 sub execute_document {
   my ($self, $document, %opts) = @_;
   my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
+  my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
 
-  if (defined $max_depth) {
-    my $is_string = !ref($document);
-    my $already_cached = $is_string
-      && $self->{_program_cache_max}
-      && $self->{_program_cache}{$document};
-    if (!$already_cached) {
-      my $ast = $is_string ? GraphQL::Houtou::parse($document) : $document;
-      my @errors = GraphQL::Houtou::Validation::DepthLimit::check_query_depth(
-        $ast, max_depth => $max_depth,
-      );
-      return { data => undef, errors => \@errors } if @errors;
+  # Hot path: a cached program whose document this runtime already
+  # validated skips the request stage entirely (depth was checked before
+  # it entered the cache, validation is recorded per document).
+  my $cached = !ref($document) && $self->{_program_cache_max}
+    ? $self->{_program_cache}{$document}
+    : undef;
+  if ($cached && (!$validate || $self->{_validated_documents}{$document})) {
+    my $result = eval { $self->execute_program($cached, %opts) };
+    if (my $error = $@) {
+      die $error if !_is_request_error($error);
+      return { errors => _request_error_entries($error) };
     }
+    return $result;
   }
 
-  my $program = $self->compile_program($document, %opts);
-  return $self->execute_program($program, %opts);
+  # Cold path. The taxonomy: parse/validation/compile failures are
+  # document-caused and always envelope; execution failures envelope only
+  # when they are GraphQL request errors (variable coercion raises
+  # GraphQL::Houtou::Error) - async misconfiguration, scheduler deadlock,
+  # and internal bugs keep propagating.
+  my $executing = 0;
+  my ($result, $request_errors);
+  my $ok = eval {
+    $request_errors = $self->_document_request_errors($document, $max_depth, $validate);
+    if (!$request_errors) {
+      my $program = $self->compile_program($document, %opts);
+      $executing = 1;
+      $result = $self->execute_program($program, %opts);
+    }
+    1;
+  };
+  if (!$ok) {
+    my $error = $@;
+    die $error if $executing && !_is_request_error($error);
+    return { errors => _request_error_entries($error) };
+  }
+  return { errors => $request_errors } if $request_errors;
+  return $result;
 }
 
 sub execute_bundle {
@@ -508,29 +606,48 @@ sub _auto_json_or_die {
   return $result;
 }
 
+sub _request_errors_json {
+  my ($errors) = @_;
+  require JSON::MaybeXS;
+  return JSON::MaybeXS->new->utf8->canonical->encode({ errors => $errors });
+}
+
 sub execute_document_to_json {
   my ($self, $document, %opts) = @_;
   my $max_depth = exists $opts{max_depth} ? delete $opts{max_depth} : $self->{_max_depth};
+  my $validate = exists $opts{validate} ? delete $opts{validate} : $self->{_validate};
 
-  if (defined $max_depth) {
-    my $is_string = !ref($document);
-    my $already_cached = $is_string
-      && $self->{_program_cache_max}
-      && $self->{_program_cache}{$document};
-    if (!$already_cached) {
-      my $ast = $is_string ? GraphQL::Houtou::parse($document) : $document;
-      my @errors = GraphQL::Houtou::Validation::DepthLimit::check_query_depth(
-        $ast, max_depth => $max_depth,
-      );
-      if (@errors) {
-        require JSON::MaybeXS;
-        return JSON::MaybeXS->new->utf8->encode({ data => undef, errors => \@errors });
-      }
+  # Same hot/cold structure and error taxonomy as execute_document.
+  my $cached = !ref($document) && $self->{_program_cache_max}
+    ? $self->{_program_cache}{$document}
+    : undef;
+  if ($cached && (!$validate || $self->{_validated_documents}{$document})) {
+    my $result = eval { $self->execute_program_to_json($cached, %opts) };
+    if (my $error = $@) {
+      die $error if !_is_request_error($error);
+      return _request_errors_json(_request_error_entries($error));
     }
+    return $result;
   }
 
-  my $program = $self->compile_program($document, %opts);
-  return $self->execute_program_to_json($program, %opts);
+  my $executing = 0;
+  my ($result, $request_errors);
+  my $ok = eval {
+    $request_errors = $self->_document_request_errors($document, $max_depth, $validate);
+    if (!$request_errors) {
+      my $program = $self->compile_program($document, %opts);
+      $executing = 1;
+      $result = $self->execute_program_to_json($program, %opts);
+    }
+    1;
+  };
+  if (!$ok) {
+    my $error = $@;
+    die $error if $executing && !_is_request_error($error);
+    return _request_errors_json(_request_error_entries($error));
+  }
+  return _request_errors_json($request_errors) if $request_errors;
+  return $result;
 }
 
 sub _cached_specialized_program {

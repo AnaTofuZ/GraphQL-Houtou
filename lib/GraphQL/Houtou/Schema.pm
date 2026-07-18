@@ -409,10 +409,12 @@ sub build_native_runtime {
   my $cache_max = delete $opts{program_cache_max};
   my $max_depth = delete $opts{max_depth};
   my $async = delete $opts{async};
+  my $validate = delete $opts{validate};
   my %runtime_args;
   $runtime_args{program_cache_max} = $cache_max if defined $cache_max;
   $runtime_args{max_depth}         = $max_depth if defined $max_depth;
   $runtime_args{async}             = $async if defined $async;
+  $runtime_args{validate}          = $validate if defined $validate;
   if (%opts || %runtime_args) {
     my $runtime_schema = %opts ? $self->compile_runtime(%opts) : $self->build_runtime;
     require GraphQL::Houtou::Runtime::NativeRuntime;
@@ -614,9 +616,36 @@ sub _runtime_cache {
   my %is_type_of_map;
   my %tag_resolver_map;
   my %runtime_tag_map;
+  my %leaf_kind_map;
+  my %enum_values_map;
+  my %serialize_map;
+
+  # Codes shared with the native runtime's leaf result coercion
+  # (gql_runtime_vm_serialize_leaf_sv): the executor checks resolver
+  # output against the field's leaf type at completion time.
+  my %BUILTIN_LEAF_KIND = (
+    Int => 1, Float => 2, String => 3, Boolean => 4, ID => 5,
+  );
 
   for my $type (values %$name2type) {
     next if !$type;
+
+    my $type_name = $type->name;
+    if (defined $BUILTIN_LEAF_KIND{$type_name}
+        && $type->isa('GraphQL::Houtou::Type::Scalar')) {
+      $leaf_kind_map{$type_name} = $BUILTIN_LEAF_KIND{$type_name};
+    } elsif ($type->isa('GraphQL::Houtou::Type::Enum')) {
+      # Serialization maps the internal value back to the enum name
+      # (Enum->perl_to_graphql); with default values this is identity.
+      my $values = $type->values || {};
+      $leaf_kind_map{$type_name} = 6;
+      $enum_values_map{$type_name} = {
+        map { ($values->{$_}{value} => $_) } keys %$values
+      };
+    } elsif ($type->isa('GraphQL::Houtou::Type::Scalar')) {
+      $leaf_kind_map{$type_name} = 7;
+      $serialize_map{$type_name} = $type->serialize if $type->serialize;
+    }
 
     if (_does_any_role($type, qw(
       GraphQL::Houtou::Role::FieldsOutput
@@ -674,6 +703,9 @@ sub _runtime_cache {
     is_type_of_map => \%is_type_of_map,
     tag_resolver_map => \%tag_resolver_map,
     runtime_tag_map => \%runtime_tag_map,
+    leaf_kind_map => \%leaf_kind_map,
+    enum_values_map => \%enum_values_map,
+    serialize_map => \%serialize_map,
   };
 }
 
@@ -709,6 +741,18 @@ sub _build_name2type {
 
   my %name2type;
   _expand_type_houtou(\%name2type, $_) for @types;
+  # The built-in scalars are always available (spec 3.5) even when nothing
+  # in the schema references them, e.g. a variable declared as Int against
+  # a schema whose fields are all String.
+  for my $builtin (
+    $GraphQL::Houtou::Type::Scalar::Int,
+    $GraphQL::Houtou::Type::Scalar::Float,
+    $GraphQL::Houtou::Type::Scalar::String,
+    $GraphQL::Houtou::Type::Scalar::Boolean,
+    $GraphQL::Houtou::Type::Scalar::ID,
+  ) {
+    $name2type{ $builtin->name } //= $builtin;
+  }
   return \%name2type;
 }
 

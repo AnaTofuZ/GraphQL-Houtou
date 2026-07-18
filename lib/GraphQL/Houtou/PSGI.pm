@@ -116,19 +116,23 @@ sub _handle_post {
     $@ ? (undef, $@) : ($out, undef);
   };
   if (defined $error) {
-    # Parse and validation failures surface as exceptions before any field
-    # executes; GraphQL over HTTP maps those to a 400 with an errors-only
-    # envelope. (Field-level failures never die - they land in "errors"
-    # inside the 200 response.)
-    my $message = blessed($error) || ref($error) eq 'HASH'
-      ? (eval { $error->{message} } || "$error")
-      : "$error";
-    $message =~ s/\s+\z//;
-    return _error_response($env, 400, $message);
+    # Request errors (syntax, validation, input coercion) come back as an
+    # errors-only envelope, not an exception, so a die here is a server
+    # problem - async misconfiguration, scheduler deadlock, an internal
+    # bug. GraphQL over HTTP calls for a 5xx, and the details belong in
+    # logs, not the response.
+    warn "GraphQL::Houtou::PSGI: execution failed: $error";
+    return _error_response($env, 500, 'Internal server error');
   }
 
+  # An errors-only envelope means the request itself was invalid (no field
+  # ever executed): GraphQL over HTTP maps that to a 400. Request errors
+  # always serialize as {"errors":...} with no data key, so the prefix
+  # check avoids decoding the response we just encoded.
+  my $status = index($json, '{"errors":') == 0 ? 400 : 200;
+
   return [
-    200,
+    $status,
     [ 'Content-Type' => _response_content_type($env), 'Content-Length' => length $json ],
     [ $json ],
   ];

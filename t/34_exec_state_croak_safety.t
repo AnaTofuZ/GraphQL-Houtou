@@ -29,14 +29,21 @@ my $schema = build_schema(q{
 });
 
 subtest 'coercion die propagates and the runtime stays usable' => sub {
-  my $runtime = build_native_runtime($schema);
+  # validate => 0: the request-stage validator would reject this document
+  # before coercion runs; the die-through-coercion path under test is what
+  # pre-validated (persisted) deployments still exercise.
+  my $runtime = build_native_runtime($schema, validate => 0);
 
-  eval { $runtime->execute_document('{ find(by: { nope: 1 }) }') };
-  like $@, qr/Unknown field/, 'unknown input field dies through coercion';
+  # The coercion die still unwinds through the XS lowering path (the
+  # regression under test); execute_document catches it at the request
+  # boundary and reports it as a request-error envelope.
+  my $bad = $runtime->execute_document('{ find(by: { nope: 1 }) }');
+  like $bad->{errors}[0]{message}, qr/Unknown field/,
+    'unknown input field dies through coercion';
 
   for my $i (1 .. 5) {
-    eval { $runtime->execute_document('{ find(by: { nope: 1 }) }') };
-    like $@, qr/Unknown field/, "repeat $i dies cleanly";
+    my $repeat = $runtime->execute_document('{ find(by: { nope: 1 }) }');
+    like $repeat->{errors}[0]{message}, qr/Unknown field/, "repeat $i dies cleanly";
   }
 
   my $result = $runtime->execute_document('{ find(by: { id: "1" }) ok }');
@@ -49,8 +56,8 @@ subtest 'coercion die via variables keeps the runtime usable' => sub {
   my $runtime = build_native_runtime($schema);
   my $query = 'query Q($by: PlainInput) { find(by: $by) }';
 
-  eval { $runtime->execute_document($query, variables => { by => { nope => 1 } }) };
-  like $@, qr/Unknown field/, 'unknown variable input field dies';
+  my $bad = $runtime->execute_document($query, variables => { by => { nope => 1 } });
+  like $bad->{errors}[0]{message}, qr/Unknown field/, 'unknown variable input field dies';
 
   my $result = $runtime->execute_document($query, variables => { by => { id => '2' } });
   is_deeply $result->{errors}, [], 'no errors afterwards';

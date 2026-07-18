@@ -234,10 +234,14 @@ An output object type. Each field takes C<type>, optional C<args>
 (C<< name => { type => ..., default_value => ... } >>), an optional
 C<resolve> callback receiving C<($source, $args, $context, $info)>, and
 optional C<description> / C<deprecation_reason>. Fields without
-C<resolve> use the default resolver: a hash key lookup on the source,
-falling back to a method call. Resolvers may return
+C<resolve> use the default resolver. A blessed source method named for the
+field is called with C<($args, $context, $info)>. Otherwise a source hash key
+is read; when that value is a coderef, it is called with the same arguments.
+Other hash values are returned directly. Resolvers may return
 L<Promise::XS> promises; see
 L<GraphQL::Houtou/Batching resolvers (DataLoader / the on_stall hook)>.
+Method lookup follows normal Perl inheritance, so fields named C<can>, C<isa>,
+or C<DOES> should use explicit resolvers when the source is blessed.
 
 C<< $type->list >> and C<< $type->non_null >> wrap any type in
 L<GraphQL::Houtou::Type::List> / L<GraphQL::Houtou::Type::NonNull>.

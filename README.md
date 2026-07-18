@@ -99,7 +99,15 @@ dispatch, and custom scalar coercion can be attached through the
 
     my $result = execute($schema, '{ dog { name } }');
 
-Fields without an explicit resolver use the default hash/method resolver.
+Fields without an explicit resolver use the graphql-perl/graphql-js-style
+default resolver. A hash value that is a coderef is called as
+`($args, $context, $info)`; other hash values are returned directly. A
+blessed source method matching the field name is called as
+`($args, $context, $info)`. Explicit field resolvers always take precedence.
+Because method lookup follows normal Perl semantics, field names such as
+`can`, `isa`, or `DOES` may resolve inherited `UNIVERSAL` methods and
+produce a field error whose message includes Perl source location details;
+use an explicit resolver for such names on blessed sources.
 Custom scalars default to pass-through `serialize` / `parse_value`; supply
 your own through `resolvers` when coercion matters. `@deprecated`,
 `@specifiedBy`, `@oneOf`, and `repeatable` directive definitions in the

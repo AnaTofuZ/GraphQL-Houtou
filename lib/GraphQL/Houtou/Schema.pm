@@ -472,7 +472,58 @@ sub validation_errors {
     }
   }
 
+  push @errors, $self->_input_object_cycle_errors($name2type);
+
   return \@errors;
+}
+
+sub _input_object_cycle_errors {
+  my ($self, $name2type) = @_;
+  my (@errors, %state, @path, %path_index);
+
+  my $visit;
+  $visit = sub {
+    my ($type) = @_;
+    my $name = $type->name;
+    $state{$name} = 1;
+    $path_index{$name} = scalar @path;
+    push @path, $name;
+
+    for my $field_name (sort keys %{ $type->fields || {} }) {
+      my $next = _required_singular_input_object($type->fields->{$field_name}{type});
+      next if !$next;
+      my $next_name = $next->name;
+      if (($state{$next_name} || 0) == 1) {
+        my @cycle = (@path[$path_index{$next_name} .. $#path], $next_name);
+        push @errors, 'Input Object circular reference cannot form an unbroken chain '
+          . 'of singular Non-Null fields: ' . join(' -> ', @cycle) . '.';
+      }
+      elsif (!$state{$next_name}) {
+        $visit->($next);
+      }
+    }
+
+    pop @path;
+    delete $path_index{$name};
+    $state{$name} = 2;
+    return;
+  };
+
+  for my $name (sort keys %$name2type) {
+    my $type = $name2type->{$name};
+    next if !$type || !$type->isa('GraphQL::Houtou::Type::InputObject') || $state{$name};
+    $visit->($type);
+  }
+  return @errors;
+}
+
+sub _required_singular_input_object {
+  my ($type) = @_;
+  return if !ref($type) || !$type->isa('GraphQL::Houtou::Type::NonNull');
+  my $of = $type->of;
+  return if !ref($of) || $of->isa('GraphQL::Houtou::Type::List');
+  return $of if $of->isa('GraphQL::Houtou::Type::InputObject');
+  return;
 }
 
 sub _reserved_name_error {

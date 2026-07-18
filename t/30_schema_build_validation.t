@@ -285,4 +285,47 @@ subtest 'user-defined type-system names cannot use the introspection prefix' => 
     'reserved argument name rejected';
 };
 
+subtest 'unbroken required input object cycles are rejected' => sub {
+  my ($First, $Second);
+  $First = GraphQL::Houtou::Type::InputObject->new(
+    name => 'First',
+    fields => sub { { second => { type => $Second->non_null } } },
+  );
+  $Second = GraphQL::Houtou::Type::InputObject->new(
+    name => 'Second',
+    fields => sub { { first => { type => $First->non_null } } },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => query_with(
+      find => { type => $String, args => { input => { type => $First } } },
+    ),
+    types => [ $First, $Second ],
+  );
+  like join("\n", @{ $schema->validation_errors }),
+    qr/unbroken chain of singular Non-Null fields: First -> Second -> First/,
+    'mutually required singular fields cannot form a cycle';
+};
+
+subtest 'nullable and list input object cycles are allowed' => sub {
+  my $Nullable;
+  $Nullable = GraphQL::Houtou::Type::InputObject->new(
+    name => 'NullableCycle',
+    fields => sub { { next => { type => $Nullable } } },
+  );
+  my $Listed;
+  $Listed = GraphQL::Houtou::Type::InputObject->new(
+    name => 'ListCycle',
+    fields => sub { { next => { type => $Listed->non_null->list->non_null } } },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => query_with(
+      nullable => { type => $String, args => { input => { type => $Nullable } } },
+      listed => { type => $String, args => { input => { type => $Listed } } },
+    ),
+    types => [ $Nullable, $Listed ],
+  );
+  is_deeply $schema->validation_errors, [],
+    'nullable fields and lists provide a way to satisfy a recursive input type';
+};
+
 done_testing;

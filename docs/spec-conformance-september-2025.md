@@ -83,7 +83,7 @@ must be added and tested:
 | Root operation types must be Object types and must be distinct | Implemented on `schema-validation-conformance` |
 | Reserved `__` names outside introspection | Implemented for types, fields, arguments, enum values, and directives on `schema-validation-conformance` |
 | Duplicate SDL fields, arguments, enum values, and input fields within one definition | Implemented with XS parser diagnostics on `schema-validation-conformance` |
-| Input-object circular references through an unbroken chain of singular Non-Null fields | An impossible-to-satisfy input schema may be accepted |
+| Input-object circular references through an unbroken chain of singular Non-Null fields | Implemented on `schema-validation-conformance` with an O(V+E) schema-build DFS |
 | Schema default values must be valid for their declared input types | Invalid argument/input-field defaults are not comprehensively checked at schema build time |
 | Type-system directives must be defined, valid at their location, and unique when non-repeatable | Executable directives are fully validated; applied SDL directives are not yet covered at the same level |
 | Required arguments and input fields must not be deprecated | Not comprehensively enforced by schema validation |

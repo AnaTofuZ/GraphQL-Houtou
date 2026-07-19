@@ -1,6 +1,6 @@
 # Production release audit (2026-07-18)
 
-Last verified against main: 2026-07-19.
+Last verified against main: 2026-07-19 (`c84c477`).
 
 ## Decision
 
@@ -13,7 +13,7 @@ endpoint until production-shaped deployment qualification is complete.
 ## Verified baseline
 
 - The complete local suite passes on Perl 5.44 / macOS arm64: 49 files and
-  468 tests.
+  469 tests.
 - The normal CI matrix covers Perl 5.24 through 5.44 on Linux.
 - Robustness CI includes ASan with hash-seed sweeping, parser fuzzing, an RSS
   soak gate, full-suite Valgrind, compiler warnings, and XS ownership linting.
@@ -24,6 +24,10 @@ endpoint until production-shaped deployment qualification is complete.
 - Federation 2 subgraph schemas, default-resolver method/coderef compatibility,
   and an opt-in introspection access policy are covered by regression tests.
 - POD syntax and META.json validation pass locally.
+- The execution checkpoint remains within its documented performance range:
+  variable-bearing programs about 201k/s, dynamic direct JSON about 359k/s,
+  fixed bundles about 650k-720k/s, and fixed-bundle direct JSON about 955k/s
+  (three-sample medians/ranges on the development macOS arm64 host).
 
 ## Release blockers
 
@@ -146,7 +150,8 @@ not yet constitute capacity planning for a deployed service.
 
 ## Recommended order
 
-1. Complete and verify the documented query/mutation conformance profile.
-2. Qualify a realistic PSGI + database deployment under concurrent load.
-3. Finish Changes, user-facing documentation, distribution tests, and a
-   release candidate before publishing 0.01 to CPAN.
+1. Qualify a realistic PSGI + database deployment under concurrent load.
+2. Add a native macOS CI job and run the release candidate through the full
+   distribution and robustness workflows.
+3. Recheck Changes, the public POD, the migration/deployment guides, and the
+   conformance tables before publishing 0.01 to CPAN.

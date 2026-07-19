@@ -11,6 +11,9 @@ main branch.
   deployment, limits, timeouts, logging, shutdown, and public-endpoint policy.
 - [`persisted-queries.md`](persisted-queries.md) — compiled programs and fixed
   bundles.
+- [`migrating-from-graphql-perl.md`](migrating-from-graphql-perl.md) —
+  schema-first and code-first migration, execution API changes, default
+  resolution, async behavior, and staged rollout.
 - [`federation.md`](federation.md) — Federation 2 subgraph support and its
   trust boundary.
 - [`execution-benchmark.md`](execution-benchmark.md) — reproducible execution

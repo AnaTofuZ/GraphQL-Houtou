@@ -203,6 +203,11 @@ subtest 'GET serves GraphiQL when enabled, 405 otherwise' => sub {
   is $status, 200, 'GraphiQL page served';
   like $headers->{'Content-Type'}, qr{text/html}, 'html content type';
   like $body, qr/graphiql/i, 'page mentions graphiql';
+  like $body, qr{graphiql\@5\.2\.4}, 'pins the supported GraphiQL release';
+  like $body, qr{\@graphiql/react\@0\.37\.7},
+    'pins the matching GraphiQL React package';
+  like $body, qr{graphiql/setup-workers/esm\.sh},
+    'loads the GraphiQL 5 worker setup';
 
   my ($s2, $h2) = request(method => 'GET', accept => 'application/json');
   is $s2, 405, 'non-html GET is a 405';

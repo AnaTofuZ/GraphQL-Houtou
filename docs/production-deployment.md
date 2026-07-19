@@ -134,6 +134,12 @@ Record throughput, p50/p95/p99 latency, CPU, RSS, database utilization, error
 rate, and behavior during a long soak. Leave headroom for tail latency and a
 worker being restarted.
 
+`examples/sqlite-blog/` is a self-contained qualification workload with a
+prefork PSGI launch command, SQLite WAL storage, request-scoped DataLoaders,
+startup-compiled persisted operations, English/Japanese data, a seed script,
+and an HTTP smoke test. Use it to validate the deployment mechanics before
+substituting the production database and schema.
+
 ## Release checklist
 
 - process-based workers; no ithreads;

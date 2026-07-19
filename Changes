@@ -2,6 +2,8 @@ Revision history for Perl extension GraphQL-Houtou
 
 {{$NEXT}}
 
+0.01 2026-07-19T04:40:06Z
+
     - Added an XS-backed GraphQL parser, schema compiler, validation engine,
       and query/mutation runtime.
     - Added synchronous and Promise::XS execution, DataLoader batching,

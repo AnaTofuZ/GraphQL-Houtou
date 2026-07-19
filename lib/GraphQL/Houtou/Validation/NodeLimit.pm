@@ -13,7 +13,7 @@ our @EXPORT_OK = qw(check_query_nodes);
 # and a huge response. This validator caps the total number of field
 # selections an operation resolves, counting fragment spreads by
 # expansion so { ...F ...F ...F } cannot multiply cheaply. It is a coarse
-# DoS bound, not a cost model (release-tasks.md S3); a weighted complexity
+# DoS bound, not a cost model; a weighted complexity
 # analysis is deferred.
 use constant DEFAULT_MAX_NODES => 10_000;
 

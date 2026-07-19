@@ -3332,8 +3332,8 @@ gql_runtime_vm_evaluate_runtime_guards_hv(pTHX_ SV *guards_sv, HV *variables)
 
 /* Free an op's abstract-child member-name table. abstract_child_names is a
  * char** whose entries are individually allocated by parse/clone, so the
- * destroy paths must free each string, not just the array (release-tasks.md
- * R5: valgrind found these leaking - bounded by the program cache, so the
+ * destroy paths must free each string, not just the array. Valgrind found
+ * these leaking - bounded by the program cache, so the
  * RSS soak never saw them). */
 static void
 gql_runtime_vm_free_op_abstract_child_names(pTHX_ gql_runtime_vm_native_op_t *op)

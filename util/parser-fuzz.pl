@@ -2,7 +2,7 @@
 use strict;
 use warnings;
 
-# Parser fuzz smoke (release-tasks.md R1). The recursive-descent parser is
+# Parser fuzz smoke. The recursive-descent parser is
 # C and faces untrusted input directly, so a crash is a downed worker. This
 # mutates known-good documents (the vendored fixtures) with byte-level and
 # structural corruptions and asserts the parser never crashes: every input

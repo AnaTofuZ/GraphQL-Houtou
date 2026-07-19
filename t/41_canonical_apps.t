@@ -335,7 +335,7 @@ subtest 'union search results' => sub {
 
 # ==========================================================================
 # 4. Dependency-wave batching beats level-order BFS
-#    (regression pin for docs/bfs-execution-analysis.md)
+#    (regression pin for breadth-wide DataLoader batching)
 # ==========================================================================
 subtest 'loads at different tree depths share one batch' => sub {
   my %USERS = (

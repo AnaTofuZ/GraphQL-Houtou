@@ -13,7 +13,7 @@
 - `loc` / `location` をどこで計算しているか
 - 今後、独自構造体化の効果が出やすい層はどこか
 
-活動記録と benchmark の最新値は `docs/current-context.md` を参照。
+再現可能な benchmark コマンドは `util/parser-benchmark.pl` を参照。
 現行の公開 parser surface は、このライブラリの canonical parser AST に固定されている。
 この文書に残っている旧 parser 由来の記述は、parser-internal な履歴的背景として読む。
 runtime / VM mainline とは別物であり、現在の本命経路ではない。

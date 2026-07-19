@@ -61,11 +61,11 @@ typedef struct {
   /* Nesting depth of the recursive-descent parser (selection sets and
    * input values). Capped so adversarial input cannot overflow the C
    * stack: a deeply nested query used to segfault the worker before any
-   * validation ran (release-tasks.md S1). */
+   * validation ran. */
   IV depth;
   /* Total tokens lexed. Capped so a huge-but-flat document cannot force an
    * unbounded AST from the parse() API independent of any transport-level
-   * body limit (release-tasks.md S2). */
+   * body limit. */
   IV token_count;
   /* Optional validation-only sink. Public parse() leaves this NULL, so
    * duplicate-name diagnostics do not change the canonical AST or allocate

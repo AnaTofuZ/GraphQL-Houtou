@@ -5376,6 +5376,148 @@ gql_runtime_vm_finalize_native_arg_def(
   }
 }
 
+/* Bounded, human-readable rendering of a provided variable value for
+ * request-error messages. Strings are quoted and escaped, JSON booleans
+ * render as true/false, other references keep the house "(reference)"
+ * placeholder, and long strings are truncated on a UTF-8 boundary so a
+ * hostile variable cannot bloat the error envelope. */
+#define GQL_RUNTIME_VM_VARIABLE_DESC_MAX_BYTES 64
+static SV *
+gql_runtime_vm_variable_value_desc_sv(pTHX_ SV *value_sv)
+{
+  SV *desc_sv;
+  const char *pv;
+  STRLEN len;
+  STRLEN i;
+  int truncated = 0;
+
+  if (!value_sv || !SvOK(value_sv)) {
+    return newSVpvs("null");
+  }
+  if (SvROK(value_sv)) {
+    if (sv_isobject(value_sv) && sv_derived_from(value_sv, "JSON::PP::Boolean")) {
+      return SvTRUE(SvRV(value_sv)) ? newSVpvs("true") : newSVpvs("false");
+    }
+    return newSVpvs("(reference)");
+  }
+  if (!SvPOK(value_sv)) {
+    /* Plain IV/NV: Perl's stringification is already the message shape. */
+    return newSVsv(value_sv);
+  }
+
+  pv = SvPV(value_sv, len);
+  if (len > GQL_RUNTIME_VM_VARIABLE_DESC_MAX_BYTES) {
+    len = GQL_RUNTIME_VM_VARIABLE_DESC_MAX_BYTES;
+    if (SvUTF8(value_sv)) {
+      /* Do not cut a multi-byte sequence: back off continuation bytes. */
+      while (len > 0 && (((const U8 *)pv)[len] & 0xC0) == 0x80) {
+        len--;
+      }
+    }
+    truncated = 1;
+  }
+  desc_sv = newSVpvs("\"");
+  for (i = 0; i < len; i++) {
+    const char c = pv[i];
+    if (c == '"' || c == '\\') {
+      sv_catpvs(desc_sv, "\\");
+      sv_catpvn(desc_sv, &c, 1);
+    } else if ((U8)c < 0x20) {
+      sv_catpvs(desc_sv, " ");
+    } else {
+      sv_catpvn(desc_sv, &c, 1);
+    }
+  }
+  if (truncated) {
+    sv_catpvs(desc_sv, "...");
+  }
+  sv_catpvs(desc_sv, "\"");
+  if (SvUTF8(value_sv)) {
+    SvUTF8_on(desc_sv);
+  }
+  return desc_sv;
+}
+
+/* Prepend "Variable \"$name\" got invalid value <desc>; " to a Houtou
+ * request-error message so clients can tell which variable failed input
+ * coercion. Custom blessed errors that are not plain Houtou error hashes
+ * are left untouched to preserve their contract. */
+static void
+gql_runtime_vm_variable_error_prepend_context(
+  pTHX_ SV *err_sv, const char *name, SV *raw_sv
+)
+{
+  HV *err_hv;
+  SV **msgp;
+  SV *desc_sv;
+  SV *message_sv;
+
+  if (!err_sv || !name || !SvROK(err_sv) || SvTYPE(SvRV(err_sv)) != SVt_PVHV
+      || !sv_derived_from(err_sv, "GraphQL::Houtou::Error")) {
+    return;
+  }
+  err_hv = (HV *)SvRV(err_sv);
+  msgp = hv_fetchs(err_hv, "message", 0);
+  if (!msgp || !*msgp || !SvOK(*msgp)) {
+    return;
+  }
+  desc_sv = gql_runtime_vm_variable_value_desc_sv(aTHX_ raw_sv);
+  message_sv = newSVpvf(
+    "Variable \"$%s\" got invalid value %" SVf "; %" SVf,
+    name, SVfARG(desc_sv), SVfARG(*msgp)
+  );
+  SvREFCNT_dec(desc_sv);
+  (void)hv_stores(err_hv, "message", message_sv);
+}
+
+/* Request error for a Non-Null variable with no value and no default,
+ * raised while coercing variables (spec CoerceVariableValues) instead of
+ * later inside argument specialization, so the message can carry the
+ * variable name and declared type. */
+static SV *
+gql_runtime_vm_missing_variable_error_sv(pTHX_ SV *type_sv, const char *name)
+{
+  dSP;
+  SV *type_str_sv = NULL;
+  SV *message_sv;
+  HV *error_hv;
+  SV *err;
+  int count;
+
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  PUSHMARK(SP);
+  XPUSHs(type_sv);
+  PUTBACK;
+  count = call_method("to_string", G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV)) {
+    sv_setsv(ERRSV, &PL_sv_undef);
+  } else if (count > 0) {
+    type_str_sv = newSVsv(POPs);
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  if (type_str_sv && SvOK(type_str_sv)) {
+    message_sv = newSVpvf(
+      "Variable \"$%s\" of required type \"%" SVf "\" was not provided.",
+      name, SVfARG(type_str_sv)
+    );
+  } else {
+    message_sv = newSVpvf("Variable \"$%s\" of required type was not provided.", name);
+  }
+  SvREFCNT_dec(type_str_sv);
+
+  error_hv = newHV();
+  (void)hv_stores(error_hv, "message", message_sv);
+  err = newRV_noinc((SV *)error_hv);
+  sv_bless(err, gv_stashpvs("GraphQL::Houtou::Error", GV_ADD));
+  return err;
+}
+
 static SV *
 gql_runtime_vm_prepare_program_variables_sv(
   pTHX_
@@ -5418,11 +5560,33 @@ gql_runtime_vm_prepare_program_variables_sv(
     }
 
     if (!has_value && !raw_sv && !coerced_sv) {
+      if (arg_def->input_type_sv && SvOK(arg_def->input_type_sv)
+          && sv_derived_from(arg_def->input_type_sv, "GraphQL::Houtou::Type::NonNull")) {
+        croak_sv(sv_2mortal(gql_runtime_vm_missing_variable_error_sv(
+          aTHX_ arg_def->input_type_sv, arg_def->name
+        )));
+      }
       continue;
     }
 
     if (!coerced_sv) {
-      coerced_sv = gql_runtime_vm_coerce_input_value_sv(aTHX_ arg_def->input_type_sv, raw_sv, NULL);
+      SV *coerce_err = NULL;
+      coerced_sv = gql_runtime_vm_coerce_input_value_sv(
+        aTHX_ arg_def->input_type_sv, raw_sv, &coerce_err
+      );
+      if (coerce_err) {
+        /* The placeholder undef from the deferred-croak contract. */
+        SvREFCNT_dec(coerced_sv);
+        /* Only client-provided values get the "got invalid value" context;
+         * a failing default keeps the raw coercion message (defaults are
+         * already validated against their declared types at build time). */
+        if (has_value) {
+          gql_runtime_vm_variable_error_prepend_context(
+            aTHX_ coerce_err, arg_def->name, raw_sv
+          );
+        }
+        croak_sv(sv_2mortal(coerce_err));
+      }
     }
     hv_store(coerced_hv, arg_def->name, (I32)name_len, coerced_sv, 0);
   }

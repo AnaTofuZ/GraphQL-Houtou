@@ -53,8 +53,11 @@ jobs:
         run: |
           perl Build.PL
           ./Build build
+      # Gate calibrated 2026-07-19: the clean baseline measures +488 KB on
+      # this runner (see docs/memory-leak-check.md), so 2048 KB leaves >4x
+      # headroom while catching a reintroduced leak of ~80 B/req.
       - name: Soak (mixed request patterns, RSS growth gate)
-        run: perl -Iblib/lib -Iblib/arch util/soak-test.pl --iterations 20000 --warmup 5000 --max-growth-kb 8192
+        run: perl -Iblib/lib -Iblib/arch util/soak-test.pl --iterations 20000 --warmup 5000 --max-growth-kb 2048
   valgrind:
     name: Valgrind leak gate
     runs-on: ubuntu-latest

@@ -1,357 +1,212 @@
 # Parser Internals
 
-## 目的
+## Scope
 
-この文書は、2026-04-05 時点の `GraphQL-Houtou` の parser 内部実装を、
-最適化検討の前提として読める形で整理したものである。
+This document describes the parser implementation in the current source tree.
+It covers the public parser, the validation-only diagnostics path, location
+tracking, resource limits, ownership, and the older internal parser helpers
+that remain compiled but are not part of the public parser contract.
 
-特に次の観点を明示する。
+For the public AST contract, see `GraphQL::Houtou` and
+`t/21_public_parser_api.t`. For repeatable measurements, use
+`util/parser-benchmark.pl`.
 
-- どの API がどの内部経路を通るか
-- `SV` / `HV` / `AV` をどこで使っているか
-- 独自構造体をどこまで導入済みか
-- `loc` / `location` をどこで計算しているか
-- 今後、独自構造体化の効果が出やすい層はどこか
+## Public API and output shape
 
-再現可能な benchmark コマンドは `util/parser-benchmark.pl` を参照。
-現行の公開 parser surface は、このライブラリの canonical parser AST に固定されている。
-この文書に残っている旧 parser 由来の記述は、parser-internal な履歴的背景として読む。
-runtime / VM mainline とは別物であり、現在の本命経路ではない。
-また、mainline と旧 parser 実装の shared helper は
-`src/parser_shared_ast.h` に切り出した。ここには node 生成や sorted hash key
-抽出のような、parser 本体と schema/compiler の両方がまだ使う小さな共通部品だけを置く。
-executable-document 向けの IR 解析と lazy materialize は `src/parser_ir_runtime.h`
-へ分離し、compat ではなく parser-internal として扱う。
-同様に、graphql-perl parser 本体は `src/parser_graphqlperl_runtime.h` に移し、
-`src/parser_compat.h` は source tree から削除した。
+The public entry points are:
 
-## 全体像
+```perl
+my $document = GraphQL::Houtou::parse($source);
 
-現在の parser 実装は、大きく次の 2 経路に分かれる。
+my $document_without_locations = GraphQL::Houtou::parse_with_options(
+  $source,
+  { no_location => 1 },
+);
+```
 
-1. canonical parser AST を XS で直接 parse する経路
-2. parser-internal helper による lazy loc / lazy array materialization 経路
+`parse_with_options()` accepts only `no_location`. The old dialect and engine
+selectors are not supported.
 
-重要なのは、内部実装がすでに一枚岩ではないことである。
+Both functions return the canonical Houtou AST: a graphql-perl-style arrayref
+of definitions. It is made from ordinary Perl hashes, arrays, and scalar
+values. For example, an executable operation has `kind => "operation"` and a
+`selections` array. The public API does not return a graphql-js `Document`
+node and does not expose a choice of AST dialect.
 
-- parser 本体は `graphql-perl` 互換 AST を直接構築する
-- lazy `loc` / lazy array の補助は parser-internal helper が受け持つ
-- 公開 API の返り値は Perl のネイティブデータ構造である
+The call path is deliberately short:
 
-ここでいう旧 parser 由来 helper は public dialect ではなく、parser 本体を支える
-内部 helper 群である。
+```text
+GraphQL::Houtou::parse / parse_with_options
+  -> GraphQL::Houtou::XS::Parser::parse_xs
+  -> gql_parse_document
+  -> gql_parse_definitions
+  -> recursive-descent definition/value/selection parsers
+  -> Perl AST (AV/HV/SV)
+```
 
-つまり、「全部 `SV` ベース」ではないが、「全部が独自構造体化済み」でもない。
+`parse_xs()` is implemented in `lib/GraphQL/Houtou.xs`; the lexer and direct
+AST builder are in `src/parser_graphqlperl_runtime.h`, with token and error
+helpers in `src/parser_core.h`.
 
-## 公開 API から見た内部経路
+## Lexer and parser state
 
-### canonical parser AST
+`gql_parser_t`, declared in `src/bootstrap.h`, is a stack-local cursor over a
+borrowed source buffer. It records:
 
-`parse_xs()` は `gql_parse_document()` を呼び、XS 側でそのまま parser AST を組み立てる。
+- source pointer, byte length, and current byte position;
+- current token kind and token/value spans;
+- whether the source scalar carries Perl's UTF-8 flag;
+- the optional line-start index used for locations;
+- recursive nesting depth and total token count;
+- an optional validation diagnostics sink.
 
-この経路では、各 node はその場で `HV` / `AV` / `SV` として生成される。
-たとえば field, selection set, variable definitions などは
-直接 `newHV()`, `newAV()`, `newSV*()` を使って materialize される。
+The parser does not copy the complete source. Token text is copied into an
+`SV` only when it is needed in the returned AST or in an error. Punctuation
+and lookahead are represented by offsets and token kinds.
 
-### parser-internal lazy helper
+The grammar is implemented as recursive descent. Definitions are parsed one
+at a time and appended directly to the result `AV`; nodes and child
+collections are constructed as their productions are recognized. There is no
+second public-AST conversion pass.
 
-公開 parser surface は 1 dialect に固定されているが、`XS::Parser` にはまだ
-lazy `loc` / lazy array materialization の helper が残っている。
+## AST allocation
 
-これは parser の hot path そのものではなく、返り値の Perl 構造を必要時だけ
-materialize するための cold 寄り helper である。
+The public parser constructs its final result directly with Perl values:
 
-## コア lexer / parser 状態
+- document and repeated children: `AV`;
+- definitions, fields, directives, and other nodes: `HV`;
+- names and scalar payloads: `SV`;
+- the document return value: an array reference.
+
+This creates many small Perl allocations, but avoids building a C tree and
+then materializing the same tree again. It also lets schema compilation and
+existing Perl callers consume the result without an adapter.
+
+Because the parser returns mutable Perl data, callers that cache an AST must
+treat it as immutable themselves or make an application-level copy before
+modifying it.
 
-低レベル parser の基本状態は `gql_parser_t` に入っている。
+## Locations
 
-主な責務:
+Unless `no_location` is true, `gql_parser_init()` scans the source once and
+builds an array of line-start byte offsets. A node location is then calculated
+from its token offset using that index and stored in graphql-perl form:
 
-- source buffer 参照
-- 現在位置と直前 token 位置の保持
-- token kind / token span / value span の保持
-- UTF-8 フラグの保持
-- `no_location` 判定
-- `line_starts` テーブルの保持
-- executable IR 用 arena 参照の保持
+```perl
+location => { line => 1, column => 3 }
+```
 
-この構造体自体は軽量な「走査状態」であり、AST そのものではない。
+Line and column numbers are one-based. `LF`, `CR`, and `CRLF` line endings are
+handled, with `CRLF` counted as a single break.
 
-`line_starts` は parser 初期化時に source 全体を一度走査して構築され、
-`location` / `loc` 計算に使われる。
-最近の修正で、これは save-stack cleanup により `croak` 時でも解放されるようになっている。
+The line-start array is registered with Perl's save stack. It is therefore
+released by scope unwinding on both success and `croak`, including malformed
+or adversarial documents. With `no_location => 1`, the initial source scan and
+per-node location hashes are skipped; this is the preferred parser mode when
+locations are not consumed.
 
-## legacy AST 直組み経路
-
-`graphql-perl` 用の XS parser は、recursive descent しながらその場で
-legacy AST を Perl データ構造として作る。
-
-典型的には次のような形で node を作る。
-
-- object node: `HV`
-- list node: `AV`
-- scalar payload: `SV`
-
-具体例:
-
-- directive は `HV { name, arguments? }`
-- selection set は `HV { selections => AV[...] }`
-- field は `HV { kind, name, alias?, arguments?, directives?, selections?, location? }`
-- operation は `HV { kind, operationType?, name?, variables?, directives?, selections, location? }`
-
-この経路の特徴は次の通り。
-
-- parse 中に最終 AST 形状まで一気に作る
-- 後段 builder が不要
-- 互換 AST を最短距離で返せる
-- その代わり parse 中の allocation 数は多くなりやすい
-
-現状の benchmark では、この「parser AST を直接組む XS 経路」が依然として最速である。
-これは、追加の変換段がないことの効果が大きいと考えてよい。
-
-## executable 用 IR 経路
-
-### 目的
-
-executable document の一部 materialize では、parser AST をそのまま再帰的に辿るのではなく、
-専用 IR を parse してから必要な断片を build する。
-
-これは次の問題を避けるために導入された。
-
-- parser AST を一度作ってから別表現へ変換する二重構築コスト
-- `loc` を後段で再走査して付けるコスト
-- 大量の小さな Perl object を parse の途中段階で持つコスト
-
-### IR の構造
-
-IR には専用の C 構造体がある。
-
-- `gql_ir_type`
-- `gql_ir_value`
-- `gql_ir_argument`
-- `gql_ir_directive`
-- `gql_ir_object_field`
-- `gql_ir_variable_definition`
-- `gql_ir_field`
-- `gql_ir_fragment_spread`
-- `gql_ir_inline_fragment`
-- `gql_ir_selection`
-- `gql_ir_selection_set`
-- `gql_ir_operation_definition`
-- `gql_ir_fragment_definition`
-- `gql_ir_definition`
-- `gql_ir_document`
-
-各 node は kind と `start_pos` を持ち、必要に応じて `name_pos` なども持つ。
-これにより、builder 段階で `loc` を付けられる。
-
-### arena allocator
-
-IR ノード本体は chunk arena 上に確保される。
-
-設計の意図:
-
-- node ごとの `malloc` 相当を避ける
-- parse 成功後の解放を document 単位でまとめる
-- 失敗時 cleanup を単純化する
-
-arena は固定長 chunk を繋いだ構造で、足りなくなったらより大きい chunk を追加する。
-document 単位の破棄時に chunk をまとめて解放する。
-
-### 可変長配列
-
-IR の children は `gql_ir_ptr_array_t` で保持される。
-
-用途:
-
-- arguments
-- directives
-- list value items
-- object value fields
-- selections
-- definitions
-
-ここは Perl の `AV` ではなく、単純な `void **` ベースの伸長配列である。
-
-### ただし IR でもまだ `SV` は残っている
-
-IR が完全に `SV` フリーというわけではない。
-たとえば次は現在も `SV *` を持つ。
-
-- type 名
-- argument 名
-- object field 名
-- enum / int / float / string などの payload
-- field 名 / alias
-- fragment 名
-
-つまり現状の executable IR は、
-
-- node の骨格と入れ子構造は独自構造体
-- 文字列 payload や一部 scalar は `SV`
-
-という折衷設計である。
-
-このため、「独自構造体化」はすでに始まっているが、まだ完全ではない。
-
-## IR から parser AST 断片を build する経路
-
-IR parse 後は、専用 builder が parser AST 断片を `HV` / `AV` として構築する。
-
-主な builder:
-
-- type builder
-- value builder
-- arguments builder
-- directives builder
-- selection builder
-- selection set builder
-- variable definitions builder
-- executable definition builder
-- document builder
-
-ここで初めて最終返り値としての Perl AST が materialize される。
-
-この段階の特徴:
-
-- executable path の最終 AST は Perl ネイティブ構造で返る
-- ただし parse 中は legacy AST を経由しない
-- `loc` を build 時に直接付けられる
-
-## SDL / 非 executable の parser 経路
-
-こちらは executable path ほど整理されていない。
-
-現状は次のような段階的変換になる。
-
-1. source を前処理し、rewrite と metadata を得る
-2. rewritten source を legacy parser に通す
-3. legacy AST を parser AST に変換する
-4. extension や variable directives などの metadata を patch する
-5. `loc` を補完する
-
-この経路の意味は次の通り。
-
-- grammar 差分や metadata 差分への実装コストを抑えやすい
-- ただし表現を複数回組み替えるので、allocation 的には重い
-- executable path ほど独自構造体化されていない
-
-最適化観点では、この経路はまだ「legacy AST を中間表現として使っている」比率が高い。
-
-## `location` と `loc`
-
-### graphql-perl dialect
-
-legacy AST では `location => { line, column }` を保持する。
-
-これは parse 中の token 位置と `line_starts` を使って XS 側で計算される。
-
-### parser dialect
-
-parser AST では `loc` を保持する。
-
-executable path では、IR node の `start_pos` と `name_pos` をもとに、
-AST build 時に直接 `loc` を付与できる。
-
-さらに `lazy_location` や `compact_location` のモードがあり、
-用途に応じて `loc` の表現コストを下げられる。
-
-一方、非 executable path では rewrite と metadata patch があるため、
-`loc` 処理は executable path より複雑である。
-
-## `SV` / `HV` / `AV` の使われ方の整理
-
-### すでに独自構造体化されている層
-
-- executable document の IR node 骨格
-- executable document の child list 管理
-- executable document の node allocation
-
-### まだ Perl object が中心の層
-
-- legacy `graphql-perl` AST そのもの
-- SDL / 非 executable の中間 legacy AST
-- parser AST の最終返り値
-- token 列の返却値
-- error object
-
-### 折衷になっている層
-
-- executable IR の文字列 payload
-- executable IR の名前文字列
-- executable IR の数値 / enum / string 値
-
-## メモリ効率の観点から見た現在地
-
-### すでに改善済みの点
-
-- executable path の node 骨格は arena 化済み
-- executable path は legacy AST の二重構築を避ける
-- `loc` は build 後の別 traversal ではなく build 時に付与できる
-
-### まだ `SV` 起因のコストが残る点
-
-- IR 内の name / scalar payload が `SV *`
-- SDL / 非 executable path は legacy AST を中間表現として持つ
-- 最終返り値 AST は互換性のため Perl object のまま
-
-### AST まで独自構造体化しない理由
-
-現状の distribution は、公開 API と互換レイヤが
-Perl の `HASH` / `ARRAY` 返却を前提にしている。
-
-そのため AST まで独自構造体化しても、最終的にはどこかで
-`SV` / `HV` / `AV` へ materialize する必要がある。
-
-この場合、
-
-- 実装複雑性
-- 保守コスト
-- 変換段の追加
-
-に対して、常に十分な利益が出るとは限らない。
-
-特に `graphql-perl + xs` のような最短経路は、
-「直接最終 AST を組む」こと自体が速さの理由でもある。
-
-## 最適化余地が大きい層
-
-現状、独自構造体化の余地がもっとも大きいのは次の層である。
-
-1. executable IR 内の `SV *` payload
-2. SDL / 非 executable path の中間表現
-3. `loc` 付与に必要な位置情報の持ち方
-
-逆に、最初から大規模に着手すると割に合いにくいのは次の層である。
-
-1. 公開返り値 AST 全体の独自構造体化
-2. Perl 互換 API を壊すような表現変更
-3. profiler を見ずに legacy path を全面書き換えすること
-
-## 実務的な読み替え
-
-現在の内部実装は、次のように理解するとよい。
-
-- parser の走査状態は軽量な C 構造体
-- executable path の中間 node は専用 IR 構造体
-- ただし文字列 payload はまだかなり `SV`
-- 非 executable path はまだ Perl object 中心
-- 最終返り値は互換性のため Perl AST
-
-したがって、
-
-- 「独自構造体に寄せる」という方針自体は正しい
-- ただし適用対象はまず IR 層と過渡表現である
-- 最終 AST まで一気に独自構造体化するのは別の判断になる
-
-## いま見るべき具体ポイント
-
-独自構造体化の妥当性をさらに詰めるなら、次の順で見るのがよい。
-
-1. executable IR 内の `SV *name` / `SV *payload` を span 化できるか
-2. SDL path を legacy AST 経由なしで build できる範囲はどこか
-3. benchmark と NYTProf で、本当に `SV` allocation が支配的か
-4. `graphql-perl + xs` の速さを崩さずに共通化できる境界はどこか
-
-この順に見れば、「全部を構造体化するべきか」という大雑把な議論ではなく、
-どの層に投資すると実際に効くかを切り分けられる。
+## Errors and validation diagnostics
+
+A syntax failure throws a blessed `GraphQL::Houtou::Error`. The message names
+the expected token or unexpected input, and `locations` identifies the parser
+position. Parser errors are exceptions at the parser API boundary; the
+runtime and PSGI layers convert request failures into GraphQL error envelopes.
+
+Validation has a separate internal entry point:
+
+```text
+_parse_with_diagnostics_xs
+  -> gql_parse_document_for_validation
+```
+
+It returns the same canonical AST plus a diagnostics array used for checks
+that are most efficient while parsing, such as duplicate names. The public
+`parse()` path leaves `validation_errors` null, so this bookkeeping does not
+add allocations to the ordinary parser hot path.
+
+Parsing establishes grammatical structure. Executable-document validation,
+schema validation, variable coercion, depth/node/cost policy, and execution
+are later phases and should not be added to the public parser loop merely
+because they inspect an AST.
+
+## Resource limits
+
+The native parser applies two compile-time safety ceilings before validation:
+
+- `GQL_PARSER_MAX_DEPTH` defaults to 512 recursive selection/input-value
+  levels. This protects the C stack from deeply nested hostile input.
+- `GQL_PARSER_MAX_TOKENS` defaults to 1,000,000 tokens. This bounds flat input
+  that would otherwise create an unbounded number of AST allocations.
+
+Exceeding either limit raises a request error instead of terminating the
+worker. These parser ceilings complement, rather than replace, the PSGI body
+limit and runtime `max_depth`, `max_nodes`, and `max_cost` policies.
+
+The constants can be overridden at build time, but changing them changes the
+process-level exposure to untrusted documents and must be backed by stack and
+memory measurements.
+
+## Strings, block strings, and UTF-8
+
+The lexer operates on byte offsets while preserving the source scalar's UTF-8
+flag on values copied into Perl scalars. Regular string escapes and the
+GraphQL `BlockStringValue` indentation algorithm are applied during parsing.
+Coverage for escaped triple quotes, blank-line trimming, indentation, and
+`CRLF` handling lives in `t/21_public_parser_api.t`.
+
+Byte offsets are an internal detail. The public location contract is line and
+column, and callers must not infer character offsets from internal spans.
+
+## Internal files and retained machinery
+
+The parser-related headers currently have these responsibilities:
+
+- `src/bootstrap.h`: shared token, parser-state, location-context, and IR type
+  declarations plus forward declarations;
+- `src/parser_core.h`: token/error and shared location/rewrite helpers;
+- `src/parser_graphqlperl_runtime.h`: public direct parser and canonical AST
+  construction;
+- `src/parser_shared_ast.h`: small constructors and sorted-hash-key helpers
+  shared by parser/schema code;
+- `src/parser_ast_runtime.h`: internal graphql-js-shaped AST and lazy
+  materialization support;
+- `src/parser_ir_runtime.h`: internal executable IR parsing/building and
+  conversion helpers.
+
+The last two headers reflect earlier parser and compatibility work. Some of
+their helpers are still compiled and used by internal materialization code,
+but they do not define the public `parse()` path or its return dialect. Do not
+optimize, document, or extend them on the assumption that every request passes
+through an IR arena: the current public parser does not.
+
+`GraphQL::Houtou::Parser::Internal::LazyLoc` and the tied lazy-array classes
+in `lib/GraphQL/Houtou/XS/Parser.pm` are likewise internal implementation
+types. Applications must not construct them or rely on their storage layout.
+
+## Performance work
+
+Use `util/parser-benchmark.pl` to compare the location and no-location public
+paths against the same input:
+
+```console
+perl -Iblib/lib -Iblib/arch util/parser-benchmark.pl \
+  --file t/kitchen-sink.graphql --count -5
+```
+
+The benchmark labels retain `graphql_perl_*` because they describe the AST
+shape, not a selectable engine.
+
+Before changing representation, profile the complete parse workload. The
+most plausible costs are final `HV`/`AV` allocation, scalar copying/unescaping,
+and location construction. Replacing the final AST with a C tree is not an
+automatic improvement: the public contract would still require
+materialization, adding a conversion pass and a second live representation.
+
+For changes to parser C code:
+
+1. preserve the canonical AST contract in `t/21_public_parser_api.t`;
+2. add adversarial cases to `t/51_parser_depth_limit.t`,
+   `t/52_node_limit.t`, or `t/53_parser_adversarial.t` as appropriate;
+3. run `minil test` and the ASan/fuzz robustness jobs for ownership-sensitive
+   changes;
+4. measure both location modes before claiming a performance improvement.

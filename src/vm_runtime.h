@@ -83,6 +83,10 @@ typedef struct {
   SV *type_def_sv;
   SV *input_type_sv;
   U8 has_default;
+  /* Lazily cached isa(NonNull) of input_type_sv so the missing-variable
+   * check costs no method lookup per request: 0 unknown, 1 non-null,
+   * 2 nullable. Newxz zero-fill leaves fresh defs at "unknown". */
+  U8 input_type_nonnull_state;
   SV *default_value_sv;
   gql_runtime_vm_native_value_t *default_native_value;
 } gql_runtime_vm_native_arg_def_t;
@@ -3894,6 +3898,7 @@ gql_runtime_vm_clone_native_slot(
       gql_runtime_vm_native_arg_def_t *src_def = &src->arg_defs[i];
       gql_runtime_vm_native_arg_def_t *dst_def = &dst->arg_defs[i];
       dst_def->has_default = src_def->has_default;
+      dst_def->input_type_nonnull_state = src_def->input_type_nonnull_state;
       if (src_def->name) {
         STRLEN len = strlen(src_def->name);
         Newxz(dst_def->name, len + 1, char);
@@ -4938,6 +4943,7 @@ gql_runtime_vm_clone_native_program(pTHX_ gql_runtime_vm_native_program_t *src)
       gql_runtime_vm_native_arg_def_t *src_def = &src->variable_defs[i];
       gql_runtime_vm_native_arg_def_t *dst_def = &dst->variable_defs[i];
       dst_def->has_default = src_def->has_default;
+      dst_def->input_type_nonnull_state = src_def->input_type_nonnull_state;
       if (src_def->name) {
         STRLEN len = strlen(src_def->name);
         Newxz(dst_def->name, len + 1, char);
@@ -5560,8 +5566,13 @@ gql_runtime_vm_prepare_program_variables_sv(
     }
 
     if (!has_value && !raw_sv && !coerced_sv) {
-      if (arg_def->input_type_sv && SvOK(arg_def->input_type_sv)
-          && sv_derived_from(arg_def->input_type_sv, "GraphQL::Houtou::Type::NonNull")) {
+      if (arg_def->input_type_nonnull_state == 0
+          && arg_def->input_type_sv && SvOK(arg_def->input_type_sv)) {
+        arg_def->input_type_nonnull_state = sv_derived_from(
+          arg_def->input_type_sv, "GraphQL::Houtou::Type::NonNull"
+        ) ? 1 : 2;
+      }
+      if (arg_def->input_type_nonnull_state == 1) {
         croak_sv(sv_2mortal(gql_runtime_vm_missing_variable_error_sv(
           aTHX_ arg_def->input_type_sv, arg_def->name
         )));

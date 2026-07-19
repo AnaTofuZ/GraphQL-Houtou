@@ -1,5 +1,11 @@
 # Validation Status
 
+> **Historical note:** This migration snapshot is superseded by
+> [`validation-conformance.md`](validation-conformance.md) for executable
+> validation coverage and
+> [`spec-conformance-september-2025.md`](spec-conformance-september-2025.md)
+> for the current specification profile.
+
 Last updated: 2026-04-27
 
 This note records the current state of `GraphQL::Houtou` validation work.

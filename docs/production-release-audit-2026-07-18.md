@@ -1,5 +1,7 @@
 # Production release audit (2026-07-18)
 
+Last verified against main: 2026-07-19.
+
 ## Decision
 
 The current tree has complete query/mutation validation against the September
@@ -10,8 +12,8 @@ endpoint until production-shaped deployment qualification is complete.
 
 ## Verified baseline
 
-- The complete local suite passes on Perl 5.44 / macOS arm64: 46 files and
-  446 tests.
+- The complete local suite passes on Perl 5.44 / macOS arm64: 49 files and
+  468 tests.
 - The normal CI matrix covers Perl 5.24 through 5.44 on Linux.
 - Robustness CI includes ASan with hash-seed sweeping, parser fuzzing, an RSS
   soak gate, full-suite Valgrind, compiler warnings, and XS ownership linting.
@@ -19,6 +21,8 @@ endpoint until production-shaped deployment qualification is complete.
   token limits, request-body limits, and alias/node limits are implemented.
 - SDL type-system extensions are merged before schema construction, including
   interface inheritance and extension-specific duplicate checks.
+- Federation 2 subgraph schemas, default-resolver method/coderef compatibility,
+  and an opt-in introspection access policy are covered by regression tests.
 - POD syntax and META.json validation pass locally.
 
 ## Release blockers
@@ -127,9 +131,9 @@ not yet constitute capacity planning for a deployed service.
 
 ## Release preparation
 
-- Replace the template `Changes` entry with the actual 0.01 history.
-- Consolidate stale status documents; several older files describe features
-  now implemented as missing.
+- `Changes` records the implemented 0.01 feature and hardening history.
+- Older status documents are retained as explicitly marked historical records;
+  this audit and the specification-conformance tables are authoritative.
 - The production deployment guide covers prefork operation, timeouts,
   pagination/cost policy, rate limiting, logging, GraphiQL/CSP, and shutdown.
 - State unsupported features prominently: ithreads, GET query execution,

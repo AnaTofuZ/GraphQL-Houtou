@@ -320,7 +320,7 @@ generic callback boundary は Perl API 互換のため source、args、context�
 flowchart TD
     E[execute_program] --> A{async runtime または on_stall?}
     A -- yes --> AUTO[execute_native_program_auto_xs]
-    A -- no --> V{variables あり または engine=native?}
+    A -- no --> V{variables あり または strict_sync?}
     V -- yes --> PV[prepare_variables]
     PV --> S{program specialization 必要?}
     S -- no --> H[execute_native_program_handle_xs]

@@ -110,18 +110,25 @@ subtest 'sync runtime: promise on the fast lane fails with an actionable error' 
   }
 };
 
-subtest 'async runtime with engine => native stays strict' => sub {
+subtest 'async runtime with strict_sync stays strict' => sub {
   my $runtime = build_native_runtime(new_schema(), async => 1);
-  my $err = do {
-    local $@;
-    eval {
-      $runtime->execute_document($QUERY,
-        variables => { id => 'u7' }, engine => 'native');
-    };
-    $@;
-  };
-  like $err, qr/synchronous fast lane/,
-    'explicit sync engine request overrides the async default and croaks';
+  for my $case (
+    [ execute => sub {
+        $runtime->execute_document($QUERY,
+          variables => { id => 'u7' }, strict_sync => 1) } ],
+    [ to_json => sub {
+        $runtime->execute_document_to_json($QUERY,
+          variables => { id => 'u8' }, strict_sync => 1) } ],
+    [ on_stall => sub {
+        $runtime->execute_document($QUERY,
+          variables => { id => 'u9' }, strict_sync => 1,
+          on_stall => sub { 1 }) } ],
+  ) {
+    my ($name, $run) = @$case;
+    my $err = do { local $@; eval { $run->() }; $@ };
+    like $err, qr/synchronous fast lane/,
+      "$name: strict_sync overrides async lane selection and croaks";
+  }
 };
 
 subtest 'sync runtime: promise LIST ITEMS also croak with the hint (issue #33)' => sub {
@@ -143,15 +150,15 @@ subtest 'sync runtime: promise LIST ITEMS also croak with the hint (issue #33)' 
     ),
   );
   my $sync_rt = build_native_runtime($schema);
-  # engine => 'native' pins the request to the synchronous fast lane, which
+  # strict_sync pins the request to the synchronous fast lane, which
   # is also where variable-carrying requests run; a bare no-variables
   # request goes down the auto lane instead (asserted below).
   for my $case (
     [ 'object list / execute' => sub {
-        $sync_rt->execute_document('{ rows { name } }', engine => 'native') } ],
+        $sync_rt->execute_document('{ rows { name } }', strict_sync => 1) } ],
     [ 'object list / to_json' => sub { $sync_rt->execute_document_to_json('{ rows { name } }') } ],
     [ 'scalar list / execute' => sub {
-        $sync_rt->execute_document('{ tags }', engine => 'native') } ],
+        $sync_rt->execute_document('{ tags }', strict_sync => 1) } ],
     [ 'scalar list / to_json' => sub { $sync_rt->execute_document_to_json('{ tags }') } ],
   ) {
     my ($name, $run) = @$case;

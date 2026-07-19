@@ -1079,14 +1079,8 @@ sub execute {
   die "promise_code is no longer supported; Promise::XS is detected automatically.\n"
     if exists $opts{promise_code};
 
-  if (!defined $opts{engine} || $opts{engine} ne 'perl') {
-    my $runtime = $self->build_native_runtime;
-    return $runtime->execute_document($document, %opts);
-  }
-
-  my $runtime = $self->build_runtime;
-  my $program = $runtime->compile_program($document, %opts);
-  return $runtime->execute_program($program, %opts);
+  my $runtime = $self->build_native_runtime;
+  return $runtime->execute_document($document, %opts);
 }
 
 sub compile_native_program_descriptor {
@@ -1153,7 +1147,7 @@ sub execute_native_bundle_descriptor {
 sub execute_native {
   my ($self, $document, %opts) = @_;
   my $runtime = $self->build_native_runtime;
-  return $runtime->execute_document($document, %opts, engine => 'native');
+  return $runtime->execute_document($document, %opts, strict_sync => 1);
 }
 
 sub runtime_cache {

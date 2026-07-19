@@ -22,6 +22,8 @@ Revision history for Perl extension GraphQL-Houtou
       methods with the graphql-perl-compatible argument contract.
     - Added an `allow_introspection` runtime and PSGI policy for public
       endpoints while retaining `__typename` support.
+    - Replaced the obsolete execution implementation selector with the
+      explicit `strict_sync` request option; execution is always native.
     - Added ASan, Valgrind, fuzz, soak, compiler-warning, XS ownership, POD,
       metadata, and Perl 5.24 through 5.44 CI coverage.
     - Added production-oriented examples, benchmark tooling, architecture

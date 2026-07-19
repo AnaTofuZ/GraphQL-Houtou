@@ -23,7 +23,7 @@ perl Build.PL
 ./Build build
 cd examples/sqlite-blog
 carton install
-carton exec -- plackup --port 8081 -I../../blib/lib -I../../blib/arch app.psgi
+carton exec -- plackup --port 8081 -I../../lib -I../../blib/arch app.psgi
 ```
 
 Open <http://127.0.0.1:8081/>. GraphiQL is available at
@@ -38,7 +38,7 @@ For a prefork qualification run:
 
 ```sh
 BLOG_GRAPHIQL=0 carton exec -- start_server --port 8081 -- \
-  plackup -s Starlet --workers 4 -I../../blib/lib -I../../blib/arch app.psgi
+  plackup -s Starlet --workers 4 -I../../lib -I../../blib/arch app.psgi
 ```
 
 Each worker opens its own SQLite handle after fork. WAL mode and a busy timeout

@@ -50,7 +50,7 @@ requests, assert RSS growth stays under the gate. Scenarios:
 - `async_promise` — Promise::XS-backed resolvers
 - `persisted_bundle` — precompiled native bundle execution
 
-## Known per-scenario growth (2026-07-05, 4000 iterations after warmup)
+## Known per-scenario growth (2026-07-19, 4000 iterations after warmup)
 
 | scenario | growth | status |
 |---|---|---|
@@ -58,9 +58,13 @@ requests, assert RSS growth stays under the gate. Scenarios:
 | specialized_directives | +32 KB | clean |
 | persisted_bundle | +16 KB | clean |
 | escaped_die | +0 KB | fixed in the Phase B batch (was +5472 KB) |
-| resolver_error | +496 KB (~125 B/req) | open — tracked follow-up |
-| async_promise | +1696 KB (~425 B/req) | open — tracked follow-up |
-| program_cache_eviction | +432 KB (~110 B/req) | open — was +1008 KB; parser location fix removed the per-parse component |
+| resolver_error | +16 KB | fixed (was +496 KB, ~125 B/req, on 2026-07-05) |
+| async_promise | +16 KB | fixed (was +1696 KB, ~425 B/req, on 2026-07-05) |
+| program_cache_eviction | +0 KB | fixed (was +432 KB, ~110 B/req, on 2026-07-05) |
+
+The three formerly open scenarios re-measured at allocator-noise level
+after the R5 valgrind pass and the frame-lifecycle fixes pinned by
+`t/54_frame_leak_regression.t`.
 
 Two cross-cutting leaks were found and fixed while attributing the table
 above (both pre-existing on main):
@@ -72,9 +76,11 @@ above (both pre-existing on main):
   next unsigned decrement underflowed and the 48-byte cursor struct leaked
   on every exec-state request across all scenarios
 
-The CI gate (`--max-growth-kb 8192` over 20k mixed iterations) is
-calibrated to fail on regressions from this baseline while the three open
-leaks are being worked down; tighten it as they are fixed.
+The CI gate (`--max-growth-kb 2048` over 20k mixed iterations) is
+calibrated against the clean baseline: the full mixed run measures
++488 KB on the Linux CI runner and +448 KB on the macOS development
+host (2026-07-19), so 2048 KB leaves >4x headroom for platform noise
+while still catching a reintroduced per-request leak of ~80 B/req.
 
 ## Local harness cases
 

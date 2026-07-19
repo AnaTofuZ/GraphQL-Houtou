@@ -522,4 +522,6 @@ block User#2 (User)
 6. `src/vm_runtime.h` — enum、native descriptor/value、loader helper。
 7. `lib/GraphQL/Houtou.xs` — resolve/complete loop、promise scheduler、writer、XS API。
 
-関連する俯瞰資料として `docs/runtime-mainline-overview.md` と `docs/runtime-mainline-architecture.md` も参照できる。本書はそれらより opcode と実データ layout に焦点を置いている。
+関連する俯瞰資料は `docs/architecture-overview.md`、モジュールごとの責務は
+`docs/module-map.md` を参照。本書はそれらより opcode と実データ layout に
+焦点を置いている。

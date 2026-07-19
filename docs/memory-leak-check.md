@@ -29,7 +29,8 @@ This document describes the repeatable memory-safety workflow for
    valgrind needed) and is asserted per scenario by
    `t/54_frame_leak_regression.t`. The R5 leak hunt (2026-07-18) used
    these counters to pinpoint the fast-lane croak path-frame leak and the
-   abandoned-request reference cycle; see `docs/release-tasks.md` R5.
+   abandoned-request reference cycle. The permanent regression coverage is
+   retained in `t/54_frame_leak_regression.t`.
 
 ## Soak test
 

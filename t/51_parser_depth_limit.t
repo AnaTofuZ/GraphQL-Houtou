@@ -2,7 +2,7 @@ use strict;
 use warnings;
 use Test::More 0.98;
 
-# Parser nesting-depth cap (release-tasks.md S1). The recursive-descent
+# Parser nesting-depth cap. The recursive-descent
 # parser used to overflow the C stack on deeply nested input (~35k levels
 # segfaulted an 8MB stack) before any validation ran, so a single
 # unauthenticated request could kill the worker. The cap turns runaway

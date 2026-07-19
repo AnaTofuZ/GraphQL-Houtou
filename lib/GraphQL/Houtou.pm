@@ -655,8 +655,8 @@ The async lane - resolvers returning promises, which upstream's executor
 resolves through its own promise plumbing - still clears upstream's sync
 numbers by more than C<2x>.
 
-For methodology, see C<docs/execution-benchmark.md>; for the measurement
-history behind these numbers, C<docs/current-context.md>.
+For methodology and reproducible commands, see
+C<docs/execution-benchmark.md>.
 
 =head1 CAVEATS
 

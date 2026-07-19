@@ -10,7 +10,7 @@ BEGIN {
 # R5 regression: every request path that abandons or errors mid-flight must
 # release its block/path frames. The live counters count frames handed out
 # minus frames released; nonzero between requests is an orphaned frame
-# (valgrind leaks 2 and 3 from docs/release-tasks.md).
+# (the async block-frame and fast-lane path-frame regressions).
 
 use GraphQL::Houtou qw(execute build_native_runtime);
 use GraphQL::Houtou::Schema;

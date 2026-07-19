@@ -2,7 +2,7 @@ use strict;
 use warnings;
 use Test::More 0.98;
 
-# Fixed adversarial parser inputs (release-tasks.md R1). Complements the
+# Fixed adversarial parser inputs. Complements the
 # randomized util/parser-fuzz.pl with named regression cases: each must
 # either parse or raise a normal GraphQL::Houtou::Error, never crash and
 # never hang. Parses run in a forked child so a regression that

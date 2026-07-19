@@ -2,7 +2,7 @@ use strict;
 use warnings;
 use Test::More 0.98;
 
-# Query node-count limit (release-tasks.md S3). The depth limit bounds
+# Query node-count limit. The depth limit bounds
 # nesting but not breadth: an alias-flooded query { a:f b:f c:f ... }
 # stays shallow while forcing huge resolution and response. The node
 # limit caps the total field selections an operation resolves, counting

@@ -32,7 +32,7 @@ sub new {
     $runtime = $schema->build_native_runtime(%runtime_opts);
   }
 
-  # Request body cap (release-tasks.md S2): an unauthenticated client
+  # Request body cap: an unauthenticated client
   # must not be able to exhaust memory with a giant body. 1 MiB is far
   # above any real GraphQL request. Pass max_body_size => 0 to disable.
   my $max_body_size = exists $args{max_body_size}

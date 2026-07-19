@@ -69,7 +69,7 @@ flowchart LR
   slot index で引ける形で常駐する。実行中に Perl の型オブジェクトを
   たどることはない
 
-## 3. リクエストパイプライン(P0-1 / P0-4)
+## 3. リクエストパイプライン
 
 `NativeRuntime::execute_document` / `execute_document_to_json` の入口。
 
@@ -77,13 +77,13 @@ flowchart LR
 flowchart TB
     IN["execute_document(document, %opts)"] --> HOT{"program cache hit<br/>かつ validate 済み?"}
     HOT -- yes --> EXEC
-    HOT -- no --> DEPTH["depth limit 検査<br/>(既定 max_depth 15)"]
-    DEPTH --> VAL["クエリ validation<br/>(XS 14 ルール + directive 検査。<br/>validate => 0 / descriptor 由来<br/>runtime はスキップ)"]
+    HOT -- no --> LIMITS["depth / node / weighted cost 検査<br/>(既定 15 / 10,000 / 10,000)"]
+    LIMITS --> VAL["クエリ validation<br/>(September 2025 executable rulesをXSで検査。<br/>validate => 0 / descriptor 由来<br/>runtime はスキップ)"]
     VAL -- エラー --> REQERR
-    DEPTH -- エラー --> REQERR
+    LIMITS -- エラー --> REQERR
     VAL -- ok --> CACHE["compile + program cache 格納<br/>(validate 済み document として記録)"]
     CACHE --> EXEC["実行レーンへ"]
-    EXEC -- 正常/フィールドエラー --> OK["{ data, errors } (200)"]
+    EXEC -- 正常/フィールドエラー --> OK["{ data [, errors] } (200)<br/>errors は非空のときだけ付与"]
     EXEC -- "GraphQL::Houtou::Error<br/>(変数コアーション等)" --> REQERR["errors-only envelope<br/>{ errors } ※data キーなし (PSGI 400)"]
     EXEC -- "その他の die<br/>(async 設定ミス・内部バグ)" --> DIE["例外のまま伝播<br/>(PSGI 500 + ログ warn)"]
 ```
@@ -120,14 +120,16 @@ XS 化しない理由は 3 つ:
    反復を安くし、XS の表面積(ASan/soak/シード掃引が必要な領域)を
    増やさない。
 3. **重いループは既に XS に降りている。** ステージが委譲する先 —
-   パーサ、validation ルール群(src/validation.h)、入力コアーション、
+   パーサ、depth/node/weighted cost walk、validation ルール群
+   (src/validation.h)、入力コアーション、
    実行本体 — は全部 native。Perl に残るのは depth walk(未キャッシュ時
    のみ)と directive 検査程度。
 
 留意点: persisted queries なしでユニーククエリが無限に流れる運用では
-ステージが毎リクエスト走るが、その場合の支配項も parse + validation
-(既に XS)であり、Perl のオーケストレーション部は小さい定数。将来の
-complexity 上限(P1)もこの層に足す想定なので、Perl のままが都合よい。
+ステージが毎リクエスト走るが、その場合の支配項も parse + validation +
+limits walk(既に XS)であり、Perl のオーケストレーション部は小さい定数。
+ポリシー値とcache signatureの管理をPerlに残すことで、上限変更時にも
+native walkを使いながら入口の契約を保てる。
 
 ## 4. 実行レーン
 
@@ -173,7 +175,7 @@ slot の family で分岐し、全レーン共通の仕様分岐を持つ。
 | ABSTRACT | tag_resolver → resolve_type → possible_types(is_type_of) の順で member 型を解決し member block 実行 | 解決不能 → field error + null(生 source は漏らさない) |
 | GENERIC (leaf) | **結果コアーション**: Int(int32・数値文字列可)/ Float / String・ID(文字列化)/ Boolean(真偽値化)/ Enum(内部値→名前、非メンバー拒否)/ カスタム scalar(serialize CV 呼び出し) | 失敗 → field error + null |
 
-**Non-Null 伝播**(P0-2): null が `return_type_kind_code == 8` の位置に
+**Non-Null 伝播**: null が `return_type_kind_code == 8` の位置に
 入ると "Cannot return null for non-nullable field Parent.field." を 1 回
 記録して**囲むオブジェクトごと null 化**し、nullable な位置まで(なければ
 data まで)バブルする。エラーの重複は「この null は既にエラーを運んでいる」

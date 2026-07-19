@@ -13,8 +13,8 @@ our @EXPORT_OK = qw(check_query_nodes);
 # and a huge response. This validator caps the total number of field
 # selections an operation resolves, counting fragment spreads by
 # expansion so { ...F ...F ...F } cannot multiply cheaply. It is a coarse
-# DoS bound, not a cost model; a weighted complexity
-# analysis is deferred.
+# DoS bound, not a cost model. The separate XS weighted-cost walk accounts
+# for field cost and estimated list fan-out; both limits are enforced.
 use constant DEFAULT_MAX_NODES => 10_000;
 
 sub check_query_nodes {

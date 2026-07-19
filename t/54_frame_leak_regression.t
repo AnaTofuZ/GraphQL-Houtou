@@ -78,12 +78,24 @@ subtest 'stall without on_stall releases the pending frames' => sub {
 
 subtest 'request-time coercion failure releases the fast-lane path frames' => sub {
   my $runtime = build_native_runtime($schema);
-  my $query = 'query Q($n: String!) { hello(name: $n) }';
-  my $missing = $runtime->execute_document($query, variables => {});
-  like $missing->{errors}[0]{message}, qr/given null value/, 'request error envelope';
-  my $json = $runtime->execute_document_to_json($query, variables => {});
+  # A nullable variable with a default may sit in a non-null argument
+  # position, and an explicit null then fails argument coercion inside the
+  # fast lane - the deferred-croak path this regression guards. (A missing
+  # non-null variable no longer reaches the lane: it is rejected while
+  # variables are prepared, before any frame is allocated.)
+  my $query = 'query Q($n: String = "x") { hello(name: $n) }';
+  my $nulled = $runtime->execute_document($query, variables => { n => undef });
+  like $nulled->{errors}[0]{message}, qr/given null value/, 'request error envelope';
+  my $json = $runtime->execute_document_to_json($query, variables => { n => undef });
   like $json, qr/given null value/, 'request error envelope (JSON lane)';
   assert_no_live_frames('coercion failure');
+
+  my $missing = $runtime->execute_document(
+    'query Q($n: String!) { hello(name: $n) }', variables => {},
+  );
+  like $missing->{errors}[0]{message}, qr/was not provided/,
+    'missing non-null variable is rejected at variable preparation';
+  assert_no_live_frames('missing variable rejection');
 };
 
 subtest 'promise on the sync fast lane releases the path frames' => sub {

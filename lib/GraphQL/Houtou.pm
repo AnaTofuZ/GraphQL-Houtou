@@ -726,6 +726,14 @@ the VTuber C<宝灯桃汁> (Houtou Momojiru)
 
 =back
 
+=head1 ACKNOWLEDGEMENTS
+
+GraphQL::Houtou is strongly influenced by GraphQL for Perl
+(C<graphql-perl>). We gratefully acknowledge its design and implementation
+as an important foundation for this project. See
+L<GraphQL on MetaCPAN|https://metacpan.org/pod/GraphQL> and the
+L<graphql-perl source repository|https://github.com/graphql-perl/graphql-perl>.
+
 =head1 LICENSE
 
 Copyright (C) anatofuz.

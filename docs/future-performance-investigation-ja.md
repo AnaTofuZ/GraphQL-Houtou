@@ -689,3 +689,29 @@ provided variablesから従来互換のHashRefを遅延構築する。
 
 変数を持たない`execute_document_to_json`は410,526 req/sで、直前の411,560 req/sと
 同等だった。空HVと空AVのallocation差はこのqueryでは支配的でない。
+
+### 14.5 引数なし resolver の専用 ABI
+
+引数を宣言しない field 向けに、opt-in の
+`resolver_mode => 'native_no_args'`を追加した。通常のnative resolverは
+`($source, $args, $context, $return_type)`を受け取るが、このABIは
+`($source, $context, $return_type)`を受け取る。同期SV、同期JSON、asyncの各レーンで
+空args HashRefの取得とcallback stackへのpushを省く。
+
+`util/resolver-abi-benchmark.pl`で、同じcompiled programを従来native ABIと比較した。
+2秒測定:
+
+| query幅 | native | native_no_args | 改善 |
+|---:|---:|---:|---:|
+| 1 field | 800,148 req/s | 827,076 req/s | +3% |
+| 10 fields | 333,577 req/s | 372,754 req/s | +12% |
+| 25 fields | 162,292 req/s | 186,535 req/s | +15% |
+
+field数に比例してcallback境界の固定費が積み上がるため、幅の広いqueryでは明確に効く。
+誤ったABI利用を防ぐため、argumentを宣言したfieldへの指定はruntime graph compile時に
+拒否する。
+
+positional argument ABIも候補だが、可変個数のPerl callback stack構築、default値と
+argument定義順の固定、descriptor互換性を新たな公開契約として持つ必要がある。
+今回のbranchで改善が実証できた引数なしABIとは独立に評価できるため、このPRには
+含めず別実験とする。

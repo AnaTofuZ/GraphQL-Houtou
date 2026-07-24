@@ -61,7 +61,8 @@ enum {
 enum {
   GQL_VM_CALLBACK_ABI_DEFAULT = 1,
   GQL_VM_CALLBACK_ABI_EXPLICIT_GENERIC = 2,
-  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE = 3
+  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE = 3,
+  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS = 4
 };
 
 enum {
@@ -2064,6 +2065,9 @@ gql_runtime_vm_evaluate_runtime_guards_native(
 static IV
 gql_runtime_vm_infer_callback_abi_code(IV resolver_shape_code, IV resolver_mode_code)
 {
+  if (resolver_mode_code == 3) {
+    return GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS;
+  }
   if (resolver_mode_code == 2) {
     return GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE;
   }
@@ -4976,7 +4980,8 @@ gql_runtime_vm_program_is_native_eligible_sv(pTHX_ SV *program_sv, int has_promi
       if (resolver_shape_code != GQL_VM_RESOLVE_DEFAULT) {
         if (resolver_shape_code != GQL_VM_RESOLVE_EXPLICIT
             || (callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_GENERIC
-                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE)) {
+                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE
+                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS)) {
           return 0;
         }
       }

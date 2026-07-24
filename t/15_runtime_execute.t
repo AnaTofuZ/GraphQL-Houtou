@@ -153,6 +153,53 @@ subtest 'native resolver mode lets explicit resolver use native runtime' => sub 
   }, 'native-safe explicit resolver still executes correctly on the auto-detect path';
 };
 
+subtest 'native_no_args resolver mode omits the arguments hash' => sub {
+  my @seen;
+  my $context = { trace_id => 42 };
+  my $native_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'NativeNoArgsQuery',
+      fields => {
+        nativeHello => {
+          type => $String,
+          resolver_mode => 'native_no_args',
+          resolve => sub {
+            @seen = @_;
+            return 'native-hi';
+          },
+        },
+      },
+    ),
+  );
+
+  my $result = $native_schema->execute('{ nativeHello }', context => $context);
+  is_deeply $result, { data => { nativeHello => 'native-hi' } },
+    'native_no_args resolver executes correctly';
+  is scalar(@seen), 3, 'resolver receives source, context, and return type only';
+  is $seen[1], $context, 'resolver receives the request context';
+  is $seen[2]->name, 'String', 'resolver receives the return type';
+};
+
+subtest 'native_no_args rejects fields that declare arguments' => sub {
+  my $invalid_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'InvalidNativeNoArgsQuery',
+      fields => {
+        greet => {
+          type => $String,
+          resolver_mode => 'native_no_args',
+          args => { name => { type => $String } },
+          resolve => sub { return 'unreachable' },
+        },
+      },
+    ),
+  );
+
+  eval { $invalid_schema->build_runtime };
+  like $@, qr/native_no_args.*requires a field without arguments/,
+    'invalid ABI declaration fails while compiling the runtime';
+};
+
 subtest 'native resolver mode supports static literal args on native runtime' => sub {
   my $native_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(

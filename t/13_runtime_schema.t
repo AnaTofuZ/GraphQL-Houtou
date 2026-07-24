@@ -46,6 +46,11 @@ my $schema = GraphQL::Houtou::Schema->new(
         resolver_mode => 'native',
         resolve => sub { +{ kind => 'user', id => 'u1', name => 'Ana' } },
       },
+      ping => {
+        type => $String,
+        resolver_mode => 'native_no_args',
+        resolve => sub { 'pong' },
+      },
       search => {
         type => $SearchResult->list->non_null,
         resolve => sub { [] },
@@ -76,6 +81,10 @@ subtest 'runtime graph records field families and dispatch shapes' => sub {
   is $slots{viewer}->completion_family, 'OBJECT', 'viewer compiles to object family';
   is $slots{viewer}->resolver_shape, 'EXPLICIT', 'viewer keeps explicit resolver shape';
   is $slots{viewer}->resolver_mode, 'NATIVE', 'viewer keeps native resolver mode';
+  is $slots{ping}->resolver_mode, 'NATIVE_NO_ARGS',
+    'ping keeps native_no_args resolver mode';
+  is $slots{ping}->callback_abi_code, 4,
+    'ping uses the native no-args callback ABI';
   is $slots{search}->completion_family, 'LIST', 'search compiles to list family';
   is $compiled->type_index->{Node}{completion_family}, 'ABSTRACT', 'interface recorded as abstract family';
   is $compiled->dispatch_index->{SearchResult}{dispatch_family}, 'TAG', 'union tag dispatch is compiled';
@@ -96,6 +105,9 @@ subtest 'runtime graph can emit native descriptor' => sub {
   my ($search_slot) = grep {
     (($_->{schema_slot_key} || q()) eq 'Query.search')
   } @{ $descriptor->{slot_catalog} || [] };
+  my ($ping_slot) = grep {
+    (($_->{schema_slot_key} || q()) eq 'Query.ping')
+  } @{ $descriptor->{slot_catalog} || [] };
   ok ref($descriptor->{slot_catalog}) eq 'ARRAY' && @{$descriptor->{slot_catalog}} >= 2,
     'native runtime descriptor exports slot catalog';
   ok defined $search_slot->{schema_slot_index},
@@ -106,6 +118,10 @@ subtest 'runtime graph can emit native descriptor' => sub {
     'native runtime slot keeps numeric resolver mode code';
   is $search_slot->{schema_slot_key}, 'Query.search',
     'native runtime slot keeps stable schema slot key';
+  is $ping_slot->{resolver_mode_code}, 3,
+    'native descriptor records the no-args resolver mode';
+  is $ping_slot->{callback_abi_code}, 4,
+    'native descriptor records the no-args callback ABI';
 };
 
 subtest 'runtime descriptor can round-trip through JSON file helpers' => sub {

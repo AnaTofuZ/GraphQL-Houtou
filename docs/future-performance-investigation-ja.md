@@ -628,3 +628,20 @@ nullable variable が未指定の場合、slot は null pointer のままにな�
 1 variable、1 dynamic argument の小さい query では lookup が 1 回しかないため改善は
 小さい。複数 field が同じ variable を参照する query では request preparation 1 回に
 対して field ごとの名前 lookup を除去できるため、相対効果が大きくなると予想される。
+
+### 14.3 採用しなかった単一 HV lookup
+
+variable preparation は、provided variables に対して `hv_exists` を行った後、同じkeyを
+`hv_fetch`している。これを単一の`hv_fetch`へ置き換える実験を行った。
+
+5標本中央値はnested variable objectが327,680 req/s、fresh variablesが
+308,163 req/sで、直前の329,244 req/s、310,597 req/sを上回らなかった。差は
+0.5〜0.8%で測定ノイズの範囲だが、改善を実証できない変更は採用せずrevertした。
+
+prepared variables HVそのものの遅延化には、次の3要素を同時に導入する必要がある。
+
+- slot valueを所有するrequest-scoped AVまたはarena
+- generic resolverが`info->{variable_values}`を要求した時の遅延HV materialize
+- nested input literal、runtime directive、unbound descriptorの名前lookup deopt
+
+空HashRefのglobal共有は、resolverによる変更が別requestへ漏れるため採用しない。

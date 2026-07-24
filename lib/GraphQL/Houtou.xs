@@ -12297,6 +12297,110 @@ _reject(self, reason)
   OUTPUT:
     RETVAL
 
+IV
+_settle_batch(class, entries_sv, values_sv)
+    SV *class
+    SV *entries_sv
+    SV *values_sv
+  PREINIT:
+    AV *entries_av;
+    AV *values_av;
+    SSize_t count;
+    SSize_t i;
+  CODE:
+    (void)class;
+    if (!entries_sv || !SvROK(entries_sv)
+        || SvTYPE(SvRV(entries_sv)) != SVt_PVAV
+        || !values_sv || !SvROK(values_sv)
+        || SvTYPE(SvRV(values_sv)) != SVt_PVAV) {
+      croak("DataLoader ticket batch settlement requires array references");
+    }
+    entries_av = (AV *)SvRV(entries_sv);
+    values_av = (AV *)SvRV(values_sv);
+    count = av_count(entries_av);
+    if (av_count(values_av) != count) {
+      croak("DataLoader ticket batch settlement length mismatch");
+    }
+    for (i = 0; i < count; i++) {
+      SV **entry_svp = av_fetch(entries_av, i, 0);
+      SV **value_svp = av_fetch(values_av, i, 0);
+      SV *value_sv = (value_svp && *value_svp) ? *value_svp : &PL_sv_undef;
+      AV *entry_av;
+      SV **ticket_svp;
+
+      if (!entry_svp || !*entry_svp || !SvROK(*entry_svp)
+          || SvTYPE(SvRV(*entry_svp)) != SVt_PVAV) {
+        croak("invalid DataLoader queue entry at index %ld", (long)i);
+      }
+      entry_av = (AV *)SvRV(*entry_svp);
+      ticket_svp = av_fetch(entry_av, 1, 0);
+      if (!ticket_svp || !*ticket_svp
+          || !gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ *ticket_svp)) {
+        croak("invalid DataLoader ticket at index %ld", (long)i);
+      }
+
+      if (sv_isobject(value_sv)
+          && sv_derived_from(value_sv, "GraphQL::Houtou::DataLoader::Error")) {
+        SV *reason_sv = &PL_sv_undef;
+        if (SvROK(value_sv) && SvTYPE(SvRV(value_sv)) == SVt_PVHV) {
+          SV **message_svp = hv_fetch((HV *)SvRV(value_sv), "message", 7, 0);
+          if (message_svp && *message_svp) {
+            reason_sv = *message_svp;
+          }
+        }
+        gql_runtime_vm_settle_dataloader_ticket(
+          aTHX_ *ticket_svp, 2, reason_sv
+        );
+      } else {
+        gql_runtime_vm_settle_dataloader_ticket(
+          aTHX_ *ticket_svp, 1, value_sv
+        );
+      }
+    }
+    RETVAL = (IV)count;
+  OUTPUT:
+    RETVAL
+
+IV
+_reject_batch(class, entries_sv, reason_sv)
+    SV *class
+    SV *entries_sv
+    SV *reason_sv
+  PREINIT:
+    AV *entries_av;
+    SSize_t count;
+    SSize_t i;
+  CODE:
+    (void)class;
+    if (!entries_sv || !SvROK(entries_sv)
+        || SvTYPE(SvRV(entries_sv)) != SVt_PVAV) {
+      croak("DataLoader ticket batch rejection requires an array reference");
+    }
+    entries_av = (AV *)SvRV(entries_sv);
+    count = av_count(entries_av);
+    for (i = 0; i < count; i++) {
+      SV **entry_svp = av_fetch(entries_av, i, 0);
+      AV *entry_av;
+      SV **ticket_svp;
+
+      if (!entry_svp || !*entry_svp || !SvROK(*entry_svp)
+          || SvTYPE(SvRV(*entry_svp)) != SVt_PVAV) {
+        croak("invalid DataLoader queue entry at index %ld", (long)i);
+      }
+      entry_av = (AV *)SvRV(*entry_svp);
+      ticket_svp = av_fetch(entry_av, 1, 0);
+      if (!ticket_svp || !*ticket_svp
+          || !gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ *ticket_svp)) {
+        croak("invalid DataLoader ticket at index %ld", (long)i);
+      }
+      gql_runtime_vm_settle_dataloader_ticket(
+        aTHX_ *ticket_svp, 2, reason_sv
+      );
+    }
+    RETVAL = (IV)count;
+  OUTPUT:
+    RETVAL
+
 void
 _subscribe_native(self, resolve, reject)
     SV *self

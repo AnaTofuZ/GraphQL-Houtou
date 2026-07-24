@@ -133,22 +133,17 @@ sub dispatch {
     if ($batch_error || ref($values) ne 'ARRAY' || @$values != @keys) {
       my $reason = $batch_error
         || "DataLoader batch function must return an arrayref with one entry per key\n";
-      for my $entry (@chunk) {
-        $entry->[1]->_reject($reason);
-        $dispatched++;
-      }
+      $dispatched += GraphQL::Houtou::DataLoader::Ticket->_reject_batch(
+        \@chunk,
+        $reason,
+      );
       next;
     }
 
-    for my $i (0 .. $#chunk) {
-      my $value = $values->[$i];
-      if (blessed($value) && $value->isa('GraphQL::Houtou::DataLoader::Error')) {
-        $chunk[$i][1]->_reject($value->message);
-      } else {
-        $chunk[$i][1]->_resolve($value);
-      }
-      $dispatched++;
-    }
+    $dispatched += GraphQL::Houtou::DataLoader::Ticket->_settle_batch(
+      \@chunk,
+      $values,
+    );
   }
   return $dispatched;
 }

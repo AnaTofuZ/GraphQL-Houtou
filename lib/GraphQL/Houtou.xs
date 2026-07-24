@@ -12254,6 +12254,57 @@ execute_native_program_auto_to_json_xs(runtime_sv, program_sv, root_value = &PL_
   OUTPUT:
     RETVAL
 
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::DataLoader
+
+SV *
+_enqueue_load_miss(self, key, cache_key, cache)
+    SV *self
+    SV *key
+    SV *cache_key
+    bool cache
+  PREINIT:
+    HV *loader_hv;
+    SV **queue_rv;
+    SV **promises_rv;
+    AV *queue_av;
+    HV *promises_hv;
+    SV *ticket_sv;
+    AV *entry_av;
+  CODE:
+    if (!self || !SvROK(self) || SvTYPE(SvRV(self)) != SVt_PVHV) {
+      croak("invalid DataLoader");
+    }
+    loader_hv = (HV *)SvRV(self);
+    queue_rv = hv_fetch(loader_hv, "_queue", 6, 0);
+    if (!queue_rv || !*queue_rv || !SvROK(*queue_rv)
+        || SvTYPE(SvRV(*queue_rv)) != SVt_PVAV) {
+      croak("invalid DataLoader storage");
+    }
+    queue_av = (AV *)SvRV(*queue_rv);
+    promises_hv = NULL;
+    if (cache) {
+      promises_rv = hv_fetch(loader_hv, "_promises", 9, 0);
+      if (!promises_rv || !*promises_rv || !SvROK(*promises_rv)
+          || SvTYPE(SvRV(*promises_rv)) != SVt_PVHV) {
+        croak("invalid DataLoader cache");
+      }
+      promises_hv = (HV *)SvRV(*promises_rv);
+    }
+
+    ticket_sv = gql_runtime_vm_new_dataloader_ticket_sv(
+      aTHX_ 0, &PL_sv_undef
+    );
+    entry_av = newAV();
+    av_push(entry_av, newSVsv(key));
+    av_push(entry_av, newSVsv(ticket_sv));
+    av_push(queue_av, newRV_noinc((SV *)entry_av));
+    if (cache) {
+      hv_store_ent(promises_hv, cache_key, newSVsv(ticket_sv), 0);
+    }
+    RETVAL = ticket_sv;
+  OUTPUT:
+    RETVAL
+
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::DataLoader::Ticket
 
 SV *

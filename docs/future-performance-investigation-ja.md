@@ -970,3 +970,17 @@ resolverが返す本当にpendingなPromiseだけをPromise::XS経路へ残す�
 小さい変更から進める場合は、batch settlementのPerl/XS反復境界を減らした後、
 Ticket subscriberからpending entryを直接更新する構造を試す。その実測を基にTicket本体や
 DataLoader全体のnative化へ進むか判断する。
+
+### 14.14 pending直結とDataLoader load missの検証
+
+Ticket subscriberからexecutorのpending entryを直接更新し、fieldごとのresolve/reject CVを
+省く試作を行った。20 unique keysではGraphQL実行が約3%改善した一方、repeated/primedでは
+最大約4%退行し、subscriberのreentrancy対応とownership管理も大幅に増えた。汎用callback
+経路を置き換えるだけでは採用基準に届かないため、この試作は破棄した。
+
+次にDataLoaderのcache miss時に行うTicket生成、`[key, ticket]`生成、queue push、cache storeを
+一つのXS呼び出しへまとめた。cache hit判定はPerlに残し、既定のidentity `cache_key` callbackも
+省略した。20 keysの測定では、`cache => 0`のloader単体が約25%、GraphQL実行が約5--7%改善した。
+通常のcache有効・全key missではloader単体が約4%、GraphQL実行が約3%改善し、repeated hitは
+概ね同等だった。DataLoader全体をC handle化せず、hotなmiss処理だけを移す小さい変更でも効果が
+得られるため、dispatchのnative化は別の変更として評価する。

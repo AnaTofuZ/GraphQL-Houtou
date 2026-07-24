@@ -306,6 +306,7 @@ static IV gql_runtime_vm_select_abstract_child_block_fast(pTHX_ gql_runtime_vm_e
 static SV *gql_runtime_vm_response_json_from_native_sv(pTHX_ const gql_runtime_vm_writer_t *writer, const gql_runtime_vm_native_value_t *value);
 static SV *gql_runtime_vm_response_json_from_data_sv(pTHX_ const gql_runtime_vm_writer_t *writer, SV *data_sv);
 static SV *gql_runtime_vm_call_cb3_nonfatal(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV **error_out);
+static SV *gql_runtime_vm_call_accessor_nonfatal(pTHX_ SV *source, const gql_runtime_vm_native_slot_t *slot, SV **error_out);
 static int gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_native_no_args_abi(const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_native_one_arg_abi(const gql_runtime_vm_native_slot_t *slot);
@@ -5331,6 +5332,10 @@ gql_runtime_vm_exec_state_execute_current_op_sync_now(pTHX_ SV *state_sv, gql_ru
         resolved_sv = (block && block->type_name && *block->type_name)
           ? newSVpv(block->type_name, 0)
           : newSVsv(&PL_sv_undef);
+      } else if (slot && slot->accessor_name && slot->accessor_name_len) {
+        resolved_sv = gql_runtime_vm_call_accessor_nonfatal(
+          aTHX_ source_sv, slot, &error_sv
+        );
       } else if (resolver_sv && SvOK(resolver_sv)) {
         SV *args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
         SV *info_sv = gql_runtime_vm_new_lazy_info_sv(aTHX_ state_sv, s, NULL);
@@ -5552,6 +5557,12 @@ gql_runtime_vm_exec_state_resolve_current_value_sv(
     return (block && block->type_name && *block->type_name)
       ? newSVpv(block->type_name, 0)
       : newSVsv(&PL_sv_undef);
+  }
+
+  if (slot && slot->accessor_name && slot->accessor_name_len) {
+    return gql_runtime_vm_call_accessor_nonfatal(
+      aTHX_ source_sv, slot, error_out
+    );
   }
 
   if (resolver_sv && SvOK(resolver_sv)) {
@@ -6598,6 +6609,61 @@ gql_runtime_vm_execute_native_program_auto_json_sv(
   return gql_runtime_vm_execute_native_program_auto_impl_sv(
     aTHX_ runtime_sv, program_sv, root_value, context_value, variables, 1
   );
+}
+
+static SV *
+gql_runtime_vm_call_accessor_nonfatal(
+  pTHX_
+  SV *source,
+  const gql_runtime_vm_native_slot_t *slot,
+  SV **error_out
+)
+{
+  dSP;
+  CV *method_cv;
+  SV *ret = NULL;
+  int count;
+
+  if (!slot || !slot->accessor_name || !slot->accessor_name_len) {
+    return newSVsv(&PL_sv_undef);
+  }
+  method_cv = gql_runtime_vm_default_method_cv(source, slot->accessor_name);
+  if (!method_cv) {
+    if (error_out) {
+      *error_out = newSVpvf(
+        "accessor method '%s' is not available on the source object",
+        slot->accessor_name
+      );
+    }
+    return newSVsv(&PL_sv_undef);
+  }
+
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  PUSHMARK(SP);
+  XPUSHs(source ? source : &PL_sv_undef);
+  PUTBACK;
+  count = call_sv((SV *)method_cv, G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV)) {
+    SV *err = newSVsv(ERRSV);
+    sv_setsv(ERRSV, &PL_sv_undef);
+    if (error_out) {
+      *error_out = err;
+      err = NULL;
+    }
+    if (err) {
+      croak_sv(err);
+    }
+  }
+  if (count > 0) {
+    ret = newSVsv(POPs);
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret ? ret : newSVsv(&PL_sv_undef);
 }
 
 static SV *
@@ -7718,6 +7784,13 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
       && slot->field_name_len == (STRLEN)sizeof("__typename") - 1
       && memEQ(slot->field_name, "__typename", sizeof("__typename") - 1)) {
     return newSVpv((state->block && state->block->type_name) ? state->block->type_name : "", 0);
+  }
+
+  if (slot->accessor_name && slot->accessor_name_len) {
+    return gql_runtime_vm_fast_lane_guard_promise_sv(
+      aTHX_ state,
+      gql_runtime_vm_call_accessor_nonfatal(aTHX_ source, slot, error_out)
+    );
   }
 
   {

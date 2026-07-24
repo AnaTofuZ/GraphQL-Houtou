@@ -407,6 +407,7 @@ sub _inflate_slot {
     schema_slot_index => $struct->{schema_slot_index},
     field_name => $struct->{field_name},
     result_name => $struct->{result_name},
+    accessor => $struct->{accessor},
     return_type_name => $struct->{return_type_name},
     resolver_shape => $struct->{resolver_shape},
     resolver_mode => $struct->{resolver_mode},
@@ -466,10 +467,26 @@ sub _build_slots_for_object {
         . "' requires exactly one argument"
         . " (" . $type->name . ".$field_name)\n";
     }
+    if (defined $field->{accessor}
+        && (ref($field->{accessor}) || $field->{accessor} eq q())) {
+      die "accessor requires a non-empty method name"
+        . " (" . $type->name . ".$field_name)\n";
+    }
+    if (defined $field->{accessor} && $field->{resolve}) {
+      die "accessor and resolve cannot both be specified"
+        . " (" . $type->name . ".$field_name)\n";
+    }
+    if (defined $field->{accessor}
+        && $field->{args}
+        && keys %{ $field->{args} }) {
+      die "accessor requires a field without arguments"
+        . " (" . $type->name . ".$field_name)\n";
+    }
     push @slots, GraphQL::Houtou::Runtime::Slot->new(
       schema_slot_key => join(q(.), $type->name, $field_name),
       field_name => $field_name,
       result_name => $field_name,
+      accessor => $field->{accessor},
       return_type_name => _type_name($return_type),
       resolver_shape => ($field->{resolve} || $wrapped) ? 'EXPLICIT' : 'DEFAULT',
       resolver_mode => $wrapped

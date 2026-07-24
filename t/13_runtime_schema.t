@@ -27,7 +27,7 @@ $User = GraphQL::Houtou::Type::Object->new(
   runtime_tag => 'user',
   fields => {
     id => { type => $String->non_null },
-    name => { type => $String },
+    name => { type => $String, accessor => 'display_name' },
   },
 );
 
@@ -121,6 +121,9 @@ subtest 'runtime graph can emit native descriptor' => sub {
   my ($echo_slot) = grep {
     (($_->{schema_slot_key} || q()) eq 'Query.echo')
   } @{ $descriptor->{slot_catalog} || [] };
+  my ($name_slot) = grep {
+    (($_->{schema_slot_key} || q()) eq 'User.name')
+  } @{ $descriptor->{slot_catalog} || [] };
   ok ref($descriptor->{slot_catalog}) eq 'ARRAY' && @{$descriptor->{slot_catalog}} >= 2,
     'native runtime descriptor exports slot catalog';
   ok defined $search_slot->{schema_slot_index},
@@ -139,6 +142,8 @@ subtest 'runtime graph can emit native descriptor' => sub {
     'native descriptor records the one-argument resolver mode';
   is $echo_slot->{callback_abi_code}, 5,
     'native descriptor records the one-argument callback ABI';
+  is $name_slot->{accessor}, 'display_name',
+    'native descriptor records the accessor method name';
 };
 
 subtest 'runtime descriptor can round-trip through JSON file helpers' => sub {

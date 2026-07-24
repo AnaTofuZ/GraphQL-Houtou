@@ -17,6 +17,14 @@ BEGIN {
   GraphQL::Houtou::_bootstrap_xs();
 }
 
+{
+  package Local::AccessorUser;
+  sub new { return bless { name => $_[1], display_name => $_[2] }, $_[0] }
+  sub name { return $_[0]{name} }
+  sub display_name { return $_[0]{display_name} }
+  sub boom { die "accessor boom\n" }
+}
+
 my $ProfileInput = GraphQL::Houtou::Type::InputObject->new(
   name => 'ProfileInput',
   fields => {
@@ -285,6 +293,78 @@ subtest 'fast_resolve mode supports the HashRef ABI' => sub {
       nativeGreet => 'hi vm',
     },
   }, 'fast_resolve passes a HashRef to the explicit resolver';
+};
+
+subtest 'accessor calls a zero-argument source method' => sub {
+  my $AccessorUser = GraphQL::Houtou::Type::Object->new(
+    name => 'AccessorUser',
+    fields => {
+      name => {
+        type => $String,
+        accessor => 'name',
+      },
+      displayName => {
+        type => $String,
+        accessor => 'display_name',
+      },
+      boom => {
+        type => $String,
+        accessor => 'boom',
+      },
+    },
+  );
+  my $accessor_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'AccessorQuery',
+      fields => {
+        viewer => {
+          type => $AccessorUser,
+          resolve => sub {
+            return Local::AccessorUser->new('Ana', 'Ana Tofu');
+          },
+        },
+      },
+    ),
+    types => [ $AccessorUser ],
+  );
+
+  is_deeply $accessor_schema->execute('{ viewer { name displayName } }'), {
+    data => {
+      viewer => {
+        name => 'Ana',
+        displayName => 'Ana Tofu',
+      },
+    },
+  }, 'same-name and renamed accessors execute without a resolver coderef';
+
+  my $error_result = $accessor_schema->execute('{ viewer { name boom } }');
+  is $error_result->{data}{viewer}{name}, 'Ana',
+    'accessor errors do not discard sibling fields';
+  is $error_result->{data}{viewer}{boom}, undef,
+    'throwing accessor completes as null';
+  is $error_result->{errors}[0]{message}, 'accessor boom',
+    'accessor exception becomes a field error';
+  is_deeply $error_result->{errors}[0]{path}, [ 'viewer', 'boom' ],
+    'accessor error keeps the field path';
+};
+
+subtest 'accessor rejects ambiguous field declarations' => sub {
+  my $invalid_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'InvalidAccessorQuery',
+      fields => {
+        hello => {
+          type => $String,
+          accessor => 'hello',
+          resolve => sub { return 'unreachable' },
+        },
+      },
+    ),
+  );
+
+  eval { $invalid_schema->build_runtime };
+  like $@, qr/accessor and resolve cannot both be specified/,
+    'accessor cannot silently override an explicit resolver';
 };
 
 subtest 'native runtime specializes variable args before bundle execution' => sub {

@@ -307,6 +307,7 @@ static SV *gql_runtime_vm_response_json_from_native_sv(pTHX_ const gql_runtime_v
 static SV *gql_runtime_vm_response_json_from_data_sv(pTHX_ const gql_runtime_vm_writer_t *writer, SV *data_sv);
 static SV *gql_runtime_vm_call_cb3_nonfatal(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV **error_out);
 static SV *gql_runtime_vm_call_accessor_nonfatal(pTHX_ SV *source, const gql_runtime_vm_native_slot_t *slot, SV **error_out);
+static CV *gql_runtime_vm_accessor_method_cv(SV *source, const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_native_no_args_abi(const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_native_one_arg_abi(const gql_runtime_vm_native_slot_t *slot);
@@ -6611,6 +6612,35 @@ gql_runtime_vm_execute_native_program_auto_json_sv(
   );
 }
 
+static CV *
+gql_runtime_vm_accessor_method_cv(SV *source, const gql_runtime_vm_native_slot_t *slot)
+{
+  gql_runtime_vm_native_slot_t *mutable_slot =
+    (gql_runtime_vm_native_slot_t *)slot;
+  HV *stash;
+  GV *method_gv;
+  CV *method_cv;
+
+  if (!source || !SvROK(source) || !SvOBJECT(SvRV(source))
+      || !slot || !slot->accessor_name || !slot->accessor_name_len) {
+    return NULL;
+  }
+  stash = SvSTASH(SvRV(source));
+  if (slot->accessor_cache_initialized
+      && slot->accessor_cache_stash == stash
+      && slot->accessor_cache_generation == PL_sub_generation) {
+    return slot->accessor_cache_gv ? GvCV(slot->accessor_cache_gv) : NULL;
+  }
+
+  method_gv = gv_fetchmethod_autoload(stash, slot->accessor_name, 0);
+  method_cv = method_gv ? GvCV(method_gv) : NULL;
+  mutable_slot->accessor_cache_stash = stash;
+  mutable_slot->accessor_cache_gv = method_gv;
+  mutable_slot->accessor_cache_generation = PL_sub_generation;
+  mutable_slot->accessor_cache_initialized = 1;
+  return method_cv;
+}
+
 static SV *
 gql_runtime_vm_call_accessor_nonfatal(
   pTHX_
@@ -6627,7 +6657,7 @@ gql_runtime_vm_call_accessor_nonfatal(
   if (!slot || !slot->accessor_name || !slot->accessor_name_len) {
     return newSVsv(&PL_sv_undef);
   }
-  method_cv = gql_runtime_vm_default_method_cv(source, slot->accessor_name);
+  method_cv = gql_runtime_vm_accessor_method_cv(source, slot);
   if (!method_cv) {
     if (error_out) {
       *error_out = newSVpvf(

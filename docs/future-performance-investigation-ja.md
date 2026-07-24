@@ -784,3 +784,11 @@ object fieldごとにgeneric args/info準備を省けるため、幅が広いほ
 GraphQL argumentsを宣言するfield、context/infoを必要とするmethod、DataLoaderや権限判定を
 行うfieldは通常resolverを使う。`accessor`と`resolve`の同時指定はschema compile時に
 拒否する。
+
+accessor導入後にもfieldごとの`gv_fetchmethod_autoload`が残っていたため、runtime slotへ
+直前のsource stashとmethod GVを1件cacheした。stashが変わるsubclass切替と
+`PL_sub_generation`の変更時はmethod resolutionをやり直す。CVそのものではなくGVを
+保持することで、同一GV上のmethod再定義も次回callで新しいCVへ追従する。
+
+accessor単体のthroughputは、1 fieldで約1%、10 fieldsで約5%、25 fieldsで約8%
+追加改善した。subclass切替と実行中のmethod再定義を回帰テストに含めた。

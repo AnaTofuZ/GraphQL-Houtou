@@ -358,6 +358,49 @@ subtest 'variable values are coerced through lowered variable defs' => sub {
   }, 'variable coercion uses graphql_to_perl';
 };
 
+subtest 'prepared variable values are not coerced again as arguments' => sub {
+  my $parse_count = 0;
+  my $CountingInput = GraphQL::Houtou::Type::Scalar->new(
+    name => 'CountingInput',
+    parse_value => sub {
+      $parse_count++;
+      return "parsed:$_[0]";
+    },
+    serialize => sub { $_[0] },
+  );
+  my $counting_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'CountingQuery',
+      fields => {
+        echoCounting => {
+          type => $String,
+          resolver_mode => 'native',
+          args => {
+            value => { type => $CountingInput->non_null },
+          },
+          resolve => sub {
+            my ($source, $args) = @_;
+            return $args->{value};
+          },
+        },
+      },
+    ),
+    types => [ $CountingInput ],
+  );
+
+  my $result = $counting_schema->execute(
+    'query Q($value: CountingInput!) { echoCounting(value: $value) }',
+    variables => { value => 'raw' },
+  );
+
+  is_deeply $result, {
+    data => {
+      echoCounting => 'parsed:raw',
+    },
+  }, 'resolver receives the value produced by variable coercion';
+  is $parse_count, 1, 'custom scalar parse_value runs once for a direct variable argument';
+};
+
 subtest 'argument values are coerced through lowered arg defs' => sub {
   my $result = $schema->execute(
     '{ describeProfile(profile: { name: "Ana" }) }',

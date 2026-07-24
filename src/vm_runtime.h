@@ -5654,6 +5654,40 @@ gql_runtime_vm_specialize_arg_payload_sv(
     raw_value = gql_runtime_vm_native_args_payload_lookup_value(payload, arg_def->name, i);
 
     if (raw_value) {
+      /*
+       * A top-level variable reference already points at the result of
+       * CoerceVariableValues. GraphQL's CoerceArgumentValues consumes that
+       * prepared value directly; coercing it again here is both redundant
+       * and observable for custom input coercers. Keep nested variable
+       * references on the materialize/coerce path because the surrounding
+       * list or input-object literal still has to be coerced as a whole.
+       */
+      if (op->args_mode_code == GQL_VM_ARGS_DYNAMIC
+          && raw_value->kind_code == GQL_VM_DYNAMIC_VARIABLE
+          && raw_value->variable_name
+          && variables_hv) {
+        SV **prepared_svp = hv_fetch(
+          variables_hv,
+          raw_value->variable_name,
+          (I32)strlen(raw_value->variable_name),
+          0
+        );
+        /*
+         * Null still has to pass through argument coercion: when validation
+         * is deliberately skipped, a nullable variable may be used at a
+         * non-null argument position and must fail here.
+         */
+        if (prepared_svp && SvOK(*prepared_svp)) {
+          hv_store(
+            coerced_hv,
+            arg_def->name,
+            (I32)strlen(arg_def->name),
+            newSVsv(*prepared_svp),
+            0
+          );
+          continue;
+        }
+      }
       if (op->args_mode_code == GQL_VM_ARGS_DYNAMIC) {
         raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, variables_hv));
       } else {
@@ -5740,6 +5774,27 @@ gql_runtime_vm_specialize_arg_payload_native(
     if (raw_value) {
       SV *raw_sv = NULL;
       SV *coerced_sv;
+      if (op
+          && op->args_mode_code == GQL_VM_ARGS_DYNAMIC
+          && raw_value->kind_code == GQL_VM_DYNAMIC_VARIABLE
+          && raw_value->variable_name
+          && variables_hv) {
+        SV **prepared_svp = hv_fetch(
+          variables_hv,
+          raw_value->variable_name,
+          (I32)strlen(raw_value->variable_name),
+          0
+        );
+        if (prepared_svp && SvOK(*prepared_svp)) {
+          coerced_value = gql_runtime_vm_native_dynamic_value_from_sv(
+            aTHX_ *prepared_svp
+          );
+          ret->names[ret->count] = savepv(arg_def->name);
+          ret->values[ret->count] = coerced_value;
+          ret->count++;
+          continue;
+        }
+      }
       if (op && op->args_mode_code == GQL_VM_ARGS_DYNAMIC) {
         raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, variables_hv));
       } else {

@@ -810,3 +810,64 @@ Promise::XSはsettled valueを公開APIから同期取得できないため、ex
 Promiseにも`then` callback、pending entry、scheduler処理を必要とする。これ以上の大幅な
 改善にはPromise::XSとの専用連携、またはDataLoaderがexecutorへnative pending handleを
 返す内部契約が必要であり、小さなruntime変更とは別のアーキテクチャ課題になる。
+
+### 14.10 DataLoader専用ticketの試作と不採用
+
+通常のWebアプリで多い「variables付きquery + DataLoader + `on_stall`」を次の対象とした。
+Houtouの`on_stall`経路はevent loopを駆動する一般的な非同期I/Oではなく、resolverが
+返したpending値を記録し、DataLoaderをbatch dispatchしてから同期的に実行を再開する。
+このため、DataLoader経路では汎用Promiseを専用pending ticketへ置き換えられるという
+仮説を立てた。
+
+最初に、20件のobject list（各3 fields）を同一queryとvariablesで実行し、sync値、
+root resolverがpre-resolved Promiseを1個返す場合、list itemごとにpre-resolved
+Promiseを返す場合を比較した。
+
+| workload | throughput | sync比 |
+|---|---:|---:|
+| sync SV | 106,190 req/s | 100% |
+| root Promise | 59,582 req/s | 56% |
+| 20 item Promises | 27,927 req/s | 26% |
+
+Promise数に応じて差が拡大するため、当初はdeferred/Promise生成と`then`連鎖が最大要因と
+考えた。そこで`perf/dataloader-pending-tickets` branchで、DataLoaderの`load()`が
+Promise::XSではなく専用ticketを返し、executorがticketをpending値として認識する試作を
+行った。cache、prime、load_many、per-key reject、object/list completion、公開`then()`
+互換まで接続し、DataLoaderとPromise fallbackのfocused testを通した。
+
+Perl HashRefとclosureで実装した最初のticketは、10 keysのGraphQL実行でmainより約10%
+遅かった。Promise::XSがC実装であるのに対し、ticketの生成・subscribe・settleをPerlで
+再実装したことが原因だった。次にticketの生成とsettleをXSへ移し、executorから
+subscribeする際のPerl method callも省いた。
+
+同じ`util/dataloader-benchmark.pl`をmainと試作branchで比較した結果:
+
+| workload | main Promise::XS | XS ticket | 差 |
+|---|---:|---:|---:|
+| loader単体、10 keys | 121,963 req/s | 139,634 req/s | +14.5% |
+| GraphQL、1 key、fast resolver | 127,296 req/s | 121,963 req/s | -4.2% |
+| GraphQL、10 keys、fast resolver | 30,072 req/s | 30,629 req/s | +1.9% |
+| GraphQL、25 keys、fast resolver | 13,273 req/s | 13,389 req/s | +0.9% |
+
+ticketはloader単体ではdeferred/Promise生成を減らしたが、GraphQL実行全体では改善が
+約1〜2%に縮み、1 keyでは逆に低下した。したがってsync/async差を支配しているのは
+Promise object生成そのものではなく、Houtou側のfieldごとのpending entry、resolve/reject
+callback、path/outcome保持、ready判定、scheduler enqueue/drain、completion再開である。
+
+一方、ticketを正式採用すると次の契約をPromise::XSと二重に保守する必要がある。
+
+- resolve/reject、複数subscriber、callback例外、chain flattening
+- cache、prime、load_manyとper-key error
+- object/list/abstract completionとNon-Null伝播
+- request cancellation、未解決ticket破棄、XS handleの所有権
+- Promise resolverとticket resolverが混在する場合のscheduler semantics
+
+GraphQL全体で約1〜2%という効果では、このメンテナンスコストとリーク・意味論差異の
+リスクに見合わない。ticket試作はcommitせず全変更を破棄し、Promise::XSを単一のpending
+契約として維持することにした。
+
+次の改善対象はPromise APIの置換ではなくasync scheduler内部とする。具体的には、
+DataLoader dispatch中はsettled entryへ値だけを書き込み、Promiseごとにschedulerを
+再入させず、dispatch終了後にready frameを一括enqueue/drainする。さらに同一blockの
+completionをまとめ、Promiseが返るまでの同期区間をsync fast lane相当にfuseできるかを
+別branchで検証する。

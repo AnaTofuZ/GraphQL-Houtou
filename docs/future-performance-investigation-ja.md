@@ -596,3 +596,35 @@ variable-dependent directive guard により program specialization が必要な
 この結果から、typed slots の前段階として、request hot path を複数の XSUB に分割せず
 coercion、argument materialization、execution、emit を単一 native request scope に
 維持すること自体が重要であると分かる。
+
+### 14.2 Variable name の compile-time slot binding
+
+native dynamic value が持つ variable name を、native program load 時に
+`variable_defs` の index へ bind するようにした。融合同期レーンでは coerce 済み
+variable value を同じ順序の request-local slot 配列にも記録し、直接 variable
+argument は次のように参照する。
+
+```text
+従来: argument payload → variable name → prepared HV の hv_fetch
+現在: argument payload → variable index → prepared slots[index]
+```
+
+8 variables 以下の一般的な operation では slot 配列を XSUB の C stack 上に置き、
+request-time heap allocationを追加しない。8 variables を超える operation と、
+descriptor-only/unbound value は従来の名前 lookup へ戻る。
+
+nullable variable が未指定の場合、slot は null pointer のままになる。このケースを
+`undef` value として安全に従来の argument coercion へ戻す必要がある。初回の全テストで
+この条件が canonical pagination query の crash として検出され、slot pointer と
+格納 value の両方を検査する deopt guard を追加した。
+
+5 標本中央値:
+
+| ワークロード | XSUB 融合後 | slot index 導入後 | 改善 |
+|---|---:|---:|---:|
+| nested variable object | 324,585 req/s | 329,244 req/s | +1.4% |
+| fresh variables per request | 307,680 req/s | 310,597 req/s | +0.9% |
+
+1 variable、1 dynamic argument の小さい query では lookup が 1 回しかないため改善は
+小さい。複数 field が同じ variable を参照する query では request preparation 1 回に
+対して field ごとの名前 lookup を除去できるため、相対効果が大きくなると予想される。

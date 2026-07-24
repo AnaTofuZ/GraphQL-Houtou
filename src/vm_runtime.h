@@ -259,6 +259,10 @@ struct gql_runtime_vm_callback_context {
   SV *context;
   SV *variables;
   SV *root_value;
+  /* Request-local prepared variables in native program definition order.
+   * Fused sync lanes borrow this array from their XSUB stack. */
+  SV **variable_slots;
+  IV variable_slot_count;
 };
 
 typedef struct {
@@ -342,6 +346,8 @@ struct gql_runtime_vm_native_dynamic_value {
   char *scalar_pv;
   STRLEN scalar_pv_len;
   char *variable_name;
+  /* Index in native_program->variable_defs; -1 means name lookup fallback. */
+  IV variable_index;
   IV object_count;
   char **object_names;
   gql_runtime_vm_native_dynamic_value_t **object_values;
@@ -606,6 +612,11 @@ static void gql_runtime_vm_native_dynamic_value_destroy(
 static SV *gql_runtime_vm_native_dynamic_value_materialize_sv(
   pTHX_ const gql_runtime_vm_native_dynamic_value_t *value,
   HV *variables
+);
+static void gql_runtime_vm_bind_dynamic_value_variables(
+  gql_runtime_vm_native_dynamic_value_t *value,
+  const gql_runtime_vm_native_arg_def_t *variable_defs,
+  IV variable_def_count
 );
 static int gql_runtime_vm_native_dynamic_value_truthy(
   pTHX_ const gql_runtime_vm_native_dynamic_value_t *value,
@@ -1132,6 +1143,7 @@ gql_runtime_vm_native_dynamic_value_from_sv(pTHX_ SV *value)
   Newxz(ret, 1, gql_runtime_vm_native_dynamic_value_t);
   ret->kind_code = GQL_VM_DYNAMIC_UNDEF;
   ret->scalar_kind_code = GQL_VM_NATIVE_SCALAR_UNDEF;
+  ret->variable_index = -1;
 
   if (!value || !SvOK(value)) {
     return ret;
@@ -1216,6 +1228,7 @@ gql_runtime_vm_native_dynamic_value_from_native_value(
   Newxz(ret, 1, gql_runtime_vm_native_dynamic_value_t);
   ret->kind_code = GQL_VM_DYNAMIC_UNDEF;
   ret->scalar_kind_code = GQL_VM_NATIVE_SCALAR_UNDEF;
+  ret->variable_index = -1;
 
   if (!value || value->kind_code == GQL_VM_NATIVE_VALUE_UNDEF) {
     return ret;
@@ -1307,6 +1320,50 @@ gql_runtime_vm_native_dynamic_value_clone(
     }
   }
   return ret;
+}
+
+static void
+gql_runtime_vm_bind_dynamic_value_variables(
+  gql_runtime_vm_native_dynamic_value_t *value,
+  const gql_runtime_vm_native_arg_def_t *variable_defs,
+  IV variable_def_count
+)
+{
+  IV i;
+
+  if (!value) {
+    return;
+  }
+  if (value->kind_code == GQL_VM_DYNAMIC_VARIABLE) {
+    value->variable_index = -1;
+    if (!value->variable_name) {
+      return;
+    }
+    for (i = 0; i < variable_def_count; i++) {
+      if (variable_defs[i].name && strEQ(variable_defs[i].name, value->variable_name)) {
+        value->variable_index = i;
+        return;
+      }
+    }
+    return;
+  }
+  if (value->kind_code == GQL_VM_DYNAMIC_OBJECT) {
+    for (i = 0; i < value->object_count; i++) {
+      gql_runtime_vm_bind_dynamic_value_variables(
+        value->object_values ? value->object_values[i] : NULL,
+        variable_defs,
+        variable_def_count
+      );
+    }
+  } else if (value->kind_code == GQL_VM_DYNAMIC_LIST) {
+    for (i = 0; i < value->list_count; i++) {
+      gql_runtime_vm_bind_dynamic_value_variables(
+        value->list_values ? value->list_values[i] : NULL,
+        variable_defs,
+        variable_def_count
+      );
+    }
+  }
 }
 
 static void
@@ -4640,6 +4697,39 @@ gql_runtime_vm_native_program_from_sv(pTHX_ SV *sv)
     }
   }
 
+  /* Resolve variable names in executable payloads once. The descriptor
+   * remains name-bearing for round trips, while request execution can use
+   * the compact variable definition index. */
+  for (i = 0; i < program->block_count; i++) {
+    gql_runtime_vm_native_block_t *block = &program->blocks[i];
+    for (j = 0; j < block->op_count; j++) {
+      gql_runtime_vm_native_op_t *op = &block->ops[j];
+      IV k;
+      if (op->args_payload_native) {
+        for (k = 0; k < op->args_payload_native->count; k++) {
+          gql_runtime_vm_bind_dynamic_value_variables(
+            op->args_payload_native->values
+              ? op->args_payload_native->values[k]
+              : NULL,
+            program->variable_defs,
+            program->variable_def_count
+          );
+        }
+      }
+      if (op->directives_payload_native) {
+        for (k = 0; k < op->directives_payload_native->count; k++) {
+          gql_runtime_vm_bind_dynamic_value_variables(
+            op->directives_payload_native->guards
+              ? op->directives_payload_native->guards[k].if_expr
+              : NULL,
+            program->variable_defs,
+            program->variable_def_count
+          );
+        }
+      }
+    }
+  }
+
   return program;
 }
 
@@ -5525,11 +5615,13 @@ gql_runtime_vm_missing_variable_error_sv(pTHX_ SV *type_sv, const char *name)
 }
 
 static SV *
-gql_runtime_vm_prepare_program_variables_sv(
+gql_runtime_vm_prepare_program_variables_into_slots_sv(
   pTHX_
   SV *runtime_schema,
   gql_runtime_vm_native_program_t *program,
-  HV *provided_hv
+  HV *provided_hv,
+  SV **variable_slots,
+  IV variable_slot_capacity
 )
 {
   HV *coerced_hv;
@@ -5606,6 +5698,10 @@ gql_runtime_vm_prepare_program_variables_sv(
       }
     }
     hv_store(coerced_hv, arg_def->name, (I32)name_len, coerced_sv, 0);
+    if (variable_slots && i < variable_slot_capacity) {
+      /* Borrowed from coerced_hv, which owns the value for the request. */
+      variable_slots[i] = coerced_sv;
+    }
   }
 
   if (provided_hv) {
@@ -5632,12 +5728,32 @@ gql_runtime_vm_prepare_program_variables_sv(
 }
 
 static SV *
+gql_runtime_vm_prepare_program_variables_sv(
+  pTHX_
+  SV *runtime_schema,
+  gql_runtime_vm_native_program_t *program,
+  HV *provided_hv
+)
+{
+  return gql_runtime_vm_prepare_program_variables_into_slots_sv(
+    aTHX_
+    runtime_schema,
+    program,
+    provided_hv,
+    NULL,
+    0
+  );
+}
+
+static SV *
 gql_runtime_vm_specialize_arg_payload_sv(
   pTHX_
   const gql_runtime_vm_native_runtime_t *runtime,
   const gql_runtime_vm_native_slot_t *slot,
   const gql_runtime_vm_native_op_t *op,
   HV *variables_hv,
+  SV **variable_slots,
+  IV variable_slot_count,
   SV **croak_out
 )
 {
@@ -5670,20 +5786,26 @@ gql_runtime_vm_specialize_arg_payload_sv(
        */
       if (op->args_mode_code == GQL_VM_ARGS_DYNAMIC
           && raw_value->kind_code == GQL_VM_DYNAMIC_VARIABLE
-          && raw_value->variable_name
-          && variables_hv) {
-        SV **prepared_svp = hv_fetch(
-          variables_hv,
-          raw_value->variable_name,
-          (I32)strlen(raw_value->variable_name),
-          0
-        );
+          && raw_value->variable_name) {
+        SV **prepared_svp = NULL;
+        if (raw_value->variable_index >= 0
+            && variable_slots
+            && raw_value->variable_index < variable_slot_count) {
+          prepared_svp = &variable_slots[raw_value->variable_index];
+        } else if (variables_hv) {
+          prepared_svp = hv_fetch(
+            variables_hv,
+            raw_value->variable_name,
+            (I32)strlen(raw_value->variable_name),
+            0
+          );
+        }
         /*
          * Null still has to pass through argument coercion: when validation
          * is deliberately skipped, a nullable variable may be used at a
          * non-null argument position and must fail here.
          */
-        if (prepared_svp && SvOK(*prepared_svp)) {
+        if (prepared_svp && *prepared_svp && SvOK(*prepared_svp)) {
           hv_store(
             coerced_hv,
             arg_def->name,
@@ -5791,7 +5913,7 @@ gql_runtime_vm_specialize_arg_payload_native(
           (I32)strlen(raw_value->variable_name),
           0
         );
-        if (prepared_svp && SvOK(*prepared_svp)) {
+        if (prepared_svp && *prepared_svp && SvOK(*prepared_svp)) {
           coerced_value = gql_runtime_vm_native_dynamic_value_from_sv(
             aTHX_ *prepared_svp
           );

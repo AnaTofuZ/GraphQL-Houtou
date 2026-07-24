@@ -4583,7 +4583,9 @@ gql_runtime_vm_state_resolve_args_sv(pTHX_ SV *state_sv)
     return newSVsv(s && s->empty_args ? s->empty_args : &PL_sv_undef);
   }
 
-  args_sv = gql_runtime_vm_specialize_arg_payload_sv(aTHX_ runtime, slot, op, variables_hv, NULL);
+  args_sv = gql_runtime_vm_specialize_arg_payload_sv(
+    aTHX_ runtime, slot, op, variables_hv, NULL, 0, NULL
+  );
   return args_sv ? args_sv : newSVsv(s && s->empty_args ? s->empty_args : &PL_sv_undef);
 }
 
@@ -7022,14 +7024,16 @@ gql_runtime_vm_lookup_slot_type_object_sv(
 }
 
 static SV *
-gql_runtime_vm_execute_bundle_fast_response_sv(
+gql_runtime_vm_execute_bundle_fast_response_with_slots_sv(
   pTHX_
   gql_runtime_vm_native_runtime_t *runtime,
   SV *runtime_schema,
   gql_runtime_vm_native_bundle_t *bundle,
   SV *root_value,
   SV *context_value,
-  SV *variables
+  SV *variables,
+  SV **variable_slots,
+  IV variable_slot_count
 )
 {
   gql_runtime_vm_exec_state_t state;
@@ -7048,6 +7052,8 @@ gql_runtime_vm_execute_bundle_fast_response_sv(
   callback_ctx.root_value = root_value;
   callback_ctx.context = context_value;
   callback_ctx.variables = variables;
+  callback_ctx.variable_slots = variable_slots;
+  callback_ctx.variable_slot_count = variable_slot_count;
   state.callback_ctx = &callback_ctx;
   gql_runtime_vm_prepare_bundle_block_type_objects(aTHX_ callback_ctx.runtime_schema, bundle);
 
@@ -7073,6 +7079,30 @@ gql_runtime_vm_execute_bundle_fast_response_sv(
     croak_sv(sv_2mortal(state.fast_lane_deferred_croak_sv));
   }
   return response_sv;
+}
+
+static SV *
+gql_runtime_vm_execute_bundle_fast_response_sv(
+  pTHX_
+  gql_runtime_vm_native_runtime_t *runtime,
+  SV *runtime_schema,
+  gql_runtime_vm_native_bundle_t *bundle,
+  SV *root_value,
+  SV *context_value,
+  SV *variables
+)
+{
+  return gql_runtime_vm_execute_bundle_fast_response_with_slots_sv(
+    aTHX_
+    runtime,
+    runtime_schema,
+    bundle,
+    root_value,
+    context_value,
+    variables,
+    NULL,
+    0
+  );
 }
 
 static SV *
@@ -7308,6 +7338,8 @@ gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
       SV *coercion_croak_sv = NULL;
       specialized_sv = gql_runtime_vm_specialize_arg_payload_sv(
         aTHX_ runtime, slot, op, variables_hv,
+        callback_ctx ? callback_ctx->variable_slots : NULL,
+        callback_ctx ? callback_ctx->variable_slot_count : 0,
         state ? &coercion_croak_sv : NULL
       );
       if (coercion_croak_sv) {
@@ -9277,14 +9309,16 @@ gql_runtime_vm_response_json_from_data_sv(pTHX_ const gql_runtime_vm_writer_t *w
 }
 
 static SV *
-gql_runtime_vm_execute_bundle_fast_response_json(
+gql_runtime_vm_execute_bundle_fast_response_json_with_slots(
   pTHX_
   gql_runtime_vm_native_runtime_t *runtime,
   SV *runtime_schema,
   gql_runtime_vm_native_bundle_t *bundle,
   SV *root_value,
   SV *context_value,
-  SV *variables
+  SV *variables,
+  SV **variable_slots,
+  IV variable_slot_count
 )
 {
   gql_runtime_vm_exec_state_t state;
@@ -9302,6 +9336,8 @@ gql_runtime_vm_execute_bundle_fast_response_json(
   callback_ctx.root_value = root_value;
   callback_ctx.context = context_value;
   callback_ctx.variables = variables;
+  callback_ctx.variable_slots = variable_slots;
+  callback_ctx.variable_slot_count = variable_slot_count;
   state.callback_ctx = &callback_ctx;
   gql_runtime_vm_prepare_bundle_block_type_objects(aTHX_ callback_ctx.runtime_schema, bundle);
 
@@ -9339,6 +9375,30 @@ gql_runtime_vm_execute_bundle_fast_response_json(
     croak_sv(sv_2mortal(state.fast_lane_deferred_croak_sv));
   }
   return out;
+}
+
+static SV *
+gql_runtime_vm_execute_bundle_fast_response_json(
+  pTHX_
+  gql_runtime_vm_native_runtime_t *runtime,
+  SV *runtime_schema,
+  gql_runtime_vm_native_bundle_t *bundle,
+  SV *root_value,
+  SV *context_value,
+  SV *variables
+)
+{
+  return gql_runtime_vm_execute_bundle_fast_response_json_with_slots(
+    aTHX_
+    runtime,
+    runtime_schema,
+    bundle,
+    root_value,
+    context_value,
+    variables,
+    NULL,
+    0
+  );
 }
 
 
@@ -10916,6 +10976,8 @@ execute_native_program_prepared_fast_xs(runtime_sv, program_sv, root_value = &PL
       SV *runtime_schema_sv;
       SV *prepared_variables_sv;
       HV *provided_hv = NULL;
+      SV *variable_slots[8];
+      IV variable_slot_count;
 
       if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
         croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
@@ -10935,25 +10997,33 @@ execute_native_program_prepared_fast_xs(runtime_sv, program_sv, root_value = &PL
         }
         provided_hv = (HV *)SvRV(variables);
       }
+      Zero(variable_slots, 8, SV *);
+      variable_slot_count = program->variable_def_count <= 8
+        ? program->variable_def_count
+        : 0;
       /*
        * Keep variable coercion and the sync fast lane inside one XSUB.
        * The prepared HV is request-local and never needs to cross back
        * through Perl before execution consumes it.
        */
-      prepared_variables_sv = sv_2mortal(gql_runtime_vm_prepare_program_variables_sv(
+      prepared_variables_sv = sv_2mortal(gql_runtime_vm_prepare_program_variables_into_slots_sv(
         aTHX_
         runtime_schema_sv,
         program,
-        provided_hv
+        provided_hv,
+        variable_slot_count ? variable_slots : NULL,
+        variable_slot_count
       ));
-      RETVAL = gql_runtime_vm_execute_bundle_fast_response_sv(
+      RETVAL = gql_runtime_vm_execute_bundle_fast_response_with_slots_sv(
         aTHX_
         runtime,
         runtime_schema_sv,
         bundle,
         root_value,
         context_value,
-        prepared_variables_sv
+        prepared_variables_sv,
+        variable_slot_count ? variable_slots : NULL,
+        variable_slot_count
       );
     }
   OUTPUT:
@@ -11013,6 +11083,8 @@ execute_native_program_prepared_fast_to_json_xs(runtime_sv, program_sv, root_val
       SV *runtime_schema_sv;
       SV *prepared_variables_sv;
       HV *provided_hv = NULL;
+      SV *variable_slots[8];
+      IV variable_slot_count;
 
       if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
         croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
@@ -11032,20 +11104,28 @@ execute_native_program_prepared_fast_to_json_xs(runtime_sv, program_sv, root_val
         }
         provided_hv = (HV *)SvRV(variables);
       }
-      prepared_variables_sv = sv_2mortal(gql_runtime_vm_prepare_program_variables_sv(
+      Zero(variable_slots, 8, SV *);
+      variable_slot_count = program->variable_def_count <= 8
+        ? program->variable_def_count
+        : 0;
+      prepared_variables_sv = sv_2mortal(gql_runtime_vm_prepare_program_variables_into_slots_sv(
         aTHX_
         runtime_schema_sv,
         program,
-        provided_hv
+        provided_hv,
+        variable_slot_count ? variable_slots : NULL,
+        variable_slot_count
       ));
-      RETVAL = gql_runtime_vm_execute_bundle_fast_response_json(
+      RETVAL = gql_runtime_vm_execute_bundle_fast_response_json_with_slots(
         aTHX_
         runtime,
         runtime_schema_sv,
         bundle,
         root_value,
         context_value,
-        prepared_variables_sv
+        prepared_variables_sv,
+        variable_slot_count ? variable_slots : NULL,
+        variable_slot_count
       );
     }
   OUTPUT:

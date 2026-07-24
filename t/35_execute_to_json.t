@@ -161,7 +161,7 @@ subtest 'async resolvers need an async runtime' => sub {
     'async runtime settles pre-resolved promises to JSON';
 };
 
-subtest 'native_no_args ABI is preserved on the async lane' => sub {
+subtest 'fast_resolve_no_args ABI is preserved on the async lane' => sub {
   my $has_promise_xs = eval { require Promise::XS; 1 };
   plan skip_all => 'Promise::XS not available' if !$has_promise_xs;
   my @seen;
@@ -171,7 +171,7 @@ subtest 'native_no_args ABI is preserved on the async lane' => sub {
       fields => {
         later => {
           type => $String,
-          resolver_mode => 'native_no_args',
+          resolver_mode => 'fast_resolve_no_args',
           resolve => sub {
             @seen = @_;
             return Promise::XS::resolved('x');
@@ -184,10 +184,45 @@ subtest 'native_no_args ABI is preserved on the async lane' => sub {
   my $bytes = build_native_runtime($async_schema, async => 1)
     ->execute_document_to_json('{ later }', context => { request_id => 7 });
   is_deeply $json->decode($bytes), { data => { later => 'x' } },
-    'async runtime settles a native_no_args resolver';
+    'async runtime settles a fast no-args resolver';
   is scalar(@seen), 3, 'async resolver receives the three-argument ABI';
   is_deeply $seen[1], { request_id => 7 }, 'async resolver receives context';
   is $seen[2]->name, 'String', 'async resolver receives return type';
+};
+
+subtest 'fast_resolve_one_arg ABI is preserved on the async lane' => sub {
+  my $has_promise_xs = eval { require Promise::XS; 1 };
+  plan skip_all => 'Promise::XS not available' if !$has_promise_xs;
+  my @seen;
+  my $async_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'AsyncNativeOneArgQuery',
+      fields => {
+        later => {
+          type => $String,
+          resolver_mode => 'fast_resolve_one_arg',
+          args => { value => { type => $String } },
+          resolve => sub {
+            @seen = @_;
+            return Promise::XS::resolved($_[1]);
+          },
+        },
+      },
+    ),
+  );
+
+  my $bytes = build_native_runtime($async_schema, async => 1)
+    ->execute_document_to_json(
+      'query Q($value: String) { later(value: $value) }',
+      variables => { value => 'x' },
+      context => { request_id => 8 },
+    );
+  is_deeply $json->decode($bytes), { data => { later => 'x' } },
+    'async runtime settles a fast one-argument resolver';
+  is scalar(@seen), 4, 'async resolver receives the four-argument ABI';
+  is $seen[1], 'x', 'async resolver receives the direct argument value';
+  is_deeply $seen[2], { request_id => 8 }, 'async resolver receives context';
+  is $seen[3]->name, 'String', 'async resolver receives return type';
 };
 
 subtest 'sequential responses are stable' => sub {

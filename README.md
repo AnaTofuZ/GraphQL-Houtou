@@ -116,6 +116,75 @@ SDL are reflected on the built types. The same functionality is available as
 `->from_ast($ast, %opts)`. Type-system extensions in the same SDL
 document are merged before the executable schema is constructed.
 
+### Fast resolver modes
+
+Resolvers remain ordinary Perl coderefs. A `fast_resolve*` mode asks the XS
+VM to call the coderef through a smaller callback signature, without
+constructing the generic lazy `$info` object. The zero- and one-argument
+forms also avoid constructing an arguments HashRef.
+
+In short:
+
+- execution and argument preparation stay inside the XS VM
+- the application callback is still Perl
+- `$info` is unavailable
+- the callback signature is part of the selected fast-resolver contract
+- return-value completion, errors, null propagation, and Promise handling
+  remain the runtime's responsibility
+
+`resolver_mode` selects one of these callback ABIs; it is not inferred from
+the number of field arguments. Use the regular resolver contract when the
+resolver needs `$info`, or unless profiling shows that a fast mode matters:
+
+| Field arguments | Recommended mode | Resolver arguments |
+|---:|---|---|
+| any count, regular API | omitted / default | `($source, $args, $context, $info, $return_type)` |
+| 0, fast path | `fast_resolve_no_args` | `($source, $context, $return_type)` |
+| exactly 1, fast path | `fast_resolve_one_arg` | `($source, $value, $context, $return_type)` |
+| 2 or more, fast path | `fast_resolve` | `($source, $args, $context, $return_type)` |
+
+Use the mode matching the field's declared argument count.
+`fast_resolve` accepts any argument count and always passes a HashRef as
+`$args`, but the count-specific names make the callback signature explicit.
+The specialized modes change the callback signature and are therefore
+never selected automatically. Schema compilation rejects
+`fast_resolve_no_args` on a field with arguments and
+`fast_resolve_one_arg` unless the field has exactly one. The older
+`native`, `native_args`, `native_no_args`, and `native_one_arg` spellings
+remain compatibility aliases.
+
+    fields => {
+      health => {
+        type => $String,
+        resolver_mode => 'fast_resolve_no_args',
+        resolve => sub {
+          my ($source, $context, $return_type) = @_;
+          return 'ok';
+        },
+      },
+      user => {
+        type => $User,
+        args => { id => { type => $ID->non_null } },
+        resolver_mode => 'fast_resolve_one_arg',
+        resolve => sub {
+          my ($source, $id, $context, $return_type) = @_;
+          return load_user($id);
+        },
+      },
+      search => {
+        type => $User->list,
+        args => {
+          term => { type => $String },
+          limit => { type => $Int },
+        },
+        resolver_mode => 'fast_resolve',
+        resolve => sub {
+          my ($source, $args, $context, $return_type) = @_;
+          return search_users($args->{term}, $args->{limit});
+        },
+      },
+    }
+
 The inverse direction is `print_schema()` (also available as
 `$schema->to_doc`), which renders any schema back to SDL — including
 schemas assembled from Perl type objects:

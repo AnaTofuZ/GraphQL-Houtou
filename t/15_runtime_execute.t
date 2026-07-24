@@ -153,7 +153,7 @@ subtest 'native resolver mode lets explicit resolver use native runtime' => sub 
   }, 'native-safe explicit resolver still executes correctly on the auto-detect path';
 };
 
-subtest 'native_no_args resolver mode omits the arguments hash' => sub {
+subtest 'fast_resolve_no_args omits the arguments hash' => sub {
   my @seen;
   my $context = { trace_id => 42 };
   my $native_schema = GraphQL::Houtou::Schema->new(
@@ -162,7 +162,7 @@ subtest 'native_no_args resolver mode omits the arguments hash' => sub {
       fields => {
         nativeHello => {
           type => $String,
-          resolver_mode => 'native_no_args',
+          resolver_mode => 'fast_resolve_no_args',
           resolve => sub {
             @seen = @_;
             return 'native-hi';
@@ -174,20 +174,20 @@ subtest 'native_no_args resolver mode omits the arguments hash' => sub {
 
   my $result = $native_schema->execute('{ nativeHello }', context => $context);
   is_deeply $result, { data => { nativeHello => 'native-hi' } },
-    'native_no_args resolver executes correctly';
+    'fast no-args resolver executes correctly';
   is scalar(@seen), 3, 'resolver receives source, context, and return type only';
   is $seen[1], $context, 'resolver receives the request context';
   is $seen[2]->name, 'String', 'resolver receives the return type';
 };
 
-subtest 'native_no_args rejects fields that declare arguments' => sub {
+subtest 'fast_resolve_no_args rejects fields that declare arguments' => sub {
   my $invalid_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
       name => 'InvalidNativeNoArgsQuery',
       fields => {
         greet => {
           type => $String,
-          resolver_mode => 'native_no_args',
+          resolver_mode => 'fast_resolve_no_args',
           args => { name => { type => $String } },
           resolve => sub { return 'unreachable' },
         },
@@ -196,18 +196,77 @@ subtest 'native_no_args rejects fields that declare arguments' => sub {
   );
 
   eval { $invalid_schema->build_runtime };
-  like $@, qr/native_no_args.*requires a field without arguments/,
+  like $@, qr/fast_resolve_no_args.*requires a field without arguments/,
     'invalid ABI declaration fails while compiling the runtime';
 };
 
-subtest 'native resolver mode supports static literal args on native runtime' => sub {
+subtest 'fast_resolve_one_arg passes the coerced value without an args hash' => sub {
+  my @seen;
+  my $context = { trace_id => 84 };
+  my $one_arg_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'NativeOneArgQuery',
+      fields => {
+        greet => {
+          type => $String,
+          resolver_mode => 'fast_resolve_one_arg',
+          args => {
+            name => { type => $String, default_value => 'Bob' },
+          },
+          resolve => sub {
+            @seen = @_;
+            return "hello $_[1]";
+          },
+        },
+      },
+    ),
+  );
+
+  my $result = $one_arg_schema->execute(
+    'query Q($name: String) { greet(name: $name) }',
+    variables => { name => 'Ana' },
+    context => $context,
+  );
+  is_deeply $result, { data => { greet => 'hello Ana' } },
+    'dynamic argument reaches the one-argument resolver';
+  is scalar(@seen), 4,
+    'resolver receives source, value, context, and return type';
+  is $seen[1], 'Ana', 'resolver receives the argument value directly';
+  is $seen[2], $context, 'one-argument resolver receives context';
+  is $seen[3]->name, 'String', 'one-argument resolver receives return type';
+
+  is_deeply $one_arg_schema->execute('{ greet }'),
+    { data => { greet => 'hello Bob' } },
+    'argument default reaches the direct value path';
+};
+
+subtest 'fast_resolve_one_arg requires exactly one argument declaration' => sub {
+  my $invalid_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'InvalidNativeOneArgQuery',
+      fields => {
+        hello => {
+          type => $String,
+          resolver_mode => 'fast_resolve_one_arg',
+          resolve => sub { return 'unreachable' },
+        },
+      },
+    ),
+  );
+
+  eval { $invalid_schema->build_runtime };
+  like $@, qr/fast_resolve_one_arg.*requires exactly one argument/,
+    'invalid one-argument ABI declaration is rejected';
+};
+
+subtest 'fast_resolve mode supports the HashRef ABI' => sub {
   my $native_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
       name => 'NativeArgsQuery',
       fields => {
         nativeGreet => {
           type => $String,
-          resolver_mode => 'native',
+          resolver_mode => 'fast_resolve',
           args => {
             name => { type => $String },
           },
@@ -225,7 +284,7 @@ subtest 'native resolver mode supports static literal args on native runtime' =>
     data => {
       nativeGreet => 'hi vm',
     },
-  }, 'auto-detect path passes static args to explicit resolver';
+  }, 'fast_resolve passes a HashRef to the explicit resolver';
 };
 
 subtest 'native runtime specializes variable args before bundle execution' => sub {

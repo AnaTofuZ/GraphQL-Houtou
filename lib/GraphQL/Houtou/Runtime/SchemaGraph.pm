@@ -451,10 +451,19 @@ sub _build_slots_for_object {
       schema => $schema,
       field => $field,
     );
-    if (($field->{resolver_mode} || q()) eq 'native_no_args'
+    if ((($field->{resolver_mode} || q()) eq 'native_no_args'
+          || ($field->{resolver_mode} || q()) eq 'fast_resolve_no_args')
         && $field->{args}
         && keys %{ $field->{args} }) {
-      die "resolver_mode 'native_no_args' requires a field without arguments"
+      die "resolver_mode '" . $field->{resolver_mode}
+        . "' requires a field without arguments"
+        . " (" . $type->name . ".$field_name)\n";
+    }
+    if ((($field->{resolver_mode} || q()) eq 'native_one_arg'
+          || ($field->{resolver_mode} || q()) eq 'fast_resolve_one_arg')
+        && (!$field->{args} || keys(%{ $field->{args} }) != 1)) {
+      die "resolver_mode '" . $field->{resolver_mode}
+        . "' requires exactly one argument"
         . " (" . $type->name . ".$field_name)\n";
     }
     push @slots, GraphQL::Houtou::Runtime::Slot->new(
@@ -465,9 +474,17 @@ sub _build_slots_for_object {
       resolver_shape => ($field->{resolve} || $wrapped) ? 'EXPLICIT' : 'DEFAULT',
       resolver_mode => $wrapped
         ? 'DEFAULT'
-        : (($field->{resolver_mode} || q()) eq 'native_no_args'
-          ? 'NATIVE_NO_ARGS'
-          : (($field->{resolver_mode} || q()) eq 'native' ? 'NATIVE' : 'DEFAULT')),
+        : ((($field->{resolver_mode} || q()) eq 'native_one_arg'
+            || ($field->{resolver_mode} || q()) eq 'fast_resolve_one_arg')
+          ? 'NATIVE_ONE_ARG'
+          : ((($field->{resolver_mode} || q()) eq 'native_no_args'
+              || ($field->{resolver_mode} || q()) eq 'fast_resolve_no_args')
+            ? 'NATIVE_NO_ARGS'
+            : ((($field->{resolver_mode} || q()) eq 'native'
+                || ($field->{resolver_mode} || q()) eq 'native_args'
+                || ($field->{resolver_mode} || q()) eq 'fast_resolve')
+              ? 'NATIVE'
+              : 'DEFAULT'))),
       completion_family => _completion_family_for_type($return_type),
       dispatch_family => _dispatch_family_for_type($return_type),
       arg_defs_compact => _build_input_defs_compact($field->{args} || {}),

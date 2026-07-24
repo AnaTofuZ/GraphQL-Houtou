@@ -715,3 +715,51 @@ positional argument ABIも候補だが、可変個数のPerl callback stack構�
 argument定義順の固定、descriptor互換性を新たな公開契約として持つ必要がある。
 今回のbranchで改善が実証できた引数なしABIとは独立に評価できるため、このPRには
 含めず別実験とする。
+
+### 14.6 採用しなかった汎用 positional resolver ABI
+
+別branchで`($source, @argument_values, $context, $return_type)`というopt-in ABIを
+試作した。argument値はcompact schema定義の安定順序で渡し、variable、default値、
+同期実行まで実装した。
+
+最初の実装は既存args HashRefをpositional値へ展開したため、通常native ABIより
+1〜5%遅かった。次にstatic argument payloadを定義順のAVとして一度だけcacheし、
+request時にはHashRefを経由せずcallback stackへ積むようにしたが、それでも次の結果に
+なった。
+
+| query幅 | nativeとの差 |
+|---:|---:|
+| 1 field、2 arguments | -1% |
+| 10 fields、2 arguments | -2% |
+| 25 fields、2 arguments | -3% |
+
+固定4引数のnative callbackに対し、汎用positional ABIはfieldごとにargument定義を走査し、
+可変個数のPerl stack entryを積む。その固定費がresolver内のHash lookup削減を上回った。
+公開ABIとdescriptor codeを増やす根拠がないため実装はrevertした。
+
+次に試すなら汎用positionalではなく、引数が1個だけのfield専用ABIに限定する。これは
+既存native callbackと同じ固定4引数callを使いながら、args HashRefの生成とresolver内の
+Hash lookupを同時に除去できる。
+
+### 14.7 1引数専用 resolver ABI
+
+`resolver_mode => 'native_one_arg'`を追加し、argumentを1個だけ宣言するfieldのresolverを
+`($source, $value, $context, $return_type)`で呼ぶようにした。汎用positional ABIと違い、
+既存native resolverと同じ固定4引数callbackを使う。
+
+static argumentはnative payloadから値を直接cacheする。dynamic argumentはargument
+HashRefを生成せず、coerce済みvariable slotを直接参照する。direct variableでない
+input literal、default、nullのcoercionも単一値のまま行う。
+
+2秒測定:
+
+| workload | nativeとの差 |
+|---|---:|
+| 1 field、1 dynamic argument | +3% |
+| 10 fields、1 dynamic argument | +18〜19% |
+| 25 fields、1 dynamic argument | +25% |
+| 1〜25 fields、1 static argument | 0〜+2% |
+
+static argumentでは既存native ABIもcached HashRefを共有するため差は小さい。一方、
+dynamic queryではfieldごとのHashRef allocationとHash lookupが消え、同じvariableを
+複数fieldが使うほど改善が大きくなる。

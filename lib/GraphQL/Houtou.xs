@@ -287,6 +287,7 @@ static SV *gql_runtime_vm_state_current_return_type_sv(pTHX_ gql_runtime_vm_exec
 static SV *gql_runtime_vm_state_return_type_for_slot_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_exec_state_resolve_runtime_type_for_slot_sv(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, const gql_runtime_vm_native_slot_t *slot, SV *resolved_sv, gql_runtime_vm_path_frame_t *path_frame, SV **error_out);
 static SV *gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state);
+static SV *gql_runtime_vm_build_current_one_arg_sv(pTHX_ gql_runtime_vm_exec_state_t *state);
 static IV gql_runtime_vm_find_abstract_child_block_index(const gql_runtime_vm_native_op_t *op, const char *type_name);
 static const char *gql_runtime_vm_type_name_from_sv(pTHX_ SV *type_sv);
 static SV *gql_runtime_vm_snapshot_scalarish_value_sv(pTHX_ SV *value);
@@ -307,6 +308,7 @@ static SV *gql_runtime_vm_response_json_from_data_sv(pTHX_ const gql_runtime_vm_
 static SV *gql_runtime_vm_call_cb3_nonfatal(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV **error_out);
 static int gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_native_no_args_abi(const gql_runtime_vm_native_slot_t *slot);
+static int gql_runtime_vm_slot_uses_native_one_arg_abi(const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_explicit_generic_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
 static SV *gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *resolved);
@@ -5565,6 +5567,25 @@ gql_runtime_vm_exec_state_resolve_current_value_sv(
         return_type_sv ? return_type_sv : &PL_sv_undef,
         error_out
       );
+    } else if (gql_runtime_vm_slot_uses_native_one_arg_abi(slot)) {
+      SV *args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
+      HV *args_hv = (args_sv && SvROK(args_sv) && SvTYPE(SvRV(args_sv)) == SVt_PVHV)
+        ? (HV *)SvRV(args_sv)
+        : NULL;
+      const gql_runtime_vm_native_arg_def_t *arg_def =
+        (slot && slot->arg_def_count == 1) ? &slot->arg_defs[0] : NULL;
+      SV **value_svp = (args_hv && arg_def)
+        ? hv_fetch(args_hv, arg_def->name, (I32)strlen(arg_def->name), 0)
+        : NULL;
+      resolved_sv = gql_runtime_vm_call_cb4_nonfatal(
+        aTHX_
+        resolver_sv,
+        source_sv,
+        (value_svp && *value_svp) ? *value_svp : &PL_sv_undef,
+        s->context,
+        return_type_sv ? return_type_sv : &PL_sv_undef,
+        error_out
+      );
     } else if (gql_runtime_vm_slot_uses_native_fast_abi(slot)) {
       args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
       resolved_sv = gql_runtime_vm_call_cb4_nonfatal(
@@ -6905,7 +6926,8 @@ gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slo
 {
   return slot
     && (slot->callback_abi_code == GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE
-        || slot->callback_abi_code == GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS);
+        || slot->callback_abi_code == GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS
+        || slot->callback_abi_code == GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_ONE_ARG);
 }
 
 static int
@@ -6913,6 +6935,13 @@ gql_runtime_vm_slot_uses_native_no_args_abi(const gql_runtime_vm_native_slot_t *
 {
   return slot
     && slot->callback_abi_code == GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS;
+}
+
+static int
+gql_runtime_vm_slot_uses_native_one_arg_abi(const gql_runtime_vm_native_slot_t *slot)
+{
+  return slot
+    && slot->callback_abi_code == GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_ONE_ARG;
 }
 
 static int
@@ -7535,6 +7564,58 @@ gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
 }
 
 static SV *
+gql_runtime_vm_build_current_one_arg_sv(
+  pTHX_ gql_runtime_vm_exec_state_t *state
+)
+{
+  const gql_runtime_vm_native_op_t *op = state->op;
+  const gql_runtime_vm_native_slot_t *slot = state->slot;
+  gql_runtime_vm_callback_context_t *callback_ctx = state->callback_ctx;
+  SV *variables_sv = callback_ctx ? callback_ctx->variables : NULL;
+  HV *variables_hv = NULL;
+  SV *coercion_croak_sv = NULL;
+  SV *value;
+
+  if (!op || !slot || slot->arg_def_count != 1) {
+    return newSVsv(&PL_sv_undef);
+  }
+  if (op->args_mode_code == GQL_VM_ARGS_STATIC && op->args_payload_native) {
+    return gql_runtime_vm_native_args_payload_materialize_one_arg_cached_sv(
+      aTHX_ op->args_payload_native
+    );
+  }
+  if (callback_ctx
+      && op->args_mode_code == GQL_VM_ARGS_DYNAMIC
+      && gql_runtime_vm_args_payload_needs_variables_hv(op->args_payload_native)) {
+    variables_sv = gql_runtime_vm_callback_variables_sv(aTHX_ callback_ctx);
+  }
+  if (variables_sv
+      && SvROK(variables_sv)
+      && SvTYPE(SvRV(variables_sv)) == SVt_PVHV) {
+    variables_hv = (HV *)SvRV(variables_sv);
+  }
+  value = gql_runtime_vm_specialize_one_arg_sv(
+    aTHX_
+    state->runtime,
+    slot,
+    op,
+    variables_hv,
+    callback_ctx ? callback_ctx->variable_slots : NULL,
+    callback_ctx ? callback_ctx->variable_slot_count : 0,
+    &coercion_croak_sv
+  );
+  if (coercion_croak_sv) {
+    if (!state->fast_lane_deferred_croak_sv) {
+      state->fast_lane_deferred_croak_sv = coercion_croak_sv;
+    } else {
+      SvREFCNT_dec(coercion_croak_sv);
+    }
+    return NULL;
+  }
+  return value ? value : newSVsv(&PL_sv_undef);
+}
+
+static SV *
 gql_runtime_vm_resolve_current_field_default_fast_sv(
   pTHX_
   gql_runtime_vm_exec_state_t *state,
@@ -7570,6 +7651,23 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
           error_out
         )
       );
+    }
+    if (gql_runtime_vm_slot_uses_native_one_arg_abi(slot)) {
+      SV *value = gql_runtime_vm_build_current_one_arg_sv(aTHX_ state);
+      if (!value) {
+        return newSVsv(&PL_sv_undef);
+      }
+      value = sv_2mortal(value);
+      return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
+      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ state, gql_runtime_vm_call_cb4_nonfatal(
+        aTHX_
+        resolver_sv,
+        source,
+        value,
+        state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
+        return_type_sv ? return_type_sv : &PL_sv_undef,
+        error_out
+      ));
     }
     args = gql_runtime_vm_build_current_args_sv(aTHX_ state);
     if (!args) {
@@ -7729,6 +7827,23 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
         error_out
       )
     );
+  }
+  if (gql_runtime_vm_slot_uses_native_one_arg_abi(slot)) {
+    SV *value = gql_runtime_vm_build_current_one_arg_sv(aTHX_ state);
+    if (!value) {
+      return newSVsv(&PL_sv_undef);
+    }
+    value = sv_2mortal(value);
+    return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
+    return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ state, gql_runtime_vm_call_cb4_nonfatal(
+      aTHX_
+      resolver_sv,
+      source,
+      value,
+      state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
+      return_type_sv ? return_type_sv : &PL_sv_undef,
+      error_out
+    ));
   }
 
   {

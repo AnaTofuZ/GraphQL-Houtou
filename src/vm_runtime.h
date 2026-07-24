@@ -62,7 +62,8 @@ enum {
   GQL_VM_CALLBACK_ABI_DEFAULT = 1,
   GQL_VM_CALLBACK_ABI_EXPLICIT_GENERIC = 2,
   GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE = 3,
-  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS = 4
+  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS = 4,
+  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_ONE_ARG = 5
 };
 
 enum {
@@ -97,6 +98,7 @@ typedef struct {
   char **names;
   gql_runtime_vm_native_dynamic_value_t **values;
   SV *static_args_sv;
+  SV *static_one_arg_sv;
 } gql_runtime_vm_native_args_payload_t;
 
 typedef struct {
@@ -642,6 +644,9 @@ static SV *gql_runtime_vm_native_args_payload_materialize_sv(
   pTHX_ const gql_runtime_vm_native_args_payload_t *payload
 );
 static SV *gql_runtime_vm_native_args_payload_materialize_cached_sv(
+  pTHX_ gql_runtime_vm_native_args_payload_t *payload
+);
+static SV *gql_runtime_vm_native_args_payload_materialize_one_arg_cached_sv(
   pTHX_ gql_runtime_vm_native_args_payload_t *payload
 );
 static gql_runtime_vm_native_directives_payload_t *gql_runtime_vm_native_directives_payload_from_sv(
@@ -1608,6 +1613,9 @@ gql_runtime_vm_native_args_payload_destroy(pTHX_ gql_runtime_vm_native_args_payl
   if (payload->static_args_sv) {
     SvREFCNT_dec(payload->static_args_sv);
   }
+  if (payload->static_one_arg_sv) {
+    SvREFCNT_dec(payload->static_one_arg_sv);
+  }
   Safefree(payload->names);
   Safefree(payload->values);
   Safefree(payload);
@@ -1674,6 +1682,21 @@ gql_runtime_vm_native_args_payload_materialize_cached_sv(
 
   payload->static_args_sv = newRV_noinc((SV *)hv);
   return SvREFCNT_inc_simple_NN(payload->static_args_sv);
+}
+
+static SV *
+gql_runtime_vm_native_args_payload_materialize_one_arg_cached_sv(
+  pTHX_ gql_runtime_vm_native_args_payload_t *payload
+)
+{
+  if (!payload || payload->count <= 0 || !payload->values || !payload->values[0]) {
+    return newSVsv(&PL_sv_undef);
+  }
+  if (!payload->static_one_arg_sv) {
+    payload->static_one_arg_sv =
+      gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ payload->values[0], NULL);
+  }
+  return SvREFCNT_inc_simple_NN(payload->static_one_arg_sv);
 }
 
 static SV *
@@ -2065,6 +2088,9 @@ gql_runtime_vm_evaluate_runtime_guards_native(
 static IV
 gql_runtime_vm_infer_callback_abi_code(IV resolver_shape_code, IV resolver_mode_code)
 {
+  if (resolver_mode_code == 4) {
+    return GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_ONE_ARG;
+  }
   if (resolver_mode_code == 3) {
     return GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS;
   }
@@ -4981,7 +5007,8 @@ gql_runtime_vm_program_is_native_eligible_sv(pTHX_ SV *program_sv, int has_promi
         if (resolver_shape_code != GQL_VM_RESOLVE_EXPLICIT
             || (callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_GENERIC
                 && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE
-                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS)) {
+                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS
+                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_ONE_ARG)) {
           return 0;
         }
       }
@@ -5769,6 +5796,81 @@ gql_runtime_vm_prepare_program_variables_sv(
     0,
     0
   );
+}
+
+static SV *
+gql_runtime_vm_specialize_one_arg_sv(
+  pTHX_
+  const gql_runtime_vm_native_runtime_t *runtime,
+  const gql_runtime_vm_native_slot_t *slot,
+  const gql_runtime_vm_native_op_t *op,
+  HV *variables_hv,
+  SV **variable_slots,
+  IV variable_slot_count,
+  SV **croak_out
+)
+{
+  const gql_runtime_vm_native_slot_t *effective_slot =
+    gql_runtime_vm_effective_slot(runtime, slot);
+  const gql_runtime_vm_native_args_payload_t *payload =
+    op ? op->args_payload_native : NULL;
+  const gql_runtime_vm_native_arg_def_t *arg_def;
+  const gql_runtime_vm_native_dynamic_value_t *raw_value;
+  SV *raw_sv = NULL;
+  SV *coerced_sv;
+
+  if (!effective_slot || effective_slot->arg_def_count != 1) {
+    return newSVsv(&PL_sv_undef);
+  }
+  arg_def = &effective_slot->arg_defs[0];
+  raw_value = gql_runtime_vm_native_args_payload_lookup_value(
+    payload, arg_def->name, 0
+  );
+
+  if (raw_value) {
+    if (op
+        && op->args_mode_code == GQL_VM_ARGS_DYNAMIC
+        && raw_value->kind_code == GQL_VM_DYNAMIC_VARIABLE
+        && raw_value->variable_name) {
+      SV **prepared_svp = NULL;
+      if (raw_value->variable_index >= 0
+          && variable_slots
+          && raw_value->variable_index < variable_slot_count) {
+        prepared_svp = &variable_slots[raw_value->variable_index];
+      } else if (variables_hv) {
+        prepared_svp = hv_fetch(
+          variables_hv,
+          raw_value->variable_name,
+          (I32)strlen(raw_value->variable_name),
+          0
+        );
+      }
+      if (prepared_svp && *prepared_svp && SvOK(*prepared_svp)) {
+        return newSVsv(*prepared_svp);
+      }
+    }
+    raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(
+      aTHX_ raw_value,
+      (op && op->args_mode_code == GQL_VM_ARGS_DYNAMIC) ? variables_hv : NULL
+    ));
+  } else if (arg_def->has_default && arg_def->default_native_value) {
+    return gql_runtime_vm_native_value_materialize_sv(
+      aTHX_ arg_def->default_native_value
+    );
+  } else if (arg_def->has_default && arg_def->default_value_sv) {
+    raw_sv = sv_2mortal(newSVsv(arg_def->default_value_sv));
+  } else {
+    return newSVsv(&PL_sv_undef);
+  }
+
+  coerced_sv = gql_runtime_vm_coerce_input_value_sv(
+    aTHX_ arg_def->input_type_sv, raw_sv, croak_out
+  );
+  if (croak_out && *croak_out) {
+    SvREFCNT_dec(coerced_sv);
+    return NULL;
+  }
+  return coerced_sv;
 }
 
 static SV *

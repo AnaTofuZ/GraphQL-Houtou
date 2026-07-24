@@ -904,3 +904,31 @@ root Promise解決後のobject listでは大半のchild fieldsが同期値なの
 frame/outcome/completion経路を通る。Promise生成やdrain回数の局所最適化ではなく、
 Promiseが現れないblockまたはblock内の同期区間をfused executionへ載せることが、残る
 sync/async差に対する次の主要候補である。
+
+### 14.12 XS await ticketの再検証
+
+Promise::XSの非公開`AWAIT_*`を呼ぶのではなく、Houtou所有のDataLoader ticketに安全な
+`AWAIT_IS_READY`と`AWAIT_GET`をXS APIとして実装した。ticketはpending、fulfilled、
+rejectedの3状態を持ち、複数subscriberへの通知、callback例外のrejection化、callbackが
+返したticketのflatten、公開`then()`からPromise::XSへの互換bridgeを提供する。
+
+最初の版ではticketの生成とsettleだけをXS化し、派生ticketと継続合成をPerlの
+`_subscribe`に残した。この版はmainに対してunique keysで約18%、同一pending keyの共有で
+約23%遅かった。Promise生成を省いても、fieldごとにPerl method、`eval`、派生ticket、
+返り値判定、resolve/reject再配送を追加したためである。
+
+継続合成をXSへ移し、executorのpending entryをarmする共通経路では派生ticketを作らず、
+既存のresolve/reject callbackをticketへ直接登録した。10 fieldsのGraphQL実行をmainの
+Promise::XS版と比較した結果:
+
+| workload | main Promise::XS | XS ticket | 差 |
+|---|---:|---:|---:|
+| unique pending keys、fast resolver | 29,094 req/s | 31,150 req/s | +7.1% |
+| repeated pending key、fast resolver | 34,673 req/s | 35,725 req/s | +3.0% |
+| primed keys、fast resolver | 32,504 req/s | 63,140 req/s | +94.2% |
+| loader単体、10 unique keys | 121,963 req/s | 143,712 req/s | +17.8% |
+
+ready ticketはresolver直後に値またはerrorへ展開され、pending entry、callback、schedulerを
+作らない。pending ticketもPromise::XSの汎用chainを経由せず、executor callbackへ直接
+通知する。これによりpending workloadの退行を解消しつつ、cache hitとprimeで大きな改善を
+得た。Promise::XSは一般resolverが返すPromiseとticketの公開`then()`互換bridgeとして残す。

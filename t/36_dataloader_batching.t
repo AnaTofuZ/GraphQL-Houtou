@@ -261,6 +261,75 @@ subtest 'load_many per-key failures land in the result array' => sub {
   is $got->[2], 'B', 'value after the failure';
 };
 
+subtest 'native ticket exposes a safe await contract' => sub {
+  my $ticket = GraphQL::Houtou::DataLoader::Ticket->new;
+  ok !$ticket->AWAIT_IS_READY, 'new ticket is pending';
+  eval { $ticket->AWAIT_GET };
+  like $@, qr/not ready/, 'pending value cannot be read';
+
+  my @notifications;
+  $ticket->_subscribe_native(
+    sub { push @notifications, [ resolved => $_[0] ] },
+    sub { push @notifications, [ rejected => $_[0] ] },
+  );
+  $ticket->_resolve('ready');
+  ok $ticket->AWAIT_IS_READY, 'resolved ticket is ready';
+  is $ticket->AWAIT_GET, 'ready', 'resolved value is available';
+  is_deeply \@notifications, [ [ resolved => 'ready' ] ],
+    'pending subscriber is notified once';
+  $ticket->_resolve('ignored');
+  is $ticket->AWAIT_GET, 'ready', 'settlement is idempotent';
+
+  my $rejected = GraphQL::Houtou::DataLoader::Ticket->new;
+  $rejected->_reject("ticket failed\n");
+  ok $rejected->AWAIT_IS_READY, 'rejected ticket is ready';
+  eval { $rejected->AWAIT_GET };
+  like $@, qr/ticket failed/, 'rejection is raised by AWAIT_GET';
+
+  my $then_value;
+  GraphQL::Houtou::DataLoader::Ticket->resolved('compatible')
+    ->then(sub { $then_value = $_[0] });
+  is $then_value, 'compatible', 'public then compatibility remains usable';
+
+  my $flattened = GraphQL::Houtou::DataLoader::Ticket->new;
+  my $derived = $flattened->_subscribe(sub {
+    return GraphQL::Houtou::DataLoader::Ticket->resolved($_[0] . '-child');
+  }, undef);
+  $flattened->_resolve('parent');
+  is $derived->AWAIT_GET, 'parent-child', 'XS chain flattens a returned ticket';
+
+  my $failed = GraphQL::Houtou::DataLoader::Ticket->new;
+  my $failed_chain = $failed->_subscribe(sub { die "callback failed\n" }, undef);
+  $failed->_resolve('value');
+  ok $failed_chain->AWAIT_IS_READY, 'callback failure settles the derived ticket';
+  eval { $failed_chain->AWAIT_GET };
+  like $@, qr/callback failed/, 'callback exception becomes a rejection';
+
+  my $recovered = GraphQL::Houtou::DataLoader::Ticket->new;
+  my $recovered_chain = $recovered->_subscribe(
+    undef, sub { return "recovered: $_[0]" },
+  );
+  $recovered->_reject('reason');
+  is $recovered_chain->AWAIT_GET, 'recovered: reason',
+    'reject callback can recover the chain';
+};
+
+subtest 'cache hits and primed values return ready tickets' => sub {
+  my ($users) = make_loaders();
+  $users->prime('1', $USERS{1});
+  my $primed = $users->load('1');
+  ok $primed->AWAIT_IS_READY, 'prime creates a ready ticket';
+  is $primed->AWAIT_GET->{name}, 'alice', 'primed value is readable';
+
+  my $pending = $users->load('2');
+  ok !$pending->AWAIT_IS_READY, 'first uncached load is pending';
+  $users->dispatch;
+  ok $pending->AWAIT_IS_READY, 'dispatch settles the ticket';
+  is $users->load('2'), $pending, 'cache returns the same ticket';
+  is $users->load('2')->AWAIT_GET->{name}, 'bob',
+    'cache hit is immediately readable';
+};
+
 subtest 'load_many list form is deprecated but keeps working' => sub {
   my ($users) = make_loaders();
   my @warnings;

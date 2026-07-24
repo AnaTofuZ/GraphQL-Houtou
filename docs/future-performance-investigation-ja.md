@@ -871,3 +871,36 @@ DataLoader dispatch中はsettled entryへ値だけを書き込み、Promiseご�
 再入させず、dispatch終了後にready frameを一括enqueue/drainする。さらに同一blockの
 completionをまとめ、Promiseが返るまでの同期区間をsync fast lane相当にfuseできるかを
 別branchで検証する。
+
+### 14.11 scheduler一括drainとsettled Promise取得の検証
+
+DataLoaderの`on_stall`実行中はschedulerのdrainを抑止し、dispatch完了後にready frameを
+一括drainする試作を行った。nested loader、error、deadlock、frame leakのfocused testは
+通過したが、1/10/25 keysのthroughputはいずれもmainと同等か僅かに低下した。
+
+既存実装は各Promise callbackでentryへ値を書き込むものの、frameの
+`pending_unresolved`が0になる最後のsettleまでready queueへ積まず、drain中の再入も
+`async_scheduler_draining`で抑止している。したがって「DataLoaderがN promisesをresolve
+するとschedulerがN回再入する」という仮説は誤りだった。外側からbatch区間を通知する
+APIだけが増え、実行回数を減らさないため試作をrevertした。
+
+Promise::XSのstashにはFuture::AsyncAwait互換名の`AWAIT_IS_READY`と`AWAIT_GET`も見える。
+pre-resolved Promiseを同期取得できればpending machineryを省略できると考えたが、
+インストール済みPromise::XSでこれらをPromise objectへ直接呼ぶとプロセスがsegfaultした。
+Promise::XS::Promiseの文書にも同期取得APIとして記載されておらず、Houtouから利用できる
+安全な公開契約ではない。
+
+25 keys DataLoader実行をmacOS `sample`で5秒計測すると、Promise::XS deferred生成そのもの
+より、次が上位に現れた。
+
+- `Perl_call_sv`によるresolverおよびpending callback境界
+- `gql_runtime_vm_exec_state_execute_current_op_async_sv`
+- recursiveな`gql_runtime_vm_exec_state_execute_block_async_path_sv`
+- `gql_runtime_vm_async_scheduler_process_frame`
+- native valueのmaterialize/destroy/store
+- pending callback、frame arm/finalize、leaf serialization
+
+root Promise解決後のobject listでは大半のchild fieldsが同期値なのに、すべてasyncの
+frame/outcome/completion経路を通る。Promise生成やdrain回数の局所最適化ではなく、
+Promiseが現れないblockまたはblock内の同期区間をfused executionへ載せることが、残る
+sync/async差に対する次の主要候補である。

@@ -25,6 +25,12 @@ BEGIN {
   sub boom { die "accessor boom\n" }
 }
 
+{
+  package Local::AccessorAdmin;
+  our @ISA = ('Local::AccessorUser');
+  sub name { return 'Admin' }
+}
+
 my $ProfileInput = GraphQL::Houtou::Type::InputObject->new(
   name => 'ProfileInput',
   fields => {
@@ -296,6 +302,7 @@ subtest 'fast_resolve mode supports the HashRef ABI' => sub {
 };
 
 subtest 'accessor calls a zero-argument source method' => sub {
+  my $current_user = Local::AccessorUser->new('Ana', 'Ana Tofu');
   my $AccessorUser = GraphQL::Houtou::Type::Object->new(
     name => 'AccessorUser',
     fields => {
@@ -320,7 +327,7 @@ subtest 'accessor calls a zero-argument source method' => sub {
         viewer => {
           type => $AccessorUser,
           resolve => sub {
-            return Local::AccessorUser->new('Ana', 'Ana Tofu');
+            return $current_user;
           },
         },
       },
@@ -346,6 +353,21 @@ subtest 'accessor calls a zero-argument source method' => sub {
     'accessor exception becomes a field error';
   is_deeply $error_result->{errors}[0]{path}, [ 'viewer', 'boom' ],
     'accessor error keeps the field path';
+
+  $current_user = bless {
+    name => 'ignored',
+    display_name => 'Administrator',
+  }, 'Local::AccessorAdmin';
+  is $accessor_schema->execute('{ viewer { name } }')->{data}{viewer}{name},
+    'Admin', 'accessor cache follows the source subclass';
+
+  {
+    no warnings 'redefine';
+    eval 'sub Local::AccessorAdmin::name { return "Redefined Admin" } 1'
+      or die $@;
+  }
+  is $accessor_schema->execute('{ viewer { name } }')->{data}{viewer}{name},
+    'Redefined Admin', 'method redefinition invalidates the accessor cache';
 };
 
 subtest 'accessor rejects ambiguous field declarations' => sub {

@@ -119,6 +119,10 @@ typedef struct {
   char *return_type_name;
   char *accessor_name;
   STRLEN accessor_name_len;
+  HV *accessor_cache_stash;
+  GV *accessor_cache_gv;
+  U32 accessor_cache_generation;
+  U8 accessor_cache_initialized;
   IV schema_slot_index;
   IV resolver_shape_code;
   IV resolver_mode_code;

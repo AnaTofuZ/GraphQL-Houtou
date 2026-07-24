@@ -715,3 +715,28 @@ positional argument ABIも候補だが、可変個数のPerl callback stack構�
 argument定義順の固定、descriptor互換性を新たな公開契約として持つ必要がある。
 今回のbranchで改善が実証できた引数なしABIとは独立に評価できるため、このPRには
 含めず別実験とする。
+
+### 14.6 採用しなかった汎用 positional resolver ABI
+
+別branchで`($source, @argument_values, $context, $return_type)`というopt-in ABIを
+試作した。argument値はcompact schema定義の安定順序で渡し、variable、default値、
+同期実行まで実装した。
+
+最初の実装は既存args HashRefをpositional値へ展開したため、通常native ABIより
+1〜5%遅かった。次にstatic argument payloadを定義順のAVとして一度だけcacheし、
+request時にはHashRefを経由せずcallback stackへ積むようにしたが、それでも次の結果に
+なった。
+
+| query幅 | nativeとの差 |
+|---:|---:|
+| 1 field、2 arguments | -1% |
+| 10 fields、2 arguments | -2% |
+| 25 fields、2 arguments | -3% |
+
+固定4引数のnative callbackに対し、汎用positional ABIはfieldごとにargument定義を走査し、
+可変個数のPerl stack entryを積む。その固定費がresolver内のHash lookup削減を上回った。
+公開ABIとdescriptor codeを増やす根拠がないため実装はrevertした。
+
+次に試すなら汎用positionalではなく、引数が1個だけのfield専用ABIに限定する。これは
+既存native callbackと同じ固定4引数callを使いながら、args HashRefの生成とresolver内の
+Hash lookupを同時に除去できる。

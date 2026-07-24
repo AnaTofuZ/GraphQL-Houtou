@@ -116,31 +116,47 @@ SDL are reflected on the built types. The same functionality is available as
 `->from_ast($ast, %opts)`. Type-system extensions in the same SDL
 document are merged before the executable schema is constructed.
 
-### Resolver modes and argument count
+### Fast resolver modes
 
-`resolver_mode` selects a callback ABI; it is not inferred from the number
-of field arguments. Use the regular resolver contract unless profiling
-shows that a native mode matters:
+Resolvers remain ordinary Perl coderefs. A `fast_resolve*` mode asks the XS
+VM to call the coderef through a smaller callback signature, without
+constructing the generic lazy `$info` object. The zero- and one-argument
+forms also avoid constructing an arguments HashRef.
+
+In short:
+
+- execution and argument preparation stay inside the XS VM
+- the application callback is still Perl
+- `$info` is unavailable
+- the callback signature is part of the selected fast-resolver contract
+- return-value completion, errors, null propagation, and Promise handling
+  remain the runtime's responsibility
+
+`resolver_mode` selects one of these callback ABIs; it is not inferred from
+the number of field arguments. Use the regular resolver contract when the
+resolver needs `$info`, or unless profiling shows that a fast mode matters:
 
 | Field arguments | Recommended mode | Resolver arguments |
 |---:|---|---|
 | any count, regular API | omitted / default | `($source, $args, $context, $info, $return_type)` |
-| 0, native fast path | `native_no_args` | `($source, $context, $return_type)` |
-| exactly 1, native fast path | `native_one_arg` | `($source, $value, $context, $return_type)` |
-| 2 or more, native fast path | `native_args` | `($source, $args, $context, $return_type)` |
+| 0, fast path | `fast_resolve_no_args` | `($source, $context, $return_type)` |
+| exactly 1, fast path | `fast_resolve_one_arg` | `($source, $value, $context, $return_type)` |
+| 2 or more, fast path | `fast_resolve` | `($source, $args, $context, $return_type)` |
 
-For clarity, prefer `native_no_args` for zero arguments,
-`native_one_arg` for one, and `native_args` for two or more. The existing
-`native` spelling remains an alias of `native_args` for compatibility.
-Both HashRef modes accept any argument count and always pass `$args`.
+Use the mode matching the field's declared argument count.
+`fast_resolve` accepts any argument count and always passes a HashRef as
+`$args`, but the count-specific names make the callback signature explicit.
 The specialized modes change the callback signature and are therefore
-always explicit. Schema compilation rejects `native_no_args` on a field
-with arguments and `native_one_arg` unless the field has exactly one.
+never selected automatically. Schema compilation rejects
+`fast_resolve_no_args` on a field with arguments and
+`fast_resolve_one_arg` unless the field has exactly one. The older
+`native`, `native_args`, `native_no_args`, and `native_one_arg` spellings
+remain compatibility aliases.
 
     fields => {
       health => {
         type => $String,
-        resolver_mode => 'native_no_args',
+        resolver_mode => 'fast_resolve_no_args',
         resolve => sub {
           my ($source, $context, $return_type) = @_;
           return 'ok';
@@ -149,7 +165,7 @@ with arguments and `native_one_arg` unless the field has exactly one.
       user => {
         type => $User,
         args => { id => { type => $ID->non_null } },
-        resolver_mode => 'native_one_arg',
+        resolver_mode => 'fast_resolve_one_arg',
         resolve => sub {
           my ($source, $id, $context, $return_type) = @_;
           return load_user($id);
@@ -161,7 +177,7 @@ with arguments and `native_one_arg` unless the field has exactly one.
           term => { type => $String },
           limit => { type => $Int },
         },
-        resolver_mode => 'native_args',
+        resolver_mode => 'fast_resolve',
         resolve => sub {
           my ($source, $args, $context, $return_type) = @_;
           return search_users($args->{term}, $args->{limit});

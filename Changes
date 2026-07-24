@@ -2,9 +2,8 @@ Revision history for Perl extension GraphQL-Houtou
 
 {{$NEXT}}
     - Speed up variable preparation and direct variable argument lookup.
-    - Add an opt-in native_no_args resolver ABI for argument-free fields.
-    - Add an opt-in native_one_arg resolver ABI for single-argument fields.
-    - Add native_args as the explicit name for the native HashRef resolver ABI.
+    - Add fast resolver ABIs for zero-, one-, and multiple-argument fields.
+    - Add explicit fast_resolve modes for reduced resolver callback signatures.
 
 0.03 2026-07-22T10:49:34Z
     - Preflight oversized parser inputs and add heaptrack gate (#86)

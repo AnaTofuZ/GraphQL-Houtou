@@ -308,17 +308,17 @@ schema と operation を分離する理由は、schema metadata と callback は
 |---:|---|---|
 | 1 | default | default resolver |
 | 2 | explicit generic | 通常の明示 resolver。lazy `info` 等を利用可能 |
-| 3 | explicit native | `resolver_mode => 'native'` の高速契約 |
-| 4 | explicit native no-args | `resolver_mode => 'native_no_args'` の引数なし高速契約 |
-| 5 | explicit native one-arg | `resolver_mode => 'native_one_arg'` の1引数高速契約 |
+| 3 | explicit fast resolver | `resolver_mode => 'fast_resolve'` のHashRef契約 |
+| 4 | explicit fast no-args | `resolver_mode => 'fast_resolve_no_args'` の引数なし契約 |
+| 5 | explicit fast one-arg | `resolver_mode => 'fast_resolve_one_arg'` の1引数契約 |
 
 generic callback boundary は Perl API 互換のため source、args、context、lazy info を用意する。native mode は hot path 向けで、generic lazy-info ABI を要求しない resolver に限定される。
-`native_args`は`native`と同じcode 3のHashRef ABIを明示するaliasであり、新規コードでは
-argumentが2個以上のfieldに`native_args`を推奨する。
-`native_no_args` は argument を宣言しない field に限り、resolver を
+公開APIではcode 3を`fast_resolve`、code 4を`fast_resolve_no_args`、code 5を
+`fast_resolve_one_arg`として指定する。`native*`表記は互換aliasとして残る。
+`fast_resolve_no_args` は argument を宣言しない field に限り、resolver を
 `($source, $context, $return_type)` で呼ぶ。空の args HashRef を request ごとに
 materialize しないため、狭い scalar field が多数ある query ほど効果が大きい。
-`native_one_arg` は argument を1個だけ宣言する field に限り、resolver を
+`fast_resolve_one_arg` は argument を1個だけ宣言する field に限り、resolver を
 `($source, $value, $context, $return_type)` で呼ぶ。特にdynamic argumentでは
 requestごとのargs HashRefを作らず、coerce済みvariable slotを直接渡す。
 

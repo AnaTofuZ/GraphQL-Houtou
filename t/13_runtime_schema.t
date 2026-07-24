@@ -48,12 +48,12 @@ my $schema = GraphQL::Houtou::Schema->new(
       },
       ping => {
         type => $String,
-        resolver_mode => 'native_no_args',
+        resolver_mode => 'fast_resolve_no_args',
         resolve => sub { 'pong' },
       },
       echo => {
         type => $String,
-        resolver_mode => 'native_one_arg',
+        resolver_mode => 'fast_resolve_one_arg',
         args => { value => { type => $String } },
         resolve => sub { $_[1] },
       },

@@ -763,3 +763,24 @@ input literal、default、nullのcoercionも単一値のまま行う。
 static argumentでは既存native ABIもcached HashRefを共有するため差は小さい。一方、
 dynamic queryではfieldごとのHashRef allocationとHash lookupが消え、同じvariableを
 複数fieldが使うほど改善が大きくなる。
+
+### 14.8 ゼロ引数 object accessor
+
+blessed source objectの単純なaccessor向けに、fieldへ
+`accessor => 'method_name'`を宣言できるようにした。通常のdefault method resolverは
+graphql-perl互換のため`($args, $context, $info)`をmethodへ渡すが、accessor契約は
+ゼロ引数methodとしてsource objectだけをinvocantにして呼ぶ。args HashRef、lazy info、
+別resolver coderefを生成しない。GraphQL field名とmethod名が異なるrenameにも使える。
+
+2秒測定:
+
+| object field数 | default method比 |
+|---:|---:|
+| 1 | +10% |
+| 10 | +48% |
+| 25 | +65% |
+
+object fieldごとにgeneric args/info準備を省けるため、幅が広いほど効果が大きい。
+GraphQL argumentsを宣言するfield、context/infoを必要とするmethod、DataLoaderや権限判定を
+行うfieldは通常resolverを使う。`accessor`と`resolve`の同時指定はschema compile時に
+拒否する。

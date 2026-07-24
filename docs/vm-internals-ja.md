@@ -137,7 +137,7 @@ compact block は5要素である。
 | 3 | block-local slot table |
 | 4 | op array |
 
-compact slot は14要素である。
+compact slot は15要素である。
 
 | index | 内容 |
 |---:|---|
@@ -155,6 +155,7 @@ compact slot は14要素である。
 | 11 | compact argument definitions |
 | 12 | callback ABI code |
 | 13 | `item_non_null` |
+| 14 | zero-argument accessor method name |
 
 compact op は21要素である。
 

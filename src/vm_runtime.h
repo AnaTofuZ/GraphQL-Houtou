@@ -117,6 +117,8 @@ typedef struct {
   char *result_name;
   STRLEN result_name_len;
   char *return_type_name;
+  char *accessor_name;
+  STRLEN accessor_name_len;
   IV schema_slot_index;
   IV resolver_shape_code;
   IV resolver_mode_code;
@@ -1781,6 +1783,9 @@ gql_runtime_vm_native_slot_to_compact_sv(
   av_push(av, newRV_noinc((SV *)arg_defs_av));
   av_push(av, newSViv(slot->callback_abi_code));
   av_push(av, newSViv(slot->item_non_null ? 1 : 0));
+  av_push(av, slot->accessor_name
+    ? newSVpvn(slot->accessor_name, slot->accessor_name_len)
+    : newSV(0));
 
   return newRV_noinc((SV *)av);
 }
@@ -3458,6 +3463,7 @@ gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
         Safefree(bundle->runtime_slots[i].field_name);
         Safefree(bundle->runtime_slots[i].result_name);
         Safefree(bundle->runtime_slots[i].return_type_name);
+        Safefree(bundle->runtime_slots[i].accessor_name);
         gql_runtime_vm_free_native_arg_defs(aTHX_ bundle->runtime_slots[i].arg_defs, bundle->runtime_slots[i].arg_def_count);
       }
     }
@@ -3472,6 +3478,7 @@ gql_runtime_vm_native_bundle_destroy(gql_runtime_vm_native_bundle_t *bundle)
           Safefree(bundle->blocks[i].slots[j].field_name);
           Safefree(bundle->blocks[i].slots[j].result_name);
           Safefree(bundle->blocks[i].slots[j].return_type_name);
+          Safefree(bundle->blocks[i].slots[j].accessor_name);
           gql_runtime_vm_free_native_arg_defs(aTHX_ bundle->blocks[i].slots[j].arg_defs, bundle->blocks[i].slots[j].arg_def_count);
         }
       }
@@ -3541,6 +3548,7 @@ gql_runtime_vm_native_program_destroy(gql_runtime_vm_native_program_t *program)
           Safefree(program->blocks[i].slots[j].field_name);
           Safefree(program->blocks[i].slots[j].result_name);
           Safefree(program->blocks[i].slots[j].return_type_name);
+          Safefree(program->blocks[i].slots[j].accessor_name);
           gql_runtime_vm_free_native_arg_defs(aTHX_ program->blocks[i].slots[j].arg_defs, program->blocks[i].slots[j].arg_def_count);
         }
       }
@@ -3586,6 +3594,7 @@ gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
       Safefree(runtime->runtime_slots[i].field_name);
       Safefree(runtime->runtime_slots[i].result_name);
       Safefree(runtime->runtime_slots[i].return_type_name);
+      Safefree(runtime->runtime_slots[i].accessor_name);
       gql_runtime_vm_free_native_arg_defs(aTHX_ runtime->runtime_slots[i].arg_defs, runtime->runtime_slots[i].arg_def_count);
     }
   }
@@ -3889,6 +3898,15 @@ gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out
       : gql_runtime_vm_infer_callback_abi_code(out->resolver_shape_code, out->resolver_mode_code);
     svp = av_fetch(av, 13, 0);
     out->item_non_null = (svp && SvOK(*svp) && SvTRUE(*svp)) ? 1 : 0;
+    svp = av_fetch(av, 14, 0);
+    if (svp && SvOK(*svp)) {
+      STRLEN len;
+      const char *pv = SvPV(*svp, len);
+      Newxz(out->accessor_name, len + 1, char);
+      Copy(pv, out->accessor_name, len, char);
+      out->accessor_name[len] = '\0';
+      out->accessor_name_len = len;
+    }
     return 1;
   }
   if (!gql_runtime_vm_sv_to_hv(aTHX_ sv, &hv)) {
@@ -3939,6 +3957,9 @@ gql_runtime_vm_parse_native_slot(pTHX_ SV *sv, gql_runtime_vm_native_slot_t *out
     SV **item_nn_svp = hv_fetch(hv, "item_non_null", 13, 0);
     out->item_non_null = (item_nn_svp && SvOK(*item_nn_svp) && SvTRUE(*item_nn_svp)) ? 1 : 0;
   }
+  if (gql_runtime_vm_fetch_hv_string(aTHX_ hv, "accessor", 8, &out->accessor_name)) {
+    out->accessor_name_len = strlen(out->accessor_name);
+  }
   svp = hv_fetch(hv, "arg_defs", 8, 0);
   gql_runtime_vm_parse_native_arg_defs(aTHX_ (svp ? *svp : NULL), &out->arg_defs, &out->arg_def_count);
   return 1;
@@ -3982,6 +4003,15 @@ gql_runtime_vm_clone_native_slot(
     Newxz(dst->return_type_name, len + 1, char);
     Copy(src->return_type_name, dst->return_type_name, len, char);
     dst->return_type_name[len] = '\0';
+  }
+  if (src->accessor_name) {
+    STRLEN len = src->accessor_name_len
+      ? src->accessor_name_len
+      : strlen(src->accessor_name);
+    Newxz(dst->accessor_name, len + 1, char);
+    Copy(src->accessor_name, dst->accessor_name, len, char);
+    dst->accessor_name[len] = '\0';
+    dst->accessor_name_len = len;
   }
   if (src->arg_def_count > 0 && src->arg_defs) {
     IV i;

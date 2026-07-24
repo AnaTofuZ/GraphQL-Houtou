@@ -390,6 +390,35 @@ spellings remain compatibility aliases.
       },
     }
 
+=head3 Zero-argument object accessors
+
+For fields backed by a zero-argument method on the source object, use
+C<accessor> instead of wrapping the method in a resolver:
+
+    my $User = GraphQL::Houtou::Type::Object->new(
+      name => 'User',
+      fields => {
+        id => {
+          type => $ID,
+          accessor => 'id',
+        },
+        displayName => {
+          type => $String,
+          accessor => 'display_name',
+        },
+      },
+    );
+
+The first field calls C<< $user->id() >> and the second calls
+C<< $user->display_name() >>. The VM does not construct C<$args> or C<$info>,
+and does not call a separate resolver coderef. Accessor methods may return
+normal values or promises.
+
+C<accessor> is deliberately limited to fields without GraphQL arguments.
+Use a regular resolver when the method needs field arguments, context, info,
+authorization logic, or DataLoader access. C<accessor> and C<resolve> cannot
+be specified together.
+
 The inverse direction is C<print_schema()> (also available as
 C<< $schema->to_doc >>), which renders any schema back to SDL — including
 schemas assembled from Perl type objects:

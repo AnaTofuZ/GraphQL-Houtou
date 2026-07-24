@@ -4,6 +4,7 @@ Revision history for Perl extension GraphQL-Houtou
     - Speed up variable preparation and direct variable argument lookup.
     - Add fast resolver ABIs for zero-, one-, and multiple-argument fields.
     - Add explicit fast_resolve modes for reduced resolver callback signatures.
+    - Add zero-argument object accessors that bypass the generic resolver adapter.
 
 0.03 2026-07-22T10:49:34Z
     - Preflight oversized parser inputs and add heaptrack gate (#86)

@@ -263,6 +263,11 @@ struct gql_runtime_vm_callback_context {
    * Fused sync lanes borrow this array from their XSUB stack. */
   SV **variable_slots;
   IV variable_slot_count;
+  gql_runtime_vm_native_program_t *native_program;
+  SV *provided_variables;
+  /* Owned only when an AV-backed slot request has to expose the legacy
+   * prepared variables HashRef to generic callbacks or nested values. */
+  SV *materialized_variables;
 };
 
 typedef struct {
@@ -5621,17 +5626,28 @@ gql_runtime_vm_prepare_program_variables_into_slots_sv(
   gql_runtime_vm_native_program_t *program,
   HV *provided_hv,
   SV **variable_slots,
-  IV variable_slot_capacity
+  IV variable_slot_capacity,
+  U8 slots_only
 )
 {
-  HV *coerced_hv;
+  HV *coerced_hv = NULL;
+  AV *coerced_av = NULL;
   SV *coerced_rv;
   IV i;
 
-  coerced_hv = newHV();
-  /* Owned by a mortal wrapper so a croak from coercion below reclaims the
-   * hash (and everything stored so far) during die unwinding. */
-  coerced_rv = sv_2mortal(newRV_noinc((SV *)coerced_hv));
+  if (slots_only) {
+    coerced_av = newAV();
+    if (program && program->variable_def_count > 0) {
+      av_extend(coerced_av, program->variable_def_count - 1);
+    }
+    coerced_rv = sv_2mortal(newRV_noinc((SV *)coerced_av));
+  } else {
+    coerced_hv = newHV();
+    coerced_rv = sv_2mortal(newRV_noinc((SV *)coerced_hv));
+  }
+  /* The mortal owner reclaims every value stored so far if coercion
+   * croaks. In slots-only mode the AV is the request-scoped value owner;
+   * variable_slots merely borrows its entries. */
 
   for (i = 0; program && i < program->variable_def_count; i++) {
     gql_runtime_vm_native_arg_def_t *arg_def = &program->variable_defs[i];
@@ -5697,14 +5713,18 @@ gql_runtime_vm_prepare_program_variables_into_slots_sv(
         croak_sv(sv_2mortal(coerce_err));
       }
     }
-    hv_store(coerced_hv, arg_def->name, (I32)name_len, coerced_sv, 0);
+    if (slots_only) {
+      av_store(coerced_av, i, coerced_sv);
+    } else {
+      hv_store(coerced_hv, arg_def->name, (I32)name_len, coerced_sv, 0);
+    }
     if (variable_slots && i < variable_slot_capacity) {
-      /* Borrowed from coerced_hv, which owns the value for the request. */
+      /* Borrowed from coerced_hv/coerced_av for the request. */
       variable_slots[i] = coerced_sv;
     }
   }
 
-  if (provided_hv) {
+  if (!slots_only && provided_hv) {
     HE *he;
     hv_iterinit(provided_hv);
     while ((he = hv_iternext(provided_hv))) {
@@ -5741,6 +5761,7 @@ gql_runtime_vm_prepare_program_variables_sv(
     program,
     provided_hv,
     NULL,
+    0,
     0
   );
 }

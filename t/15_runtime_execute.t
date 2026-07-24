@@ -424,6 +424,18 @@ subtest 'dynamic argument values are coerced through lowered arg defs' => sub {
   }, 'dynamic arg coercion uses lowered arg defs';
 };
 
+subtest 'variables nested in input literals use the prepared variables fallback' => sub {
+  my $result = $schema->execute(
+    'query Q($name: String!) { describeProfile(profile: { name: $name }) }',
+    variables => { name => 'Cara' },
+  );
+  is_deeply $result, {
+    data => {
+      describeProfile => 'Cara:20',
+    },
+  }, 'nested variable references materialize the compatibility variables hash';
+};
+
 subtest 'resolver receives lazy info hash' => sub {
   my $saw = {};
   my $info_schema = GraphQL::Houtou::Schema->new(
@@ -432,6 +444,9 @@ subtest 'resolver receives lazy info hash' => sub {
       fields => {
         hello => {
           type => $String,
+          args => {
+            name => { type => $String },
+          },
           resolve => sub {
             my ($source, $args, $context, $info, $return_type) = @_;
             $saw->{field_name} = $info->{field_name};
@@ -439,6 +454,7 @@ subtest 'resolver receives lazy info hash' => sub {
             $saw->{return_type} = $info->{return_type}->name;
             $saw->{path} = $info->{path};
             $saw->{context_value} = $info->{context_value};
+            $saw->{variable_values} = $info->{variable_values};
             return $return_type->name;
           },
         },
@@ -446,7 +462,11 @@ subtest 'resolver receives lazy info hash' => sub {
     ),
   );
 
-  my $result = $info_schema->execute('{ hello }', context => { trace_id => 1 });
+  my $result = $info_schema->execute(
+    'query Q($name: String) { hello(name: $name) }',
+    context => { trace_id => 1 },
+    variables => { name => 'Ana', extra => 'kept' },
+  );
   is_deeply $result, { data => { hello => 'String' } }, 'resolver still executes';
   is_deeply $saw, {
     field_name => 'hello',
@@ -454,6 +474,7 @@ subtest 'resolver receives lazy info hash' => sub {
     return_type => 'String',
     path => [ 'hello' ],
     context_value => { trace_id => 1 },
+    variable_values => { name => 'Ana', extra => 'kept' },
   }, 'lazy info exposes compatible keys on demand';
 };
 

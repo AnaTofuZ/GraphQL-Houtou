@@ -645,3 +645,47 @@ prepared variables HVそのものの遅延化には、次の3要素を同時に�
 - nested input literal、runtime directive、unbound descriptorの名前lookup deopt
 
 空HashRefのglobal共有は、resolverによる変更が別requestへ漏れるため採用しない。
+
+### 14.4 Slot-only owner と遅延 compatibility HV
+
+融合同期レーンで、8 variables 以下のoperationはprepared variables HVを一次表現に
+使わず、request-scoped AVをslot valueのownerとして使うようにした。
+
+```text
+provided variables HV
+  → variable coercion
+  → request AV owns coerced SVs
+  → stack slots[index] borrows each SV
+  → direct variable arguments
+```
+
+通常のnative resolverと直接variable argumentだけで完走する場合、coerce済みvariables
+HashRefは生成されない。次の場合だけ、programのvariable definition、slot values、
+provided variablesから従来互換のHashRefを遅延構築する。
+
+- generic resolverがlazy infoを受け取る
+- resolverが`info->{variable_values}`をmaterializeする
+- input object/list literal内部にvariable referenceがある
+- unbound variable valueが名前lookupを必要とする
+
+未宣言のprovided variableも従来どおりcompatibility HVへコピーする。これにより
+`info->{variable_values}`の既存契約を維持しつつ、native fast pathではHV allocationを
+回避できる。
+
+追加した回帰テスト:
+
+- generic resolverの`variable_values`にcoerce済み値と追加variableが見える
+- input object literal内部のvariableがfallback HVから解決される
+- missing nullable variable、custom scalar、request errorの既存テスト
+
+5標本中央値:
+
+| ワークロード | slot index導入後 | slot-only owner導入後 | 改善 |
+|---|---:|---:|---:|
+| nested variable object | 329,244 req/s | 337,313 req/s | +2.5% |
+| fresh variables per request | 310,597 req/s | 323,567 req/s | +4.2% |
+
+最初の基準との比較では、それぞれ約65.5%、64.8%の改善となった。
+
+変数を持たない`execute_document_to_json`は410,526 req/sで、直前の411,560 req/sと
+同等だった。空HVと空AVのallocation差はこのqueryでは支配的でない。

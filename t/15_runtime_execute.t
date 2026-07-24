@@ -234,11 +234,11 @@ subtest 'cached runtime program can execute on native runtime with request varia
   );
 
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::XS::VM::execute_native_program_handle_xs;
+  my $orig = \&GraphQL::Houtou::XS::VM::execute_native_program_prepared_fast_xs;
   my $result;
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::XS::VM::execute_native_program_handle_xs = sub {
+    local *GraphQL::Houtou::XS::VM::execute_native_program_prepared_fast_xs = sub {
       $called = 1;
       goto &$orig;
     };
@@ -253,8 +253,8 @@ subtest 'cached runtime program can execute on native runtime with request varia
     data => {
       greet => 'hello cached',
     },
-  }, 'cached program uses request-time specialization before native execution';
-  ok $called, 'cached runtime/program still reached native execution';
+  }, 'cached program prepares request variables inside native execution';
+  ok $called, 'cached runtime/program reached fused prepare-and-execute entry';
 };
 
 subtest 'inflated runtime descriptor can still drive native specialization' => sub {

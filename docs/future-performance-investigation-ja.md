@@ -545,3 +545,54 @@ coercion 結果は別の owned SV になるため、入力の複製は不要で�
 この変更後の 3 標本中央値は nested variable object が 243,926 req/s、fresh variables
 が 236,302 req/s だった。直前の保守的な 3 標本から約 2%、最初の基準からはそれぞれ
 約 19.7%、20.3% の改善となった。
+
+### 14.1 Variable preparation と同期実行の融合
+
+次に、variable-invariant program の同期 SV/JSON レーンについて、variable preparation
+と実行を 1 回の XSUB 呼び出しへ融合した。
+
+従来経路:
+
+```text
+Perl
+  → prepare_variables XSUB
+  → prepared variables HV を Perl へ返す
+  → execute program XSUB
+  → sync fast lane
+```
+
+新経路:
+
+```text
+Perl
+  → fused prepare-and-execute XSUB
+      → prepared variables HV
+      → sync fast lane
+```
+
+prepared variables HV は fused XSUB 内の request-local temporary となり、Perl 側へ
+一度返して再び XS へ渡す必要がなくなった。runtime directive または
+variable-dependent directive guard により program specialization が必要な場合は、
+従来経路を維持する。
+
+5 標本中央値:
+
+| ワークロード | 最初の基準 | 融合後 | 改善 |
+|---|---:|---:|---:|
+| nested variable object | 203,829 req/s | 324,585 req/s | +59.2% |
+| fresh variables per request | 196,383 req/s | 307,680 req/s | +56.7% |
+
+直前の raw SV clone 除去後との比較でも、それぞれ約 33.1%、30.2% 改善した。
+
+同期 JSON レーンにも同じ融合入口を追加した。変数を持たない list-of-objects の
+`execute_document_to_json` でも、prepared empty HV の Perl 往復が消える。
+
+3 標本中央値:
+
+| ワークロード | 変更前 | 融合後 | 改善 |
+|---|---:|---:|---:|
+| `execute_document_to_json` | 359,102 req/s | 411,560 req/s | +14.6% |
+
+この結果から、typed slots の前段階として、request hot path を複数の XSUB に分割せず
+coercion、argument materialization、execution、emit を単一 native request scope に
+維持すること自体が重要であると分かる。

@@ -10902,6 +10902,64 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
     RETVAL
 
 SV *
+execute_native_program_prepared_fast_xs(runtime_sv, program_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
+    SV *runtime_sv
+    SV *program_sv
+    SV *root_value
+    SV *context_value
+    SV *variables
+  CODE:
+    {
+      gql_runtime_vm_native_runtime_t *runtime;
+      gql_runtime_vm_native_program_t *program;
+      gql_runtime_vm_native_bundle_t *bundle;
+      SV *runtime_schema_sv;
+      SV *prepared_variables_sv;
+      HV *provided_hv = NULL;
+
+      if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
+      }
+      runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
+      if (!runtime) {
+        croak("native VM runtime handle is no longer valid");
+      }
+      program = gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
+      bundle = gql_runtime_vm_native_program_cached_bundle(aTHX_ runtime, program);
+      runtime_schema_sv = (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema)
+        ? runtime->callback_catalog->runtime_schema
+        : &PL_sv_undef;
+      if (variables && SvOK(variables)) {
+        if (!SvROK(variables) || SvTYPE(SvRV(variables)) != SVt_PVHV) {
+          croak("variables must be a hash reference");
+        }
+        provided_hv = (HV *)SvRV(variables);
+      }
+      /*
+       * Keep variable coercion and the sync fast lane inside one XSUB.
+       * The prepared HV is request-local and never needs to cross back
+       * through Perl before execution consumes it.
+       */
+      prepared_variables_sv = sv_2mortal(gql_runtime_vm_prepare_program_variables_sv(
+        aTHX_
+        runtime_schema_sv,
+        program,
+        provided_hv
+      ));
+      RETVAL = gql_runtime_vm_execute_bundle_fast_response_sv(
+        aTHX_
+        runtime,
+        runtime_schema_sv,
+        bundle,
+        root_value,
+        context_value,
+        prepared_variables_sv
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 execute_native_program_to_json_xs(runtime_sv, program_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
     SV *runtime_sv
     SV *program_sv
@@ -10935,6 +10993,59 @@ execute_native_program_to_json_xs(runtime_sv, program_sv, root_value = &PL_sv_un
         root_value,
         context_value,
         variables
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+execute_native_program_prepared_fast_to_json_xs(runtime_sv, program_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
+    SV *runtime_sv
+    SV *program_sv
+    SV *root_value
+    SV *context_value
+    SV *variables
+  CODE:
+    {
+      gql_runtime_vm_native_runtime_t *runtime;
+      gql_runtime_vm_native_program_t *program;
+      gql_runtime_vm_native_bundle_t *bundle;
+      SV *runtime_schema_sv;
+      SV *prepared_variables_sv;
+      HV *provided_hv = NULL;
+
+      if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
+      }
+      runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
+      if (!runtime) {
+        croak("native VM runtime handle is no longer valid");
+      }
+      program = gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
+      bundle = gql_runtime_vm_native_program_cached_bundle(aTHX_ runtime, program);
+      runtime_schema_sv = (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema)
+        ? runtime->callback_catalog->runtime_schema
+        : &PL_sv_undef;
+      if (variables && SvOK(variables)) {
+        if (!SvROK(variables) || SvTYPE(SvRV(variables)) != SVt_PVHV) {
+          croak("variables must be a hash reference");
+        }
+        provided_hv = (HV *)SvRV(variables);
+      }
+      prepared_variables_sv = sv_2mortal(gql_runtime_vm_prepare_program_variables_sv(
+        aTHX_
+        runtime_schema_sv,
+        program,
+        provided_hv
+      ));
+      RETVAL = gql_runtime_vm_execute_bundle_fast_response_json(
+        aTHX_
+        runtime,
+        runtime_schema_sv,
+        bundle,
+        root_value,
+        context_value,
+        prepared_variables_sv
       );
     }
   OUTPUT:

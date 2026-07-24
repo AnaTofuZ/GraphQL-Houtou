@@ -597,6 +597,14 @@ my @cases = (
     op => 'q',
   },
   {
+    name => 'dynamic_directive_guards',
+    query => 'query q($show: Boolean!) { '
+      . join(' ', map { "greet$_: greet(name: \"houtou\") \@include(if: \$show)" } 1 .. 10)
+      . ' }',
+    vars => { show => 1 },
+    op => 'q',
+  },
+  {
     name => 'list_of_objects_json',
     query => '{ users { id name } }',
     json => 1,

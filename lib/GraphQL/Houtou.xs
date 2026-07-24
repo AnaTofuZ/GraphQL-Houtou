@@ -4604,7 +4604,9 @@ gql_runtime_vm_should_execute_op_now(pTHX_ gql_runtime_vm_exec_state_handle_t *s
     if (native_op->directives_mode_code == 0 || !native_op->has_directives || !native_op->directives_payload_native) {
       return 1;
     }
-    return gql_runtime_vm_evaluate_runtime_guards_native(aTHX_ native_op->directives_payload_native, variables_hv) ? 1 : 0;
+    return gql_runtime_vm_evaluate_runtime_guards_native(
+      aTHX_ native_op->directives_payload_native, variables_hv, NULL, 0
+    ) ? 1 : 0;
   }
 
   SV *mode_sv;
@@ -8767,6 +8769,35 @@ DISPATCH_ERROR:
 #endif
 }
 
+static int
+gql_runtime_vm_should_execute_current_op_fast(pTHX_ gql_runtime_vm_exec_state_t *state)
+{
+  const gql_runtime_vm_native_op_t *op = state ? state->op : NULL;
+  gql_runtime_vm_callback_context_t *ctx = state ? state->callback_ctx : NULL;
+  HV *variables_hv = NULL;
+  SV *variables_sv;
+
+  if (!op
+      || !op->has_directives
+      || op->directives_mode_code == GQL_VM_ARGS_NONE
+      || !op->directives_payload_native) {
+    return 1;
+  }
+  variables_sv = ctx ? ctx->variables : NULL;
+  if (variables_sv
+      && SvROK(variables_sv)
+      && SvTYPE(SvRV(variables_sv)) == SVt_PVHV) {
+    variables_hv = (HV *)SvRV(variables_sv);
+  }
+  return gql_runtime_vm_evaluate_runtime_guards_native(
+    aTHX_
+    op->directives_payload_native,
+    variables_hv,
+    ctx ? ctx->variable_slots : NULL,
+    ctx ? ctx->variable_slot_count : 0
+  );
+}
+
 static SV *
 gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source)
 {
@@ -8806,6 +8837,10 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
     state->op = op;
     state->slot = slot;
     state->op_index = i;
+
+    if (!gql_runtime_vm_should_execute_current_op_fast(aTHX_ state)) {
+      continue;
+    }
 
     eager_path_frame = !gql_runtime_vm_slot_can_delay_field_path(state->runtime, slot, op);
 
@@ -9339,6 +9374,10 @@ gql_runtime_vm_execute_block_fast_json(pTHX_ gql_runtime_vm_exec_state_t *state,
     state->op = op;
     state->slot = slot;
     state->op_index = i;
+
+    if (!gql_runtime_vm_should_execute_current_op_fast(aTHX_ state)) {
+      continue;
+    }
 
     dispatch_index = gql_runtime_vm_dispatch_index_from_opcode(op->opcode_code);
     if (dispatch_index < 0) {

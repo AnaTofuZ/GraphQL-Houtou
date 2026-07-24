@@ -207,7 +207,7 @@ subtest 'fast_resolve_one_arg ABI is preserved on the async lane' => sub {
         later => {
           type => $String,
           resolver_mode => 'fast_resolve_one_arg',
-          args => { value => { type => $String } },
+          args => { value => { type => $String, default_value => 'fallback' } },
           resolve => sub {
             @seen = @_;
             return Promise::XS::resolved($_[1]);
@@ -229,6 +229,13 @@ subtest 'fast_resolve_one_arg ABI is preserved on the async lane' => sub {
   is $seen[1], 'x', 'async resolver receives the direct argument value';
   is_deeply $seen[2], { request_id => 8 }, 'async resolver receives context';
   is $seen[3]->name, 'String', 'async resolver receives return type';
+
+  my $default_bytes = build_native_runtime($async_schema, async => 1)
+    ->execute_document_to_json(
+      'query Q($value: String) { later(value: $value) }',
+    );
+  is_deeply $json->decode($default_bytes), { data => { later => 'fallback' } },
+    'async JSON lane applies an argument default for an omitted variable';
 };
 
 subtest 'accessor methods can return promises on the async lane' => sub {

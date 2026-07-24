@@ -448,20 +448,29 @@ sub _build_slots_for_object {
   for my $field_name (sort keys %$fields) {
     my $field = $fields->{$field_name} || {};
     my $return_type = $field->{type};
+    my $resolver_mode = $field->{resolver_mode} || q();
     my $wrapped = slot_needs_runtime_wrapper(
       schema => $schema,
       field => $field,
     );
-    if ((($field->{resolver_mode} || q()) eq 'native_no_args'
-          || ($field->{resolver_mode} || q()) eq 'fast_resolve_no_args')
+    if ($resolver_mode ne q()
+        && !grep { $resolver_mode eq $_ } qw(
+          native native_args native_no_args native_one_arg
+          fast_resolve fast_resolve_no_args fast_resolve_one_arg
+        )) {
+      die "unknown resolver_mode '$resolver_mode'"
+        . " (" . $type->name . ".$field_name)\n";
+    }
+    if (($resolver_mode eq 'native_no_args'
+          || $resolver_mode eq 'fast_resolve_no_args')
         && $field->{args}
         && keys %{ $field->{args} }) {
       die "resolver_mode '" . $field->{resolver_mode}
         . "' requires a field without arguments"
         . " (" . $type->name . ".$field_name)\n";
     }
-    if ((($field->{resolver_mode} || q()) eq 'native_one_arg'
-          || ($field->{resolver_mode} || q()) eq 'fast_resolve_one_arg')
+    if (($resolver_mode eq 'native_one_arg'
+          || $resolver_mode eq 'fast_resolve_one_arg')
         && (!$field->{args} || keys(%{ $field->{args} }) != 1)) {
       die "resolver_mode '" . $field->{resolver_mode}
         . "' requires exactly one argument"
@@ -491,15 +500,15 @@ sub _build_slots_for_object {
       resolver_shape => ($field->{resolve} || $wrapped) ? 'EXPLICIT' : 'DEFAULT',
       resolver_mode => $wrapped
         ? 'DEFAULT'
-        : ((($field->{resolver_mode} || q()) eq 'native_one_arg'
-            || ($field->{resolver_mode} || q()) eq 'fast_resolve_one_arg')
+        : (($resolver_mode eq 'native_one_arg'
+            || $resolver_mode eq 'fast_resolve_one_arg')
           ? 'NATIVE_ONE_ARG'
-          : ((($field->{resolver_mode} || q()) eq 'native_no_args'
-              || ($field->{resolver_mode} || q()) eq 'fast_resolve_no_args')
+          : (($resolver_mode eq 'native_no_args'
+              || $resolver_mode eq 'fast_resolve_no_args')
             ? 'NATIVE_NO_ARGS'
-            : ((($field->{resolver_mode} || q()) eq 'native'
-                || ($field->{resolver_mode} || q()) eq 'native_args'
-                || ($field->{resolver_mode} || q()) eq 'fast_resolve')
+            : (($resolver_mode eq 'native'
+                || $resolver_mode eq 'native_args'
+                || $resolver_mode eq 'fast_resolve')
               ? 'NATIVE'
               : 'DEFAULT'))),
       completion_family => _completion_family_for_type($return_type),

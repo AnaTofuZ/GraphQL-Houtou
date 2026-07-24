@@ -740,3 +740,26 @@ request時にはHashRefを経由せずcallback stackへ積むようにしたが�
 次に試すなら汎用positionalではなく、引数が1個だけのfield専用ABIに限定する。これは
 既存native callbackと同じ固定4引数callを使いながら、args HashRefの生成とresolver内の
 Hash lookupを同時に除去できる。
+
+### 14.7 1引数専用 resolver ABI
+
+`resolver_mode => 'native_one_arg'`を追加し、argumentを1個だけ宣言するfieldのresolverを
+`($source, $value, $context, $return_type)`で呼ぶようにした。汎用positional ABIと違い、
+既存native resolverと同じ固定4引数callbackを使う。
+
+static argumentはnative payloadから値を直接cacheする。dynamic argumentはargument
+HashRefを生成せず、coerce済みvariable slotを直接参照する。direct variableでない
+input literal、default、nullのcoercionも単一値のまま行う。
+
+2秒測定:
+
+| workload | nativeとの差 |
+|---|---:|
+| 1 field、1 dynamic argument | +3% |
+| 10 fields、1 dynamic argument | +18〜19% |
+| 25 fields、1 dynamic argument | +25% |
+| 1〜25 fields、1 static argument | 0〜+2% |
+
+static argumentでは既存native ABIもcached HashRefを共有するため差は小さい。一方、
+dynamic queryではfieldごとのHashRef allocationとHash lookupが消え、同じvariableを
+複数fieldが使うほど改善が大きくなる。

@@ -200,6 +200,65 @@ subtest 'native_no_args rejects fields that declare arguments' => sub {
     'invalid ABI declaration fails while compiling the runtime';
 };
 
+subtest 'native_one_arg passes the coerced value without an args hash' => sub {
+  my @seen;
+  my $context = { trace_id => 84 };
+  my $one_arg_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'NativeOneArgQuery',
+      fields => {
+        greet => {
+          type => $String,
+          resolver_mode => 'native_one_arg',
+          args => {
+            name => { type => $String, default_value => 'Bob' },
+          },
+          resolve => sub {
+            @seen = @_;
+            return "hello $_[1]";
+          },
+        },
+      },
+    ),
+  );
+
+  my $result = $one_arg_schema->execute(
+    'query Q($name: String) { greet(name: $name) }',
+    variables => { name => 'Ana' },
+    context => $context,
+  );
+  is_deeply $result, { data => { greet => 'hello Ana' } },
+    'dynamic argument reaches the one-argument resolver';
+  is scalar(@seen), 4,
+    'resolver receives source, value, context, and return type';
+  is $seen[1], 'Ana', 'resolver receives the argument value directly';
+  is $seen[2], $context, 'one-argument resolver receives context';
+  is $seen[3]->name, 'String', 'one-argument resolver receives return type';
+
+  is_deeply $one_arg_schema->execute('{ greet }'),
+    { data => { greet => 'hello Bob' } },
+    'argument default reaches the direct value path';
+};
+
+subtest 'native_one_arg requires exactly one argument declaration' => sub {
+  my $invalid_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'InvalidNativeOneArgQuery',
+      fields => {
+        hello => {
+          type => $String,
+          resolver_mode => 'native_one_arg',
+          resolve => sub { return 'unreachable' },
+        },
+      },
+    ),
+  );
+
+  eval { $invalid_schema->build_runtime };
+  like $@, qr/native_one_arg.*requires exactly one argument/,
+    'invalid one-argument ABI declaration is rejected';
+};
+
 subtest 'native resolver mode supports static literal args on native runtime' => sub {
   my $native_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(

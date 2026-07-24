@@ -469,7 +469,9 @@ static int gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_
 static int gql_runtime_vm_slot_uses_native_no_args_abi(const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_native_one_arg_abi(const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_explicit_generic_fast_abi(const gql_runtime_vm_native_slot_t *slot);
+static SV *gql_runtime_vm_slot_resolver_sv(const gql_runtime_vm_native_runtime_t *runtime, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
+static SV *gql_runtime_vm_try_execute_plain_hash_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *resolved);
 
 /* Shared by the mid-lane detection sites and the top-level croak so the
@@ -4156,6 +4158,171 @@ gql_runtime_vm_abstract_list_item_block_index(
   return child_block_index;
 }
 
+/*
+ * Promise settlement commonly exposes a list of plain database rows.  When
+ * the child selection is only default scalar hash reads, executing it through
+ * the resumable async frame machinery adds bookkeeping without adding any
+ * suspension point.  Prove that narrow shape before entering the sync fast
+ * lane: rejecting references also excludes callable properties and promises.
+ */
+static SV *
+gql_runtime_vm_try_execute_plain_hash_block_fast_sv(
+  pTHX_
+  gql_runtime_vm_exec_state_handle_t *s,
+  IV block_index,
+  SV *source,
+  gql_runtime_vm_path_frame_t *path_frame
+)
+{
+  gql_runtime_vm_native_runtime_t *runtime;
+  gql_runtime_vm_native_bundle_t *bundle;
+  gql_runtime_vm_native_block_t *block;
+  HV *source_hv;
+  IV i;
+  gql_runtime_vm_native_value_t *object_value;
+  gql_runtime_vm_outcome_t *outcome;
+  SV *ret;
+
+  if (!s || !s->native_program || !source || !SvOK(source)
+      || !SvROK(source) || SvTYPE(SvRV(source)) != SVt_PVHV
+      || sv_isobject(source)) {
+    return NULL;
+  }
+
+  runtime = gql_runtime_vm_exec_state_native_runtime(aTHX_ s);
+  bundle = gql_runtime_vm_native_program_cached_bundle(aTHX_ runtime, s->native_program);
+  if (!runtime || !bundle || block_index < 0 || block_index >= bundle->block_count) {
+    return NULL;
+  }
+
+  block = &bundle->blocks[block_index];
+  source_hv = (HV *)SvRV(source);
+  for (i = 0; i < block->op_count; i++) {
+    const gql_runtime_vm_native_op_t *op = &block->ops[i];
+    const gql_runtime_vm_native_slot_t *slot;
+    SV **value_svp;
+    IV leaf_kind = GQL_VM_LEAF_NONE;
+
+    if (op->slot_index < 0 || op->slot_index >= block->slot_count
+        || op->resolve_code != GQL_VM_RESOLVE_DEFAULT
+        || op->complete_code != GQL_VM_COMPLETE_GENERIC
+        || op->child_block_index >= 0 || op->abstract_child_count > 0
+        || op->has_directives || op->has_runtime_directives
+        || op->runtime_directives_sv) {
+      return NULL;
+    }
+    slot = gql_runtime_vm_effective_slot(runtime, &block->slots[op->slot_index]);
+    if (!slot || slot->resolver_shape_code != GQL_VM_RESOLVE_DEFAULT
+        || (slot->accessor_name && slot->accessor_name_len)
+        || gql_runtime_vm_slot_resolver_sv(runtime, slot)) {
+      return NULL;
+    }
+    if (runtime->callback_catalog
+        && runtime->callback_catalog->slot_leaf_kinds
+        && slot->schema_slot_index >= 0
+        && slot->schema_slot_index < runtime->runtime_slot_count) {
+      leaf_kind = runtime->callback_catalog->slot_leaf_kinds[slot->schema_slot_index];
+    }
+    if (leaf_kind == GQL_VM_LEAF_CUSTOM) {
+      return NULL;
+    }
+    value_svp = hv_fetch(
+      source_hv,
+      slot->field_name,
+      (I32)slot->field_name_len,
+      0
+    );
+    if (value_svp && *value_svp && SvROK(*value_svp)) {
+      return NULL;
+    }
+  }
+
+  object_value = gql_runtime_vm_new_native_value_object();
+  for (i = 0; i < block->op_count; i++) {
+    const gql_runtime_vm_native_op_t *op = &block->ops[i];
+    const gql_runtime_vm_native_slot_t *plan_slot = &block->slots[op->slot_index];
+    const gql_runtime_vm_native_slot_t *slot =
+      gql_runtime_vm_effective_slot(runtime, plan_slot);
+    SV **value_svp = hv_fetch(
+      source_hv,
+      slot->field_name,
+      (I32)slot->field_name_len,
+      0
+    );
+    SV *value_sv = (value_svp && *value_svp) ? *value_svp : &PL_sv_undef;
+    SV *serialized;
+    SV *error_sv = NULL;
+    int carries_error = 0;
+
+    if (slot->field_name && strEQ(slot->field_name, "__typename")) {
+      value_sv = block->type_name ? sv_2mortal(newSVpv(block->type_name, 0)) : &PL_sv_undef;
+    }
+    serialized = gql_runtime_vm_serialize_leaf_sv(
+      aTHX_ runtime, slot, value_sv, &error_sv
+    );
+    if (error_sv) {
+      gql_runtime_vm_path_frame_t *field_path =
+        gql_runtime_vm_new_result_path_frame(aTHX_ path_frame, plan_slot);
+      gql_runtime_vm_outcome_t *error_outcome =
+        gql_runtime_vm_new_error_outcome_struct_for_path(aTHX_ error_sv, field_path);
+      IV j;
+      for (j = 0; s->writer && j < error_outcome->error_record_count; j++) {
+        gql_runtime_vm_writer_push_error_record(s->writer, error_outcome->error_records[j]);
+      }
+      gql_runtime_vm_outcome_decref(aTHX_ error_outcome);
+      gql_runtime_vm_path_frame_decref(field_path);
+      SvREFCNT_dec(error_sv);
+      if (serialized) {
+        SvREFCNT_dec(serialized);
+      }
+      serialized = newSVsv(&PL_sv_undef);
+      carries_error = 1;
+    }
+
+    if ((!serialized || !SvOK(serialized)) && slot->return_type_kind_code == 8) {
+      if (!carries_error && s->writer) {
+        gql_runtime_vm_path_frame_t *field_path =
+          gql_runtime_vm_new_result_path_frame(aTHX_ path_frame, plan_slot);
+        gql_runtime_vm_record_nonnull_violation(
+          aTHX_ s->writer, block->type_name, slot->field_name, field_path
+        );
+        gql_runtime_vm_path_frame_decref(field_path);
+      }
+      if (serialized) {
+        SvREFCNT_dec(serialized);
+      }
+      gql_runtime_vm_native_value_destroy(aTHX_ object_value);
+      outcome = gql_runtime_vm_new_outcome_struct(
+        aTHX_ GQL_VM_KIND_SCALAR, &PL_sv_undef, &PL_sv_undef
+      );
+      outcome->null_carries_error = 1;
+      ret = gql_runtime_vm_wrap_outcome_sv(aTHX_ outcome);
+      gql_runtime_vm_outcome_decref(aTHX_ outcome);
+      return ret;
+    }
+
+    gql_runtime_vm_native_object_store(
+      aTHX_
+      object_value,
+      plan_slot->result_name,
+      1,
+      gql_runtime_vm_native_value_from_sv(
+        aTHX_ serialized ? serialized : &PL_sv_undef
+      )
+    );
+    if (serialized) {
+      SvREFCNT_dec(serialized);
+    }
+  }
+
+  outcome = gql_runtime_vm_new_outcome_from_owned_native_value_struct(
+    aTHX_ GQL_VM_KIND_OBJECT, object_value
+  );
+  ret = gql_runtime_vm_wrap_outcome_sv(aTHX_ outcome);
+  gql_runtime_vm_outcome_decref(aTHX_ outcome);
+  return ret;
+}
+
 static SV *
 gql_runtime_vm_exec_state_complete_current_native_async_sv(
   pTHX_
@@ -4300,15 +4467,20 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
               /* Mode 2: sync items come back as native outcomes (assembled
                * into the list natively below), pending items as promises
                * (routed through the list_pending machinery). */
-              item_result = gql_runtime_vm_exec_state_execute_block_async_path_sv(
-                aTHX_
-                state_sv,
-                s,
-                item_block_index,
-                item_sv,
-                item_path,
-                2
+              item_result = gql_runtime_vm_try_execute_plain_hash_block_fast_sv(
+                aTHX_ s, item_block_index, item_sv, item_path
               );
+              if (!item_result) {
+                item_result = gql_runtime_vm_exec_state_execute_block_async_path_sv(
+                  aTHX_
+                  state_sv,
+                  s,
+                  item_block_index,
+                  item_sv,
+                  item_path,
+                  2
+                );
+              }
             }
           }
           gql_runtime_vm_path_frame_decref(item_path);

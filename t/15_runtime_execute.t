@@ -200,6 +200,63 @@ subtest 'native_no_args rejects fields that declare arguments' => sub {
     'invalid ABI declaration fails while compiling the runtime';
 };
 
+subtest 'native_positional passes coerced arguments in schema order' => sub {
+  my @seen;
+  my $context = { trace_id => 84 };
+  my $positional_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'NativePositionalQuery',
+      fields => {
+        joinValues => {
+          type => $String,
+          resolver_mode => 'native_positional',
+          args => {
+            beta => { type => $String, default_value => 'B' },
+            alpha => { type => $String->non_null },
+          },
+          resolve => sub {
+            @seen = @_;
+            return join q(:), $_[1], $_[2];
+          },
+        },
+      },
+    ),
+  );
+
+  my $result = $positional_schema->execute(
+    'query Q($alpha: String!) { joinValues(alpha: $alpha) }',
+    variables => { alpha => 'A' },
+    context => $context,
+  );
+  is_deeply $result, { data => { joinValues => 'A:B' } },
+    'variable and default arguments reach the positional resolver';
+  is scalar(@seen), 5,
+    'resolver receives source, two values, context, and return type';
+  is_deeply [ @seen[1, 2] ], [ 'A', 'B' ],
+    'argument values follow the stable compact schema order';
+  is $seen[3], $context, 'positional resolver receives context';
+  is $seen[4]->name, 'String', 'positional resolver receives return type';
+};
+
+subtest 'native_positional requires an argument declaration' => sub {
+  my $invalid_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'InvalidNativePositionalQuery',
+      fields => {
+        hello => {
+          type => $String,
+          resolver_mode => 'native_positional',
+          resolve => sub { return 'unreachable' },
+        },
+      },
+    ),
+  );
+
+  eval { $invalid_schema->build_runtime };
+  like $@, qr/native_positional.*requires at least one argument/,
+    'zero-argument positional ABI declaration is rejected';
+};
+
 subtest 'native resolver mode supports static literal args on native runtime' => sub {
   my $native_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(

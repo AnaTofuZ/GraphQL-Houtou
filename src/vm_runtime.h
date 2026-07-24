@@ -62,7 +62,8 @@ enum {
   GQL_VM_CALLBACK_ABI_DEFAULT = 1,
   GQL_VM_CALLBACK_ABI_EXPLICIT_GENERIC = 2,
   GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE = 3,
-  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS = 4
+  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS = 4,
+  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_POSITIONAL = 5
 };
 
 enum {
@@ -97,6 +98,7 @@ typedef struct {
   char **names;
   gql_runtime_vm_native_dynamic_value_t **values;
   SV *static_args_sv;
+  SV *static_positional_args_sv;
 } gql_runtime_vm_native_args_payload_t;
 
 typedef struct {
@@ -643,6 +645,11 @@ static SV *gql_runtime_vm_native_args_payload_materialize_sv(
 );
 static SV *gql_runtime_vm_native_args_payload_materialize_cached_sv(
   pTHX_ gql_runtime_vm_native_args_payload_t *payload
+);
+static SV *gql_runtime_vm_native_args_payload_materialize_positional_cached_sv(
+  pTHX_
+  gql_runtime_vm_native_args_payload_t *payload,
+  const gql_runtime_vm_native_slot_t *slot
 );
 static gql_runtime_vm_native_directives_payload_t *gql_runtime_vm_native_directives_payload_from_sv(
   pTHX_ SV *guards_sv
@@ -1608,6 +1615,9 @@ gql_runtime_vm_native_args_payload_destroy(pTHX_ gql_runtime_vm_native_args_payl
   if (payload->static_args_sv) {
     SvREFCNT_dec(payload->static_args_sv);
   }
+  if (payload->static_positional_args_sv) {
+    SvREFCNT_dec(payload->static_positional_args_sv);
+  }
   Safefree(payload->names);
   Safefree(payload->values);
   Safefree(payload);
@@ -1674,6 +1684,43 @@ gql_runtime_vm_native_args_payload_materialize_cached_sv(
 
   payload->static_args_sv = newRV_noinc((SV *)hv);
   return SvREFCNT_inc_simple_NN(payload->static_args_sv);
+}
+
+static SV *
+gql_runtime_vm_native_args_payload_materialize_positional_cached_sv(
+  pTHX_
+  gql_runtime_vm_native_args_payload_t *payload,
+  const gql_runtime_vm_native_slot_t *slot
+)
+{
+  AV *av;
+  IV i;
+
+  if (!payload || !slot) {
+    return newRV_noinc((SV *)newAV());
+  }
+  if (payload->static_positional_args_sv) {
+    return SvREFCNT_inc_simple_NN(payload->static_positional_args_sv);
+  }
+
+  av = newAV();
+  if (slot->arg_def_count > 0) {
+    av_extend(av, slot->arg_def_count - 1);
+  }
+  for (i = 0; i < slot->arg_def_count; i++) {
+    const gql_runtime_vm_native_arg_def_t *arg_def = &slot->arg_defs[i];
+    const gql_runtime_vm_native_dynamic_value_t *value =
+      gql_runtime_vm_native_args_payload_lookup_value(payload, arg_def->name, i);
+    av_store(
+      av,
+      i,
+      value
+        ? gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ value, NULL)
+        : newSVsv(&PL_sv_undef)
+    );
+  }
+  payload->static_positional_args_sv = newRV_noinc((SV *)av);
+  return SvREFCNT_inc_simple_NN(payload->static_positional_args_sv);
 }
 
 static SV *
@@ -2065,6 +2112,9 @@ gql_runtime_vm_evaluate_runtime_guards_native(
 static IV
 gql_runtime_vm_infer_callback_abi_code(IV resolver_shape_code, IV resolver_mode_code)
 {
+  if (resolver_mode_code == 4) {
+    return GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_POSITIONAL;
+  }
   if (resolver_mode_code == 3) {
     return GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS;
   }
@@ -4981,7 +5031,8 @@ gql_runtime_vm_program_is_native_eligible_sv(pTHX_ SV *program_sv, int has_promi
         if (resolver_shape_code != GQL_VM_RESOLVE_EXPLICIT
             || (callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_GENERIC
                 && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE
-                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS)) {
+                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS
+                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_POSITIONAL)) {
           return 0;
         }
       }

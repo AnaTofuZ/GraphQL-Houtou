@@ -457,6 +457,11 @@ sub _build_slots_for_object {
       die "resolver_mode 'native_no_args' requires a field without arguments"
         . " (" . $type->name . ".$field_name)\n";
     }
+    if (($field->{resolver_mode} || q()) eq 'native_positional'
+        && (!$field->{args} || !keys %{ $field->{args} })) {
+      die "resolver_mode 'native_positional' requires at least one argument"
+        . " (" . $type->name . ".$field_name)\n";
+    }
     push @slots, GraphQL::Houtou::Runtime::Slot->new(
       schema_slot_key => join(q(.), $type->name, $field_name),
       field_name => $field_name,
@@ -465,9 +470,11 @@ sub _build_slots_for_object {
       resolver_shape => ($field->{resolve} || $wrapped) ? 'EXPLICIT' : 'DEFAULT',
       resolver_mode => $wrapped
         ? 'DEFAULT'
-        : (($field->{resolver_mode} || q()) eq 'native_no_args'
-          ? 'NATIVE_NO_ARGS'
-          : (($field->{resolver_mode} || q()) eq 'native' ? 'NATIVE' : 'DEFAULT')),
+        : (($field->{resolver_mode} || q()) eq 'native_positional'
+          ? 'NATIVE_POSITIONAL'
+          : (($field->{resolver_mode} || q()) eq 'native_no_args'
+            ? 'NATIVE_NO_ARGS'
+            : (($field->{resolver_mode} || q()) eq 'native' ? 'NATIVE' : 'DEFAULT'))),
       completion_family => _completion_family_for_type($return_type),
       dispatch_family => _dispatch_family_for_type($return_type),
       arg_defs_compact => _build_input_defs_compact($field->{args} || {}),

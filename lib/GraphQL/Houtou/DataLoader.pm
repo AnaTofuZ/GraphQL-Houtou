@@ -181,15 +181,19 @@ sub message { return $_[0]{message} }
 
 package GraphQL::Houtou::DataLoader::Ticket;
 
-sub then {
-  my ($self, @callbacks) = @_;
+sub _as_promise {
+  my ($self) = @_;
   my $deferred = Promise::XS::deferred();
   $self->_subscribe_native(
     sub { $deferred->resolve($_[0]) },
     sub { $deferred->reject($_[0]) },
   );
-  return $deferred->promise->then(@callbacks);
+  return $deferred->promise;
 }
+
+sub then    { return shift->_as_promise->then(@_) }
+sub catch   { return shift->_as_promise->catch(@_) }
+sub finally { return shift->_as_promise->finally(@_) }
 
 package GraphQL::Houtou::DataLoader;
 
@@ -281,12 +285,13 @@ C<isa>, read the reason with C<< ->message >>). Calling it with a flat key
 list is deprecated (it returns one promise per key and warns in the
 C<deprecated> category).
 
-C<load> and C<load_many> return XS-backed tickets. They retain C<then>
-compatibility for application code. The executor uses C<AWAIT_IS_READY>
-and C<AWAIT_GET> to consume already-settled cache entries without creating
-a Promise::XS continuation; pending tickets notify the executor directly
-from XS. Calling C<AWAIT_GET> before readiness throws, and calling it on a
-rejected ticket throws the rejection reason.
+C<load> and C<load_many> return XS-backed tickets. They retain the
+Promise::XS chaining methods C<then>, C<catch>, and C<finally> for
+application code. The executor uses C<AWAIT_IS_READY> and C<AWAIT_GET> to
+consume already-settled cache entries without creating a Promise::XS
+continuation; pending tickets notify the executor directly from XS.
+Calling C<AWAIT_GET> before readiness throws, and calling it on a rejected
+ticket throws the rejection reason.
 
 Instances cache per key (create one loader per request unless you want
 cross-request caching). Pass C<< cache => 0 >> to disable, C<cache_key>

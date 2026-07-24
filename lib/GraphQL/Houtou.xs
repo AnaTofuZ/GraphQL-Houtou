@@ -3054,6 +3054,9 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
 static SV *gql_runtime_vm_new_ticket_chain_callback_sv(
   pTHX_ SV *derived_ticket, SV *callback_sv, U8 reject_arm
 );
+static void gql_runtime_vm_resolve_dataloader_ticket_value(
+  pTHX_ SV *derived_ticket, SV *result
+);
 
 static XS(gql_runtime_vm_xs_ticket_chain_callback)
 {
@@ -3070,9 +3073,15 @@ static XS(gql_runtime_vm_xs_ticket_chain_callback)
     XSRETURN_UNDEF;
   }
   if (!ctx->callback_sv || !SvOK(ctx->callback_sv)) {
-    gql_runtime_vm_settle_dataloader_ticket(
-      aTHX_ ctx->derived_ticket, ctx->reject_arm ? 2 : 1, input
-    );
+    if (ctx->reject_arm) {
+      gql_runtime_vm_settle_dataloader_ticket(
+        aTHX_ ctx->derived_ticket, 2, input
+      );
+    } else {
+      gql_runtime_vm_resolve_dataloader_ticket_value(
+        aTHX_ ctx->derived_ticket, input
+      );
+    }
     XSRETURN_UNDEF;
   }
 
@@ -3104,23 +3113,57 @@ static XS(gql_runtime_vm_xs_ticket_chain_callback)
     LEAVE;
   }
 
-  if (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ result)) {
+  gql_runtime_vm_resolve_dataloader_ticket_value(
+    aTHX_ ctx->derived_ticket, result
+  );
+  SvREFCNT_dec(result);
+  XSRETURN_UNDEF;
+}
+
+static void
+gql_runtime_vm_resolve_dataloader_ticket_value(
+  pTHX_ SV *derived_ticket, SV *result
+)
+{
+  if (result
+      && SvROK(result)
+      && SvROK(derived_ticket)
+      && SvRV(result) == SvRV(derived_ticket)) {
+    SV *reason = newSVpvs("DataLoader ticket cannot resolve to itself");
+    gql_runtime_vm_settle_dataloader_ticket(
+      aTHX_ derived_ticket, 2, reason
+    );
+    SvREFCNT_dec(reason);
+  } else if (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ result)) {
     SV *resolve = gql_runtime_vm_new_ticket_chain_callback_sv(
-      aTHX_ ctx->derived_ticket, &PL_sv_undef, 0
+      aTHX_ derived_ticket, &PL_sv_undef, 0
     );
     SV *reject = gql_runtime_vm_new_ticket_chain_callback_sv(
-      aTHX_ ctx->derived_ticket, &PL_sv_undef, 1
+      aTHX_ derived_ticket, &PL_sv_undef, 1
     );
     gql_runtime_vm_subscribe_dataloader_ticket(aTHX_ result, resolve, reject);
     SvREFCNT_dec(resolve);
     SvREFCNT_dec(reject);
+  } else if (gql_runtime_vm_sv_is_promise_xs(aTHX_ result)) {
+    SV *resolve = gql_runtime_vm_new_ticket_chain_callback_sv(
+      aTHX_ derived_ticket, &PL_sv_undef, 0
+    );
+    SV *reject = gql_runtime_vm_new_ticket_chain_callback_sv(
+      aTHX_ derived_ticket, &PL_sv_undef, 1
+    );
+    SV *chain = gql_runtime_vm_call_then_promise_xs_sv(
+      aTHX_ result, resolve, reject, NULL
+    );
+    SvREFCNT_dec(resolve);
+    SvREFCNT_dec(reject);
+    if (chain) {
+      SvREFCNT_dec(chain);
+    }
   } else {
     gql_runtime_vm_settle_dataloader_ticket(
-      aTHX_ ctx->derived_ticket, 1, result
+      aTHX_ derived_ticket, 1, result
     );
   }
-  SvREFCNT_dec(result);
-  XSRETURN_UNDEF;
 }
 
 static SV *

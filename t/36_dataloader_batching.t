@@ -287,9 +287,24 @@ subtest 'native ticket exposes a safe await contract' => sub {
   like $@, qr/ticket failed/, 'rejection is raised by AWAIT_GET';
 
   my $then_value;
-  GraphQL::Houtou::DataLoader::Ticket->resolved('compatible')
-    ->then(sub { $then_value = $_[0] });
+  my $compatible = GraphQL::Houtou::DataLoader::Ticket->resolved('compatible');
+  ok $compatible->can('then'), 'ticket provides then';
+  ok $compatible->can('catch'), 'ticket provides catch';
+  ok $compatible->can('finally'), 'ticket provides finally';
+  $compatible->then(sub { $then_value = $_[0] });
   is $then_value, 'compatible', 'public then compatibility remains usable';
+
+  my $caught;
+  my $public_rejected = GraphQL::Houtou::DataLoader::Ticket->new;
+  $public_rejected->catch(sub { $caught = $_[0] });
+  $public_rejected->_reject('public failure');
+  is $caught, 'public failure', 'public catch compatibility remains usable';
+
+  my $finalized = 0;
+  my $public_pending = GraphQL::Houtou::DataLoader::Ticket->new;
+  $public_pending->finally(sub { $finalized++ });
+  $public_pending->_resolve('public value');
+  is $finalized, 1, 'public finally compatibility remains usable';
 
   my $flattened = GraphQL::Houtou::DataLoader::Ticket->new;
   my $derived = $flattened->_subscribe(sub {
@@ -297,6 +312,23 @@ subtest 'native ticket exposes a safe await contract' => sub {
   }, undef);
   $flattened->_resolve('parent');
   is $derived->AWAIT_GET, 'parent-child', 'XS chain flattens a returned ticket';
+
+  my $promise_source = GraphQL::Houtou::DataLoader::Ticket->new;
+  my $promise_derived = $promise_source->_subscribe(sub {
+    return Promise::XS::resolved($_[0] . '-promise');
+  }, undef);
+  $promise_source->_resolve('parent');
+  is $promise_derived->AWAIT_GET, 'parent-promise',
+    'XS chain flattens a returned Promise::XS promise';
+
+  my $promise_rejection_source = GraphQL::Houtou::DataLoader::Ticket->new;
+  my $promise_rejection = $promise_rejection_source->_subscribe(sub {
+    return Promise::XS::rejected("nested promise failed\n");
+  }, undef);
+  $promise_rejection_source->_resolve('parent');
+  eval { $promise_rejection->AWAIT_GET };
+  like $@, qr/nested promise failed/,
+    'rejection from a returned Promise::XS promise propagates';
 
   my $failed = GraphQL::Houtou::DataLoader::Ticket->new;
   my $failed_chain = $failed->_subscribe(sub { die "callback failed\n" }, undef);
@@ -312,6 +344,14 @@ subtest 'native ticket exposes a safe await contract' => sub {
   $recovered->_reject('reason');
   is $recovered_chain->AWAIT_GET, 'recovered: reason',
     'reject callback can recover the chain';
+
+  my $self_source = GraphQL::Houtou::DataLoader::Ticket->new;
+  my $self_chain;
+  $self_chain = $self_source->_subscribe(sub { return $self_chain }, undef);
+  $self_source->_resolve('value');
+  ok $self_chain->AWAIT_IS_READY, 'self-resolution settles the derived ticket';
+  eval { $self_chain->AWAIT_GET };
+  like $@, qr/cannot resolve to itself/, 'self-resolution is rejected';
 };
 
 subtest 'cache hits and primed values return ready tickets' => sub {

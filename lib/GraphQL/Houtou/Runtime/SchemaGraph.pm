@@ -474,7 +474,10 @@ sub _build_slots_for_object {
           ? 'NATIVE_ONE_ARG'
           : (($field->{resolver_mode} || q()) eq 'native_no_args'
             ? 'NATIVE_NO_ARGS'
-            : (($field->{resolver_mode} || q()) eq 'native' ? 'NATIVE' : 'DEFAULT'))),
+            : ((($field->{resolver_mode} || q()) eq 'native'
+                || ($field->{resolver_mode} || q()) eq 'native_args')
+              ? 'NATIVE'
+              : 'DEFAULT'))),
       completion_family => _completion_family_for_type($return_type),
       dispatch_family => _dispatch_family_for_type($return_type),
       arg_defs_compact => _build_input_defs_compact($field->{args} || {}),

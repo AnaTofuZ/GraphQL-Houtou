@@ -296,6 +296,76 @@ C<< GraphQL::Houtou::Schema->from_doc($sdl, %opts) >> and
 C<< ->from_ast($ast, %opts) >>. Type-system extensions in the same SDL
 document are merged before the executable schema is constructed.
 
+=head3 Resolver modes and argument count
+
+C<resolver_mode> selects a callback ABI; it is not inferred from the number
+of field arguments. Use the regular resolver contract unless profiling
+shows that a native mode matters:
+
+=over 4
+
+=item * any count, regular API
+
+Omit C<resolver_mode>. The resolver receives
+C<($source, $args, $context, $info, $return_type)>.
+
+=item * zero arguments, native fast path
+
+Use C<native_no_args>. The resolver receives
+C<($source, $context, $return_type)>.
+
+=item * exactly one argument, native fast path
+
+Use C<native_one_arg>. The resolver receives
+C<($source, $value, $context, $return_type)>.
+
+=item * two or more arguments, native fast path
+
+Use C<native_args>. The resolver receives
+C<($source, $args, $context, $return_type)>.
+
+=back
+
+For clarity, prefer C<native_no_args> for zero arguments,
+C<native_one_arg> for one, and C<native_args> for two or more. The existing
+C<native> spelling remains an alias of C<native_args> for compatibility.
+Both HashRef modes accept any argument count and always pass C<$args>.
+The specialized modes change the callback signature and are therefore
+always explicit. Schema compilation rejects C<native_no_args> on a field
+with arguments and C<native_one_arg> unless the field has exactly one.
+
+    fields => {
+      health => {
+        type => $String,
+        resolver_mode => 'native_no_args',
+        resolve => sub {
+          my ($source, $context, $return_type) = @_;
+          return 'ok';
+        },
+      },
+      user => {
+        type => $User,
+        args => { id => { type => $ID->non_null } },
+        resolver_mode => 'native_one_arg',
+        resolve => sub {
+          my ($source, $id, $context, $return_type) = @_;
+          return load_user($id);
+        },
+      },
+      search => {
+        type => $User->list,
+        args => {
+          term => { type => $String },
+          limit => { type => $Int },
+        },
+        resolver_mode => 'native_args',
+        resolve => sub {
+          my ($source, $args, $context, $return_type) = @_;
+          return search_users($args->{term}, $args->{limit});
+        },
+      },
+    }
+
 The inverse direction is C<print_schema()> (also available as
 C<< $schema->to_doc >>), which renders any schema back to SDL — including
 schemas assembled from Perl type objects:

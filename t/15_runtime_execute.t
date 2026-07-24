@@ -259,14 +259,14 @@ subtest 'native_one_arg requires exactly one argument declaration' => sub {
     'invalid one-argument ABI declaration is rejected';
 };
 
-subtest 'native resolver mode supports static literal args on native runtime' => sub {
+subtest 'native_args resolver mode supports the HashRef ABI' => sub {
   my $native_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
       name => 'NativeArgsQuery',
       fields => {
         nativeGreet => {
           type => $String,
-          resolver_mode => 'native',
+          resolver_mode => 'native_args',
           args => {
             name => { type => $String },
           },
@@ -284,7 +284,7 @@ subtest 'native resolver mode supports static literal args on native runtime' =>
     data => {
       nativeGreet => 'hi vm',
     },
-  }, 'auto-detect path passes static args to explicit resolver';
+  }, 'native_args passes a HashRef to the explicit resolver';
 };
 
 subtest 'native runtime specializes variable args before bundle execution' => sub {

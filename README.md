@@ -116,6 +116,59 @@ SDL are reflected on the built types. The same functionality is available as
 `->from_ast($ast, %opts)`. Type-system extensions in the same SDL
 document are merged before the executable schema is constructed.
 
+### Resolver modes and argument count
+
+`resolver_mode` selects a callback ABI; it is not inferred from the number
+of field arguments. Use the regular resolver contract unless profiling
+shows that a native mode matters:
+
+| Field arguments | Recommended mode | Resolver arguments |
+|---:|---|---|
+| any count, regular API | omitted / default | `($source, $args, $context, $info, $return_type)` |
+| 0, native fast path | `native_no_args` | `($source, $context, $return_type)` |
+| exactly 1, native fast path | `native_one_arg` | `($source, $value, $context, $return_type)` |
+| 2 or more, native fast path | `native_args` | `($source, $args, $context, $return_type)` |
+
+For clarity, prefer `native_no_args` for zero arguments,
+`native_one_arg` for one, and `native_args` for two or more. The existing
+`native` spelling remains an alias of `native_args` for compatibility.
+Both HashRef modes accept any argument count and always pass `$args`.
+The specialized modes change the callback signature and are therefore
+always explicit. Schema compilation rejects `native_no_args` on a field
+with arguments and `native_one_arg` unless the field has exactly one.
+
+    fields => {
+      health => {
+        type => $String,
+        resolver_mode => 'native_no_args',
+        resolve => sub {
+          my ($source, $context, $return_type) = @_;
+          return 'ok';
+        },
+      },
+      user => {
+        type => $User,
+        args => { id => { type => $ID->non_null } },
+        resolver_mode => 'native_one_arg',
+        resolve => sub {
+          my ($source, $id, $context, $return_type) = @_;
+          return load_user($id);
+        },
+      },
+      search => {
+        type => $User->list,
+        args => {
+          term => { type => $String },
+          limit => { type => $Int },
+        },
+        resolver_mode => 'native_args',
+        resolve => sub {
+          my ($source, $args, $context, $return_type) = @_;
+          return search_users($args->{term}, $args->{limit});
+        },
+      },
+    }
+
 The inverse direction is `print_schema()` (also available as
 `$schema->to_doc`), which renders any schema back to SDL — including
 schemas assembled from Perl type objects:

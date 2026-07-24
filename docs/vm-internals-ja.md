@@ -313,6 +313,8 @@ schema と operation を分離する理由は、schema metadata と callback は
 | 5 | explicit native one-arg | `resolver_mode => 'native_one_arg'` の1引数高速契約 |
 
 generic callback boundary は Perl API 互換のため source、args、context、lazy info を用意する。native mode は hot path 向けで、generic lazy-info ABI を要求しない resolver に限定される。
+`native_args`は`native`と同じcode 3のHashRef ABIを明示するaliasであり、新規コードでは
+argumentが2個以上のfieldに`native_args`を推奨する。
 `native_no_args` は argument を宣言しない field に限り、resolver を
 `($source, $context, $return_type)` で呼ぶ。空の args HashRef を request ごとに
 materialize しないため、狭い scalar field が多数ある query ほど効果が大きい。

@@ -2390,10 +2390,7 @@ gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
   } else {
     entry->payload_kind = payload_kind;
     entry->payload.promise_sv = newSVsv(outcome);
-    if (outcome
-        && SvOK(outcome)
-        && SvROK(outcome)
-        && sv_derived_from(outcome, "Promise::XS::Promise")) {
+    if (gql_runtime_vm_sv_is_pending_async_value(aTHX_ outcome)) {
       entry->state_code = GQL_VM_PENDING_STATE_WAITING_UNARMED;
     } else {
       entry->state_code = GQL_VM_PENDING_STATE_READY_SV;

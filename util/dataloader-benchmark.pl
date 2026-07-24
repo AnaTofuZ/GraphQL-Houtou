@@ -24,28 +24,36 @@ use GraphQL::Houtou::Type::Scalar qw($String);
 my $count = -3;
 my $width = 10;
 my $scenario = 'loader';
+my $access = 'unique';
 
 GetOptions(
   'count=s' => \$count,
   'width=i' => \$width,
   'scenario=s' => \$scenario,
-) or die "Usage: $0 [--count Benchmark-count] [--width key-count] [--scenario loader|execution]\n";
+  'access=s' => \$access,
+) or die "Usage: $0 [--count Benchmark-count] [--width key-count] [--scenario loader|execution] [--access unique|repeated|primed]\n";
 
 die "--width must be positive\n" unless $width > 0;
 die "--scenario must be loader or execution\n"
   unless $scenario eq 'loader' || $scenario eq 'execution';
+die "--access must be unique, repeated, or primed\n"
+  unless $access eq 'unique' || $access eq 'repeated' || $access eq 'primed';
 
 my @keys = map { "key$_" } 1 .. $width;
+my @request_keys = $access eq 'repeated' ? (($keys[0]) x $width) : @keys;
 
 sub run_request {
   my $loader = GraphQL::Houtou::DataLoader->new(
-    cache => 0,
+    cache => $access eq 'unique' ? 0 : 1,
     batch => sub {
       my ($batch_keys) = @_;
       return [ map { "value:$_" } @$batch_keys ];
     },
   );
-  $loader->load($_) for @keys;
+  if ($access eq 'primed') {
+    $loader->prime($_, "value:$_") for @keys;
+  }
+  $loader->load($_) for @request_keys;
   return $loader->dispatch;
 }
 
@@ -83,7 +91,7 @@ sub build_execution_runner {
           type => $Row->list,
           resolver_mode => 'fast_resolve_no_args',
           resolve => sub {
-            return [ map { +{ id => $_ } } @keys ];
+            return [ map { +{ id => $_ } } @request_keys ];
           },
         },
       },
@@ -95,12 +103,15 @@ sub build_execution_runner {
 
   return sub {
     my $loader = GraphQL::Houtou::DataLoader->new(
-      cache => 0,
+      cache => $access eq 'unique' ? 0 : 1,
       batch => sub {
         my ($batch_keys) = @_;
         return [ map { +{ value => "value:$_" } } @$batch_keys ];
       },
     );
+    if ($access eq 'primed') {
+      $loader->prime($_, +{ value => "value:$_" }) for @keys;
+    }
     return $runtime->execute_program(
       $program,
       context => { loader => $loader },
@@ -116,10 +127,10 @@ if ($scenario eq 'execution') {
     generic_resolver => build_execution_runner(0),
     fast_resolver => build_execution_runner(1),
   };
-  $label = "$width keys through GraphQL execution";
+  $label = "$width $access accesses through GraphQL execution";
 } else {
   $cases = { load_and_dispatch => \&run_request };
-  $label = "$width keys in one batch";
+  $label = "$width $access accesses in one batch";
 }
 
 for my $runner (values %$cases) {

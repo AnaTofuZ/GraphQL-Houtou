@@ -8,12 +8,14 @@
 #include "validation.h"
 static SV *gql_runtime_vm_empty_args_sv(pTHX);
 static SV *gql_runtime_vm_named_coderef_sv(pTHX_ const char *name);
+static int gql_runtime_vm_sv_is_pending_async_value(pTHX_ SV *value);
 #include "vm_runtime.h"
 
 static SV *gql_runtime_vm_global_empty_args_sv = NULL;
 static SV *gql_runtime_vm_global_identity_callback_sv = NULL;
 static HV *gql_runtime_vm_outcome_stash = NULL;
 static HV *gql_runtime_vm_promise_xs_stash = NULL;
+static HV *gql_runtime_vm_dataloader_ticket_stash = NULL;
 
 /* Recycled resolve/reject callback pairs for armed pending entries. Each
  * newXS + magic attach costs more than the entry bookkeeping it drives, so
@@ -86,6 +88,155 @@ gql_runtime_vm_sv_is_promise_xs(pTHX_ SV *sv)
     return 1;
   }
   return sv_derived_from(sv, "Promise::XS::Promise");
+}
+
+static int
+gql_runtime_vm_sv_is_dataloader_ticket(pTHX_ SV *sv)
+{
+  SV *rv;
+  if (!sv || !SvROK(sv)) {
+    return 0;
+  }
+  rv = SvRV(sv);
+  if (!SvOBJECT(rv)) {
+    return 0;
+  }
+  if (!gql_runtime_vm_dataloader_ticket_stash) {
+    gql_runtime_vm_dataloader_ticket_stash =
+      gv_stashpvs("GraphQL::Houtou::DataLoader::Ticket", GV_ADD);
+  }
+  return SvSTASH(rv) == gql_runtime_vm_dataloader_ticket_stash;
+}
+
+static AV *
+gql_runtime_vm_dataloader_ticket_av(pTHX_ SV *ticket)
+{
+  if (!gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ ticket)
+      || SvTYPE(SvRV(ticket)) != SVt_PVAV) {
+    croak("invalid DataLoader ticket");
+  }
+  return (AV *)SvRV(ticket);
+}
+
+static IV
+gql_runtime_vm_dataloader_ticket_state(pTHX_ SV *ticket)
+{
+  AV *av = gql_runtime_vm_dataloader_ticket_av(aTHX_ ticket);
+  SV **state = av_fetch(av, 0, 0);
+  return state ? SvIV(*state) : 0;
+}
+
+static SV *
+gql_runtime_vm_dataloader_ticket_value(pTHX_ SV *ticket)
+{
+  AV *av = gql_runtime_vm_dataloader_ticket_av(aTHX_ ticket);
+  SV **value = av_fetch(av, 1, 0);
+  return value ? *value : &PL_sv_undef;
+}
+
+static SV *
+gql_runtime_vm_new_dataloader_ticket_sv(pTHX_ IV state, SV *value)
+{
+  AV *av = newAV();
+  av_store(av, 0, newSViv(state));
+  av_store(av, 1, newSVsv(value ? value : &PL_sv_undef));
+  av_store(av, 2, newRV_noinc((SV *)newAV()));
+  if (!gql_runtime_vm_dataloader_ticket_stash) {
+    gql_runtime_vm_dataloader_ticket_stash =
+      gv_stashpvs("GraphQL::Houtou::DataLoader::Ticket", GV_ADD);
+  }
+  return sv_bless(newRV_noinc((SV *)av), gql_runtime_vm_dataloader_ticket_stash);
+}
+
+static void
+gql_runtime_vm_call_ticket_callback(pTHX_ SV *callback, SV *value)
+{
+  dSP;
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  XPUSHs(value ? value : &PL_sv_undef);
+  PUTBACK;
+  call_sv(callback, G_VOID | G_DISCARD);
+  FREETMPS;
+  LEAVE;
+}
+
+static void
+gql_runtime_vm_subscribe_dataloader_ticket(
+  pTHX_ SV *ticket, SV *resolve, SV *reject
+)
+{
+  IV state = gql_runtime_vm_dataloader_ticket_state(aTHX_ ticket);
+  if (state == 0) {
+    AV *av = gql_runtime_vm_dataloader_ticket_av(aTHX_ ticket);
+    SV **subscribers_rv = av_fetch(av, 2, 0);
+    AV *subscribers;
+    AV *pair;
+    if (!subscribers_rv || !SvROK(*subscribers_rv)
+        || SvTYPE(SvRV(*subscribers_rv)) != SVt_PVAV) {
+      croak("invalid DataLoader ticket subscribers");
+    }
+    subscribers = (AV *)SvRV(*subscribers_rv);
+    pair = newAV();
+    av_push(pair, newSVsv(resolve ? resolve : &PL_sv_undef));
+    av_push(pair, newSVsv(reject ? reject : &PL_sv_undef));
+    av_push(subscribers, newRV_noinc((SV *)pair));
+    return;
+  }
+  if (state == 1 && resolve && SvOK(resolve)) {
+    gql_runtime_vm_call_ticket_callback(
+      aTHX_ resolve, gql_runtime_vm_dataloader_ticket_value(aTHX_ ticket)
+    );
+  } else if (state == 2 && reject && SvOK(reject)) {
+    gql_runtime_vm_call_ticket_callback(
+      aTHX_ reject, gql_runtime_vm_dataloader_ticket_value(aTHX_ ticket)
+    );
+  }
+}
+
+static void
+gql_runtime_vm_settle_dataloader_ticket(pTHX_ SV *ticket, IV state, SV *value)
+{
+  AV *av = gql_runtime_vm_dataloader_ticket_av(aTHX_ ticket);
+  SV **subscribers_rv;
+  AV *subscribers;
+  SSize_t i;
+  if (gql_runtime_vm_dataloader_ticket_state(aTHX_ ticket) != 0) {
+    return;
+  }
+  subscribers_rv = av_fetch(av, 2, 0);
+  if (!subscribers_rv || !SvROK(*subscribers_rv)
+      || SvTYPE(SvRV(*subscribers_rv)) != SVt_PVAV) {
+    croak("invalid DataLoader ticket subscribers");
+  }
+  subscribers = (AV *)SvRV(*subscribers_rv);
+  SvREFCNT_inc_simple_void_NN((SV *)subscribers);
+  av_store(av, 0, newSViv(state));
+  av_store(av, 1, newSVsv(value ? value : &PL_sv_undef));
+  av_store(av, 2, newRV_noinc((SV *)newAV()));
+  for (i = 0; i <= av_top_index(subscribers); i++) {
+    SV **pair_rv = av_fetch(subscribers, i, 0);
+    AV *pair;
+    SV **callback;
+    if (!pair_rv || !SvROK(*pair_rv) || SvTYPE(SvRV(*pair_rv)) != SVt_PVAV) {
+      continue;
+    }
+    pair = (AV *)SvRV(*pair_rv);
+    callback = av_fetch(pair, state == 1 ? 0 : 1, 0);
+    if (callback && SvOK(*callback)) {
+      gql_runtime_vm_call_ticket_callback(aTHX_ *callback, value);
+    }
+  }
+  SvREFCNT_dec((SV *)subscribers);
+}
+
+static int
+gql_runtime_vm_sv_is_pending_async_value(pTHX_ SV *value)
+{
+  return gql_runtime_vm_sv_is_promise_xs(aTHX_ value)
+    || (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ value)
+        && gql_runtime_vm_dataloader_ticket_state(aTHX_ value) == 0);
 }
 
 static SV *gql_runtime_vm_global_wrap_object_outcome_callback_sv = NULL;
@@ -249,6 +400,12 @@ typedef struct {
 typedef struct {
   gql_runtime_vm_pending_merge_t *merge;
 } gql_runtime_vm_finalize_callback_ctx_t;
+
+typedef struct {
+  SV *derived_ticket;
+  SV *callback_sv;
+  U8 reject_arm;
+} gql_runtime_vm_ticket_chain_ctx_t;
 
 
 typedef struct {
@@ -593,6 +750,24 @@ gql_runtime_vm_finalize_callback_ctx_free(pTHX_ SV *sv, MAGIC *mg)
   return 0;
 }
 
+static int
+gql_runtime_vm_ticket_chain_ctx_free(pTHX_ SV *sv, MAGIC *mg)
+{
+  gql_runtime_vm_ticket_chain_ctx_t *ctx = mg && mg->mg_ptr
+    ? INT2PTR(gql_runtime_vm_ticket_chain_ctx_t *, mg->mg_ptr)
+    : NULL;
+  if (ctx) {
+    SvREFCNT_dec(ctx->derived_ticket);
+    SvREFCNT_dec(ctx->callback_sv);
+    Safefree(ctx);
+    mg->mg_ptr = NULL;
+  }
+  if (sv && SvTYPE(sv) == SVt_PVCV) {
+    CvXSUBANY((CV *)sv).any_ptr = NULL;
+  }
+  return 0;
+}
+
 static MGVTBL gql_runtime_vm_pending_callback_ctx_vtbl = {
   NULL,
   NULL,
@@ -651,6 +826,19 @@ static MGVTBL gql_runtime_vm_finalize_callback_ctx_vtbl = {
   NULL,
   NULL,
   gql_runtime_vm_finalize_callback_ctx_free
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
+
+static MGVTBL gql_runtime_vm_ticket_chain_ctx_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gql_runtime_vm_ticket_chain_ctx_free
 #if PERL_VERSION_GE(5, 15, 0)
   ,NULL
   ,NULL
@@ -1537,7 +1725,9 @@ gql_runtime_vm_is_promise_value_for_state_sv(
     return 0;
   }
   if (s && s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
-    return gql_runtime_vm_is_promise_xs_value_sv(value);
+    return gql_runtime_vm_is_promise_xs_value_sv(value)
+      || (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ value)
+          && gql_runtime_vm_dataloader_ticket_state(aTHX_ value) == 0);
   }
   return 0;
 }
@@ -2128,14 +2318,26 @@ gql_runtime_vm_async_scheduler_arm_frame(
       entry->armed_resolve_ctx = pair_ctx;
       entry->armed_reject_ctx = pair_ctx;
 
-      ret = gql_runtime_vm_call_then_promise_for_state_sv(
-        aTHX_
-        s,
-        entry->payload.promise_sv,
-        callback_sv,
-        error_callback_sv,
-        entry->path_frame
-      );
+      if (gql_runtime_vm_sv_is_dataloader_ticket(
+            aTHX_ entry->payload.promise_sv
+          )) {
+        gql_runtime_vm_subscribe_dataloader_ticket(
+          aTHX_
+          entry->payload.promise_sv,
+          callback_sv,
+          error_callback_sv
+        );
+        ret = NULL;
+      } else {
+        ret = gql_runtime_vm_call_then_promise_for_state_sv(
+          aTHX_
+          s,
+          entry->payload.promise_sv,
+          callback_sv,
+          error_callback_sv,
+          entry->path_frame
+        );
+      }
 
       SvREFCNT_dec(callback_sv);
       SvREFCNT_dec(error_callback_sv);
@@ -2847,6 +3049,160 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
     );
   }
   return gql_runtime_vm_native_value_materialize_sv(aTHX_ state->frame->values_value);
+}
+
+static SV *gql_runtime_vm_new_ticket_chain_callback_sv(
+  pTHX_ SV *derived_ticket, SV *callback_sv, U8 reject_arm
+);
+static void gql_runtime_vm_resolve_dataloader_ticket_value(
+  pTHX_ SV *derived_ticket, SV *result
+);
+
+static XS(gql_runtime_vm_xs_ticket_chain_callback)
+{
+  dVAR;
+  dXSARGS;
+  gql_runtime_vm_ticket_chain_ctx_t *ctx = INT2PTR(
+    gql_runtime_vm_ticket_chain_ctx_t *,
+    CvXSUBANY(cv).any_ptr
+  );
+  SV *input = items > 0 && ST(0) ? ST(0) : &PL_sv_undef;
+  SV *result = NULL;
+
+  if (!ctx || !ctx->derived_ticket) {
+    XSRETURN_UNDEF;
+  }
+  if (!ctx->callback_sv || !SvOK(ctx->callback_sv)) {
+    if (ctx->reject_arm) {
+      gql_runtime_vm_settle_dataloader_ticket(
+        aTHX_ ctx->derived_ticket, 2, input
+      );
+    } else {
+      gql_runtime_vm_resolve_dataloader_ticket_value(
+        aTHX_ ctx->derived_ticket, input
+      );
+    }
+    XSRETURN_UNDEF;
+  }
+
+  {
+    dSP;
+    I32 count;
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(input);
+    PUTBACK;
+    count = call_sv(ctx->callback_sv, G_SCALAR | G_EVAL);
+    SPAGAIN;
+    if (SvTRUE(ERRSV)) {
+      result = newSVsv(ERRSV);
+      sv_setsv(ERRSV, &PL_sv_undef);
+      PUTBACK;
+      FREETMPS;
+      LEAVE;
+      gql_runtime_vm_settle_dataloader_ticket(
+        aTHX_ ctx->derived_ticket, 2, result
+      );
+      SvREFCNT_dec(result);
+      XSRETURN_UNDEF;
+    }
+    result = count > 0 ? newSVsv(POPs) : newSVsv(&PL_sv_undef);
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+  }
+
+  gql_runtime_vm_resolve_dataloader_ticket_value(
+    aTHX_ ctx->derived_ticket, result
+  );
+  SvREFCNT_dec(result);
+  XSRETURN_UNDEF;
+}
+
+static void
+gql_runtime_vm_resolve_dataloader_ticket_value(
+  pTHX_ SV *derived_ticket, SV *result
+)
+{
+  if (result
+      && SvROK(result)
+      && SvROK(derived_ticket)
+      && SvRV(result) == SvRV(derived_ticket)) {
+    SV *reason = newSVpvs("DataLoader ticket cannot resolve to itself");
+    gql_runtime_vm_settle_dataloader_ticket(
+      aTHX_ derived_ticket, 2, reason
+    );
+    SvREFCNT_dec(reason);
+  } else if (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ result)) {
+    SV *resolve = gql_runtime_vm_new_ticket_chain_callback_sv(
+      aTHX_ derived_ticket, &PL_sv_undef, 0
+    );
+    SV *reject = gql_runtime_vm_new_ticket_chain_callback_sv(
+      aTHX_ derived_ticket, &PL_sv_undef, 1
+    );
+    gql_runtime_vm_subscribe_dataloader_ticket(aTHX_ result, resolve, reject);
+    SvREFCNT_dec(resolve);
+    SvREFCNT_dec(reject);
+  } else if (gql_runtime_vm_sv_is_promise_xs(aTHX_ result)) {
+    SV *resolve = gql_runtime_vm_new_ticket_chain_callback_sv(
+      aTHX_ derived_ticket, &PL_sv_undef, 0
+    );
+    SV *reject = gql_runtime_vm_new_ticket_chain_callback_sv(
+      aTHX_ derived_ticket, &PL_sv_undef, 1
+    );
+    SV *chain = gql_runtime_vm_call_then_promise_xs_sv(
+      aTHX_ result, resolve, reject, NULL
+    );
+    SvREFCNT_dec(resolve);
+    SvREFCNT_dec(reject);
+    if (chain) {
+      SvREFCNT_dec(chain);
+    }
+  } else {
+    gql_runtime_vm_settle_dataloader_ticket(
+      aTHX_ derived_ticket, 1, result
+    );
+  }
+}
+
+static SV *
+gql_runtime_vm_new_ticket_chain_callback_sv(
+  pTHX_ SV *derived_ticket, SV *callback_sv, U8 reject_arm
+)
+{
+  CV *cv;
+  gql_runtime_vm_ticket_chain_ctx_t *ctx;
+  Newxz(ctx, 1, gql_runtime_vm_ticket_chain_ctx_t);
+  ctx->derived_ticket = SvREFCNT_inc_simple_NN(derived_ticket);
+  ctx->callback_sv = newSVsv(callback_sv ? callback_sv : &PL_sv_undef);
+  ctx->reject_arm = reject_arm;
+  cv = newXS(NULL, gql_runtime_vm_xs_ticket_chain_callback, __FILE__);
+  CvXSUBANY(cv).any_ptr = ctx;
+  gql_runtime_vm_attach_callback_magic_ptr(
+    aTHX_ (SV *)cv, &gql_runtime_vm_ticket_chain_ctx_vtbl, ctx
+  );
+  return newRV_noinc((SV *)cv);
+}
+
+static SV *
+gql_runtime_vm_chain_dataloader_ticket(
+  pTHX_ SV *ticket, SV *resolve_callback, SV *reject_callback
+)
+{
+  SV *derived = gql_runtime_vm_new_dataloader_ticket_sv(
+    aTHX_ 0, &PL_sv_undef
+  );
+  SV *resolve = gql_runtime_vm_new_ticket_chain_callback_sv(
+    aTHX_ derived, resolve_callback, 0
+  );
+  SV *reject = gql_runtime_vm_new_ticket_chain_callback_sv(
+    aTHX_ derived, reject_callback, 1
+  );
+  gql_runtime_vm_subscribe_dataloader_ticket(aTHX_ ticket, resolve, reject);
+  SvREFCNT_dec(resolve);
+  SvREFCNT_dec(reject);
+  return derived;
 }
 
 static XS(gql_runtime_vm_xs_pending_callback)
@@ -3643,6 +3999,24 @@ gql_runtime_vm_call_then_promise_for_state_sv(
   gql_runtime_vm_path_frame_t *path_frame
 )
 {
+  if (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ promise_sv)) {
+    dSP;
+    SV *ret = NULL;
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(promise_sv);
+    XPUSHs(callback_sv ? callback_sv : &PL_sv_undef);
+    XPUSHs(error_callback_sv ? error_callback_sv : &PL_sv_undef);
+    PUTBACK;
+    call_method("_subscribe", G_SCALAR);
+    SPAGAIN;
+    ret = newSVsv(POPs);
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return ret;
+  }
   if (s && s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
     return gql_runtime_vm_call_then_promise_xs_sv(
       aTHX_
@@ -5869,6 +6243,22 @@ gql_runtime_vm_exec_state_execute_current_op_async_sv(
     path_frame,
     &error_sv
   );
+  if (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ resolved_sv)) {
+    IV ticket_state = gql_runtime_vm_dataloader_ticket_state(aTHX_ resolved_sv);
+    if (ticket_state == 1) {
+      SV *value_sv = newSVsv(
+        gql_runtime_vm_dataloader_ticket_value(aTHX_ resolved_sv)
+      );
+      SvREFCNT_dec(resolved_sv);
+      resolved_sv = value_sv;
+    } else if (ticket_state == 2) {
+      error_sv = newSVsv(
+        gql_runtime_vm_dataloader_ticket_value(aTHX_ resolved_sv)
+      );
+      SvREFCNT_dec(resolved_sv);
+      resolved_sv = newSVsv(&PL_sv_undef);
+    }
+  }
   if (error_sv && SvOK(error_sv)) {
     if (outcome_out) {
       *outcome_out = gql_runtime_vm_new_error_outcome_struct_for_path(
@@ -11689,6 +12079,94 @@ execute_native_program_auto_to_json_xs(runtime_sv, program_sv, root_value = &PL_
         variables
       );
     }
+  OUTPUT:
+    RETVAL
+
+MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::DataLoader::Ticket
+
+SV *
+new(class)
+    SV *class
+  CODE:
+    (void)class;
+    RETVAL = gql_runtime_vm_new_dataloader_ticket_sv(aTHX_ 0, &PL_sv_undef);
+  OUTPUT:
+    RETVAL
+
+SV *
+resolved(class, value)
+    SV *class
+    SV *value
+  CODE:
+    (void)class;
+    RETVAL = gql_runtime_vm_new_dataloader_ticket_sv(aTHX_ 1, value);
+  OUTPUT:
+    RETVAL
+
+SV *
+_resolve(self, value)
+    SV *self
+    SV *value
+  CODE:
+    gql_runtime_vm_settle_dataloader_ticket(aTHX_ self, 1, value);
+    RETVAL = self;
+    SvREFCNT_inc_simple_void_NN(RETVAL);
+  OUTPUT:
+    RETVAL
+
+SV *
+_reject(self, reason)
+    SV *self
+    SV *reason
+  CODE:
+    gql_runtime_vm_settle_dataloader_ticket(aTHX_ self, 2, reason);
+    RETVAL = self;
+    SvREFCNT_inc_simple_void_NN(RETVAL);
+  OUTPUT:
+    RETVAL
+
+void
+_subscribe_native(self, resolve, reject)
+    SV *self
+    SV *resolve
+    SV *reject
+  CODE:
+    gql_runtime_vm_subscribe_dataloader_ticket(aTHX_ self, resolve, reject);
+
+SV *
+_subscribe(self, resolve, reject)
+    SV *self
+    SV *resolve
+    SV *reject
+  CODE:
+    RETVAL = gql_runtime_vm_chain_dataloader_ticket(
+      aTHX_ self, resolve, reject
+    );
+  OUTPUT:
+    RETVAL
+
+bool
+AWAIT_IS_READY(self)
+    SV *self
+  CODE:
+    RETVAL = gql_runtime_vm_dataloader_ticket_state(aTHX_ self) != 0;
+  OUTPUT:
+    RETVAL
+
+SV *
+AWAIT_GET(self)
+    SV *self
+  PREINIT:
+    IV state;
+  CODE:
+    state = gql_runtime_vm_dataloader_ticket_state(aTHX_ self);
+    if (state == 0) {
+      croak("DataLoader ticket is not ready");
+    }
+    if (state == 2) {
+      croak_sv(gql_runtime_vm_dataloader_ticket_value(aTHX_ self));
+    }
+    RETVAL = newSVsv(gql_runtime_vm_dataloader_ticket_value(aTHX_ self));
   OUTPUT:
     RETVAL
 

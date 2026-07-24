@@ -466,6 +466,23 @@ C<load($key)> returns one promise per key, C<load_many(\@keys)> returns a
 single promise of the values in key order, and instances cache per key
 (create one loader per request).
 
+An argument-free DataLoader field that only needs its source and context can
+use the reduced resolver contract:
+
+    author => {
+      type => $User,
+      resolver_mode => 'fast_resolve_no_args',
+      resolve => sub {
+        my ($entry, $context) = @_;
+        return $context->{users}->load($entry->{author_id});
+      },
+    }
+
+This avoids constructing the generic args and info objects for every list
+item. The bundled DataLoader benchmark measures roughly 4--7% higher
+end-to-end throughput for this shape. Use the regular resolver contract when
+the field needs GraphQL arguments or C<$info>.
+
 =head3 Declaring an async schema (async => 1)
 
 Batching is the normal deployment shape, so runtimes accept a single

@@ -792,3 +792,21 @@ accessor導入後にもfieldごとの`gv_fetchmethod_autoload`が残っていた
 
 accessor単体のthroughputは、1 fieldで約1%、10 fieldsで約5%、25 fieldsで約8%
 追加改善した。subclass切替と実行中のmethod再定義を回帰テストに含めた。
+
+### 14.9 DataLoader resolver境界
+
+DataLoaderの1 batch requestをloader単体とGraphQL実行全体に分けて測定した。
+`dispatch`時のqueue全体`splice`除去、default identity `cache_key` callback除去、
+`on_stall_for`の最終empty dispatch round省略をそれぞれ試したが、いずれも改善せず
+約1〜2%低下したためrevertした。deferred Promise生成とsettleが支配的で、Perl配列や
+小callbackの削減は全体throughputへ反映されない。
+
+一方、GraphQL argumentsを持たないDataLoader resolverをgeneric ABIから
+`fast_resolve_no_args`へ変更すると、1 keyで約4%、10 keysで約7%、25 keysで約6%
+改善した。list itemごとのargs HashRefとlazy info生成を省けるためである。
+
+pre-resolved Promise workloadでもasync SV laneはsync SV laneの約56%のthroughputだった。
+Promise::XSはsettled valueを公開APIから同期取得できないため、executorはpre-resolved
+Promiseにも`then` callback、pending entry、scheduler処理を必要とする。これ以上の大幅な
+改善にはPromise::XSとの専用連携、またはDataLoaderがexecutorへnative pending handleを
+返す内部契約が必要であり、小さなruntime変更とは別のアーキテクチャ課題になる。

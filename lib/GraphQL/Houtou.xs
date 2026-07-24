@@ -12305,8 +12305,8 @@ _settle_batch(class, entries_sv, values_sv)
   PREINIT:
     AV *entries_av;
     AV *values_av;
-    SSize_t count;
-    SSize_t i;
+    Size_t count;
+    Size_t i;
   CODE:
     (void)class;
     if (!entries_sv || !SvROK(entries_sv)
@@ -12368,8 +12368,8 @@ _reject_batch(class, entries_sv, reason_sv)
     SV *reason_sv
   PREINIT:
     AV *entries_av;
-    SSize_t count;
-    SSize_t i;
+    Size_t count;
+    Size_t i;
   CODE:
     (void)class;
     if (!entries_sv || !SvROK(entries_sv)

@@ -932,3 +932,41 @@ ready ticketはresolver直後に値またはerrorへ展開され、pending entry
 作らない。pending ticketもPromise::XSの汎用chainを経由せず、executor callbackへ直接
 通知する。これによりpending workloadの退行を解消しつつ、cache hitとprimeで大きな改善を
 得た。Promise::XSは一般resolverが返すPromiseとticketの公開`then()`互換bridgeとして残す。
+
+### 14.13 今後のasync高速化候補
+
+Promise::XSの非公開`AWAIT_*`を同期取得APIとして利用する案は、安全な契約ではなく実測でも
+成立しなかった。以降はHoutouが所有するTicketとasync scheduler内部を主な対象とし、外部
+resolverが返す本当にpendingなPromiseだけをPromise::XS経路へ残す。
+
+優先順位は次の通り。
+
+1. **Ticket settlementとfield completionの直結**
+   Ticket subscriberにblock、op、slot、result path、親frameのpending entryを持たせ、
+   settle時にschedulerの汎用再開処理を経ずcompletionを実行する。DataLoaderが返すplain
+   hash objectでは、settleからnative object格納までを一続きにできる可能性がある。
+2. **Ticket subscriberとpending entryの一体化**
+   fieldごとに生成するresolve/reject CV、callback context、subscriber pairを専用C structへ
+   まとめる。Ticketからpending entryを直接更新し、Perl callback境界と小オブジェクト生成を
+   削減する。
+3. **Ticket本体のC struct化**
+   現在のblessed AVが持つstate、value、subscriber配列を専用C structへ移す。`av_fetch`と
+   callback pair用AV/RVを減らせる一方、request cancellation、循環参照、未解決Ticket破棄の
+   ownership監査が必要なため独立した変更として扱う。
+4. **DataLoader queue/cacheのnative化**
+   `load`時のcache lookup、`[key, ticket]`生成、queue push、dispatch時の`splice`と`map`を
+   native loader handleへ移す。loader単体への効果は大きい可能性があるが、GraphQL全体では
+   batch関数とresolverの比率も併せて測る。
+5. **batch単位のscheduler連携**
+   Ticket batchのsettlement中は値とready stateだけを更新し、batch末尾で一度だけschedulerへ
+   通知する。ただし既存schedulerは最後のpendingが解決するまでframeをenqueueせず、drain再入も
+   抑止済みである。単純な一括drain通知は過去に効果がなかったため、subscriber/pending entryの
+   一体化と組み合わせてcallback生成や走査自体を削減できる場合にのみ再検証する。
+6. **native valueへの直接settlement**
+   実行planとselectionが確定しているexecutor内部subscriberに限り、plain hashをPerlの
+   completion中間表現へ戻さずnative objectへ変換する。汎用Ticket APIには型やselectionを
+   持ち込まず、executor固有の最適化として隔離する。
+
+小さい変更から進める場合は、batch settlementのPerl/XS反復境界を減らした後、
+Ticket subscriberからpending entryを直接更新する構造を試す。その実測を基にTicket本体や
+DataLoader全体のnative化へ進むか判断する。

@@ -161,6 +161,35 @@ subtest 'async resolvers need an async runtime' => sub {
     'async runtime settles pre-resolved promises to JSON';
 };
 
+subtest 'native_no_args ABI is preserved on the async lane' => sub {
+  my $has_promise_xs = eval { require Promise::XS; 1 };
+  plan skip_all => 'Promise::XS not available' if !$has_promise_xs;
+  my @seen;
+  my $async_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'AsyncNativeNoArgsQuery',
+      fields => {
+        later => {
+          type => $String,
+          resolver_mode => 'native_no_args',
+          resolve => sub {
+            @seen = @_;
+            return Promise::XS::resolved('x');
+          },
+        },
+      },
+    ),
+  );
+
+  my $bytes = build_native_runtime($async_schema, async => 1)
+    ->execute_document_to_json('{ later }', context => { request_id => 7 });
+  is_deeply $json->decode($bytes), { data => { later => 'x' } },
+    'async runtime settles a native_no_args resolver';
+  is scalar(@seen), 3, 'async resolver receives the three-argument ABI';
+  is_deeply $seen[1], { request_id => 7 }, 'async resolver receives context';
+  is $seen[2]->name, 'String', 'async resolver receives return type';
+};
+
 subtest 'sequential responses are stable' => sub {
   my $first = $runtime->execute_document_to_json('{ users { id name } int }');
   my $second = $runtime->execute_document_to_json('{ users { id name } int }');

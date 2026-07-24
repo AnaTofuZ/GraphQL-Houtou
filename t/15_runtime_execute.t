@@ -153,6 +153,53 @@ subtest 'native resolver mode lets explicit resolver use native runtime' => sub 
   }, 'native-safe explicit resolver still executes correctly on the auto-detect path';
 };
 
+subtest 'native_no_args resolver mode omits the arguments hash' => sub {
+  my @seen;
+  my $context = { trace_id => 42 };
+  my $native_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'NativeNoArgsQuery',
+      fields => {
+        nativeHello => {
+          type => $String,
+          resolver_mode => 'native_no_args',
+          resolve => sub {
+            @seen = @_;
+            return 'native-hi';
+          },
+        },
+      },
+    ),
+  );
+
+  my $result = $native_schema->execute('{ nativeHello }', context => $context);
+  is_deeply $result, { data => { nativeHello => 'native-hi' } },
+    'native_no_args resolver executes correctly';
+  is scalar(@seen), 3, 'resolver receives source, context, and return type only';
+  is $seen[1], $context, 'resolver receives the request context';
+  is $seen[2]->name, 'String', 'resolver receives the return type';
+};
+
+subtest 'native_no_args rejects fields that declare arguments' => sub {
+  my $invalid_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'InvalidNativeNoArgsQuery',
+      fields => {
+        greet => {
+          type => $String,
+          resolver_mode => 'native_no_args',
+          args => { name => { type => $String } },
+          resolve => sub { return 'unreachable' },
+        },
+      },
+    ),
+  );
+
+  eval { $invalid_schema->build_runtime };
+  like $@, qr/native_no_args.*requires a field without arguments/,
+    'invalid ABI declaration fails while compiling the runtime';
+};
+
 subtest 'native resolver mode supports static literal args on native runtime' => sub {
   my $native_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
@@ -234,11 +281,11 @@ subtest 'cached runtime program can execute on native runtime with request varia
   );
 
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::XS::VM::execute_native_program_handle_xs;
+  my $orig = \&GraphQL::Houtou::XS::VM::execute_native_program_prepared_fast_xs;
   my $result;
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::XS::VM::execute_native_program_handle_xs = sub {
+    local *GraphQL::Houtou::XS::VM::execute_native_program_prepared_fast_xs = sub {
       $called = 1;
       goto &$orig;
     };
@@ -253,8 +300,8 @@ subtest 'cached runtime program can execute on native runtime with request varia
     data => {
       greet => 'hello cached',
     },
-  }, 'cached program uses request-time specialization before native execution';
-  ok $called, 'cached runtime/program still reached native execution';
+  }, 'cached program prepares request variables inside native execution';
+  ok $called, 'cached runtime/program reached fused prepare-and-execute entry';
 };
 
 subtest 'inflated runtime descriptor can still drive native specialization' => sub {
@@ -358,6 +405,49 @@ subtest 'variable values are coerced through lowered variable defs' => sub {
   }, 'variable coercion uses graphql_to_perl';
 };
 
+subtest 'prepared variable values are not coerced again as arguments' => sub {
+  my $parse_count = 0;
+  my $CountingInput = GraphQL::Houtou::Type::Scalar->new(
+    name => 'CountingInput',
+    parse_value => sub {
+      $parse_count++;
+      return "parsed:$_[0]";
+    },
+    serialize => sub { $_[0] },
+  );
+  my $counting_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'CountingQuery',
+      fields => {
+        echoCounting => {
+          type => $String,
+          resolver_mode => 'native',
+          args => {
+            value => { type => $CountingInput->non_null },
+          },
+          resolve => sub {
+            my ($source, $args) = @_;
+            return $args->{value};
+          },
+        },
+      },
+    ),
+    types => [ $CountingInput ],
+  );
+
+  my $result = $counting_schema->execute(
+    'query Q($value: CountingInput!) { echoCounting(value: $value) }',
+    variables => { value => 'raw' },
+  );
+
+  is_deeply $result, {
+    data => {
+      echoCounting => 'parsed:raw',
+    },
+  }, 'resolver receives the value produced by variable coercion';
+  is $parse_count, 1, 'custom scalar parse_value runs once for a direct variable argument';
+};
+
 subtest 'argument values are coerced through lowered arg defs' => sub {
   my $result = $schema->execute(
     '{ describeProfile(profile: { name: "Ana" }) }',
@@ -381,6 +471,18 @@ subtest 'dynamic argument values are coerced through lowered arg defs' => sub {
   }, 'dynamic arg coercion uses lowered arg defs';
 };
 
+subtest 'variables nested in input literals use the prepared variables fallback' => sub {
+  my $result = $schema->execute(
+    'query Q($name: String!) { describeProfile(profile: { name: $name }) }',
+    variables => { name => 'Cara' },
+  );
+  is_deeply $result, {
+    data => {
+      describeProfile => 'Cara:20',
+    },
+  }, 'nested variable references materialize the compatibility variables hash';
+};
+
 subtest 'resolver receives lazy info hash' => sub {
   my $saw = {};
   my $info_schema = GraphQL::Houtou::Schema->new(
@@ -389,6 +491,9 @@ subtest 'resolver receives lazy info hash' => sub {
       fields => {
         hello => {
           type => $String,
+          args => {
+            name => { type => $String },
+          },
           resolve => sub {
             my ($source, $args, $context, $info, $return_type) = @_;
             $saw->{field_name} = $info->{field_name};
@@ -396,6 +501,7 @@ subtest 'resolver receives lazy info hash' => sub {
             $saw->{return_type} = $info->{return_type}->name;
             $saw->{path} = $info->{path};
             $saw->{context_value} = $info->{context_value};
+            $saw->{variable_values} = $info->{variable_values};
             return $return_type->name;
           },
         },
@@ -403,7 +509,11 @@ subtest 'resolver receives lazy info hash' => sub {
     ),
   );
 
-  my $result = $info_schema->execute('{ hello }', context => { trace_id => 1 });
+  my $result = $info_schema->execute(
+    'query Q($name: String) { hello(name: $name) }',
+    context => { trace_id => 1 },
+    variables => { name => 'Ana', extra => 'kept' },
+  );
   is_deeply $result, { data => { hello => 'String' } }, 'resolver still executes';
   is_deeply $saw, {
     field_name => 'hello',
@@ -411,6 +521,7 @@ subtest 'resolver receives lazy info hash' => sub {
     return_type => 'String',
     path => [ 'hello' ],
     context_value => { trace_id => 1 },
+    variable_values => { name => 'Ana', extra => 'kept' },
   }, 'lazy info exposes compatible keys on demand';
 };
 

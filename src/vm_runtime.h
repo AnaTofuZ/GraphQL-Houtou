@@ -61,7 +61,8 @@ enum {
 enum {
   GQL_VM_CALLBACK_ABI_DEFAULT = 1,
   GQL_VM_CALLBACK_ABI_EXPLICIT_GENERIC = 2,
-  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE = 3
+  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE = 3,
+  GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS = 4
 };
 
 enum {
@@ -259,6 +260,15 @@ struct gql_runtime_vm_callback_context {
   SV *context;
   SV *variables;
   SV *root_value;
+  /* Request-local prepared variables in native program definition order.
+   * Fused sync lanes borrow this array from their XSUB stack. */
+  SV **variable_slots;
+  IV variable_slot_count;
+  gql_runtime_vm_native_program_t *native_program;
+  SV *provided_variables;
+  /* Owned only when an AV-backed slot request has to expose the legacy
+   * prepared variables HashRef to generic callbacks or nested values. */
+  SV *materialized_variables;
 };
 
 typedef struct {
@@ -342,6 +352,8 @@ struct gql_runtime_vm_native_dynamic_value {
   char *scalar_pv;
   STRLEN scalar_pv_len;
   char *variable_name;
+  /* Index in native_program->variable_defs; -1 means name lookup fallback. */
+  IV variable_index;
   IV object_count;
   char **object_names;
   gql_runtime_vm_native_dynamic_value_t **object_values;
@@ -606,6 +618,11 @@ static void gql_runtime_vm_native_dynamic_value_destroy(
 static SV *gql_runtime_vm_native_dynamic_value_materialize_sv(
   pTHX_ const gql_runtime_vm_native_dynamic_value_t *value,
   HV *variables
+);
+static void gql_runtime_vm_bind_dynamic_value_variables(
+  gql_runtime_vm_native_dynamic_value_t *value,
+  const gql_runtime_vm_native_arg_def_t *variable_defs,
+  IV variable_def_count
 );
 static int gql_runtime_vm_native_dynamic_value_truthy(
   pTHX_ const gql_runtime_vm_native_dynamic_value_t *value,
@@ -1132,6 +1149,7 @@ gql_runtime_vm_native_dynamic_value_from_sv(pTHX_ SV *value)
   Newxz(ret, 1, gql_runtime_vm_native_dynamic_value_t);
   ret->kind_code = GQL_VM_DYNAMIC_UNDEF;
   ret->scalar_kind_code = GQL_VM_NATIVE_SCALAR_UNDEF;
+  ret->variable_index = -1;
 
   if (!value || !SvOK(value)) {
     return ret;
@@ -1216,6 +1234,7 @@ gql_runtime_vm_native_dynamic_value_from_native_value(
   Newxz(ret, 1, gql_runtime_vm_native_dynamic_value_t);
   ret->kind_code = GQL_VM_DYNAMIC_UNDEF;
   ret->scalar_kind_code = GQL_VM_NATIVE_SCALAR_UNDEF;
+  ret->variable_index = -1;
 
   if (!value || value->kind_code == GQL_VM_NATIVE_VALUE_UNDEF) {
     return ret;
@@ -1307,6 +1326,50 @@ gql_runtime_vm_native_dynamic_value_clone(
     }
   }
   return ret;
+}
+
+static void
+gql_runtime_vm_bind_dynamic_value_variables(
+  gql_runtime_vm_native_dynamic_value_t *value,
+  const gql_runtime_vm_native_arg_def_t *variable_defs,
+  IV variable_def_count
+)
+{
+  IV i;
+
+  if (!value) {
+    return;
+  }
+  if (value->kind_code == GQL_VM_DYNAMIC_VARIABLE) {
+    value->variable_index = -1;
+    if (!value->variable_name) {
+      return;
+    }
+    for (i = 0; i < variable_def_count; i++) {
+      if (variable_defs[i].name && strEQ(variable_defs[i].name, value->variable_name)) {
+        value->variable_index = i;
+        return;
+      }
+    }
+    return;
+  }
+  if (value->kind_code == GQL_VM_DYNAMIC_OBJECT) {
+    for (i = 0; i < value->object_count; i++) {
+      gql_runtime_vm_bind_dynamic_value_variables(
+        value->object_values ? value->object_values[i] : NULL,
+        variable_defs,
+        variable_def_count
+      );
+    }
+  } else if (value->kind_code == GQL_VM_DYNAMIC_LIST) {
+    for (i = 0; i < value->list_count; i++) {
+      gql_runtime_vm_bind_dynamic_value_variables(
+        value->list_values ? value->list_values[i] : NULL,
+        variable_defs,
+        variable_def_count
+      );
+    }
+  }
 }
 
 static void
@@ -2002,6 +2065,9 @@ gql_runtime_vm_evaluate_runtime_guards_native(
 static IV
 gql_runtime_vm_infer_callback_abi_code(IV resolver_shape_code, IV resolver_mode_code)
 {
+  if (resolver_mode_code == 3) {
+    return GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS;
+  }
   if (resolver_mode_code == 2) {
     return GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE;
   }
@@ -4640,6 +4706,39 @@ gql_runtime_vm_native_program_from_sv(pTHX_ SV *sv)
     }
   }
 
+  /* Resolve variable names in executable payloads once. The descriptor
+   * remains name-bearing for round trips, while request execution can use
+   * the compact variable definition index. */
+  for (i = 0; i < program->block_count; i++) {
+    gql_runtime_vm_native_block_t *block = &program->blocks[i];
+    for (j = 0; j < block->op_count; j++) {
+      gql_runtime_vm_native_op_t *op = &block->ops[j];
+      IV k;
+      if (op->args_payload_native) {
+        for (k = 0; k < op->args_payload_native->count; k++) {
+          gql_runtime_vm_bind_dynamic_value_variables(
+            op->args_payload_native->values
+              ? op->args_payload_native->values[k]
+              : NULL,
+            program->variable_defs,
+            program->variable_def_count
+          );
+        }
+      }
+      if (op->directives_payload_native) {
+        for (k = 0; k < op->directives_payload_native->count; k++) {
+          gql_runtime_vm_bind_dynamic_value_variables(
+            op->directives_payload_native->guards
+              ? op->directives_payload_native->guards[k].if_expr
+              : NULL,
+            program->variable_defs,
+            program->variable_def_count
+          );
+        }
+      }
+    }
+  }
+
   return program;
 }
 
@@ -4881,7 +4980,8 @@ gql_runtime_vm_program_is_native_eligible_sv(pTHX_ SV *program_sv, int has_promi
       if (resolver_shape_code != GQL_VM_RESOLVE_DEFAULT) {
         if (resolver_shape_code != GQL_VM_RESOLVE_EXPLICIT
             || (callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_GENERIC
-                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE)) {
+                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE
+                && callback_abi_code != GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS)) {
           return 0;
         }
       }
@@ -5525,21 +5625,34 @@ gql_runtime_vm_missing_variable_error_sv(pTHX_ SV *type_sv, const char *name)
 }
 
 static SV *
-gql_runtime_vm_prepare_program_variables_sv(
+gql_runtime_vm_prepare_program_variables_into_slots_sv(
   pTHX_
   SV *runtime_schema,
   gql_runtime_vm_native_program_t *program,
-  HV *provided_hv
+  HV *provided_hv,
+  SV **variable_slots,
+  IV variable_slot_capacity,
+  U8 slots_only
 )
 {
-  HV *coerced_hv;
+  HV *coerced_hv = NULL;
+  AV *coerced_av = NULL;
   SV *coerced_rv;
   IV i;
 
-  coerced_hv = newHV();
-  /* Owned by a mortal wrapper so a croak from coercion below reclaims the
-   * hash (and everything stored so far) during die unwinding. */
-  coerced_rv = sv_2mortal(newRV_noinc((SV *)coerced_hv));
+  if (slots_only) {
+    coerced_av = newAV();
+    if (program && program->variable_def_count > 0) {
+      av_extend(coerced_av, program->variable_def_count - 1);
+    }
+    coerced_rv = sv_2mortal(newRV_noinc((SV *)coerced_av));
+  } else {
+    coerced_hv = newHV();
+    coerced_rv = sv_2mortal(newRV_noinc((SV *)coerced_hv));
+  }
+  /* The mortal owner reclaims every value stored so far if coercion
+   * croaks. In slots-only mode the AV is the request-scoped value owner;
+   * variable_slots merely borrows its entries. */
 
   for (i = 0; program && i < program->variable_def_count; i++) {
     gql_runtime_vm_native_arg_def_t *arg_def = &program->variable_defs[i];
@@ -5557,7 +5670,13 @@ gql_runtime_vm_prepare_program_variables_sv(
 
     if (provided_hv && hv_exists(provided_hv, arg_def->name, (I32)name_len)) {
       SV **provided_svp = hv_fetch(provided_hv, arg_def->name, (I32)name_len, 0);
-      raw_sv = sv_2mortal(provided_svp ? newSVsv(*provided_svp) : newSV(0));
+      /*
+       * Borrow the input HV's value for the duration of coercion. The
+       * provided variables hash outlives this call and the coercer returns
+       * a separately owned SV, so cloning the raw scalar here only adds a
+       * request-time allocation/refcount round trip.
+       */
+      raw_sv = provided_svp ? *provided_svp : &PL_sv_undef;
       has_value = 1;
     } else if (arg_def->has_default && arg_def->default_native_value) {
       coerced_sv = gql_runtime_vm_native_value_materialize_sv(aTHX_ arg_def->default_native_value);
@@ -5599,10 +5718,18 @@ gql_runtime_vm_prepare_program_variables_sv(
         croak_sv(sv_2mortal(coerce_err));
       }
     }
-    hv_store(coerced_hv, arg_def->name, (I32)name_len, coerced_sv, 0);
+    if (slots_only) {
+      av_store(coerced_av, i, coerced_sv);
+    } else {
+      hv_store(coerced_hv, arg_def->name, (I32)name_len, coerced_sv, 0);
+    }
+    if (variable_slots && i < variable_slot_capacity) {
+      /* Borrowed from coerced_hv/coerced_av for the request. */
+      variable_slots[i] = coerced_sv;
+    }
   }
 
-  if (provided_hv) {
+  if (!slots_only && provided_hv) {
     HE *he;
     hv_iterinit(provided_hv);
     while ((he = hv_iternext(provided_hv))) {
@@ -5626,12 +5753,33 @@ gql_runtime_vm_prepare_program_variables_sv(
 }
 
 static SV *
+gql_runtime_vm_prepare_program_variables_sv(
+  pTHX_
+  SV *runtime_schema,
+  gql_runtime_vm_native_program_t *program,
+  HV *provided_hv
+)
+{
+  return gql_runtime_vm_prepare_program_variables_into_slots_sv(
+    aTHX_
+    runtime_schema,
+    program,
+    provided_hv,
+    NULL,
+    0,
+    0
+  );
+}
+
+static SV *
 gql_runtime_vm_specialize_arg_payload_sv(
   pTHX_
   const gql_runtime_vm_native_runtime_t *runtime,
   const gql_runtime_vm_native_slot_t *slot,
   const gql_runtime_vm_native_op_t *op,
   HV *variables_hv,
+  SV **variable_slots,
+  IV variable_slot_count,
   SV **croak_out
 )
 {
@@ -5654,6 +5802,46 @@ gql_runtime_vm_specialize_arg_payload_sv(
     raw_value = gql_runtime_vm_native_args_payload_lookup_value(payload, arg_def->name, i);
 
     if (raw_value) {
+      /*
+       * A top-level variable reference already points at the result of
+       * CoerceVariableValues. GraphQL's CoerceArgumentValues consumes that
+       * prepared value directly; coercing it again here is both redundant
+       * and observable for custom input coercers. Keep nested variable
+       * references on the materialize/coerce path because the surrounding
+       * list or input-object literal still has to be coerced as a whole.
+       */
+      if (op->args_mode_code == GQL_VM_ARGS_DYNAMIC
+          && raw_value->kind_code == GQL_VM_DYNAMIC_VARIABLE
+          && raw_value->variable_name) {
+        SV **prepared_svp = NULL;
+        if (raw_value->variable_index >= 0
+            && variable_slots
+            && raw_value->variable_index < variable_slot_count) {
+          prepared_svp = &variable_slots[raw_value->variable_index];
+        } else if (variables_hv) {
+          prepared_svp = hv_fetch(
+            variables_hv,
+            raw_value->variable_name,
+            (I32)strlen(raw_value->variable_name),
+            0
+          );
+        }
+        /*
+         * Null still has to pass through argument coercion: when validation
+         * is deliberately skipped, a nullable variable may be used at a
+         * non-null argument position and must fail here.
+         */
+        if (prepared_svp && *prepared_svp && SvOK(*prepared_svp)) {
+          hv_store(
+            coerced_hv,
+            arg_def->name,
+            (I32)strlen(arg_def->name),
+            newSVsv(*prepared_svp),
+            0
+          );
+          continue;
+        }
+      }
       if (op->args_mode_code == GQL_VM_ARGS_DYNAMIC) {
         raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, variables_hv));
       } else {
@@ -5740,6 +5928,27 @@ gql_runtime_vm_specialize_arg_payload_native(
     if (raw_value) {
       SV *raw_sv = NULL;
       SV *coerced_sv;
+      if (op
+          && op->args_mode_code == GQL_VM_ARGS_DYNAMIC
+          && raw_value->kind_code == GQL_VM_DYNAMIC_VARIABLE
+          && raw_value->variable_name
+          && variables_hv) {
+        SV **prepared_svp = hv_fetch(
+          variables_hv,
+          raw_value->variable_name,
+          (I32)strlen(raw_value->variable_name),
+          0
+        );
+        if (prepared_svp && *prepared_svp && SvOK(*prepared_svp)) {
+          coerced_value = gql_runtime_vm_native_dynamic_value_from_sv(
+            aTHX_ *prepared_svp
+          );
+          ret->names[ret->count] = savepv(arg_def->name);
+          ret->values[ret->count] = coerced_value;
+          ret->count++;
+          continue;
+        }
+      }
       if (op && op->args_mode_code == GQL_VM_ARGS_DYNAMIC) {
         raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, variables_hv));
       } else {

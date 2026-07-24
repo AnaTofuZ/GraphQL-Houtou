@@ -304,7 +304,9 @@ static SV *gql_runtime_vm_call_then_promise_for_state_sv(pTHX_ const gql_runtime
 static IV gql_runtime_vm_select_abstract_child_block_fast(pTHX_ gql_runtime_vm_exec_state_t *state, SV *value, SV **error_out);
 static SV *gql_runtime_vm_response_json_from_native_sv(pTHX_ const gql_runtime_vm_writer_t *writer, const gql_runtime_vm_native_value_t *value);
 static SV *gql_runtime_vm_response_json_from_data_sv(pTHX_ const gql_runtime_vm_writer_t *writer, SV *data_sv);
+static SV *gql_runtime_vm_call_cb3_nonfatal(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV **error_out);
 static int gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slot);
+static int gql_runtime_vm_slot_uses_native_no_args_abi(const gql_runtime_vm_native_slot_t *slot);
 static int gql_runtime_vm_slot_uses_explicit_generic_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
 static SV *gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *resolved);
@@ -4583,7 +4585,9 @@ gql_runtime_vm_state_resolve_args_sv(pTHX_ SV *state_sv)
     return newSVsv(s && s->empty_args ? s->empty_args : &PL_sv_undef);
   }
 
-  args_sv = gql_runtime_vm_specialize_arg_payload_sv(aTHX_ runtime, slot, op, variables_hv, NULL);
+  args_sv = gql_runtime_vm_specialize_arg_payload_sv(
+    aTHX_ runtime, slot, op, variables_hv, NULL, 0, NULL
+  );
   return args_sv ? args_sv : newSVsv(s && s->empty_args ? s->empty_args : &PL_sv_undef);
 }
 
@@ -5549,10 +5553,20 @@ gql_runtime_vm_exec_state_resolve_current_value_sv(
   }
 
   if (resolver_sv && SvOK(resolver_sv)) {
-    SV *args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
+    SV *args_sv = NULL;
     SV *return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
 
-    if (gql_runtime_vm_slot_uses_native_fast_abi(slot)) {
+    if (gql_runtime_vm_slot_uses_native_no_args_abi(slot)) {
+      resolved_sv = gql_runtime_vm_call_cb3_nonfatal(
+        aTHX_
+        resolver_sv,
+        source_sv,
+        s->context,
+        return_type_sv ? return_type_sv : &PL_sv_undef,
+        error_out
+      );
+    } else if (gql_runtime_vm_slot_uses_native_fast_abi(slot)) {
+      args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
       resolved_sv = gql_runtime_vm_call_cb4_nonfatal(
         aTHX_
         resolver_sv,
@@ -5563,6 +5577,7 @@ gql_runtime_vm_exec_state_resolve_current_value_sv(
         error_out
       );
     } else {
+      args_sv = gql_runtime_vm_state_resolve_args_sv(aTHX_ state_sv);
       SV *info_sv = gql_runtime_vm_new_lazy_info_for_path_sv(aTHX_ state_sv, s, path_frame);
 
       if (!return_type_sv && !gql_runtime_vm_slot_uses_explicit_generic_fast_abi(slot)) {
@@ -6565,6 +6580,43 @@ gql_runtime_vm_execute_native_program_auto_json_sv(
 }
 
 static SV *
+gql_runtime_vm_call_cb3_nonfatal(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV **error_out)
+{
+  dSP;
+  SV *ret = NULL;
+  int count;
+
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  PUSHMARK(SP);
+  XPUSHs(arg0 ? arg0 : &PL_sv_undef);
+  XPUSHs(arg1 ? arg1 : &PL_sv_undef);
+  XPUSHs(arg2 ? arg2 : &PL_sv_undef);
+  PUTBACK;
+  count = call_sv(cb, G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV)) {
+    SV *err = newSVsv(ERRSV);
+    sv_setsv(ERRSV, &PL_sv_undef);
+    if (error_out) {
+      *error_out = err;
+      err = NULL;
+    }
+    if (err) {
+      croak_sv(err);
+    }
+  }
+  if (count > 0) {
+    ret = newSVsv(POPs);
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret ? ret : newSVsv(&PL_sv_undef);
+}
+
+static SV *
 gql_runtime_vm_call_cb4_nonfatal(pTHX_ SV *cb, SV *arg0, SV *arg1, SV *arg2, SV *arg3, SV **error_out)
 {
   dSP;
@@ -6851,7 +6903,16 @@ gql_runtime_vm_apply_runtime_directives_nonfatal(
 static int
 gql_runtime_vm_slot_uses_native_fast_abi(const gql_runtime_vm_native_slot_t *slot)
 {
-  return slot && slot->callback_abi_code == GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE;
+  return slot
+    && (slot->callback_abi_code == GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE
+        || slot->callback_abi_code == GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS);
+}
+
+static int
+gql_runtime_vm_slot_uses_native_no_args_abi(const gql_runtime_vm_native_slot_t *slot)
+{
+  return slot
+    && slot->callback_abi_code == GQL_VM_CALLBACK_ABI_EXPLICIT_NATIVE_NO_ARGS;
 }
 
 static int
@@ -7022,14 +7083,101 @@ gql_runtime_vm_lookup_slot_type_object_sv(
 }
 
 static SV *
-gql_runtime_vm_execute_bundle_fast_response_sv(
+gql_runtime_vm_callback_variables_sv(
+  pTHX_ gql_runtime_vm_callback_context_t *ctx
+)
+{
+  HV *variables_hv;
+  IV i;
+
+  if (!ctx) {
+    return &PL_sv_undef;
+  }
+  if (ctx->variables
+      && SvROK(ctx->variables)
+      && SvTYPE(SvRV(ctx->variables)) == SVt_PVHV) {
+    return ctx->variables;
+  }
+  if (ctx->materialized_variables) {
+    return ctx->materialized_variables;
+  }
+
+  variables_hv = newHV();
+  if (ctx->native_program && ctx->variable_slots) {
+    for (i = 0; i < ctx->native_program->variable_def_count; i++) {
+      const gql_runtime_vm_native_arg_def_t *arg_def =
+        &ctx->native_program->variable_defs[i];
+      SV *value = i < ctx->variable_slot_count ? ctx->variable_slots[i] : NULL;
+      if (!arg_def->name || !value) {
+        continue;
+      }
+      hv_store(
+        variables_hv,
+        arg_def->name,
+        (I32)strlen(arg_def->name),
+        newSVsv(value),
+        0
+      );
+    }
+  }
+  if (ctx->provided_variables
+      && SvROK(ctx->provided_variables)
+      && SvTYPE(SvRV(ctx->provided_variables)) == SVt_PVHV) {
+    HV *provided_hv = (HV *)SvRV(ctx->provided_variables);
+    HE *he;
+    hv_iterinit(provided_hv);
+    while ((he = hv_iternext(provided_hv))) {
+      SV *key_sv = hv_iterkeysv(he);
+      SV *value_sv = hv_iterval(provided_hv, he);
+      STRLEN key_len = 0;
+      const char *key_pv;
+      if (!key_sv || !SvOK(key_sv)) {
+        continue;
+      }
+      key_pv = SvPV(key_sv, key_len);
+      if (!hv_exists(variables_hv, key_pv, (I32)key_len)) {
+        hv_store(variables_hv, key_pv, (I32)key_len, newSVsv(value_sv), 0);
+      }
+    }
+  }
+  ctx->materialized_variables = newRV_noinc((SV *)variables_hv);
+  return ctx->materialized_variables;
+}
+
+static int
+gql_runtime_vm_args_payload_needs_variables_hv(
+  const gql_runtime_vm_native_args_payload_t *payload
+)
+{
+  IV i;
+  if (!payload) {
+    return 0;
+  }
+  for (i = 0; i < payload->count; i++) {
+    const gql_runtime_vm_native_dynamic_value_t *value =
+      payload->values ? payload->values[i] : NULL;
+    if (value
+        && (value->kind_code != GQL_VM_DYNAMIC_VARIABLE
+            || value->variable_index < 0)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static SV *
+gql_runtime_vm_execute_bundle_fast_response_with_slots_sv(
   pTHX_
   gql_runtime_vm_native_runtime_t *runtime,
   SV *runtime_schema,
   gql_runtime_vm_native_bundle_t *bundle,
   SV *root_value,
   SV *context_value,
-  SV *variables
+  SV *variables,
+  SV **variable_slots,
+  IV variable_slot_count,
+  gql_runtime_vm_native_program_t *native_program,
+  SV *provided_variables
 )
 {
   gql_runtime_vm_exec_state_t state;
@@ -7048,6 +7196,10 @@ gql_runtime_vm_execute_bundle_fast_response_sv(
   callback_ctx.root_value = root_value;
   callback_ctx.context = context_value;
   callback_ctx.variables = variables;
+  callback_ctx.variable_slots = variable_slots;
+  callback_ctx.variable_slot_count = variable_slot_count;
+  callback_ctx.native_program = native_program;
+  callback_ctx.provided_variables = provided_variables;
   state.callback_ctx = &callback_ctx;
   gql_runtime_vm_prepare_bundle_block_type_objects(aTHX_ callback_ctx.runtime_schema, bundle);
 
@@ -7067,12 +7219,39 @@ gql_runtime_vm_execute_bundle_fast_response_sv(
   response_sv = gql_runtime_vm_fast_response_sv(aTHX_ data_sv, &writer_storage);
   SvREFCNT_dec(empty_args_sv);
   gql_runtime_vm_clear_writer_struct(aTHX_ &writer_storage);
+  SvREFCNT_dec(callback_ctx.materialized_variables);
   if (state.fast_lane_deferred_croak_sv) {
     /* Deferred from mid-lane so the path frame chain unwound normally. */
     SvREFCNT_dec(response_sv);
     croak_sv(sv_2mortal(state.fast_lane_deferred_croak_sv));
   }
   return response_sv;
+}
+
+static SV *
+gql_runtime_vm_execute_bundle_fast_response_sv(
+  pTHX_
+  gql_runtime_vm_native_runtime_t *runtime,
+  SV *runtime_schema,
+  gql_runtime_vm_native_bundle_t *bundle,
+  SV *root_value,
+  SV *context_value,
+  SV *variables
+)
+{
+  return gql_runtime_vm_execute_bundle_fast_response_with_slots_sv(
+    aTHX_
+    runtime,
+    runtime_schema,
+    bundle,
+    root_value,
+    context_value,
+    variables,
+    NULL,
+    0,
+    NULL,
+    NULL
+  );
 }
 
 static SV *
@@ -7105,13 +7284,16 @@ gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_state_t *sta
 {
   SV *return_type_sv;
   SV *directives_sv = NULL;
-  const gql_runtime_vm_callback_context_t *ctx = state ? state->callback_ctx : NULL;
+  gql_runtime_vm_callback_context_t *ctx = state ? state->callback_ctx : NULL;
   const gql_runtime_vm_native_slot_t *slot = state ? state->slot : NULL;
   const gql_runtime_vm_native_op_t *op = state ? state->op : NULL;
   const gql_runtime_vm_native_block_t *block = state ? state->block : NULL;
   gql_runtime_vm_native_callback_catalog_t *catalog =
     (state && state->runtime) ? state->runtime->callback_catalog : NULL;
   SV *field_name_sv = NULL;
+  SV *variables_sv = ctx
+    ? gql_runtime_vm_callback_variables_sv(aTHX_ ctx)
+    : &PL_sv_undef;
 
   if (!state) {
     return newRV_noinc((SV *)newHV());
@@ -7143,13 +7325,13 @@ gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_state_t *sta
       ctx->program,
       state->block_index,
       state->op_index,
-      (ctx && ctx->variables) ? ctx->variables : &PL_sv_undef
+      variables_sv
     );
   } else if (op && op->runtime_directives_sv) {
     directives_sv = gql_runtime_vm_materialize_runtime_directives_sv(
       aTHX_
       op->runtime_directives_sv,
-      (ctx && ctx->variables) ? ctx->variables : &PL_sv_undef
+      variables_sv
     );
   }
 
@@ -7164,7 +7346,7 @@ gql_runtime_vm_new_callback_info_sv(pTHX_ const gql_runtime_vm_exec_state_t *sta
     state->path_frame,
     (ctx && ctx->context) ? ctx->context : &PL_sv_undef,
     (ctx && ctx->root_value) ? ctx->root_value : &PL_sv_undef,
-    (ctx && ctx->variables) ? ctx->variables : &PL_sv_undef,
+    variables_sv,
     (ctx && ctx->program) ? ctx->program : &PL_sv_undef,
     (ctx && ctx->runtime_schema) ? ctx->runtime_schema : &PL_sv_undef,
     directives_sv ? sv_2mortal(directives_sv) : &PL_sv_undef,
@@ -7276,6 +7458,7 @@ gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
   gql_runtime_vm_native_runtime_t *runtime = state->runtime;
   gql_runtime_vm_callback_context_t *callback_ctx = state->callback_ctx;
   HV *variables_hv = NULL;
+  SV *variables_sv = callback_ctx ? callback_ctx->variables : NULL;
   SV *specialized_sv;
   if (!op) {
     if (state && state->empty_args_sv) {
@@ -7292,10 +7475,14 @@ gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
     return newRV_noinc((SV *)newHV());
   }
   if (callback_ctx
-      && callback_ctx->variables
-      && SvROK(callback_ctx->variables)
-      && SvTYPE(SvRV(callback_ctx->variables)) == SVt_PVHV) {
-    variables_hv = (HV *)SvRV(callback_ctx->variables);
+      && op->args_mode_code == GQL_VM_ARGS_DYNAMIC
+      && gql_runtime_vm_args_payload_needs_variables_hv(op->args_payload_native)) {
+    variables_sv = gql_runtime_vm_callback_variables_sv(aTHX_ callback_ctx);
+  }
+  if (variables_sv
+      && SvROK(variables_sv)
+      && SvTYPE(SvRV(variables_sv)) == SVt_PVHV) {
+    variables_hv = (HV *)SvRV(variables_sv);
   }
   if (slot && (slot->arg_def_count > 0 || op->has_args)) {
     if (op->args_mode_code == GQL_VM_ARGS_STATIC && op->args_payload_native) {
@@ -7308,6 +7495,8 @@ gql_runtime_vm_build_current_args_sv(pTHX_ gql_runtime_vm_exec_state_t *state)
       SV *coercion_croak_sv = NULL;
       specialized_sv = gql_runtime_vm_specialize_arg_payload_sv(
         aTHX_ runtime, slot, op, variables_hv,
+        callback_ctx ? callback_ctx->variable_slots : NULL,
+        callback_ctx ? callback_ctx->variable_slot_count : 0,
         state ? &coercion_croak_sv : NULL
       );
       if (coercion_croak_sv) {
@@ -7366,7 +7555,23 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
     : NULL;
 
   if (resolver_sv && SvOK(resolver_sv)) {
-    SV *args = gql_runtime_vm_build_current_args_sv(aTHX_ state);
+    SV *args = NULL;
+
+    if (gql_runtime_vm_slot_uses_native_no_args_abi(slot)) {
+      return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
+      return gql_runtime_vm_fast_lane_guard_promise_sv(
+        aTHX_ state,
+        gql_runtime_vm_call_cb3_nonfatal(
+          aTHX_
+          resolver_sv,
+          source,
+          state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
+          return_type_sv ? return_type_sv : &PL_sv_undef,
+          error_out
+        )
+      );
+    }
+    args = gql_runtime_vm_build_current_args_sv(aTHX_ state);
     if (!args) {
       /* Argument coercion failed and armed the deferred croak channel:
        * skip the resolver and complete the field as null. */
@@ -7509,6 +7714,21 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
 
   if (!resolver_sv || !SvOK(resolver_sv)) {
     return gql_runtime_vm_clone_value_sv(aTHX_ &PL_sv_undef);
+  }
+
+  if (gql_runtime_vm_slot_uses_native_no_args_abi(slot)) {
+    return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
+    return gql_runtime_vm_fast_lane_guard_promise_sv(
+      aTHX_ state,
+      gql_runtime_vm_call_cb3_nonfatal(
+        aTHX_
+        resolver_sv,
+        source,
+        state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
+        return_type_sv ? return_type_sv : &PL_sv_undef,
+        error_out
+      )
+    );
   }
 
   {
@@ -9277,14 +9497,18 @@ gql_runtime_vm_response_json_from_data_sv(pTHX_ const gql_runtime_vm_writer_t *w
 }
 
 static SV *
-gql_runtime_vm_execute_bundle_fast_response_json(
+gql_runtime_vm_execute_bundle_fast_response_json_with_slots(
   pTHX_
   gql_runtime_vm_native_runtime_t *runtime,
   SV *runtime_schema,
   gql_runtime_vm_native_bundle_t *bundle,
   SV *root_value,
   SV *context_value,
-  SV *variables
+  SV *variables,
+  SV **variable_slots,
+  IV variable_slot_count,
+  gql_runtime_vm_native_program_t *native_program,
+  SV *provided_variables
 )
 {
   gql_runtime_vm_exec_state_t state;
@@ -9302,6 +9526,10 @@ gql_runtime_vm_execute_bundle_fast_response_json(
   callback_ctx.root_value = root_value;
   callback_ctx.context = context_value;
   callback_ctx.variables = variables;
+  callback_ctx.variable_slots = variable_slots;
+  callback_ctx.variable_slot_count = variable_slot_count;
+  callback_ctx.native_program = native_program;
+  callback_ctx.provided_variables = provided_variables;
   state.callback_ctx = &callback_ctx;
   gql_runtime_vm_prepare_bundle_block_type_objects(aTHX_ callback_ctx.runtime_schema, bundle);
 
@@ -9333,12 +9561,39 @@ gql_runtime_vm_execute_bundle_fast_response_json(
 
   SvREFCNT_dec(empty_args_sv);
   gql_runtime_vm_clear_writer_struct(aTHX_ &writer_storage);
+  SvREFCNT_dec(callback_ctx.materialized_variables);
   if (state.fast_lane_deferred_croak_sv) {
     /* Deferred from mid-lane so the path frame chain unwound normally. */
     SvREFCNT_dec(out);
     croak_sv(sv_2mortal(state.fast_lane_deferred_croak_sv));
   }
   return out;
+}
+
+static SV *
+gql_runtime_vm_execute_bundle_fast_response_json(
+  pTHX_
+  gql_runtime_vm_native_runtime_t *runtime,
+  SV *runtime_schema,
+  gql_runtime_vm_native_bundle_t *bundle,
+  SV *root_value,
+  SV *context_value,
+  SV *variables
+)
+{
+  return gql_runtime_vm_execute_bundle_fast_response_json_with_slots(
+    aTHX_
+    runtime,
+    runtime_schema,
+    bundle,
+    root_value,
+    context_value,
+    variables,
+    NULL,
+    0,
+    NULL,
+    NULL
+  );
 }
 
 
@@ -10902,6 +11157,77 @@ execute_native_program_handle_xs(runtime_sv, program_sv, root_value = &PL_sv_und
     RETVAL
 
 SV *
+execute_native_program_prepared_fast_xs(runtime_sv, program_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
+    SV *runtime_sv
+    SV *program_sv
+    SV *root_value
+    SV *context_value
+    SV *variables
+  CODE:
+    {
+      gql_runtime_vm_native_runtime_t *runtime;
+      gql_runtime_vm_native_program_t *program;
+      gql_runtime_vm_native_bundle_t *bundle;
+      SV *runtime_schema_sv;
+      SV *prepared_variables_sv;
+      HV *provided_hv = NULL;
+      SV *variable_slots[8];
+      IV variable_slot_count;
+
+      if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
+      }
+      runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
+      if (!runtime) {
+        croak("native VM runtime handle is no longer valid");
+      }
+      program = gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
+      bundle = gql_runtime_vm_native_program_cached_bundle(aTHX_ runtime, program);
+      runtime_schema_sv = (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema)
+        ? runtime->callback_catalog->runtime_schema
+        : &PL_sv_undef;
+      if (variables && SvOK(variables)) {
+        if (!SvROK(variables) || SvTYPE(SvRV(variables)) != SVt_PVHV) {
+          croak("variables must be a hash reference");
+        }
+        provided_hv = (HV *)SvRV(variables);
+      }
+      Zero(variable_slots, 8, SV *);
+      variable_slot_count = program->variable_def_count <= 8
+        ? program->variable_def_count
+        : 0;
+      /*
+       * Keep variable coercion and the sync fast lane inside one XSUB.
+       * The prepared HV is request-local and never needs to cross back
+       * through Perl before execution consumes it.
+       */
+      prepared_variables_sv = sv_2mortal(gql_runtime_vm_prepare_program_variables_into_slots_sv(
+        aTHX_
+        runtime_schema_sv,
+        program,
+        provided_hv,
+        variable_slot_count ? variable_slots : NULL,
+        variable_slot_count,
+        program->variable_def_count <= 8 ? 1 : 0
+      ));
+      RETVAL = gql_runtime_vm_execute_bundle_fast_response_with_slots_sv(
+        aTHX_
+        runtime,
+        runtime_schema_sv,
+        bundle,
+        root_value,
+        context_value,
+        prepared_variables_sv,
+        variable_slot_count ? variable_slots : NULL,
+        variable_slot_count,
+        program,
+        variables
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 execute_native_program_to_json_xs(runtime_sv, program_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
     SV *runtime_sv
     SV *program_sv
@@ -10934,6 +11260,72 @@ execute_native_program_to_json_xs(runtime_sv, program_sv, root_value = &PL_sv_un
         bundle,
         root_value,
         context_value,
+        variables
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+execute_native_program_prepared_fast_to_json_xs(runtime_sv, program_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef)
+    SV *runtime_sv
+    SV *program_sv
+    SV *root_value
+    SV *context_value
+    SV *variables
+  CODE:
+    {
+      gql_runtime_vm_native_runtime_t *runtime;
+      gql_runtime_vm_native_program_t *program;
+      gql_runtime_vm_native_bundle_t *bundle;
+      SV *runtime_schema_sv;
+      SV *prepared_variables_sv;
+      HV *provided_hv = NULL;
+      SV *variable_slots[8];
+      IV variable_slot_count;
+
+      if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
+      }
+      runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
+      if (!runtime) {
+        croak("native VM runtime handle is no longer valid");
+      }
+      program = gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
+      bundle = gql_runtime_vm_native_program_cached_bundle(aTHX_ runtime, program);
+      runtime_schema_sv = (runtime && runtime->callback_catalog && runtime->callback_catalog->runtime_schema)
+        ? runtime->callback_catalog->runtime_schema
+        : &PL_sv_undef;
+      if (variables && SvOK(variables)) {
+        if (!SvROK(variables) || SvTYPE(SvRV(variables)) != SVt_PVHV) {
+          croak("variables must be a hash reference");
+        }
+        provided_hv = (HV *)SvRV(variables);
+      }
+      Zero(variable_slots, 8, SV *);
+      variable_slot_count = program->variable_def_count <= 8
+        ? program->variable_def_count
+        : 0;
+      prepared_variables_sv = sv_2mortal(gql_runtime_vm_prepare_program_variables_into_slots_sv(
+        aTHX_
+        runtime_schema_sv,
+        program,
+        provided_hv,
+        variable_slot_count ? variable_slots : NULL,
+        variable_slot_count,
+        program->variable_def_count <= 8 ? 1 : 0
+      ));
+      RETVAL = gql_runtime_vm_execute_bundle_fast_response_json_with_slots(
+        aTHX_
+        runtime,
+        runtime_schema_sv,
+        bundle,
+        root_value,
+        context_value,
+        prepared_variables_sv,
+        variable_slot_count ? variable_slots : NULL,
+        variable_slot_count,
+        program,
         variables
       );
     }

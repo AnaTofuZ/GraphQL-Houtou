@@ -125,12 +125,14 @@ sub _resolver_shape_code {
 
 sub _resolver_mode_code {
   my ($mode) = @_;
+  return 3 if ($mode || q()) eq 'NATIVE_NO_ARGS';
   return 2 if ($mode || q()) eq 'NATIVE';
   return 1;
 }
 
 sub _callback_abi_code {
   my ($shape, $mode) = @_;
+  return 4 if ($mode || q()) eq 'NATIVE_NO_ARGS';
   return 3 if ($mode || q()) eq 'NATIVE';
   return 2 if ($shape || q()) eq 'EXPLICIT';
   return 1;

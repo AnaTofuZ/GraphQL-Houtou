@@ -56,7 +56,7 @@ schema compile は、GraphQL 型定義を実行用の slot catalog に変換す�
 | `return_type_kind_code` | scalar/object/list/interface 等の種別 |
 | `item_non_null` | list item が non-null か |
 | `resolver_shape` | `DEFAULT` または `EXPLICIT` |
-| `resolver_mode` | `DEFAULT` または native resolver 契約の `NATIVE` |
+| `resolver_mode` | `DEFAULT`、`NATIVE`、または引数なし専用の `NATIVE_NO_ARGS` |
 | `callback_abi_code` | resolver 呼び出し ABI |
 | `completion_family` | `GENERIC`、`OBJECT`、`LIST`、`ABSTRACT` |
 | `dispatch_family` | abstract type の dispatch 方法 |
@@ -309,8 +309,12 @@ schema と operation を分離する理由は、schema metadata と callback は
 | 1 | default | default resolver |
 | 2 | explicit generic | 通常の明示 resolver。lazy `info` 等を利用可能 |
 | 3 | explicit native | `resolver_mode => 'native'` の高速契約 |
+| 4 | explicit native no-args | `resolver_mode => 'native_no_args'` の引数なし高速契約 |
 
 generic callback boundary は Perl API 互換のため source、args、context、lazy info を用意する。native mode は hot path 向けで、generic lazy-info ABI を要求しない resolver に限定される。
+`native_no_args` は argument を宣言しない field に限り、resolver を
+`($source, $context, $return_type)` で呼ぶ。空の args HashRef を request ごとに
+materialize しないため、狭い scalar field が多数ある query ほど効果が大きい。
 
 ## 6. request-time 実行
 

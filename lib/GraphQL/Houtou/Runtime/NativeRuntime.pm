@@ -369,18 +369,23 @@ sub execute_program {
     );
   }
   if ($strict_sync || $has_variables) {
+    # Variable-invariant programs need no per-request clone. Keep variable
+    # coercion and execution inside one XSUB so the prepared variables HV
+    # does not make an otherwise redundant XS -> Perl -> XS round trip.
+    if (!GraphQL::Houtou::XS::VM::native_program_needs_variable_specialization_xs($native_program)) {
+      return GraphQL::Houtou::XS::VM::execute_native_program_prepared_fast_xs(
+        $runtime_handle,
+        $native_program,
+        $root_value,
+        $context_value,
+        $variables || {},
+      );
+    }
     my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
       $self->runtime_schema,
       $native_program,
       $variables || {},
     );
-    # Programs without runtime directives or variable-dependent directive
-    # guards are variable-invariant: the fast lanes evaluate dynamic
-    # arguments against the prepared variables at request time, so no
-    # per-request clone/specialize (or variables-keyed cache) is needed.
-    if (!GraphQL::Houtou::XS::VM::native_program_needs_variable_specialization_xs($native_program)) {
-      return $self->execute_compact_program($native_program, %opts, variables => $prepared_variables);
-    }
     my $specialized = $self->_cached_specialized_program(
       $native_program,
       $prepared_variables,
@@ -685,18 +690,24 @@ sub execute_program_to_json {
   if ($self->{_async} && !$strict_sync) {
     return $self->_auto_json_or_die($native_program, %opts);
   }
+  if (!GraphQL::Houtou::XS::VM::native_program_needs_variable_specialization_xs($native_program)) {
+    return GraphQL::Houtou::XS::VM::execute_native_program_prepared_fast_to_json_xs(
+      $self->_native_runtime_handle,
+      $native_program,
+      $opts{root_value},
+      $opts{context},
+      $opts{variables} || {},
+    );
+  }
   my $prepared_variables = GraphQL::Houtou::Runtime::InputCoercion::prepare_variables(
     $self->runtime_schema,
     $native_program,
     $opts{variables} || {},
   );
-  my $effective_program = $native_program;
-  if (GraphQL::Houtou::XS::VM::native_program_needs_variable_specialization_xs($native_program)) {
-    $effective_program = $self->_cached_specialized_program(
-      $native_program,
-      $prepared_variables,
-    );
-  }
+  my $effective_program = $self->_cached_specialized_program(
+    $native_program,
+    $prepared_variables,
+  );
   return GraphQL::Houtou::XS::VM::execute_native_program_to_json_xs(
     $self->_native_runtime_handle,
     $effective_program,

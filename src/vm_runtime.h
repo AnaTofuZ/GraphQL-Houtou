@@ -5557,7 +5557,13 @@ gql_runtime_vm_prepare_program_variables_sv(
 
     if (provided_hv && hv_exists(provided_hv, arg_def->name, (I32)name_len)) {
       SV **provided_svp = hv_fetch(provided_hv, arg_def->name, (I32)name_len, 0);
-      raw_sv = sv_2mortal(provided_svp ? newSVsv(*provided_svp) : newSV(0));
+      /*
+       * Borrow the input HV's value for the duration of coercion. The
+       * provided variables hash outlives this call and the coercer returns
+       * a separately owned SV, so cloning the raw scalar here only adds a
+       * request-time allocation/refcount round trip.
+       */
+      raw_sv = provided_svp ? *provided_svp : &PL_sv_undef;
       has_value = 1;
     } else if (arg_def->has_default && arg_def->default_native_value) {
       coerced_sv = gql_runtime_vm_native_value_materialize_sv(aTHX_ arg_def->default_native_value);

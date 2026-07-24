@@ -537,3 +537,11 @@ custom scalar の `parse_value` が直接 variable argument で一度だけ呼�
 
 次の段階では、prepared variables HV と名前 lookup 自体を固定長 typed slots へ
 置き換え、argument plan から slot index で参照できる構造を検討する。
+
+続く小変更として、provided variables HV が保持している raw SV を variable coercion
+へ渡す際の `newSVsv` を除去した。coercion 中は入力 HV が raw SV を所有し続け、
+coercion 結果は別の owned SV になるため、入力の複製は不要である。
+
+この変更後の 3 標本中央値は nested variable object が 243,926 req/s、fresh variables
+が 236,302 req/s だった。直前の保守的な 3 標本から約 2%、最初の基準からはそれぞれ
+約 19.7%、20.3% の改善となった。

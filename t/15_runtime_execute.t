@@ -229,7 +229,7 @@ subtest 'fast_resolve_one_arg passes the coerced value without an args hash' => 
           },
           resolve => sub {
             @seen = @_;
-            return "hello $_[1]";
+            return defined $_[1] ? "hello $_[1]" : 'hello NULL';
           },
         },
       },
@@ -252,6 +252,17 @@ subtest 'fast_resolve_one_arg passes the coerced value without an args hash' => 
   is_deeply $one_arg_schema->execute('{ greet }'),
     { data => { greet => 'hello Bob' } },
     'argument default reaches the direct value path';
+
+  is_deeply $one_arg_schema->execute(
+    'query Q($name: String) { greet(name: $name) }',
+  ), { data => { greet => 'hello Bob' } },
+    'argument default applies when a referenced variable is omitted';
+
+  is_deeply $one_arg_schema->execute(
+    'query Q($name: String) { greet(name: $name) }',
+    variables => { name => undef },
+  ), { data => { greet => 'hello NULL' } },
+    'an explicitly null variable does not activate the argument default';
 };
 
 subtest 'fast_resolve_one_arg requires exactly one argument declaration' => sub {
@@ -271,6 +282,25 @@ subtest 'fast_resolve_one_arg requires exactly one argument declaration' => sub 
   eval { $invalid_schema->build_runtime };
   like $@, qr/fast_resolve_one_arg.*requires exactly one argument/,
     'invalid one-argument ABI declaration is rejected';
+};
+
+subtest 'unknown resolver modes are rejected' => sub {
+  my $invalid_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'UnknownResolverModeQuery',
+      fields => {
+        hello => {
+          type => $String,
+          resolver_mode => 'fast_resolve_no_arg',
+          resolve => sub { return 'unreachable' },
+        },
+      },
+    ),
+  );
+
+  eval { $invalid_schema->build_runtime };
+  like $@, qr/unknown resolver_mode 'fast_resolve_no_arg'.*UnknownResolverModeQuery\.hello/,
+    'a resolver mode typo cannot silently select the generic ABI';
 };
 
 subtest 'fast_resolve mode supports the HashRef ABI' => sub {

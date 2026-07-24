@@ -291,8 +291,18 @@ subtest 'native ticket exposes a safe await contract' => sub {
   ok $compatible->can('then'), 'ticket provides then';
   ok $compatible->can('catch'), 'ticket provides catch';
   ok $compatible->can('finally'), 'ticket provides finally';
+  ok $compatible->can('all'), 'ticket provides all';
+  ok $compatible->can('race'), 'ticket provides race';
   $compatible->then(sub { $then_value = $_[0] });
   is $then_value, 'compatible', 'public then compatibility remains usable';
+
+  my ($all_value, $race_value);
+  $compatible->all($compatible)->then(sub { $all_value = $_[0] });
+  $compatible->race($compatible)->then(sub { $race_value = $_[0] });
+  is_deeply $all_value, ['compatible'],
+    'public instance-style all compatibility remains usable';
+  is $race_value, 'compatible',
+    'public instance-style race compatibility remains usable';
 
   my $caught;
   my $public_rejected = GraphQL::Houtou::DataLoader::Ticket->new;

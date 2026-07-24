@@ -5893,14 +5893,37 @@ gql_runtime_vm_specialize_one_arg_sv(
           0
         );
       }
-      if (prepared_svp && *prepared_svp && SvOK(*prepared_svp)) {
-        return newSVsv(*prepared_svp);
+      if (prepared_svp && *prepared_svp) {
+        if (SvOK(*prepared_svp)) {
+          return newSVsv(*prepared_svp);
+        }
+        /* An explicitly provided null remains null and must not activate
+         * the argument default. It still passes through argument coercion
+         * so an invalid nullable-variable/non-null-argument combination is
+         * rejected when validation was deliberately skipped. */
+        raw_sv = sv_2mortal(newSVsv(*prepared_svp));
+      } else {
+        /* A variable reference whose variable was not provided behaves as
+         * an absent argument. CoerceArgumentValues applies the field
+         * argument default in this case. */
+        if (arg_def->has_default && arg_def->default_native_value) {
+          return gql_runtime_vm_native_value_materialize_sv(
+            aTHX_ arg_def->default_native_value
+          );
+        }
+        if (arg_def->has_default && arg_def->default_value_sv) {
+          raw_sv = sv_2mortal(newSVsv(arg_def->default_value_sv));
+        } else {
+          return newSVsv(&PL_sv_undef);
+        }
       }
     }
-    raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(
-      aTHX_ raw_value,
-      (op && op->args_mode_code == GQL_VM_ARGS_DYNAMIC) ? variables_hv : NULL
-    ));
+    if (!raw_sv) {
+      raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(
+        aTHX_ raw_value,
+        (op && op->args_mode_code == GQL_VM_ARGS_DYNAMIC) ? variables_hv : NULL
+      ));
+    }
   } else if (arg_def->has_default && arg_def->default_native_value) {
     return gql_runtime_vm_native_value_materialize_sv(
       aTHX_ arg_def->default_native_value
@@ -5976,26 +5999,51 @@ gql_runtime_vm_specialize_arg_payload_sv(
             0
           );
         }
-        /*
-         * Null still has to pass through argument coercion: when validation
-         * is deliberately skipped, a nullable variable may be used at a
-         * non-null argument position and must fail here.
-         */
-        if (prepared_svp && *prepared_svp && SvOK(*prepared_svp)) {
-          hv_store(
-            coerced_hv,
-            arg_def->name,
-            (I32)strlen(arg_def->name),
-            newSVsv(*prepared_svp),
-            0
-          );
-          continue;
+        if (prepared_svp && *prepared_svp) {
+          /*
+           * A non-null prepared variable is already argument-coerced. Null
+           * still passes through coercion so an invalid nullable-variable /
+           * non-null-argument combination fails when validation was skipped.
+           */
+          if (SvOK(*prepared_svp)) {
+            hv_store(
+              coerced_hv,
+              arg_def->name,
+              (I32)strlen(arg_def->name),
+              newSVsv(*prepared_svp),
+              0
+            );
+            continue;
+          }
+          raw_sv = sv_2mortal(newSVsv(*prepared_svp));
+        } else {
+          /* An omitted variable makes the argument absent, allowing the
+           * field argument default to apply. */
+          if (arg_def->has_default && arg_def->default_native_value) {
+            coerced_sv = gql_runtime_vm_native_value_materialize_sv(
+              aTHX_ arg_def->default_native_value
+            );
+            hv_store(
+              coerced_hv,
+              arg_def->name,
+              (I32)strlen(arg_def->name),
+              coerced_sv,
+              0
+            );
+          } else if (arg_def->has_default && arg_def->default_value_sv) {
+            raw_sv = sv_2mortal(newSVsv(arg_def->default_value_sv));
+          } else {
+            continue;
+          }
         }
       }
-      if (op->args_mode_code == GQL_VM_ARGS_DYNAMIC) {
+      if (!raw_sv && !coerced_sv && op->args_mode_code == GQL_VM_ARGS_DYNAMIC) {
         raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, variables_hv));
-      } else {
+      } else if (!raw_sv && !coerced_sv) {
         raw_sv = sv_2mortal(gql_runtime_vm_native_dynamic_value_materialize_sv(aTHX_ raw_value, NULL));
+      }
+      if (coerced_sv) {
+        continue;
       }
     } else if (arg_def->has_default && arg_def->default_native_value) {
       coerced_sv = gql_runtime_vm_native_value_materialize_sv(aTHX_ arg_def->default_native_value);

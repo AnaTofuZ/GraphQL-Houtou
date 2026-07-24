@@ -194,6 +194,8 @@ sub _as_promise {
 sub then    { return shift->_as_promise->then(@_) }
 sub catch   { return shift->_as_promise->catch(@_) }
 sub finally { return shift->_as_promise->finally(@_) }
+sub all     { shift; return Promise::XS::Promise->all(@_) }
+sub race    { shift; return Promise::XS::Promise->race(@_) }
 
 package GraphQL::Houtou::DataLoader;
 
@@ -286,12 +288,12 @@ list is deprecated (it returns one promise per key and warns in the
 C<deprecated> category).
 
 C<load> and C<load_many> return XS-backed tickets. They retain the
-Promise::XS chaining methods C<then>, C<catch>, and C<finally> for
-application code. The executor uses C<AWAIT_IS_READY> and C<AWAIT_GET> to
-consume already-settled cache entries without creating a Promise::XS
-continuation; pending tickets notify the executor directly from XS.
-Calling C<AWAIT_GET> before readiness throws, and calling it on a rejected
-ticket throws the rejection reason.
+Promise::XS chaining methods C<then>, C<catch>, C<finally>, C<all>, and
+C<race> for application code. The executor uses C<AWAIT_IS_READY> and
+C<AWAIT_GET> to consume already-settled cache entries without creating a
+Promise::XS continuation; pending tickets notify the executor directly
+from XS. Calling C<AWAIT_GET> before readiness throws, and calling it on a
+rejected ticket throws the rejection reason.
 
 Instances cache per key (create one loader per request unless you want
 cross-request caching). Pass C<< cache => 0 >> to disable, C<cache_key>

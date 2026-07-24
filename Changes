@@ -1,6 +1,9 @@
 Revision history for Perl extension GraphQL-Houtou
 
 {{$NEXT}}
+    - Apply argument defaults when referenced variables are omitted.
+    - Reject unknown resolver modes during schema compilation.
+    - Preserve DataLoader ticket all/race Promise compatibility.
     - Speed up variable preparation and direct variable argument lookup.
     - Add fast resolver ABIs for zero-, one-, and multiple-argument fields.
     - Add explicit fast_resolve modes for reduced resolver callback signatures.

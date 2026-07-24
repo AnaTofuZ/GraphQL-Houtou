@@ -465,7 +465,7 @@ subtest 'cached runtime program can execute on native runtime with request varia
   ok $called, 'cached runtime/program reached fused prepare-and-execute entry';
 };
 
-subtest 'inflated runtime descriptor can still drive native specialization' => sub {
+subtest 'inflated runtime descriptor evaluates directive guards in the fused lane' => sub {
   my $runtime = $schema->build_runtime;
   my $inflated = GraphQL::Houtou::Runtime::SchemaGraph->inflate_schema($schema, $runtime->to_struct);
   my $program = $inflated->compile_program(
@@ -473,11 +473,11 @@ subtest 'inflated runtime descriptor can still drive native specialization' => s
   );
 
   my $called = 0;
-  my $orig = \&GraphQL::Houtou::XS::VM::execute_native_program_handle_xs;
+  my $orig = \&GraphQL::Houtou::XS::VM::execute_native_program_prepared_fast_xs;
   my $result;
   {
     no warnings 'redefine';
-    local *GraphQL::Houtou::XS::VM::execute_native_program_handle_xs = sub {
+    local *GraphQL::Houtou::XS::VM::execute_native_program_prepared_fast_xs = sub {
       $called = 1;
       goto &$orig;
     };
@@ -488,8 +488,16 @@ subtest 'inflated runtime descriptor can still drive native specialization' => s
     data => {
       greet => 'hello Ana',
     },
-  }, 'inflated runtime still specializes directive guards before native execution';
-  ok $called, 'inflated runtime also uses native execution';
+  }, 'inflated runtime evaluates a defaulted directive variable';
+  ok $called, 'inflated runtime uses fused prepare-and-execute for directive guards';
+
+  is_deeply $inflated->execute_program(
+    $program,
+    strict_sync => 1,
+    variables => { show => 0 },
+  ), {
+    data => {},
+  }, 'false directive variable omits the field without specializing the program';
 };
 
 subtest 'schema helper can compile and execute in one call' => sub {

@@ -245,10 +245,10 @@ typedef struct {
   gql_runtime_vm_native_directives_payload_t **directives_payloads;
   gql_runtime_vm_native_runtime_t *cached_bundle_runtime;
   gql_runtime_vm_native_bundle_t *cached_bundle;
-  /* 0 = not computed yet, 1 = no, 2 = yes: whether any op carries runtime
-   * directives or variable-dependent directive guards, i.e. whether
-   * per-request program specialization is required at all. Zero-init via
-   * Newxz means "not computed". */
+  /* 0 = not computed yet, 1 = no, 2 = yes: whether any op carries custom
+   * runtime directives that require per-request program specialization.
+   * Built-in include/skip guards are evaluated in the fused execution lane.
+   * Zero-init via Newxz means "not computed". */
   IV needs_variable_specialization;
 } gql_runtime_vm_native_program_t;
 
@@ -634,7 +634,9 @@ static void gql_runtime_vm_bind_dynamic_value_variables(
 );
 static int gql_runtime_vm_native_dynamic_value_truthy(
   pTHX_ const gql_runtime_vm_native_dynamic_value_t *value,
-  HV *variables
+  HV *variables,
+  SV **variable_slots,
+  IV variable_slot_count
 );
 static const gql_runtime_vm_native_dynamic_value_t *gql_runtime_vm_native_args_payload_lookup_value(
   const gql_runtime_vm_native_args_payload_t *payload,
@@ -666,7 +668,9 @@ static void gql_runtime_vm_native_directives_payload_destroy(
 );
 static int gql_runtime_vm_evaluate_runtime_guards_native(
   pTHX_ const gql_runtime_vm_native_directives_payload_t *payload,
-  HV *variables
+  HV *variables,
+  SV **variable_slots,
+  IV variable_slot_count
 );
 static gql_runtime_vm_native_args_payload_t *gql_runtime_vm_specialize_arg_payload_native(
   pTHX_
@@ -1473,7 +1477,9 @@ gql_runtime_vm_native_dynamic_value_materialize_sv(
 static int
 gql_runtime_vm_native_dynamic_value_truthy(
   pTHX_ const gql_runtime_vm_native_dynamic_value_t *value,
-  HV *variables
+  HV *variables,
+  SV **variable_slots,
+  IV variable_slot_count
 )
 {
   if (!value || value->kind_code == GQL_VM_DYNAMIC_UNDEF) {
@@ -1482,6 +1488,12 @@ gql_runtime_vm_native_dynamic_value_truthy(
 
   switch (value->kind_code) {
     case GQL_VM_DYNAMIC_VARIABLE: {
+      if (variable_slots
+          && value->variable_index >= 0
+          && value->variable_index < variable_slot_count) {
+        SV *slot_value = variable_slots[value->variable_index];
+        return (slot_value && SvOK(slot_value) && SvTRUE(slot_value)) ? 1 : 0;
+      }
       SV **svp = (variables && value->variable_name)
         ? hv_fetch(variables, value->variable_name, (I32)strlen(value->variable_name), 0)
         : NULL;
@@ -2073,7 +2085,9 @@ gql_runtime_vm_native_directives_payload_destroy(
 static int
 gql_runtime_vm_evaluate_runtime_guards_native(
   pTHX_ const gql_runtime_vm_native_directives_payload_t *payload,
-  HV *variables
+  HV *variables,
+  SV **variable_slots,
+  IV variable_slot_count
 )
 {
   IV i;
@@ -2083,7 +2097,9 @@ gql_runtime_vm_evaluate_runtime_guards_native(
   }
   for (i = 0; i < payload->count; i++) {
     const gql_runtime_vm_native_guard_t *guard = &payload->guards[i];
-    int bool_value = gql_runtime_vm_native_dynamic_value_truthy(aTHX_ guard->if_expr, variables);
+    int bool_value = gql_runtime_vm_native_dynamic_value_truthy(
+      aTHX_ guard->if_expr, variables, variable_slots, variable_slot_count
+    );
     if (guard->kind_code == GQL_VM_GUARD_SKIP && bool_value) {
       return 0;
     }
@@ -3523,8 +3539,7 @@ gql_runtime_vm_program_needs_variable_specialization(gql_runtime_vm_native_progr
     }
     for (j = 0; j < block->op_count; j++) {
       gql_runtime_vm_native_op_t *op = &block->ops[j];
-      if (op->has_runtime_directives
-          || (op->has_directives && op->directives_mode_code == GQL_VM_ARGS_DYNAMIC)) {
+      if (op->has_runtime_directives) {
         program->needs_variable_specialization = 2;
         return 1;
       }
@@ -4868,7 +4883,9 @@ gql_runtime_vm_prepare_cached_bundle_in_place(
         if (!gql_runtime_vm_evaluate_runtime_guards_native(
               aTHX_
               op->directives_payload_native,
-              NULL
+              NULL,
+              NULL,
+              0
             )) {
           keep = 0;
         } else {
@@ -6151,7 +6168,9 @@ gql_runtime_vm_specialize_native_program_in_place(
         if (!gql_runtime_vm_evaluate_runtime_guards_native(
               aTHX_
               op->directives_payload_native,
-              variables_hv
+              variables_hv,
+              NULL,
+              0
             )) {
           keep = 0;
         } else {

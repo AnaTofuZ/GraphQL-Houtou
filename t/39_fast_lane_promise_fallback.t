@@ -1083,7 +1083,12 @@ subtest 'async runtime: root object/abstract list fields promote through the fas
     }, 'the cat member suspends and resolves, the dog member has no such field';
   };
 
-  subtest 'a nested object field within an item still falls back (excluded scope)' => sub {
+  subtest 'a nested object field within an item (fully synchronous)' => sub {
+    # Written when Phase 5 excluded this shape entirely (any nested
+    # object/abstract field forced a fallback); Phase 6 lifts that
+    # restriction (see the subtest block below), so this now resolves via
+    # the fast continuation's recursive per-item wrapper instead - kept
+    # as a plain synchronous regression check either way.
     my $Inner = GraphQL::Houtou::Type::Object->new(
       name => 'InnerP5', fields => { v => { type => $String } });
     my $Row = GraphQL::Houtou::Type::Object->new(
@@ -1107,7 +1112,334 @@ subtest 'async runtime: root object/abstract list fields promote through the fas
     my $runtime = build_native_runtime($schema, async => 1);
     my $r = $runtime->execute_document('{ rows { id inner { v } } }');
     is_deeply $r, { data => { rows => [ { id => 'n1', inner => { v => 'nested' } } ] } },
-      'still resolves correctly via the generic executor fallback';
+      'resolves correctly';
+  };
+};
+
+subtest 'async runtime: nested object/abstract fields inside a list item promote through the fast continuation (Phase 6)' => sub {
+  require GraphQL::Houtou::DataLoader;
+  # Phase 5 required a list item's own child block to be "flat" (no
+  # further object/abstract nesting). Phase 6 lifts that restriction by
+  # making gql_runtime_vm_fast_lane_list_item_block_is_eligible recurse,
+  # and reusing gql_runtime_vm_execute_safe_child_block_fast_sv (Phase 5's
+  # sibling-preserving wrapper) at the plain OBJECT/ABSTRACT field
+  # child-block call sites too - these cases exercise a nested field
+  # itself suspending, one or more levels below the list item.
+
+  subtest 'fully synchronous 2-level nesting needs no promotion' => sub {
+    my $Author = GraphQL::Houtou::Type::Object->new(
+      name => 'SyncAuthor', fields => { name => { type => $String } });
+    my $Post = GraphQL::Houtou::Type::Object->new(
+      name => 'SyncPost',
+      fields => {
+        title => { type => $String },
+        author => { type => $Author, resolve => sub { { name => "a:$_[0]{id}" } } },
+      },
+    );
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          posts => {
+            type => GraphQL::Houtou::Type::List->new(of => $Post),
+            args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+            resolve => sub {
+              my (undef, $args) = @_;
+              return [ map { { id => $_, title => "t:$_" } } @{ $args->{ids} } ];
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query q($ids: [String]) { posts(ids: $ids) { title author { name } } }',
+      variables => { ids => [ 'p1', 'p2' ] },
+    );
+    is_deeply $r, {
+      data => { posts => [
+        { title => 't:p1', author => { name => 'a:p1' } },
+        { title => 't:p2', author => { name => 'a:p2' } },
+      ] },
+    }, 'no DataLoader involved, resolves synchronously';
+  };
+
+  subtest 'a nested field suspends without re-running an already-resolved sibling two levels up' => sub {
+    my %calls = (title => 0, name => 0);
+    my $Author = GraphQL::Houtou::Type::Object->new(
+      name => 'NestedAuthor',
+      fields => {
+        name => { type => $String, resolve => sub { $calls{name}++; "n:$_[0]{id}" } },
+        pendingField => {
+          type => $String,
+          args => { key => { type => $String } },
+          resolve => sub {
+            my (undef, $args, $ctx) = @_;
+            return $ctx->{loader}->load($args->{key});
+          },
+        },
+      },
+    );
+    my $Post = GraphQL::Houtou::Type::Object->new(
+      name => 'NestedPost',
+      fields => {
+        title => { type => $String, resolve => sub { $calls{title}++; "t:$_[0]{id}" } },
+        author => { type => $Author, resolve => sub { { id => $_[0]{id} } } },
+      },
+    );
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { "loaded:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          posts => {
+            type => GraphQL::Houtou::Type::List->new(of => $Post),
+            args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+            resolve => sub {
+              my (undef, $args) = @_;
+              return [ map { { id => $_ } } @{ $args->{ids} } ];
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query q($ids: [String], $k: String) { posts(ids: $ids) { title author { name pendingField(key: $k) } } }',
+      variables => { ids => [ 'p1', 'p2' ], k => 'k1' },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, {
+      data => { posts => [
+        { title => 't:p1', author => { name => 'n:p1', pendingField => 'loaded:k1' } },
+        { title => 't:p2', author => { name => 'n:p2', pendingField => 'loaded:k1' } },
+      ] },
+    }, 'every post and its nested author resolve correctly';
+    is $calls{title}, 2, 'title (an item-level sibling of the nested object) ran exactly once per item';
+    is $calls{name}, 2, 'name (a sibling of the suspending field, one level deeper) ran exactly once per item';
+  };
+
+  subtest 'true recursion: a 3-level-deep nested field can suspend' => sub {
+    my $Team = GraphQL::Houtou::Type::Object->new(
+      name => 'DeepTeam',
+      fields => {
+        name => { type => $String, resolve => sub { "team:$_[0]{id}" } },
+        secret => {
+          type => $String,
+          args => { key => { type => $String } },
+          resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader}->load($a->{key}) },
+        },
+      },
+    );
+    my $Author = GraphQL::Houtou::Type::Object->new(
+      name => 'DeepAuthor',
+      fields => {
+        name => { type => $String, resolve => sub { "author:$_[0]{id}" } },
+        team => { type => $Team, resolve => sub { { id => $_[0]{id} } } },
+      },
+    );
+    my $Post = GraphQL::Houtou::Type::Object->new(
+      name => 'DeepPost',
+      fields => {
+        title => { type => $String, resolve => sub { "t:$_[0]{id}" } },
+        author => { type => $Author, resolve => sub { { id => $_[0]{id} } } },
+      },
+    );
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { "secret:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          posts => {
+            type => GraphQL::Houtou::Type::List->new(of => $Post),
+            args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+            resolve => sub {
+              my (undef, $args) = @_;
+              return [ map { { id => $_ } } @{ $args->{ids} } ];
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query q($ids: [String], $k: String) { posts(ids: $ids) { title author { name team { name secret(key: $k) } } } }',
+      variables => { ids => [ 'p1' ], k => 'k1' },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, {
+      data => { posts => [ {
+        title => 't:p1',
+        author => { name => 'author:p1', team => { name => 'team:p1', secret => 'secret:k1' } },
+      } ] },
+    }, 'three levels of nesting resolve correctly, not just a hardcoded two';
+  };
+
+  subtest 'a non-null violation in a nested field nulls only that field, sibling data intact' => sub {
+    my $Author = GraphQL::Houtou::Type::Object->new(
+      name => 'NonNullAuthor',
+      fields => {
+        name => { type => $String, resolve => sub { "n:$_[0]{id}" } },
+        req => {
+          type => $String->non_null,
+          args => { key => { type => $String } },
+          resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader}->load($a->{key}) },
+        },
+      },
+    );
+    my $Post = GraphQL::Houtou::Type::Object->new(
+      name => 'NonNullPost',
+      fields => {
+        title => { type => $String, resolve => sub { "t:$_[0]{id}" } },
+        author => { type => $Author, resolve => sub { { id => $_[0]{id} } } },
+      },
+    );
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { undef } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          posts => {
+            type => GraphQL::Houtou::Type::List->new(of => $Post),
+            args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+            resolve => sub {
+              my (undef, $args) = @_;
+              return [ map { { id => $_ } } @{ $args->{ids} } ];
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query q($ids: [String], $k: String) { posts(ids: $ids) { title author { name req(key: $k) } } }',
+      variables => { ids => [ 'p1' ], k => 'k1' },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is $r->{data}{posts}[0]{title}, 't:p1', 'the item-level sibling (title) is unaffected';
+    is $r->{data}{posts}[0]{author}, undef, 'the nested object itself is null (its own non-null field violated)';
+    is scalar @{ $r->{errors} }, 1, 'one error record';
+    like $r->{errors}[0]{message}, qr/Cannot return null for non-nullable field NonNullAuthor\.req/,
+      'error names the non-null violation';
+    is_deeply $r->{errors}[0]{path}, [ 'posts', 0, 'author', 'req' ], 'error path points at the offending nested field';
+  };
+
+  subtest 'an abstract (union) field nested inside a list item can suspend' => sub {
+    my $Cat = GraphQL::Houtou::Type::Object->new(
+      name => 'NestedCat', runtime_tag => 'cat',
+      fields => {
+        name => { type => $String },
+        meow => {
+          type => $String,
+          args => { key => { type => $String } },
+          resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader}->load($a->{key}) },
+        },
+      },
+    );
+    my $Dog = GraphQL::Houtou::Type::Object->new(
+      name => 'NestedDog', runtime_tag => 'dog',
+      fields => { name => { type => $String } },
+    );
+    my $Pet = GraphQL::Houtou::Type::Union->new(
+      name => 'NestedPet', types => [ $Cat, $Dog ], tag_resolver => sub { $_[0]{kind} },
+    );
+    my $Owner = GraphQL::Houtou::Type::Object->new(
+      name => 'NestedOwner',
+      fields => {
+        name => { type => $String, resolve => sub { "owner:$_[0]{id}" } },
+        pet => {
+          type => $Pet,
+          resolve => sub { { kind => 'cat', name => 'Tama', id => $_[0]{id} } },
+        },
+      },
+    );
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { "sound:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          owners => {
+            type => GraphQL::Houtou::Type::List->new(of => $Owner),
+            args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+            resolve => sub {
+              my (undef, $args) = @_;
+              return [ map { { id => $_ } } @{ $args->{ids} } ];
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query q($ids: [String], $k: String) { owners(ids: $ids) { name pet { ... on NestedCat { name meow(key: $k) } ... on NestedDog { name } } } }',
+      variables => { ids => [ 'o1' ], k => 'purr' },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, {
+      data => { owners => [ {
+        name => 'owner:o1',
+        pet => { name => 'Tama', meow => 'sound:purr' },
+      } ] },
+    }, 'the union member nested inside a list item resolves after its own field suspends';
+  };
+
+  subtest 'nesting deeper than the recursion guard falls back safely' => sub {
+    # GQL_VM_FAST_LANE_MAX_NESTING_DEPTH is 16 - build a chain of plain
+    # object types one field deeper than that (17 levels below the root
+    # list item) and confirm gql_runtime_vm_fast_lane_list_item_block_is_eligible
+    # fails closed (falls back to the generic executor) rather than
+    # crashing or mishandling the query, and that the query still
+    # produces the correct result either way.
+    my $depth = 17;
+    # Every "next" field uses the default resolver (reads $source->{next}),
+    # so a single nested Perl hash built once, matching the type chain
+    # shape exactly, is enough - no per-level resolve callbacks needed.
+    my $item_value = { v => 'bottom' };
+    for (1 .. $depth) {
+      $item_value = { next => $item_value };
+    }
+    my $innermost = GraphQL::Houtou::Type::Object->new(
+      name => "DeepLevel$depth", fields => { v => { type => $String } });
+    my @levels = ($innermost);
+    for (my $lvl = $depth - 1; $lvl >= 0; $lvl--) {
+      my $child = $levels[0];
+      unshift @levels, GraphQL::Houtou::Type::Object->new(
+        name => "DeepLevel$lvl",
+        fields => { next => { type => $child } },
+      );
+    }
+    my $query_inner = join(' ', ('next {') x $depth) . ' v ' . ('}' x $depth);
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          rows => {
+            type => GraphQL::Houtou::Type::List->new(of => $levels[0]),
+            resolve => sub { return [ $item_value ] },
+          },
+        },
+      ),
+    );
+    # The query is deeper than the schema's default max_depth (an
+    # unrelated request-validation limit, not the fast-lane recursion
+    # guard under test), so raise it here.
+    my $runtime = build_native_runtime($schema, async => 1, max_depth => $depth + 5);
+    my $r = $runtime->execute_document("{ rows { $query_inner } }");
+    my $expected = $item_value;
+    is_deeply $r, { data => { rows => [ $expected ] } },
+      'the over-depth query still resolves correctly via the generic executor fallback';
   };
 };
 

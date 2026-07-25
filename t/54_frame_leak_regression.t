@@ -299,4 +299,69 @@ subtest 'repeated root object-list item-child-block promotions stay clean' => su
   assert_no_live_frames('200 root object-list item-child-block promotions');
 };
 
+subtest 'repeated 2-level nested object field promotions stay clean' => sub {
+  # Phase 6: each request here promotes THREE frames per item (the root
+  # list frame, the item's own frame, and the nested object field's own
+  # frame - see gql_runtime_vm_execute_safe_child_block_fast_sv's
+  # recursive reuse). A leak here was caught during development (missing
+  # gql_runtime_vm_ensure_fast_lane_state_sv call on the new "completion
+  # produced a promise" channel in gql_runtime_vm_execute_block_fast_multi_sv)
+  # and would only show up after many requests, not one.
+  my $Author = GraphQL::Houtou::Type::Object->new(
+    name => 'LeakAuthor',
+    fields => {
+      name => { type => $String, resolve => sub { "n:$_[0]{id}" } },
+      pendingField => {
+        type => $String,
+        args => { key => { type => $String } },
+        resolve => sub {
+          my (undef, $args, $ctx) = @_;
+          return $ctx->{loader}->load($args->{key});
+        },
+      },
+    },
+  );
+  my $Post = GraphQL::Houtou::Type::Object->new(
+    name => 'LeakPost',
+    fields => {
+      title => { type => $String, resolve => sub { "t:$_[0]{id}" } },
+      author => { type => $Author, resolve => sub { { id => $_[0]{id} } } },
+    },
+  );
+  my $nested_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        posts => {
+          type => GraphQL::Houtou::Type::List->new(of => $Post),
+          args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+          resolve => sub {
+            my (undef, $args) = @_;
+            return [ map { { id => $_ } } @{ $args->{ids} } ];
+          },
+        },
+      },
+    ),
+  );
+  my $runtime = build_native_runtime($nested_schema, async => 1);
+  for my $i (1 .. 200) {
+    my $loader = GraphQL::Houtou::DataLoader->new(
+      batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+    );
+    my $r = $runtime->execute_document(
+      'query q($ids: [String], $k: String) { posts(ids: $ids) { title author { name pendingField(key: $k) } } }',
+      variables => { ids => [ "p$i-1", "p$i-2" ], k => "k$i" },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, {
+      data => { posts => [
+        { title => "t:p$i-1", author => { name => "n:p$i-1", pendingField => "v:k$i" } },
+        { title => "t:p$i-2", author => { name => "n:p$i-2", pendingField => "v:k$i" } },
+      ] },
+    }, "iteration $i resolved" or last;
+  }
+  assert_no_live_frames('200 nested object field promotions');
+};
+
 done_testing;

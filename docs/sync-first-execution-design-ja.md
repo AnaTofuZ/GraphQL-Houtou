@@ -466,6 +466,61 @@ settle後にresponseへなること、suspend前とresume後を通じてresolver
     (list fieldの複数item集約ハンドル)に対する同種のdeadlock
     cancellation未対応は、今回の対応範囲外として記録した。
 
+17. Perl呼び出し境界の高速パス化(item 16直後のコミット、
+    `gql_runtime_vm_call_ticket_callback`がPromise::XS/Ticket用の
+    resolve/reject callbackを呼ぶ際、既知の自前XS関数であることを
+    `CvXSUB(cv)`の関数ポインタ比較で検出し、`call_sv`のPerl汎用呼び出し
+    規約を丸ごとスキップする)では、suspendケースが増やす約6箇所の
+    Perl呼び出し境界のうち1箇所しか対象にできず、ベンチマークでは
+    測定誤差の範囲を超える改善を確認できなかった。
+
+    そこでsample(macOS標準CPUサンプリングプロファイラ)でsuspendケースを
+    全同期ケースと比較し内訳分解したところ、「scheduler自体の構築・
+    drain」(exec_state_handle_t/block_frame_t/Promise::XS)が約2.5
+    tick/1kと最小カテゴリだった一方、その中核である**応答用Promise::XS
+    の生成・`.then()`登録・同期解決の往復**は、on_stallで同期的に
+    完結するPSGIアプリでは「真の非同期」に一切使われておらず、単に
+    C↔Perl間の値受け渡し手段として使われているだけと判明した。
+    on_stallのドライブ(`_settle_result`、`NativeRuntime.pm`)自体を
+    Perl側からC側へ移し、この往復を丸ごと省く、より抜本的な変更に
+    着手した(詳細は`docs/future-performance-investigation-ja.md`
+    §14.24)。
+
+    `gql_runtime_vm_block_frame_finalize_sv`に「応答フレームであっても
+    Promise::XSを一切作らない」モード3を追加(既存の`completed_response_sv`
+    直接stash分岐を再利用)。fast lane(item 11〜16が広げてきたeligibility)
+    が対象shapeを扱える場合、on_stallをC側から`G_EVAL`付きで直接呼ぶ
+    駆動ループ(`gql_runtime_vm_drive_with_on_stall_sv`)がこのモード3の
+    frameを完了まで駆動し、Promise::XSを一度も生成しない。fast laneが
+    対象外のshape(runtime directives・再帰深さ上限超過・json_mode)は
+    従来のgeneric executor+`_settle_result`のまま。Phase 2由来の単一op
+    直接resumeショートカットは、この新機構を知らない独自の軽量継続
+    (別のPromise::XS経路)を持つため、on_stallのC駆動時は常にスキップ
+    してmulti-opパスを使う設計にした。
+
+    検証中に2つの既存バグ(Phase 8由来の退行ではなく、Phase 8以前の
+    ビルドでも同じシナリオで同じ個数が再現することを確認済み)を発見:
+    (1) `_settle_result`はon_stallが「進捗0を返す」場合のみ`cancel_pending_response_xs`
+    を呼んでおり、on_stall自身が`die`すると呼び出し式から直接die が
+    飛び出しcancel漏れとなる(単純なPromise::XSがpendingな場合、
+    Phase 8の新経路はこれを解消する)。(2) ただしDataLoaderの`Ticket`
+    がpendingな場合は、Ticket自身のsubscriberリストがDataLoaderの
+    `_queue`経由で生き続けるため、同じcancelでも3 frame相当のリークが
+    残る(未修正、今後の課題として記録)。
+
+    `t/59_on_stall_native_drive.t`を新規追加(全同期・DataLoaderネスト
+    suspend・resolver/batch/on_stall die・stall検出・複数loader・200回
+    リークストレス・上記2件の既知バグを固定するsubtest)。全510テスト、
+    50ファイル個別実行・ASanがクリーン。ベンチマーク(`async_single_root_object_field`、
+    複数回計測)でsuspendケースが**+20〜25%改善**(旧executor比
+    106,103〜108,195 req/sからPhase 8の127,099〜132,923 req/sへ)し、
+    Phase 3〜7で続いていた「suspendケースは改善なし」という結末を
+    初めて破った。ただし`async_nested_object_list_item_field`
+    (item数2/5/10)で見ると、item数が増えるほど改善幅は縮小し
+    (+11%→+2.7%→-3%、誤差程度)、Phase 8が削減するのはリクエスト
+    あたり固定のコストであり、item数が増えるとitemごとの決着コストが
+    支配的になるため相対的寄与が薄まるという解釈で一貫している。
+
 ## 11. 試行から分かった境界条件
 
 root fieldが1個で`child_block_index == -1`という条件だけでは、leaf continuationとして安全では

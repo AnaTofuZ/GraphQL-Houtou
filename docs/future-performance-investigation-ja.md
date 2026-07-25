@@ -1703,3 +1703,132 @@ on_stall放棄された場合、list_pending構造体配下の個々のitem fram
 辿り着けない。今回のPhase 7の作業範囲では発見1の(1)(2)と全く同型・
 同規模の話だが、list fieldの`GQL_VM_PENDING_LIST_PENDING_PTR`という
 別のpayload種別に対する話であり、範囲外として次の課題に送る。
+
+### 14.24 on_stallドライブをC側へ移し、レスポンス用Promise::XSを省略する(Phase 8)
+
+`gql_runtime_vm_call_ticket_callback`の高速パス化(直前のコミット)後に
+ベンチマークを取ったところ、対象がsuspendケースで増える約6箇所の
+Perl呼び出し境界のうち1箇所に過ぎなかったため、測定誤差の範囲を超える
+改善は確認できなかった。そこでsample(macOS標準のCPUサンプリング
+プロファイラ)でsuspendケースをall-syncケースと比較し1000イテレーション
+あたりのtick数へ正規化して内訳分解したところ、以下の内訳が判明した:
+
+| カテゴリ | 追加コスト(tick/1k) |
+|---|---:|
+| Perl subコール境界(entersub/call_sv/runops) | 約13 |
+| Perlの一時SV/CV後始末(sv_free2/sv_clear/free_tmps/leave_scope) | 約6 |
+| DataLoader/Ticket決着の呼び出し連鎖 | 約3.7 |
+| scheduler自体の構築・drain(exec_state_handle_t/block_frame_t/Promise::XS) | 約2.5 |
+
+このうち「scheduler自体の構築・drain」の中核である、レスポンス用
+Promise::XSの生成・`.then()`登録・同期解決という往復を丸ごと省く、
+より抜本的な変更に着手した。
+
+**発見: `finalize_sv`には既に「Promise::XSを一切作らない」経路が
+存在した。** `gql_runtime_vm_async_scheduler_resolve_frame`の応答フレーム
+(親を持たない)ケースには、`frame->deferred_sv`がNULLなら
+`s->completed_response_sv`へ直接値を置く分岐が既にあった(元々は
+「armだけで全pendingが即座に解決した」ケース向け)。`finalize_sv`の
+`return_promise`計算式は応答フレームでは常にtrueに固定されていたため、
+新モード(`return_pending_handle == 3`)を追加してこれを常にfalseに
+できるようにするだけで、genuinely pendingなticketが後から解決される
+場合にも同じ経路で完了できるようになった。
+
+**実装。**
+1. `finalize_sv`にモード3を追加(既存呼び出しへの影響ゼロを確認)。
+2. `gql_runtime_vm_cancel_pending_response_sv`を、promiseのmagicを
+   unwrapする前段と、`exec_state_handle_t`を直接受け取る本体
+   (`gql_runtime_vm_cancel_exec_state_sv`)に分離(純粋なリファクタ、
+   挙動変更なし)。
+3. `gql_runtime_vm_try_execute_fast_root_continuation_sv`に
+   `on_stall_sv`引数を追加。非NULLの場合、Phase 2の単一op直接resume
+   ショートカット(このメカニズムを知らない独自のPromise::XS継続を
+   構築するため)をスキップして常にmulti-opパスを使い、最後の
+   `finalize_sv`呼び出しをモード3にする。genuinely pendingのまま
+   返ってきた場合、新しい駆動ループ(`gql_runtime_vm_drive_with_on_stall_sv`)
+   へ入る。
+4. 駆動ループは`gql_runtime_vm_call_on_stall_once`でon_stallを
+   `G_EVAL`付きの`call_sv`(このファイル全域のユーザーコールバック
+   呼び出しと同じ確立されたイディオム)で直接呼び、
+   `exec_state->completed_response_sv`をポーリングする。die()を
+   捕捉した場合・進捗0の場合はどちらも`cancel_exec_state_sv`で
+   キャンセルしてから`croak_sv`/`croak`し、`_settle_result`と
+   全く同じ文言・契約を再現する。
+5. 新しいXSエントリポイント`execute_native_program_auto_with_on_stall_xs`
+   (実体は`gql_runtime_vm_execute_native_program_auto_with_on_stall_sv`)
+   を追加。fast laneが対象shapeを扱えない場合(runtime directives・
+   再帰深さ上限超過・json_modeなど)は、既存のgeneric executorへ
+   完全に無変更でfall backする(そちらは引き続き本物のPromise::XSを
+   返し、Perl側`_settle_result`が今まで通り駆動する)。
+6. `NativeRuntime.pm`の`execute_program`のon_stall分岐を新エントリ
+   ポイント呼び出しへ変更。`_settle_result`自体は変更せず、その戻り値を
+   そのまま通す(`_settle_result`の1行目が「promiseでなければ即返す」
+   ため、fast laneが完全に駆動し終えた結果でもgeneric executorが返した
+   本物のpromiseでもそのまま正しく動作する)。
+
+**単一op直接resumeショートカットとの関係。** これはPhase 2由来の
+純粋な性能ショートカット(block_frame_t/exec_state_handle_tを一切
+使わない)で、正しさの要件ではないため、`on_stall_sv`が与えられた
+場合は常にスキップし、multi-opパス経由にする方針とした
+(スコープを大幅に削減できた)。
+
+**発見(検証中に判明した2つの既存バグ)。**
+
+1. `_settle_result`(`NativeRuntime.pm`)は`on_stall`が「進捗0を返す」
+   ケースでのみ`cancel_pending_response_xs`を呼んでいた。`on_stall`
+   自身が`die`した場合、`$on_stall->()`呼び出し式から直接die が
+   飛び出すため、cancel呼び出しへ到達せず、応答側の参照循環
+   (exec_state → armed callback → promise → exec_state)がリークして
+   いた。Phase 8以前のビルドでも同じシナリオで同じ個数(3 frame)が
+   リークすることを確認済み(既存のバグで、Phase 8による退行ではない)。
+   Phase 8の新経路は`G_EVAL`でdie を捕捉してから`cancel_exec_state_sv`
+   を呼ぶため、**単純なPromise::XS(生のresolverの戻り値)がpendingな
+   場合はこの問題を解消する**(0/0を確認)。
+2. ただし、**DataLoaderの`Ticket`がpendingな場合は同じシナリオでも
+   3 frameのリークが残る**ことが判明した。`Ticket`は
+   `gql_runtime_vm_subscribe_dataloader_ticket`でsubscribeされると、
+   自分のsubscriberリストへresolve/reject callbackペアを追加するが、
+   このTicket自体はDataLoaderの`_queue`から参照され続けており
+   (`dispatch`が呼ばれるまで消えない)、`cancel_exec_state_sv`は
+   この参照経路を辿れない。on_stallの死・stall検出のどちらでも
+   同じ形で再現し、Phase 8以前のビルドでも全く同じ個数がリークする
+   ことを確認済み(退行ではないが、修正もしていない、既知の別課題)。
+
+**検証。** `t/59_on_stall_native_drive.t`を新規追加: 全同期リクエスト
+(on_stallが一度も呼ばれないこと)、DataLoaderネスト suspend の正常解決、
+resolver die・batch関数die(いずれもfield errorへ変換され例外にならない
+ことを確認)・on_stall自身のdie(生のPromise::XSがpendingな場合は
+クリーン)、stall検出(同上)、複数loaderをまたぐ`on_stall_for`、200回
+リークストレス、そして上記の既知バグ2件を「現状のまま固定した」
+専用subtest(必ずファイル末尾に配置 - リークが以降の全subtestの
+ゼロフレーム前提を壊すため)。全510テスト、50ファイル個別実行・
+`PERL_HASH_SEED`5点でのASanがクリーン。
+
+**計測。** `async_single_root_object_field`(6標本中央値、複数回計測):
+
+| | 旧executor(`_settle_result`+Promise::XS) | Phase 8(C駆動) |
+|---|---:|---:|
+| suspendケース | 106,103〜108,195 req/s (100%) | 127,099〜132,923 req/s (120〜125%) |
+
+単一nested fieldのケースで**+20〜25%の明確な改善**を確認した
+(これまでのPhase 3〜7が軒並み「改善なし」だったのとは対照的)。
+一方、`async_nested_object_list_item_field`(Phase 6のroot list field、
+item数を2/5/10で変えたベンチマーク)で同様に比較すると:
+
+| width | 旧executor | Phase 8 |
+|---|---:|---:|
+| 2 | 58,813 req/s | 65,433 req/s (+11%) |
+| 5 | 34,230 req/s | 35,144 req/s (+2.7%、誤差程度) |
+| 10 | 20,002 req/s | 19,402 req/s (-3%、誤差程度〜横ばい)|
+
+item数が増えるほど改善幅が縮小し、10件では誤差程度になる。Phase 8が
+削減するのは**リクエストあたり固定のコスト**(応答用Promise::XS
+1個分の構築・登録・解決)であり、item数が増えるとリクエスト全体の
+処理時間がitemごとの決着コストで支配的になるため、固定costの
+相対的な寄与が薄まるという解釈で一貫している。
+
+**スコープ。** 今回はfast lane(Phase 3〜7がeligibilityを広げてきた
+形)が対象shapeを扱える場合に限定した。fast laneが対象外のshape
+(runtime directives・再帰深さ上限超過・json_mode)は、引き続き
+従来のgeneric executor+`_settle_result`経由のまま
+(このphaseの恩恵を受けない)。

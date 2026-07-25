@@ -1359,3 +1359,128 @@ ASanランタイムを指定しないこと、というのがこの環境固有�
 この置き換え後、49ファイル個別実行・`PERL_HASH_SEED`5点(1, 7, 42, 99,
 12345)のフルスイープを実施し、全245実行がクリーン(異常終了・ASan報告
 なし)であることを確認した。
+
+### 14.21 root object/abstract list fieldへの拡張(Phase 5)
+
+§13 item 4(`benchmark_async_preresolved`が対象とする形、object/abstract
+item を持つ root list)へ対応した。対象は Phase 4 と同様「item の child
+block(abstract の場合は取りうる全 member block)自体が flat」なものに
+限定する: item 自身の各フィールドは `GQL_VM_COMPLETE_GENERIC` または
+`GQL_VM_COMPLETE_LIST`(かつそのLISTもplain leaf)のみで、runtime
+directive無し、**ただし non-null(`return_type_kind_code == 8`)は許可**
+(Phase 4までのroot opでは禁止していたが、item自身のfieldでは後述の
+sync-first パターンが正しく処理できることを確認済み)。item の
+フィールドがさらに object/abstract を持つ場合(2階層目のネスト)は
+今回もスコープ外とし、既存の(exactly-once未対応な)経路へ従来通り
+fallbackさせる。
+
+**調査で発見した重大な設計課題(exactly-once違反のリスク)。**
+`gql_runtime_vm_complete_current_list_fast_sv`のobject/abstract item
+分岐は、各itemを`gql_runtime_vm_execute_block_fast_sv`(child block全般で
+共有される「1つでもsuspendしたらブロック全体を破棄してNULLを返す」設計)
+へ委譲していた。item のchild blockに複数フィールドがある場合(例:
+`{ name, team }`)、`name`がcustom resolverで同期解決した**後**に`team`が
+suspendすると、この設計ではブロック全体を破棄してNULLを返す。これを
+そのまま汎用executorへfallbackしてやり直すと、既に解決済みだった`name`
+のresolverが二重に呼ばれる(exactly-once保証違反)。加えて、
+`gql_runtime_vm_complete_current_list_fast_sv`の呼び出し側はこのNULLを
+「non-null違反による自己null化」と誤認するバグも同時に発見した
+(`state->fast_lane_suspended_sv`を一切チェックしていなかったため)。
+Phase 4時点ではeligibility guardが`child_block_index >= 0`を全面的に
+弾いていたため、この分岐が`fast_lane_can_suspend == 1`で到達すること
+自体がなく、出荷済みコードにこのバグは表面化していなかった。
+
+ユーザーの判断で、正しい形(exactly-onceを完全に守る形)で実装する
+ことを選択した。
+
+**設計: child blockにもlazy block-frame promotionを拡張する。** Phase
+3/4でroot block用に作った「全opを実行し、どれかがsuspendしたらその時点で
+初めて実`block_frame_t`/`exec_state_handle_t`を構築し、既に解決済みの
+siblingは保持したまま、suspendしたopだけpending entryとして登録する」
+というsync-firstパターン(`gql_runtime_vm_execute_root_block_fast_multi_sv`)
+を、root block専用から任意の(non-root)child blockでも使える形へ
+一般化した(`gql_runtime_vm_execute_block_fast_multi_sv`、
+`parent_path_frame`引数を追加、non-null propagationハンドリングも追加
+— root blockでは既存のeligibility guardによりdead codeのまま)。
+
+item自身のchild blockでsuspendが起きた場合、その場で
+`gql_runtime_vm_block_frame_finalize_sv(frame, PROMISE_XS, writer,
+state_sv, /*return_pending_handle=*/2)`を呼ぶ。このmode 2は既存の汎用
+async executorのper-item object分岐(`gql_runtime_vm_exec_state_execute_block_async_path_sv`
+の"mode 2"、`deferred_resolves_response`が0のケース)と全く同じ経路で、
+`pending_count == 0`ならその場でnative outcomeを、`pending_count > 0`
+なら本物の`Promise::XS`を返す。この結果を`gql_runtime_vm_list_pending_handle_sv`
+(Layer 2)へそのまま渡せば、Layer 1を新規に書かずに既存のitem集約機構が
+そのまま機能する(finalize mode 2が既に「item 1個分のPromise::XS」を
+作っているため、Layer 2の既存のpromise検出がそのまま働く)。
+
+state_sv/実handleは、Phase 4で作ったroot専用のヘルパを、request全体で
+共有される`state->fast_lane_root_state_sv`フィールド経由の汎用ヘルパ
+(`gql_runtime_vm_ensure_fast_lane_state_sv`)へ一般化した。これにより、
+root自身のfield-level suspensionと、item内部で深くネストした suspension
+のどちらが先に発生しても、同じ1つのhandleを再利用できる。
+
+**実装中に発見・修正した2つのバグ(いずれも既存テストが検出)。**
+
+1. 一般化した`gql_runtime_vm_execute_block_fast_multi_sv`は、
+   `gql_runtime_vm_execute_block_fast_sv`が行っている
+   `state->block/op/slot/block_index/op_index`の保存・復元を行っていな
+   かった(root専用だった頃はroot自身がstateの唯一の所有者だったため
+   不要だった)。item自身のchild block処理がこれらを書き換えたまま
+   呼び出し元(list opの処理)へ戻るため、呼び出し元が直後に参照する
+   `state->slot->item_non_null`等が誤った値になる。t/50_nonnull_propagation.t
+   の既存回帰テストが直ちに検出した。`gql_runtime_vm_execute_block_fast_sv`
+   と同じsave/restore規律を追加して修正。
+2. field-level suspension(`state->fast_lane_suspended_sv`)時の
+   payload_kind選択が、参照実装(`gql_runtime_vm_then_complete_current_sv`)
+   にある`complete_code == GQL_VM_COMPLETE_GENERIC`チェックを欠いていた
+   (Phase 3/4で simplified した際に落とした)。Phase 4までは対象が常に
+   plain leaf listだったため`leaf_kind == NONE`が真になることがなく
+   偶然正しく動いていたが、Phase 5でobject listが対象になると、
+   object list自体がfield-level promiseの場合に誤ったpayload_kind
+   (完了処理を素通りする`GENERIC_VALUE_SV`)を選んでしまう。手動検証
+   (t/16_runtime_promise.tの既存テストで表面化)で発見し、参照実装通りの
+   条件へ修正。
+3. さらに、field-level suspension分岐がstate_sv(実handle)を構築せずに
+   root呼び出し元の末尾へ委ねる設計だったため、item wrapperがその場で
+   `block_frame_finalize_sv`を呼ぼうとするとNULLハンドルを渡すことになる
+   バグも見つかった(独自の手動smoke testで発見、既存テストでは未検出)。
+   frame構築と同時にstate_svも構築するよう修正(root側のコストは
+   変わらない、同じタイミングで両方作るだけ)。
+
+**正しさの検証。** t/39_fast_lane_promise_fallback.tへ6subtest追加:
+全item同期(promotionなし)、item内で先に同期解決したsiblingが後続の
+suspendで二重呼び出しされないこと(呼び出し回数で確認)、self_nulled
+(先にsuspendしたsiblingがある状態でnon-null違反が起きてitem全体がnull
+になること)、複数itemが同一batchで同時suspend、abstract(union)item
+のmember選択+suspend、item内のネストしたobject fieldが引き続き
+fallbackすること(スコープ外の否定テスト)。t/54_frame_leak_regression.t
+へ200回のitem child block promotionのリークストレスを追加。全496
+テスト、49ファイル個別実行・`PERL_HASH_SEED`5点でのASanがクリーン。
+
+**計測。** `benchmark_async_object_list_item_field`(新規、単一root
+object-list field、各itemが1同期field+1 DataLoader-Ticket-pending
+fieldを持つ)を追加し、旧executor(Phase 5導入前)と比較した(5標本
+中央値):
+
+| width | 旧executor(fallback) | Phase 5 |
+|---|---:|---:|
+| 2 | 69,433 req/s (100%) | 71,411 req/s (102.8%) |
+| 5 | 41,080 req/s (100%) | 42,829 req/s (104.3%) |
+| 10 | 25,000 req/s (100%) | 26,064 req/s (104.3%) |
+
+誤差の範囲内で、Phase 3/4と同型の結末(itemが実際にsuspendするケース
+では、旧経路も新経路も結局同じ実`exec_state_handle_t`+two-layer機構を
+構築するため、削減できるコストがほとんど無い)。一方、DataLoader/Promise
+を一切使わない全同期object listのケースでは、Phase 4と同様の改善を
+確認した(単一root object-list field・5要素・全item同期、`--case`に
+含めない手動ベンチマーク):
+
+| | 旧executor(fallback) | Phase 5 |
+|---|---:|---:|
+| sync runtime | 138,223〜138,866 req/s (100%) | 138,223〜139,515 req/s (100〜101%) |
+| async runtime | 119,037 req/s (85.6〜86%) | 138,866〜141,499 req/s (100〜102%) |
+
+Phase 5適用前はasync runtimeがLISTの`child_block_index >= 0`
+unconditional ineligibleにより旧executor経由の固定費(-14〜17%)を
+払っていたのが、Phase 5適用後はsync runtimeとほぼ同速になった。

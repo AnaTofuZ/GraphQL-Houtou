@@ -349,6 +349,11 @@ typedef struct {
 struct gql_runtime_vm_native_value {
   U8 kind_code;
   U8 scalar_kind_code;
+  /* Whether scalar_pv holds UTF-8-flagged text (SvUTF8 on the source SV)
+   * rather than an unflagged byte/Latin-1 string; materialize_sv restores
+   * the flag from this so a resolver's wide-character string survives the
+   * round trip through this tree unchanged. */
+  U8 scalar_pv_is_utf8;
   IV scalar_iv;
   NV scalar_nv;
   char *scalar_pv;
@@ -864,6 +869,7 @@ gql_runtime_vm_new_native_value_scalar(pTHX_ SV *value)
   gql_runtime_vm_native_value_t *ret;
   ret = gql_runtime_vm_native_value_pool_get(GQL_VM_NATIVE_VALUE_SCALAR);
   ret->scalar_kind_code = GQL_VM_NATIVE_SCALAR_UNDEF;
+  ret->scalar_pv_is_utf8 = 0;
   ret->scalar_iv = 0;
   ret->scalar_nv = 0.0;
   ret->scalar_pv = NULL;
@@ -883,6 +889,7 @@ gql_runtime_vm_new_native_value_scalar(pTHX_ SV *value)
     ret->scalar_kind_code = GQL_VM_NATIVE_SCALAR_PV;
     ret->scalar_pv = savepvn(pv, len);
     ret->scalar_pv_len = len;
+    ret->scalar_pv_is_utf8 = SvUTF8(value) ? 1 : 0;
     return ret;
   }
   if (SvIOKp(value)) {
@@ -1001,6 +1008,7 @@ gql_runtime_vm_native_value_destroy(pTHX_ gql_runtime_vm_native_value_t *value)
       break;
   }
   value->scalar_kind_code = GQL_VM_NATIVE_SCALAR_UNDEF;
+  value->scalar_pv_is_utf8 = 0;
   value->scalar_pv = NULL;
   value->scalar_pv_len = 0;
   value->scalar_fallback_sv = NULL;
@@ -1055,8 +1063,13 @@ gql_runtime_vm_native_value_materialize_sv(pTHX_ gql_runtime_vm_native_value_t *
           return newSViv(value->scalar_iv);
         case GQL_VM_NATIVE_SCALAR_NV:
           return newSVnv(value->scalar_nv);
-        case GQL_VM_NATIVE_SCALAR_PV:
-          return newSVpvn(value->scalar_pv ? value->scalar_pv : "", value->scalar_pv_len);
+        case GQL_VM_NATIVE_SCALAR_PV: {
+          SV *pv_sv = newSVpvn(value->scalar_pv ? value->scalar_pv : "", value->scalar_pv_len);
+          if (value->scalar_pv_is_utf8) {
+            SvUTF8_on(pv_sv);
+          }
+          return pv_sv;
+        }
         case GQL_VM_NATIVE_SCALAR_FALLBACK_SV:
         default:
           return value->scalar_fallback_sv ? newSVsv(value->scalar_fallback_sv) : newSVsv(&PL_sv_undef);
@@ -1153,6 +1166,7 @@ gql_runtime_vm_native_value_clone(pTHX_ const gql_runtime_vm_native_value_t *val
           if (value->scalar_pv && value->scalar_pv_len) {
             ret->scalar_pv = savepvn(value->scalar_pv, value->scalar_pv_len);
             ret->scalar_pv_len = value->scalar_pv_len;
+            ret->scalar_pv_is_utf8 = value->scalar_pv_is_utf8;
           }
           return ret;
         case GQL_VM_NATIVE_SCALAR_FALLBACK_SV:

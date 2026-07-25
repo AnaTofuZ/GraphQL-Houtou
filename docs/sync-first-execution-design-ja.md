@@ -179,12 +179,116 @@ refcountとframe poolを使い、性能差とownershipを独立に検証する�
 width 1、10、20、100、unique/repeated/primed/cold、SV/JSONを測る。loader単体の改善だけでは
 採用せず、GraphQL end-to-endを主指標にする。
 
-## 9. 最初の実装範囲
+## 9. ここまでの経緯
 
-最初の変更ではcontinuationそのものを導入せず、query blockのop loopから
-「1 opを同期resolve/completionしてnative outputへ格納する」処理を共通helperへ切り出す。
-sync laneの出力と性能を保ち、async側がplain value/ready Ticketに同じhelperを使える境界を
-作る。
+async高速化では、最初にPromise処理そのものとGraphQL executor内部のどちらが支配的かを
+切り分けた。Promise::XSをTicketへ置き換える案、TicketをXS実装してPerl callback層をなくす案、
+ready値を`AWAIT_IS_READY`/`AWAIT_GET`で同期取得する案を試した。
 
-この共通化だけで性能が下がる場合は採用せず、inline可能なstatic helperまたはmacroへ調整する。
-意味論を変えずに共通境界を確立してから、pending検出時の昇格を次の変更で実装する。
+TicketはDataLoader内部のready cache entryには有効だった。一方、GraphQL request全体では
+Ticket用のsubscription、settlement、Promise adapterと、既存Promise::XS経路の二系統を維持
+する必要がある。Promise/Ticketの種類を変えるだけでは、async executorがrequest開始時から
+作るexec state、frame、pending entry、callback、outcomeを除去できない。このためTicketを
+request全体の非同期表現にする案は、性能差に対して実装・保守コストが大きいと判断した。
+
+その後の計測で、同期resolverを含むasync runtimeも最初からasync executorへ入ることが主要な
+固定費だと分かった。asyncとsyncの経路が異なる理由は、resolverがpending値を返した後も
+source、path、出力先、次のopを保持する必要があるためである。ただし、その状態保持は実際に
+pending値が現れるまで必要ない。ここから「async executorを軽量化する」より「sync executorを
+開始点にして、pending時だけcontinuationへ昇格する」方針へ移った。
+
+他言語処理系との比較では、この方式をHoutou固有の発明とは扱わないことにした。C#の完了済み
+awaitable、Kotlinの`COROUTINE_SUSPENDED`、Rustの`Poll::Ready/Pending`、LLVM coroutineの
+frame loweringと同型である。GraphQL固有の点はresolver call siteがsuspend候補だとcompile時に
+分かっても、そのresolverがplain valueとPromiseのどちらを返すかはrequest時まで確定しない
+ことである。したがってresolver call siteを動的なpromotion境界にする。
+
+## 10. 現在までの実装
+
+`perf/sync-first-continuation`ブランチでは、次の順番で実装した。
+
+1. 本文書でsync-firstの状態遷移、ownership、段階移行を定義した。
+2. fast lane stateへ`fast_lane_can_suspend`と`fast_lane_suspended_sv`を追加した。
+3. Promiseを検出したresolverは、suspensionが許可されたlaneではPromiseの所有権をsuspension
+   channelへ移し、block loopを安全にunwindできるようにした。strict sync laneのcroak動作は
+   維持した。
+4. settled値を受け取りresolverを再実行せずcompletionだけを行う
+   `gql_runtime_vm_complete_resolved_current_fast_sv`を抽出した。
+5. SV出力、rootが単一field、runtime directiveなし、nullableなgeneric leafという限定条件で
+   root continuationを実装した。
+6. Promiseが呼出し中にsettleする場合は完成したresponseを同期的に回収し、本当にpendingなら
+   Promise callbackが保存したblock/op/slotからcompletionを再開するようにした。
+7. resolve/reject callback、runtime、program、schema、root、context、prepared variablesの
+   ownershipをmagic destructorへ集約した。
+
+対応するコミットは次のとおり。
+
+- `7a05e7f` `Document sync-first execution design`
+- `a891f37` `Add fast lane suspension channel`
+- `6170274` `Extract fast lane resume boundary`
+- `4ca673a` `Resume pending root leaf fields`
+- `94ce5ec` `Benchmark pre-resolved async leaves`
+
+追加した回帰テストは、pre-resolved Promiseが同期responseになること、pending Promiseが
+settle後にresponseへなること、suspend前とresume後を通じてresolverが一度しか呼ばれないことを
+確認する。現時点で全486テストとXS ownership lintが通る。
+
+## 11. 試行から分かった境界条件
+
+root fieldが1個で`child_block_index == -1`という条件だけでは、leaf continuationとして安全では
+ない。listはchild blockを持たなくても、各itemがPromiseの場合やabstract item completionを
+持つ場合がある。最初の試作でlistまで同じ経路へ入れたところ、Star Wars/DataLoaderとunion
+searchのitemがnullになり、batchも起動しなかった。
+
+この退行は、root resolverのPromiseがsettleしたことと、その戻り値のlist全体が同期completion
+可能であることを同一視したために起きた。list内のpending itemは新しいsuspension pointであり、
+root continuationからitem continuationまたは既存async schedulerへ部分昇格する必要がある。
+現在は`complete_code == GQL_VM_COMPLETE_GENERIC`へ限定してlistを従来経路へfallbackしている。
+
+もう一つの境界はpre-resolved Promiseである。Promise::XSの`then`はcallbackをその場で実行しても
+derived Promiseを返す。そのderived Promiseをそのままpublic APIへ返すと、従来はHashRefだった
+pre-resolved requestがPromiseへ変わる。callback pairと共有する小さなsettlement stateを使い、
+`then`登録中にresponseまで完成した場合はderived Promiseを破棄して同期responseを返すことで
+API互換を維持した。
+
+## 12. 現在の性能
+
+既存の`async_preresolved`はrootがobject listなので、現在の限定continuationには入らない。
+計測値は次のとおりで、変更前とほぼ同等である。
+
+```text
+async items SV   27.9k/s
+async SV         64.5k/s
+async JSON       66.0k/s
+sync JSON        96.8k/s
+sync SV         101.2k/s
+```
+
+root leaf専用の`async_preresolved_leaf` benchmarkを追加した。変数を使うresolverが
+pre-resolved Promise::XSを返すcaseである。
+
+```text
+async leaf SV   274.9k/s
+sync leaf SV    414.4k/s
+```
+
+現在のasync leafはsync leafの約66%である。汎用async exec stateを作らずに正しく
+suspend/resumeできる足場はできたが、sync同等という目標には未到達である。残る固定費の候補は
+Promise::XSの`then`、resolve/reject CV、continuation contextと所有SVの割当である。
+
+## 13. 次に進める順序
+
+1. resolve/rejectが別々に保持しているroot continuation contextを共有し、所有SVのrefcount操作と
+   heap allocationを減らす。
+2. leaf benchmarkをallocation profileと合わせて測り、Promise::XS自体の下限とHoutou側の固定費を
+   分離する。
+3. settled root listを走査し、全itemがplainならfast completion、pending itemが1個でもあれば
+   item continuationまたは既存async schedulerへ部分昇格する境界を作る。
+4. `async_preresolved`のroot object listへ適用し、sync比と旧async比を測る。
+5. nullable leaf/listでownershipが固まってからnon-null propagation、runtime directives、
+   object child block、複数root siblingへ対象を広げる。
+6. Promise callback内でcompletionを再帰実行する形はroot単一fieldに限定し、複数siblingへ
+   広げる段階ではready queueへ統合してreentrancyを防ぐ。
+
+旧async executorはfallbackとして残す。対象shapeが明示的に判定でき、correctnessと性能の両方を
+満たした範囲だけをsync-first経路へ移す。

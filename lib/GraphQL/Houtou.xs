@@ -1605,7 +1605,19 @@ gql_runtime_vm_block_frame_finalize_sv(
    *       handle when pendings remain.
    *   2 - native-first hot path: native outcome on sync completion (no
    *       materialize/reconvert round trip), but still a promise when
-   *       pendings remain so the existing then-wrap machinery applies. */
+   *       pendings remain so the existing then-wrap machinery applies.
+   *   3 - Phase 8: never build a Promise::XS deferred/promise pair, even for
+   *       the response frame (which modes 0-2 all force one for via
+   *       resolve_response). The caller drives completion itself (a C-level
+   *       on_stall loop) instead of registering then() on a returned
+   *       promise, and polls exec_state->completed_response_sv - the same
+   *       stash gql_runtime_vm_async_scheduler_resolve_frame's "no deferred
+   *       was ever created" branch already writes to when the response
+   *       settles without ever needing a promise. The raw block-frame
+   *       handle returned when pendings remain is not meant to be used by
+   *       the caller (arm_frame/enqueue below are what matter); it is
+   *       returned only because the same branch already builds it for mode
+   *       1. */
   if (!frame) {
     return newSVsv(&PL_sv_undef);
   }
@@ -1642,7 +1654,9 @@ gql_runtime_vm_block_frame_finalize_sv(
     SV *ret_sv;
     U8 saved_draining = exec_state->async_scheduler_draining;
     U8 resolve_response = frame->deferred_resolves_response ? 1 : 0;
-    U8 return_promise = (resolve_response || return_pending_handle != 1) ? 1 : 0;
+    U8 return_promise = (return_pending_handle == 3)
+      ? 0
+      : ((resolve_response || return_pending_handle != 1) ? 1 : 0);
     U8 armed = 0;
 
     /* Response frame at the top level: try to complete the request inside

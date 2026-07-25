@@ -505,7 +505,7 @@ static SV *gql_runtime_vm_slot_resolver_sv(const gql_runtime_vm_native_runtime_t
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
 static void gql_runtime_vm_execute_block_fast_multi_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source, gql_runtime_vm_path_frame_t *parent_path_frame, SV **resolved_values, gql_runtime_vm_block_frame_t **frame_out, SV **state_sv_out, U8 *self_nulled_out);
 static gql_runtime_vm_exec_state_handle_t *gql_runtime_vm_ensure_fast_lane_state_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV **state_sv_out);
-static SV *gql_runtime_vm_execute_list_item_child_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV item_block_index, SV *item, gql_runtime_vm_path_frame_t *item_path_frame);
+static SV *gql_runtime_vm_execute_safe_child_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV item_block_index, SV *item, gql_runtime_vm_path_frame_t *item_path_frame);
 static SV *gql_runtime_vm_try_execute_fast_root_continuation_sv(
   pTHX_ SV *runtime_sv, SV *program_sv,
   gql_runtime_vm_native_runtime_t *runtime,
@@ -8720,41 +8720,6 @@ gql_runtime_vm_dispatch_index_from_opcode(IV opcode_code)
   }
 }
 
-static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
-
-static SV *
-gql_runtime_vm_execute_child_block_fast_sv(
-  pTHX_
-  gql_runtime_vm_exec_state_t *state,
-  IV block_index,
-  SV *source
-)
-{
-  gql_runtime_vm_path_frame_t *saved_path_frame = state ? state->path_frame : NULL;
-  int saved_path_is_current_field = state ? state->path_frame_is_current_field : 0;
-  gql_runtime_vm_path_frame_t *field_path;
-  SV *ret;
-
-  if (!state) {
-    return newSVsv(&PL_sv_undef);
-  }
-
-  if (state->path_frame_is_current_field) {
-    field_path = NULL;
-  } else {
-    field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, state->slot);
-    state->path_frame = field_path;
-    state->path_frame_is_current_field = 1;
-  }
-  ret = gql_runtime_vm_execute_block_fast_sv(aTHX_ state, block_index, source);
-  state->path_frame = saved_path_frame;
-  state->path_frame_is_current_field = saved_path_is_current_field;
-  if (field_path) {
-    gql_runtime_vm_path_frame_decref(field_path);
-  }
-  return ret;
-}
-
 /*
  * Shared abstract dispatch for the sync fast lanes: resolve the concrete
  * runtime type for `value` (tag resolver / resolve_type / possible types)
@@ -8976,7 +8941,23 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
   if (child_block_index < 0) {
     return newSVsv(&PL_sv_undef);
   }
-  return gql_runtime_vm_execute_child_block_fast_sv(aTHX_ state, child_block_index, value);
+  {
+    /* Phase 6: field-path bookkeeping (reuse state->path_frame if the
+     * caller already made it the current field's path, else build one),
+     * passed explicitly to the sibling-preserving safe wrapper instead of
+     * threading it implicitly through state the way the old (now removed)
+     * abort-on-suspend child-block dispatcher used to. */
+    gql_runtime_vm_path_frame_t *field_path = state->path_frame_is_current_field
+      ? state->path_frame
+      : gql_runtime_vm_new_result_path_frame(aTHX_ state->path_frame, state->slot);
+    SV *ret = gql_runtime_vm_execute_safe_child_block_fast_sv(
+      aTHX_ state, child_block_index, value, field_path
+    );
+    if (!state->path_frame_is_current_field) {
+      gql_runtime_vm_path_frame_decref(field_path);
+    }
+    return ret;
+  }
 }
 
 static SV *
@@ -9007,7 +8988,20 @@ gql_runtime_vm_complete_current_object_fast_sv(pTHX_ gql_runtime_vm_exec_state_t
     if (!value || !SvOK(value)) {
       return newSVsv(&PL_sv_undef);
     }
-    return gql_runtime_vm_execute_child_block_fast_sv(aTHX_ state, op->child_block_index, value);
+    {
+      /* Phase 6: see the matching comment in
+       * gql_runtime_vm_complete_current_abstract_fast_sv. */
+      gql_runtime_vm_path_frame_t *field_path = state->path_frame_is_current_field
+        ? state->path_frame
+        : gql_runtime_vm_new_result_path_frame(aTHX_ state->path_frame, state->slot);
+      SV *ret = gql_runtime_vm_execute_safe_child_block_fast_sv(
+        aTHX_ state, op->child_block_index, value, field_path
+      );
+      if (!state->path_frame_is_current_field) {
+        gql_runtime_vm_path_frame_decref(field_path);
+      }
+      return ret;
+    }
   }
   return gql_runtime_vm_clone_value_sv(aTHX_ value);
 }
@@ -9034,23 +9028,29 @@ gql_runtime_vm_fast_lane_record_error_for_path(
   gql_runtime_vm_outcome_decref(aTHX_ outcome);
 }
 
-/* Phase 5: drop-in replacement for gql_runtime_vm_execute_block_fast_sv at
- * the object/abstract list-item call site. Returns the exact same shapes
- * that function does - NULL for a definite non-null violation with
- * nothing async in flight (the caller's existing item_had_error handling
- * via state->null_carries_error is unchanged), or an owned plain hashref
- * SV when every field in the item's own child block resolved
- * synchronously - PLUS one new shape gql_runtime_vm_execute_block_fast_sv
- * could never produce: a genuine Promise::XS when a field inside the
- * item's own child block suspended (or a non-null violation happened
- * after an earlier sibling in the SAME item already suspended - the
- * frame's self_nulled flag carries that through to settle time). The
- * caller's existing per-item loop already treats any such promise
- * correctly (item_non_null's own null check is false for a blessed
- * reference, so it does not fire early), so no other change is needed
- * there beyond swapping the call. */
+/* Phase 5/6: drop-in replacement for both gql_runtime_vm_execute_block_fast_sv
+ * (at the object/abstract list-item call site) and
+ * gql_runtime_vm_execute_child_block_fast_sv (at the plain OBJECT/ABSTRACT
+ * field child-block call sites, Phase 6) - the two functions it replaces
+ * are themselves identical in contract (the latter is a thin path-frame
+ * wrapper around the former), so one safe implementation covers both.
+ * Returns the exact same shapes those functions do - NULL for a definite
+ * non-null violation with nothing async in flight (the caller's existing
+ * item_had_error/null handling is unchanged), or an owned plain hashref SV
+ * when every field in the child block resolved synchronously - PLUS one
+ * new shape those functions could never produce: a genuine Promise::XS
+ * when a field inside the child block suspended (or a non-null violation
+ * happened after an earlier sibling in the SAME block already suspended -
+ * the frame's self_nulled flag carries that through to settle time). Every
+ * existing caller already treats such a promise correctly (a non-null
+ * check against a blessed reference is false, so it does not fire early),
+ * so no other change is needed beyond swapping the call - this is exactly
+ * how Phase 6 reuses this same function one or more levels deeper than
+ * Phase 5's list-item call site, recursively, for as many nested object/
+ * abstract fields as gql_runtime_vm_fast_lane_list_item_block_is_eligible
+ * allows. */
 static SV *
-gql_runtime_vm_execute_list_item_child_block_fast_sv(
+gql_runtime_vm_execute_safe_child_block_fast_sv(
   pTHX_
   gql_runtime_vm_exec_state_t *state,
   IV item_block_index,
@@ -9247,7 +9247,7 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
         completed = newSVsv(&PL_sv_undef);
         item_had_error = 1;
       } else if (item_block_index >= 0) {
-        completed = gql_runtime_vm_execute_list_item_child_block_fast_sv(
+        completed = gql_runtime_vm_execute_safe_child_block_fast_sv(
           aTHX_ state, item_block_index, item, item_path
         );
         if (!completed) {
@@ -9359,7 +9359,7 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
     }
     if (base_path) {
       /* Phase 5: an object/abstract item may have come back as a genuine
-       * Promise::XS (gql_runtime_vm_execute_list_item_child_block_fast_sv,
+       * Promise::XS (gql_runtime_vm_execute_safe_child_block_fast_sv,
        * above) instead of an already-final value. Every item that reached
        * this point already did its own exactly-once-safe work (this is
        * NOT the raw, not-yet-item-completed array the leaf pre-scan above
@@ -10076,8 +10076,8 @@ gql_runtime_vm_execute_block_fast_multi_sv(
       }
       /* The root caller defers building sched_state_sv to its own tail
        * (only field-level suspension ever needed it there, and only after
-       * the loop). An item child block wrapper
-       * (gql_runtime_vm_execute_list_item_child_block_fast_sv) instead
+       * the loop). A child block wrapper
+       * (gql_runtime_vm_execute_safe_child_block_fast_sv) instead
        * finalizes its frame immediately, right after this function
        * returns, so it needs a real state_sv NOW - ensuring it here is a
        * no-op cost-wise for the root case (the frame is already being
@@ -10183,10 +10183,60 @@ gql_runtime_vm_execute_block_fast_multi_sv(
       continue;
     }
 
+    if (completed && SvOK(completed) && gql_runtime_vm_sv_is_promise_xs(aTHX_ completed)) {
+      /* Phase 6: this op's own COMPLETION (not its resolver) produced a
+       * genuine Promise::XS - an OBJECT/ABSTRACT field whose own child
+       * block suspended (gql_runtime_vm_execute_safe_child_block_fast_sv),
+       * discovered only after gql_runtime_vm_execute_current_op_fast_sv
+       * already returned, unlike fast_lane_suspended_sv (set before
+       * completion ever runs, for a resolver that itself returned a
+       * pending value). Because gql_runtime_vm_block_frame_finalize_sv's
+       * mode 2 always materializes the settled child frame into a plain,
+       * fully-completed Perl value (see its own doc comment), this promise
+       * needs no re-completion at settle time - GENERIC_VALUE_SV (store
+       * as-is) is correct here regardless of the field's own leaf kind,
+       * unlike the field-level fast_lane_suspended_sv case just above. */
+      if (error_sv) {
+        SvREFCNT_dec(error_sv);
+        error_sv = NULL;
+      }
+      if (!frame) {
+        frame = gql_runtime_vm_new_block_frame_struct(aTHX);
+      }
+      /* This frame's own finalize (in gql_runtime_vm_execute_safe_child_block_fast_sv,
+       * for the item/field this block belongs to) runs before returning to
+       * whatever caller ultimately needs state_sv - without ensuring it
+       * here, finalize would be handed a NULL state_sv and silently take
+       * its legacy no-exec_state fallback path instead of the real arm/
+       * drain machinery, leaking this frame (its own creation refcount is
+       * never released because arm_frame - and the settle callback's
+       * eventual resolve_frame call - never run on it). */
+      gql_runtime_vm_ensure_fast_lane_state_sv(aTHX_ state, &sched_state_sv);
+      gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
+        aTHX_ frame, slot->result_name, slot->result_name_len, 1,
+        completed, GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV, field_path,
+        block_index, op->slot_index, i
+      );
+      SvREFCNT_dec(completed);
+      gql_runtime_vm_path_frame_decref(field_path);
+      continue;
+    }
+
     if (error_sv) {
       gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, error_sv, field_path);
       SvREFCNT_dec(error_sv);
       completed = completed ? completed : newSVsv(&PL_sv_undef);
+      /* The null above already carries this field's own error (a coercion
+       * or resolver error, not a non-null violation) - matching
+       * gql_runtime_vm_execute_block_fast_sv's own error_outcome handling.
+       * Without this, the non-null check just below would record a SECOND,
+       * redundant "Cannot return null" error on top of the real one. This
+       * was dead code for the root block (root ops are never non-null per
+       * the eligibility guard) until Phase 5/6 made it live for item/
+       * object child blocks - caught by t/50_nonnull_propagation.t once a
+       * nested (non-list) object field's own coercion failure became
+       * reachable through gql_runtime_vm_execute_safe_child_block_fast_sv. */
+      state->null_carries_error = 1;
     }
 
     /* Non-Null propagation (spec 6.4.4): dead code for the root block (the
@@ -10438,31 +10488,44 @@ static XS(gql_runtime_vm_xs_fast_root_continuation_reject_callback)
   XSRETURN(1);
 }
 
-/* Phase 5 eligibility: an object/abstract list item's own child block must
- * itself be a "flat" block, matching the same restrictions the root loop
- * already applies to root ops (no runtime directives, stable bundle/
- * native_program op indices) - except non-null (return_type_kind_code ==
- * 8) IS allowed here, since gql_runtime_vm_execute_block_fast_multi_sv
- * handles that correctly (unlike the root loop, where it stays dead code).
- * A nested OBJECT/ABSTRACT field (the item has a field that is itself
- * another object) still goes through the exactly-once-unsafe
- * gql_runtime_vm_execute_child_block_fast_sv, so it is intentionally
- * excluded from this phase rather than risked - deeper object nesting is
- * future work. A nested LIST field is allowed, but only if it is itself
- * plain-leaf (no child block/abstract dispatch of its own), since nested
- * list completion reuses this same now-safe machinery regardless of
- * depth, but validating ITS OWN possible item shapes recursively is out
- * of scope for this phase. */
+/* Phase 5/6 eligibility: an object/abstract list item's own child block
+ * (and, recursively, any further object/abstract field nested inside it -
+ * Phase 6) must itself be a "flat-or-nested-eligible" block, matching the
+ * same restrictions the root loop already applies to root ops (no runtime
+ * directives, stable bundle/native_program op indices) - except non-null
+ * (return_type_kind_code == 8) IS allowed here, since
+ * gql_runtime_vm_execute_block_fast_multi_sv handles that correctly
+ * (unlike the root loop, where it stays dead code). A nested OBJECT/
+ * ABSTRACT field now recurses into ITS OWN child block(s) via this same
+ * function, since gql_runtime_vm_execute_safe_child_block_fast_sv (Phase 6)
+ * is exactly-once-safe at any depth - only a single (non-list) root
+ * object field (`{ user { name } }`) stays out of scope, that being a
+ * different eligibility site entirely (the root op loop below, unchanged).
+ *
+ * depth is a purely defensive recursion-depth guard, not a correctness
+ * requirement: compiled blocks mirror the query document's (finite,
+ * validation-guaranteed acyclic) selection-set tree, not the schema's type
+ * graph, so a self-referential schema type (e.g. Character.friends:
+ * [Character]) cannot make this recursion non-terminating - only a
+ * pathologically deep query literal could, and GQL_VM_FAST_LANE_MAX_NESTING_DEPTH
+ * exists solely to fail closed (fall back) rather than risk a stack
+ * overflow on such an input. */
+#define GQL_VM_FAST_LANE_MAX_NESTING_DEPTH 16
+
 static int
 gql_runtime_vm_fast_lane_list_item_block_is_eligible(
   gql_runtime_vm_native_bundle_t *bundle,
   gql_runtime_vm_native_program_t *program,
-  IV block_index
+  IV block_index,
+  IV depth
 )
 {
   gql_runtime_vm_native_block_t *block;
   IV i;
 
+  if (depth > GQL_VM_FAST_LANE_MAX_NESTING_DEPTH) {
+    return 0;
+  }
   if (block_index < 0 || block_index >= bundle->block_count) {
     return 0;
   }
@@ -10477,11 +10540,27 @@ gql_runtime_vm_fast_lane_list_item_block_is_eligible(
       return 0;
     }
     if ((op->complete_code != GQL_VM_COMPLETE_GENERIC
-         && op->complete_code != GQL_VM_COMPLETE_LIST)
-        || op->has_runtime_directives || op->runtime_directives_sv
-        || op->child_block_index >= 0
-        || op->abstract_child_count > 0) {
+         && op->complete_code != GQL_VM_COMPLETE_LIST
+         && op->complete_code != GQL_VM_COMPLETE_OBJECT
+         && op->complete_code != GQL_VM_COMPLETE_ABSTRACT)
+        || op->has_runtime_directives || op->runtime_directives_sv) {
       return 0;
+    }
+    if (op->child_block_index >= 0
+        && !gql_runtime_vm_fast_lane_list_item_block_is_eligible(
+             bundle, program, op->child_block_index, depth + 1
+           )) {
+      return 0;
+    }
+    if (op->abstract_child_count > 0) {
+      IV ai;
+      for (ai = 0; ai < op->abstract_child_count; ai++) {
+        if (!gql_runtime_vm_fast_lane_list_item_block_is_eligible(
+              bundle, program, op->abstract_child_indexes[ai], depth + 1
+            )) {
+          return 0;
+        }
+      }
     }
   }
   return 1;
@@ -10565,7 +10644,7 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
     }
     if (op->complete_code == GQL_VM_COMPLETE_LIST && op->child_block_index >= 0) {
       if (!gql_runtime_vm_fast_lane_list_item_block_is_eligible(
-            bundle, program, op->child_block_index
+            bundle, program, op->child_block_index, 0
           )) {
         return NULL;
       }
@@ -10574,7 +10653,7 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
       IV ai;
       for (ai = 0; ai < op->abstract_child_count; ai++) {
         if (!gql_runtime_vm_fast_lane_list_item_block_is_eligible(
-              bundle, program, op->abstract_child_indexes[ai]
+              bundle, program, op->abstract_child_indexes[ai], 0
             )) {
           return NULL;
         }

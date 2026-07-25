@@ -1484,3 +1484,103 @@ fieldを持つ)を追加し、旧executor(Phase 5導入前)と比較した(5標�
 Phase 5適用前はasync runtimeがLISTの`child_block_index >= 0`
 unconditional ineligibleにより旧executor経由の固定費(-14〜17%)を
 払っていたのが、Phase 5適用後はsync runtimeとほぼ同速になった。
+
+### 14.22 list itemの2階層以上のobject/abstractネストへの拡張(Phase 6)
+
+Phase 5はlist itemの子selection setが「flat」(GENERIC/plain leaf LIST
+のみ)であることを要求し、item field がさらに object/abstract を持つ場合
+(2階層目のネスト、例: `{ posts { author { name } } }`)はスコープ外だった。
+Phase 6はこの制限を外し、任意の深さのネストへ対応した。
+
+**調査で判明した重要な事実(Phase 5より低リスク)。**
+object/abstract fieldの子selection set実行に使われていた
+`gql_runtime_vm_execute_child_block_fast_sv`は、単にpath_frameの管理を
+した上で`gql_runtime_vm_execute_block_fast_sv`(Phase 5がlist item向けに
+置き換えた、まさに同じ「1つでもsuspendしたらブロック全体を破棄」関数)
+へ委譲しているだけの薄いラッパーだった。返り値の形も同じ契約のため、
+Phase 5で作った安全なラッパー(`gql_runtime_vm_execute_list_item_child_block_fast_sv`、
+Phase 6で`gql_runtime_vm_execute_safe_child_block_fast_sv`へ改名)を
+そのまま使い回せた。また、`gql_runtime_vm_complete_current_object_fast_sv`
+/`_abstract_fast_sv`(このラッパーの唯一の呼び出し元)は、Phase 5時点では
+`fast_lane_can_suspend == 1`の下で到達不可能(root自身のeligibility guard
+とPhase 5のeligibility関数がどちらも`complete_code == OBJECT/ABSTRACT`を
+無条件に弾いていたため)だったので、この呼び出し箇所を置き換える変更は
+eligibility guardを緩和するまでは副作用ゼロだった。循環スキーマ
+(`Character.friends: [Character]`等)による無限再帰の心配も、block が
+スキーマの型グラフではなくクエリdocumentのselection setツリーごとに
+生成される(循環クエリはvalidationで既に弾かれる)ため杞憂と確認できた。
+
+**実装。**
+1. `gql_runtime_vm_execute_list_item_child_block_fast_sv`を
+   `gql_runtime_vm_execute_safe_child_block_fast_sv`へ改名し、
+   `complete_current_object_fast_sv`/`_abstract_fast_sv`の2箇所の
+   呼び出しをこれに置き換え(元の`gql_runtime_vm_execute_child_block_fast_sv`
+   は不要になり削除)。
+2. `gql_runtime_vm_fast_lane_list_item_block_is_eligible`に`depth`引数を
+   追加し、`op->child_block_index`/`op->abstract_child_indexes[]`を
+   見つけたら自分自身を再帰呼び出しするよう変更(`GQL_VM_FAST_LANE_MAX_NESTING_DEPTH`
+   =16の防御的な再帰深さ上限付き、正しさのためではなくスタック安全の
+   ため)。
+
+**実装中に発見・修正した3つのバグ(いずれもテストまたは手動検証で検出)。**
+
+1. 一般化した`gql_runtime_vm_execute_block_fast_multi_sv`のerror_sv処理が
+   `state->null_carries_error`を一度もセットしていなかった(参照実装には
+   ある)。root blockでは non-null が dead code だったため無害だったが、
+   Phase 5/6でitem/object child blockのnon-nullがliveになったことで、
+   coercion失敗した非null fieldが「coercionエラー」と「non-null違反」の
+   二重エラーを出す形で表面化した。t/50_nonnull_propagation.tの既存テスト
+   が直ちに検出。
+2. object/abstract field自身の completion(resolverではなく)が
+   本物の`Promise::XS`を生成するケース(item内のnested fieldが
+   suspendした場合)を、`execute_block_fast_multi_sv`の per-op ループが
+   検出する手段がなかった(既存の3チャンネルはどれもこのケースを
+   想定していなかった)。手動検証で、settle前の生のPromise::XSオブジェクト
+   がそのままレスポンスに漏れる形で発覚。`GENERIC_VALUE_SV`
+   (再completion不要、mode 2のfinalizeが既に最終値へmaterialize済み)
+   として新しいpending entryを push するよう修正。
+3. 上記の修正が`gql_runtime_vm_ensure_fast_lane_state_sv`の呼び出しを
+   忘れていたため、`state_sv`がNULLのままfinalizeへ渡り、
+   `block_frame_finalize_sv`が実handleを使う正しい経路ではなく
+   legacyのno-exec_stateフォールバック経路を静かに通ってしまい、
+   item1つにつきblock_frame_tが1つリークするバグを埋め込んだ
+   (どのテストも検出せず、`gql_runtime_vm_new_block_frame_struct`/
+   `gql_runtime_vm_free_block_frame`/`arm_frame`への一時的なfprintf
+   トレースで発見)。
+
+**正しさの検証。** t/39_fast_lane_promise_fallback.tへ6subtest追加:
+全同期2階層ネスト、item自身のsiblingが2階層下のnested fieldのsuspendで
+二重呼び出しされないこと(呼び出し回数で確認)、3階層ネスト(2階層固定
+実装ではなく真の再帰であることの確認)、nested field自身のnon-null違反が
+そのfieldのみをnullにしitem levelのsiblingは無傷であること、
+abstract(union)がネストの途中に混じるケース、再帰深さ上限を1段超えた
+クエリが安全にfallbackすること。t/54_frame_leak_regression.tへ
+200回(item1つあたり3 frame: root/item/nested field)のリークストレスを
+追加。全498テスト、49ファイル個別実行・`PERL_HASH_SEED`5点でのASanが
+クリーン。
+
+**計測。** `benchmark_async_nested_object_list_item_field`(新規)を
+追加し、旧executor(Phase 6導入前)と比較した(5標本中央値):
+
+| width | 旧executor(fallback) | Phase 6 |
+|---|---:|---:|
+| 2 | 60,982 req/s (100%) | 56,627 req/s (92.9%) |
+| 5 | 34,553 req/s (100%) | 31,355 req/s (90.7%) |
+| 10 | 20,286 req/s (100%) | 18,097 req/s (89.2%) |
+
+Phase 3/4/5と同型の結末で、genuinely pendingなfieldが実際に発生する
+ケースでの明確な改善は確認できなかった(誤差を超えたわずかな悪化さえ
+見られるが、旧経路も新経路も結局同じ実handle+two-layer機構を構築する
+ため大差ないと解釈)。一方、DataLoader/Promiseを一切使わない
+全同期2階層ネストのケースでは、Phase 4/5と同様の改善を確認した
+(単一root object-list field・5要素・2階層ネスト全同期、`--case`に
+含めない手動ベンチマーク):
+
+| | 旧executor(fallback) | Phase 6 |
+|---|---:|---:|
+| sync runtime | 122,528〜126,118 req/s (100%) | 122,528〜125,431 req/s (100%) |
+| async runtime | 97,740 req/s (77.5〜80%) | 123,098〜127,077 req/s (100〜101%) |
+
+Phase 6適用前はasync runtimeが2階層ネストのobject/abstract fieldにより
+旧executor経由の固定費(-23%)を払っていたのが、Phase 6適用後はsync
+runtimeとほぼ同速になった。

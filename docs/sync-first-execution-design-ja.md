@@ -380,6 +380,45 @@ settle後にresponseへなること、suspend前とresume後を通じてresolver
     と同型)一方、全同期object listのケースではasync runtimeの固定費
     (-14〜17%)が解消しsync runtimeとほぼ同速になった。
 
+15. 本節item 14でスコープ外とした「item fieldがさらにobject/abstractを
+    持つ場合(2階層以上のネスト)」への対応を実装した(詳細は
+    `docs/future-performance-investigation-ja.md`§14.22)。調査の結果、
+    object/abstract fieldの子selection set実行に使われていた
+    `gql_runtime_vm_execute_child_block_fast_sv`は、item 14で作った
+    安全なラッパー(`gql_runtime_vm_execute_list_item_child_block_fast_sv`、
+    本節item 15で`gql_runtime_vm_execute_safe_child_block_fast_sv`へ
+    改名)と全く同じ契約の薄いラッパーだったため、そのまま置き換えられた。
+    かつ、この置き換え先の呼び出し元は当時のeligibility guardの下では
+    到達不可能だったため、eligibility guardを緩和するまでは副作用ゼロの
+    変更として先に着手できた。`gql_runtime_vm_fast_lane_list_item_block_is_eligible`
+    を`depth`引数付きで自分自身を再帰呼び出しする形へ変更し
+    (`GQL_VM_FAST_LANE_MAX_NESTING_DEPTH`=16の防御的な再帰深さ上限付き
+    — 循環スキーマではなくスタック安全のため。blockはスキーマの型
+    グラフでなくクエリdocumentのselection setツリーごとに生成されるため
+    循環の心配は無い)、任意の深さのnestingへ対応した。
+
+    実装過程で3件のバグを見つけて修正した: (1) 一般化したループの
+    error_sv処理が`state->null_carries_error`を一度もセットしていなかった
+    (item 14までnon-nullがdead codeだったため無害だったが、item/object
+    child blockでliveになったことで二重エラーとして表面化、既存テストが
+    検出)、(2) object/abstract field自身のcompletionが本物の
+    `Promise::XS`を生成するケースを検出する手段が per-op ループに
+    無かった(手動検証で生のPromise::XSオブジェクトがレスポンスに漏れる
+    形で発覚、新しいpending entryチャンネルとして追加)、(3) その修正が
+    `gql_runtime_vm_ensure_fast_lane_state_sv`の呼び出しを忘れており、
+    block_frame_tがitemごとにリークするバグ(どのテストも検出せず、
+    一時的なfprintfトレースで発見)。
+
+    正しさは全同期2階層ネスト・2階層下のsuspendでitem自身のsiblingが
+    二重呼び出しされないこと・真の3階層再帰・nested fieldのnon-null違反
+    がそのfieldのみをnullにすること・abstractの途中混在・再帰深さ上限
+    超過時の安全なfallback、で確認し、全498テスト、200回(item1つあたり
+    3 frame)のリークストレス、49ファイル個別実行・ASanがクリーン。
+    genuinely pendingなfieldが実際に発生するケースでの性能改善は確認
+    できなかった(誤差程度、Phase 3/4/14と同型)一方、全同期2階層ネスト
+    のケースではasync runtimeの固定費(-23%)が解消しsync runtimeと
+    ほぼ同速になった。
+
 ## 11. 試行から分かった境界条件
 
 root fieldが1個で`child_block_index == -1`という条件だけでは、leaf continuationとして安全では
@@ -447,15 +486,16 @@ fulfilled Ticketの認識はsuspension channelにもderived objectにも触れ�
    item continuationまたは既存async schedulerへ部分昇格する境界を作る。~~ **plain leaf list
    (object/abstract item除く)に限定して実施済み**(本節item 13)。
 4. ~~`async_preresolved`のroot object listへ適用し、sync比と旧async比を測る。~~
-   **item自身のchild blockがflat(runtime directive無し、2階層目の
-   object/abstractネスト無し)なものに限定して実施済み**(本節item 14)。
-   ネストしたobject/abstract fieldを持つitemは引き続きfallback。
+   **item自身のchild blockがflat(runtime directive無し)なものに限定して
+   実施済み**(本節item 14)。**item fieldが持つ2階層以上の
+   object/abstractネストも本節item 15で対応済み**(任意の深さ、防御的な
+   再帰深さ上限16付き)。
 5. ~~nullable leaf/listでownershipが固まってからnon-null propagation、runtime directives、
    object child block、複数root siblingへ対象を広げる。~~ **複数root siblingは実施済み**
-   (leafに限定、本節item 11)。**非rootのnon-null propagationはitem自身のfieldに限り
-   item 14で実施済み**(item自身がさらにobject/abstractの場合と、runtime directivesは
-   引き続き未着手、混在時はfallback)。単一(list以外の)root object fieldへの対応も
-   引き続き未着手。
+   (leafに限定、本節item 11)。**非rootのnon-null propagationはitem自身の
+   field(任意の深さ)に限りitem 14/15で実施済み**(runtime directivesは
+   引き続き未着手、混在時はfallback)。単一(list以外の)root object field
+   への対応も引き続き未着手。
 6. ~~Promise callback内でcompletionを再帰実行する形はroot単一fieldに限定し、複数siblingへ
    広げる段階ではready queueへ統合してreentrancyを防ぐ。~~ 実施済み(本節item 10で単独試作、
    item 11で複数sibling実装に組み込んだ形で採用)。

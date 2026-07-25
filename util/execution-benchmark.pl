@@ -906,6 +906,99 @@ sub benchmark_async_object_list_item_field {
   }
 }
 
+sub benchmark_async_nested_object_list_item_field {
+  require GraphQL::Houtou::DataLoader;
+
+  # Phase 6: root has a single list field whose items are objects, and
+  # each item's own "author" field is ITSELF another object whose own
+  # child block has one sync field and one DataLoader-Ticket-pending
+  # field. Before Phase 6 any object/abstract field nested inside a list
+  # item's own child block forced the whole list field back to the
+  # generic async executor; this benchmark exercises the new recursive
+  # per-item/per-nested-field wrapper
+  # (gql_runtime_vm_execute_safe_child_block_fast_sv, reused one level
+  # deeper) added for it.
+  for my $width (2, 5, 10) {
+    my $query = 'query q($ids: [String]) { posts(ids: $ids) { title author { name } } }';
+    my $vars = { ids => [ map { "id$_" } 1 .. $width ] };
+
+    my $build_schema = sub {
+      my ($author_name_resolve) = @_;
+      my $Author = GraphQL::Houtou::Type::Object->new(
+        name => 'Author',
+        fields => {
+          name => { type => $GraphQL::Houtou::Type::Scalar::String, resolve => $author_name_resolve },
+        },
+      );
+      my $Post = GraphQL::Houtou::Type::Object->new(
+        name => 'Post',
+        fields => {
+          title => { type => $GraphQL::Houtou::Type::Scalar::String, resolve => sub { "t:$_[0]{id}" } },
+          author => { type => $Author, resolve => sub { { id => $_[0]{id} } } },
+        },
+      );
+      return GraphQL::Houtou::Schema->new(
+        query => GraphQL::Houtou::Type::Object->new(
+          name => 'Query',
+          fields => {
+            posts => {
+              type => GraphQL::Houtou::Type::List->new(of => $Post),
+              args => {
+                ids => {
+                  type => GraphQL::Houtou::Type::List->new(
+                    of => $GraphQL::Houtou::Type::Scalar::String
+                  ),
+                },
+              },
+              resolve => sub {
+                my (undef, $args) = @_;
+                return [ map { { id => $_ } } @{ $args->{ids} } ];
+              },
+            },
+          },
+        ),
+      );
+    };
+
+    my $sync_rt = $build_schema->(
+      sub { return "sync:$_[0]{id}" }
+    )->build_native_runtime;
+
+    my $pending_loader;
+    my $async_rt = $build_schema->(
+      sub { my ($source, undef, $ctx) = @_; return $pending_loader->load($source->{id}) }
+    )->build_native_runtime(async => 1);
+
+    my %modes = (
+      "houtou_sync_nested_object_list${width}_sv" => sub {
+        return $sync_rt->execute_document($query, variables => $vars);
+      },
+      "houtou_async_nested_object_list${width}_sv" => sub {
+        $pending_loader = GraphQL::Houtou::DataLoader->new(
+          batch => sub { my ($keys) = @_; return [ map { "batched:$_" } @$keys ] },
+        );
+        return maybe_get_promise_xs(
+          $async_rt->execute_document(
+            $query,
+            variables => $vars,
+            on_stall => GraphQL::Houtou::DataLoader->on_stall_for($pending_loader),
+          )
+        );
+      },
+    );
+
+    my $async_result = _normalize_result($modes{"houtou_async_nested_object_list${width}_sv"}->());
+    for my $i (1 .. $width) {
+      die "Result mismatch for async_nested_object_list_item_field/width=$width item $i\n"
+        unless ($async_result->{data}{posts}[$i - 1]{author}{name} // '') eq "batched:id$i";
+    }
+
+    print "\n=== async_nested_object_list_item_field (width=$width) ===\n";
+    print "Query: single root object-list field, $width items each with a nested object field whose own sub-field is DataLoader-Ticket-pending\n";
+    cmpthese($count, \%modes);
+  }
+}
+
 sub _dump {
   require Data::Dumper;
   local $Data::Dumper::Sortkeys = 1;
@@ -1006,3 +1099,5 @@ benchmark_async_leaf_list()
   if $include_async && (!@only || $only{async_leaf_list});
 benchmark_async_object_list_item_field()
   if $include_async && (!@only || $only{async_object_list_item_field});
+benchmark_async_nested_object_list_item_field()
+  if $include_async && (!@only || $only{async_nested_object_list_item_field});

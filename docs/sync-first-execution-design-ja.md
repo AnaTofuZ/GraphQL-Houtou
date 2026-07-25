@@ -419,6 +419,53 @@ settle後にresponseへなること、suspend前とresume後を通じてresolver
     のケースではasync runtimeの固定費(-23%)が解消しsync runtimeと
     ほぼ同速になった。
 
+16. §13(旧稿)item 5に残っていた最後の未着手項目「単一(list以外の)
+    root object fieldへの対応」を実装した(詳細は
+    `docs/future-performance-investigation-ja.md`§14.23)。root op
+    eligibility loopが`complete_code`を`GENERIC`/`LIST`のみに制限して
+    いたのを`OBJECT`/`ABSTRACT`も許可するよう緩和し、子blockを
+    item 15の再帰eligibility関数で検証するだけで済んだ(実行側は
+    item 14/15で既に汎用化済みのため無変更)。
+
+    単一root object fieldが初めてfast lane経由でdeadlock/on_stall放棄
+    シナリオに到達したことで、item 14/15の対応範囲では気づけなかった
+    2つの既存バグが表面化した: (1) fast root continuationのmulti-op
+    pathが返すgenuinely pendingなpromiseに、Perl側driverがdeadlock時に
+    exec_stateの参照循環を断ち切るためのmagicが一度も付与されていな
+    かった(item 13の複数sibling root path導入以来ずっと存在していた
+    欠落)。(2) OBJECT/ABSTRACT fieldの子blockがsuspendした際に返す
+    bridging Promise::XSへ、deadlock cancellationが辿り着けなかった。
+
+    (2)の応急修正(bridging promiseへ子frameの生ポインタをmagicで
+    付与)を入れた直後にベンチマークを取ったところ、item 13〜15とは
+    異なり**明確な退行(-15〜20%)**が確認された。原因は、item 15の
+    「子blockがsuspendしたら必ず新しいPromise::XSを1つ生成する」設計
+    (list item集約向けには合理的)を、list item集約を必要としない
+    単一fieldの文脈でも使ったため、1回のsuspendに2階層分の
+    deferred/promise pairを積み重ねていたこと。汎用executorは元々、
+    生のframe同士を直結する`GQL_VM_PENDING_BLOCK_FRAME_PTR`
+    (`gql_runtime_vm_push_pending_block_frame`)という既存の軽量機構で
+    同じ形を実現しており、Promise::XSを一切生成しない。ユーザーの
+    判断で退行を許容せず、`gql_runtime_vm_execute_safe_child_block_fast_sv`
+    に`want_promise`引数を追加し、list item呼び出し箇所のみPromise::XS
+    生成モードを残し、それ以外の全呼び出し箇所(root含む)を生の
+    block-frame handleモードへ切り替える再設計を同じフェーズ内で実施。
+    これにより(2)の応急修正(magic付与)は不要になり削除した
+    (`GQL_VM_PENDING_BLOCK_FRAME_PTR`は`cancel_frame_tree`が既に
+    正しく辿れるため)。
+
+    再設計の実装中、新チャンネルの`gql_runtime_vm_ensure_fast_lane_state_sv`
+    呼び出しを条件分岐の中だけに置いてしまうitem 15のバグ(3)と全く
+    同型の失敗を再び埋め込み、2階層ネストの初回リクエストで即座に
+    Perlレベルの破損エラーとして検出、fprintfトレースで特定・修正した。
+
+    退行は再設計で完全に解消し(suspendケースは旧executor比100〜101%、
+    退行も改善もなし)、全同期ケースの固定費解消(+21〜24%)は維持
+    された。全500テスト、200回のリークストレス、49ファイル個別実行・
+    ASan(応急修正版・再設計版どちらも)がクリーン。`GQL_VM_PENDING_LIST_PENDING_PTR`
+    (list fieldの複数item集約ハンドル)に対する同種のdeadlock
+    cancellation未対応は、今回の対応範囲外として記録した。
+
 ## 11. 試行から分かった境界条件
 
 root fieldが1個で`child_block_index == -1`という条件だけでは、leaf continuationとして安全では
@@ -494,8 +541,10 @@ fulfilled Ticketの認識はsuspension channelにもderived objectにも触れ�
    object child block、複数root siblingへ対象を広げる。~~ **複数root siblingは実施済み**
    (leafに限定、本節item 11)。**非rootのnon-null propagationはitem自身の
    field(任意の深さ)に限りitem 14/15で実施済み**(runtime directivesは
-   引き続き未着手、混在時はfallback)。単一(list以外の)root object field
-   への対応も引き続き未着手。
+   引き続き未着手、混在時はfallback)。**単一(list以外の)root object field
+   への対応も本節item 16で実施済み**(deadlock cancellationの2つの既存
+   バグを発見・修正し、退行を許容せずPromise::XSブリッジの再設計まで
+   実施した上での完了)。
 6. ~~Promise callback内でcompletionを再帰実行する形はroot単一fieldに限定し、複数siblingへ
    広げる段階ではready queueへ統合してreentrancyを防ぐ。~~ 実施済み(本節item 10で単独試作、
    item 11で複数sibling実装に組み込んだ形で採用)。

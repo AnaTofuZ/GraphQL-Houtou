@@ -1584,3 +1584,122 @@ Phase 3/4/5と同型の結末で、genuinely pendingなfieldが実際に発生�
 Phase 6適用前はasync runtimeが2階層ネストのobject/abstract fieldにより
 旧executor経由の固定費(-23%)を払っていたのが、Phase 6適用後はsync
 runtimeとほぼ同速になった。
+
+### 14.23 単一(list以外の)root object/abstract fieldへの拡張(Phase 7)
+
+§13 item 5に残っていた最後の未着手項目。`gql_runtime_vm_try_execute_fast_root_continuation_sv`
+のroot op eligibility loopは、rootの各opの`complete_code`を
+`GQL_VM_COMPLETE_GENERIC`と`GQL_VM_COMPLETE_LIST`のみに制限しており、
+`{ user { name } }`のような単一のobject root field(complete_code ==
+`GQL_VM_COMPLETE_OBJECT`)やinterface/union root field(`COMPLETE_ABSTRACT`)
+は無条件にfallbackしていた。実行側(`gql_runtime_vm_execute_block_fast_multi_sv`)
+はPhase 5/6で既にOBJECT/ABSTRACT opを汎用的に扱えるようになっていたため、
+eligibility loopの拡張(`GENERIC`/`LIST`に加えて`OBJECT`/`ABSTRACT`を許可し、
+子blockを`gql_runtime_vm_fast_lane_list_item_block_is_eligible`で再帰検証)
+だけで済むと見込んだ。
+
+**発見1: 2つの真正な、既存コードに潜んでいたバグ。** 単一root object field
+が初めてfast lane経由でdeadlock/on_stall放棄シナリオに到達したことで、
+以下2つの、Phase 3〜6では到達不可能だったため誰も気づいていなかったバグが
+表面化した(いずれも`t/54_frame_leak_regression.t`の既存subtest
+`'deadlocked stall releases the pending frames'`の`{ inner { hang } }`
+ケースが直ちに検出):
+
+1. `gql_runtime_vm_try_execute_fast_root_continuation_sv`のmulti-op path
+   が返す、genuinely pendingなpromiseに、`gql_runtime_vm_attach_response_state_magic`
+   が一度も呼ばれていなかった。このmagicはPerl側driverがdeadlocked stall
+   時にexec_stateの参照循環を断ち切るために必須(生成側の
+   `gql_runtime_vm_execute_native_program_auto_impl_sv`だけが呼んでいた)。
+   Phase 3で複数sibling root pathを導入して以来ずっと存在していた欠落で、
+   単一root object fieldの`{ inner { hang } }`という組み合わせで初めて
+   deadlock経路に到達したことで露呈した。
+2. `gql_runtime_vm_cancel_frame_tree`は`GQL_VM_PENDING_BLOCK_FRAME_PTR`
+   payloadの子しか辿れず、OBJECT/ABSTRACT fieldの子blockがPromise::XSで
+   ラップされて返ってくる(§14.22参照)場合、そのPromise::XSがcancel時に
+   子フレームへ辿り着けなかった。応急処置として、bridging promiseに
+   子フレームの生ポインタをmagicで付与する仕組み
+   (`gql_runtime_vm_attach_child_frame_magic`)を追加したが、後述の
+   §14.23の再設計でこの仕組み自体が不要になり削除した。
+
+**発見2: ベンチマークで初の明確な退行。** 修正後、`{ user { name team {
+name } } }`(単一root object field、nested fieldがDataLoader pending)の
+ベンチマークを実施したところ、Phase 3〜6の「genuinely pendingケースでの
+改善なし」という結末とは異なり、**明確な退行(-15〜20%)**が確認された:
+
+| | 旧executor(fallback) | Phase 7(最初の実装) |
+|---|---:|---:|
+| suspendケース | 104,050〜111,004 req/s (100%) | 83,627〜91,330 req/s (79〜82%) |
+| 全同期ケース(async runtime) | 232,411〜235,636 req/s (100%) | 281,040〜286,903 req/s (121〜124%) |
+
+原因を調査した結果、Phase 6の「OBJECT/ABSTRACT fieldの子blockが
+suspendしたら必ず新しいPromise::XSを1つ生成して親に返す」設計
+(list item集約が「Promise形の値」を要求するため合理的だった)が、
+list item集約を必要としない単一fieldの文脈では、1回のsuspendに対し
+2階層分のPromise::XS/deferred pairを積み重ねる無駄なオーバーヘッドに
+なっていたためと判明した。汎用(旧)executorは、`gql_runtime_vm_then_complete_current_sv`
+のコメントが示す通り、ネストしたobject fieldの子blockが持つ子blockが
+再度suspendしても、生のフレーム同士を直接連結する`GQL_VM_PENDING_BLOCK_FRAME_PTR`
+という既存の軽量機構(`gql_runtime_vm_push_pending_block_frame`/
+`gql_runtime_vm_consume_current_result_now`)を使っており、ユーザーの
+resolverが返した実際のpromise/Ticket以外には一切新しいPromise::XS
+オブジェクトを作らない。
+
+**再設計。** ユーザーの判断で、退行を許容せずPhase 7の中でこの根本原因
+まで修正した。`gql_runtime_vm_execute_safe_child_block_fast_sv`に
+`want_promise`引数を追加し、`gql_runtime_vm_block_frame_finalize_sv`の
+モード選択に反映: list item呼び出し箇所(Layer 2集約が本当に
+Promise::XS形の値を必要とする唯一の箇所)は`want_promise=1`
+(mode 2、従来通り)のまま、それ以外の全呼び出し箇所(`complete_current_object_fast_sv`
+/`_abstract_fast_sv`、深さやroot/nestedを問わない全てのplain object/
+abstract field)は`want_promise=0`(mode 1、生のblock-frame handle)に
+変更。`execute_block_fast_multi_sv`の該当チャンネルも、Promise::XS検出
+から`gql_runtime_vm_is_block_frame_value_sv`検出+`gql_runtime_vm_push_pending_block_frame`
+呼び出しへ置き換え、汎用executorの`gql_runtime_vm_consume_current_result_now`
+と全く同じ経路を辿らせた。これにより発見1の(2)で追加した
+`attach_child_frame_magic`機構は不要になり削除した
+(`GQL_VM_PENDING_BLOCK_FRAME_PTR`は`cancel_frame_tree`が既に正しく
+辿れるため)。
+
+**実装中に発見・修正したバグ(再設計版)。** 新チャンネルで
+`gql_runtime_vm_ensure_fast_lane_state_sv`の呼び出しを「settled
+immediately」の条件分岐の中だけに置いてしまい(§14.22のバグ3と全く
+同型の失敗)、child_frameが実際にpending(通常ケース)のときは
+`*state_sv_out`がNULLのまま返る不具合を埋め込んだ。呼び出し元の
+`execute_safe_child_block_fast_sv`がNULLの`state_sv`で`finalize_sv`を
+呼ぶと、legacyのno-exec_stateフォールバック経路(本来使うべき実handle
+の経路ではない)へ静かに迂回してしまい、2階層ネストの初回リクエストで
+即座に`Bizarre copy of ARRAY in subroutine entry`というPerlレベルの
+破損エラーで検出された。`gql_runtime_vm_new_block_frame_struct`/
+`gql_runtime_vm_free_block_frame`/`gql_runtime_vm_async_scheduler_resolve_frame`
+への一時的なfprintfトレース(frame pointerとrefcountを記録)で、
+finalizeが`return_pending_handle=0(legacy)`相当の経路を取っていたこと
+を特定し、`ensure_fast_lane_state_sv`を他の全チャンネルと同様に
+無条件呼び出しへ修正して解消。全デバッグ計装はコミット前に除去した。
+
+**計測(再設計後)。**
+
+| | 旧executor(fallback) | Phase 7(再設計後) |
+|---|---:|---:|
+| suspendケース | 104,050〜111,004 req/s (100%) | 104,371〜110,828 req/s (100〜101%) |
+| 全同期ケース(async runtime) | 232,411〜235,636 req/s (100%) | 284,802〜287,545 req/s (121〜124%) |
+
+退行が完全に解消し、全同期ケースの固定費解消(+21〜24%)はそのまま
+維持された。suspendケースはPhase 3〜6と同じ「改善なし、退行もなし」
+という結末に落ち着いた。
+
+**検証。** `t/39_fast_lane_promise_fallback.t`へ6subtest追加(全同期、
+exactly-once、non-null伝播、abstract union dispatch、Phase 6機構の
+再利用によるネスト併用)。`t/54_frame_leak_regression.t`へ200回の
+リークストレスを追加。既存の`'deadlocked stall releases the pending
+frames'`/`'stall without on_stall releases the pending frames'`
+subtestが、単一root object fieldの`{ inner { hang } }`ケースを新たに
+fast lane経由でカバーするようになった。全500テスト、49ファイル個別
+実行・`PERL_HASH_SEED`5点でのASan(再設計の前後どちらも)がクリーン。
+
+**残課題(今回の対応範囲外として記録)。** `gql_runtime_vm_cancel_frame_tree`
+は`GQL_VM_PENDING_LIST_PENDING_PTR`(list fieldの複数item集約ハンドル)
+には未対応で、genuinely pendingなlist itemを含むリクエストがdeadlock/
+on_stall放棄された場合、list_pending構造体配下の個々のitem frameへは
+辿り着けない。今回のPhase 7の作業範囲では発見1の(1)(2)と全く同型・
+同規模の話だが、list fieldの`GQL_VM_PENDING_LIST_PENDING_PTR`という
+別のpayload種別に対する話であり、範囲外として次の課題に送る。

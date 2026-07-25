@@ -16,6 +16,7 @@ use GraphQL::Houtou qw(execute build_native_runtime);
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);
+use GraphQL::Houtou::Type::List;
 use GraphQL::Houtou::DataLoader;
 
 GraphQL::Houtou::_bootstrap_xs();
@@ -197,6 +198,47 @@ subtest 'repeated multi-sibling root promotions stay clean' => sub {
       or last;
   }
   assert_no_live_frames('200 multi-sibling root promotions');
+};
+
+subtest 'repeated root list-item-pending promotions stay clean' => sub {
+  # Each request here promotes via the item-level list_pending path added
+  # for Phase 4 (gql_runtime_vm_complete_current_list_fast_sv stashing the
+  # raw array, then gql_runtime_vm_exec_state_complete_current_native_async_sv
+  # + gql_runtime_vm_push_pending_list_pending adopting it); a leak in that
+  # handoff, or in the lazily-built exec_state_handle_t it now requires,
+  # would only show up after many requests, not one.
+  my $list_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        a => { type => $String, resolve => sub { 'sync-a' } },
+        names => {
+          type => GraphQL::Houtou::Type::List->new(of => $String),
+          args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+          resolve => sub {
+            my (undef, $args, $ctx) = @_;
+            return [ map { $ctx->{loader}->load($_) } @{ $args->{ids} } ];
+          },
+        },
+      },
+    ),
+  );
+  my $runtime = build_native_runtime($list_schema, async => 1);
+  for my $i (1 .. 200) {
+    my $loader = GraphQL::Houtou::DataLoader->new(
+      batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+    );
+    my $r = $runtime->execute_document(
+      'query Q($ids: [String]) { a names(ids: $ids) }',
+      variables => { ids => [ "l$i-1", "l$i-2", "l$i-3" ] },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, {
+      data => { a => 'sync-a', names => [ "v:l$i-1", "v:l$i-2", "v:l$i-3" ] },
+    }, "iteration $i resolved" or last;
+  }
+  assert_no_live_frames('200 root list-item-pending promotions');
 };
 
 done_testing;

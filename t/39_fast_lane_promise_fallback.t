@@ -7,6 +7,7 @@ use GraphQL::Houtou qw(build_native_runtime);
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String $ID);
+use GraphQL::Houtou::Type::List;
 
 BEGIN {
   eval { require Promise::XS; 1 }
@@ -609,6 +610,221 @@ subtest 'async runtime: multiple sibling root leaves promote together' => sub {
       $ok++ if $settled->{data}{s1} eq 'sync' && $settled->{data}{p1} eq "b:k$i";
     }
     is $ok, $n, 'every request settled with the correct value';
+  };
+};
+
+subtest 'async runtime: root plain-leaf list fields promote through the fast continuation' => sub {
+  require GraphQL::Houtou::DataLoader;
+  # A root list field whose items are plain scalar leaves (no child block,
+  # no abstract dispatch) is exactly the shape Phase 4 adds to
+  # gql_runtime_vm_try_execute_fast_root_continuation_sv's eligibility
+  # guard. Before Phase 4 this always fell back to the generic async
+  # executor (LIST ops were unconditionally ineligible); these cases
+  # exercise the new item-level list_pending continuation instead.
+
+  subtest 'sync list resolver, all items pending in one batch' => sub {
+    my $dispatches = 0;
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      $dispatches++;
+      return [ map { "v:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          names => {
+            type => GraphQL::Houtou::Type::List->new(of => $String),
+            args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+            resolve => sub {
+              my (undef, $args, $ctx) = @_;
+              return [ map { $ctx->{loader}->load($_) } @{ $args->{ids} } ];
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($ids: [String]) { names(ids: $ids) }',
+      variables => { ids => [ 'x1', 'x2', 'x3' ] },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, { data => { names => [ 'v:x1', 'v:x2', 'v:x3' ] } },
+      'every item resolves via the shared batch';
+    is $dispatches, 1, 'one batch dispatch settles every item';
+  };
+
+  subtest 'a sync sibling alongside a list field with pending items' => sub {
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { "v:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          a => { type => $String, resolve => sub { 'sync-a' } },
+          names => {
+            type => GraphQL::Houtou::Type::List->new(of => $String),
+            args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+            resolve => sub {
+              my (undef, $args, $ctx) = @_;
+              return [ map { $ctx->{loader}->load($_) } @{ $args->{ids} } ];
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($ids: [String]) { a names(ids: $ids) }',
+      variables => { ids => [ 'y1', 'y2' ] },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, { data => { a => 'sync-a', names => [ 'v:y1', 'v:y2' ] } },
+      'the sync sibling and the list with pending items both resolve';
+  };
+
+  subtest 'a field-level pending sibling alongside item-level list pending' => sub {
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { "v:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          greeting => {
+            type => $String,
+            args => { id => { type => $String } },
+            resolve => sub {
+              my (undef, $args, $ctx) = @_;
+              return $ctx->{loader}->load($args->{id});
+            },
+          },
+          names => {
+            type => GraphQL::Houtou::Type::List->new(of => $String),
+            args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+            resolve => sub {
+              my (undef, $args, $ctx) = @_;
+              return [ map { $ctx->{loader}->load($_) } @{ $args->{ids} } ];
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($id: String, $ids: [String]) { greeting(id: $id) names(ids: $ids) }',
+      variables => { id => 'g1', ids => [ 'y1', 'y2' ] },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, {
+      data => { greeting => 'v:g1', names => [ 'v:y1', 'v:y2' ] },
+    }, 'a suspended-at-the-field sibling and a suspended-in-its-items sibling both resolve';
+  };
+
+  subtest 'a rejected item nulls only its own slot' => sub {
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      my ($ids) = @_;
+      return [ map {
+        $_ eq 'bad' ? GraphQL::Houtou::DataLoader::Error->new("no such key: $_") : "v:$_"
+      } @$ids ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          names => {
+            type => GraphQL::Houtou::Type::List->new(of => $String),
+            args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+            resolve => sub {
+              my (undef, $args, $ctx) = @_;
+              return [ map { $ctx->{loader}->load($_) } @{ $args->{ids} } ];
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($ids: [String]) { names(ids: $ids) }',
+      variables => { ids => [ 'ok1', 'bad', 'ok2' ] },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r->{data}{names}, [ 'v:ok1', undef, 'v:ok2' ], 'only the failed item is null';
+    is scalar @{ $r->{errors} }, 1, 'one error record';
+    is $r->{errors}[0]{message}, 'no such key: bad', 'rejection reason surfaces as the error message';
+    is_deeply $r->{errors}[0]{path}, [ 'names', 1 ], 'error path points at the failed item';
+  };
+
+  subtest 'a non-null item violation nulls the whole list, not just the item' => sub {
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      my ($ids) = @_;
+      return [ map { $_ eq 'bad' ? undef : "v:$_" } @$ids ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          names => {
+            # [String!]: item_non_null
+            type => GraphQL::Houtou::Type::List->new(of => $String->non_null),
+            args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+            resolve => sub {
+              my (undef, $args, $ctx) = @_;
+              return [ map { $ctx->{loader}->load($_) } @{ $args->{ids} } ];
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($ids: [String]) { names(ids: $ids) }',
+      variables => { ids => [ 'ok1', 'bad', 'ok2' ] },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is $r->{data}{names}, undef, 'the whole (nullable) list field is null';
+    is scalar @{ $r->{errors} }, 1, 'one error record';
+    like $r->{errors}[0]{message}, qr/Cannot return null for non-nullable field/,
+      'error names the non-null violation';
+    is_deeply $r->{errors}[0]{path}, [ 'names', 1 ], 'error path points at the offending item';
+  };
+
+  subtest 'object list items still fall back to the generic executor' => sub {
+    my $Row = GraphQL::Houtou::Type::Object->new(
+      name => 'RowP4', fields => { name => { type => $String } });
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { { name => "row-$_" } } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          rows => {
+            type => GraphQL::Houtou::Type::List->new(of => $Row),
+            args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+            resolve => sub {
+              my (undef, $args, $ctx) = @_;
+              return [ map { $ctx->{loader}->load($_) } @{ $args->{ids} } ];
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($ids: [String]) { rows(ids: $ids) { name } }',
+      variables => { ids => [ 'i1', 'i2' ] },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, { data => { rows => [ { name => 'row-i1' }, { name => 'row-i2' } ] } },
+      'object list items resolve correctly through the pre-existing (non-fast-continuation) path';
   };
 };
 

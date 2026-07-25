@@ -34,6 +34,7 @@ use GraphQL::Houtou::Promise::PromiseXS qw(
   maybe_get_promise_xs
 );
 use GraphQL::Houtou::Type::Interface ();
+use GraphQL::Houtou::Type::List ();
 use GraphQL::Houtou::Type::Object ();
 use GraphQL::Houtou::Type::Scalar ();
 use GraphQL::Houtou::Type::Union ();
@@ -738,6 +739,85 @@ sub benchmark_async_multi_leaf {
   }
 }
 
+sub benchmark_async_leaf_list {
+  require GraphQL::Houtou::DataLoader;
+
+  # Phase 4: root has a single plain-leaf list field (no child block, no
+  # abstract dispatch); every item is DataLoader-Ticket-backed and settles
+  # in one shared batch. Before Phase 4 a LIST op was unconditionally
+  # ineligible for the fast root continuation, so this shape always fell
+  # back to the generic async executor; this benchmark exercises the new
+  # item-level list_pending continuation added for it.
+  for my $width (2, 5, 10) {
+    my $query = 'query q($ids: [String]) { names(ids: $ids) }';
+    my $vars = { ids => [ map { "id$_" } 1 .. $width ] };
+
+    my $build_schema = sub {
+      my ($resolve) = @_;
+      return GraphQL::Houtou::Schema->new(
+        query => GraphQL::Houtou::Type::Object->new(
+          name => 'Query',
+          fields => {
+            names => {
+              type => GraphQL::Houtou::Type::List->new(
+                of => $GraphQL::Houtou::Type::Scalar::String
+              ),
+              args => {
+                ids => {
+                  type => GraphQL::Houtou::Type::List->new(
+                    of => $GraphQL::Houtou::Type::Scalar::String
+                  ),
+                },
+              },
+              resolve => $resolve,
+            },
+          },
+        ),
+      );
+    };
+
+    my $sync_rt = $build_schema->(
+      sub { my (undef, $args) = @_; return [ map { "sync:$_" } @{ $args->{ids} } ] }
+    )->build_native_runtime;
+
+    my $pending_loader;
+    my $async_rt = $build_schema->(
+      sub {
+        my (undef, $args, $ctx) = @_;
+        return [ map { $pending_loader->load($_) } @{ $args->{ids} } ];
+      }
+    )->build_native_runtime(async => 1);
+
+    my %modes = (
+      "houtou_sync_leaf_list${width}_sv" => sub {
+        return $sync_rt->execute_document($query, variables => $vars);
+      },
+      "houtou_async_leaf_list${width}_sv" => sub {
+        $pending_loader = GraphQL::Houtou::DataLoader->new(
+          batch => sub { my ($keys) = @_; return [ map { "batched:$_" } @$keys ] },
+        );
+        return maybe_get_promise_xs(
+          $async_rt->execute_document(
+            $query,
+            variables => $vars,
+            on_stall => GraphQL::Houtou::DataLoader->on_stall_for($pending_loader),
+          )
+        );
+      },
+    );
+
+    my $async_result = _normalize_result($modes{"houtou_async_leaf_list${width}_sv"}->());
+    for my $i (1 .. $width) {
+      die "Result mismatch for async_leaf_list/width=$width item $i\n"
+        unless ($async_result->{data}{names}[$i - 1] // '') eq "batched:id$i";
+    }
+
+    print "\n=== async_leaf_list (width=$width) ===\n";
+    print "Query: single root list field, $width DataLoader-Ticket-pending items\n";
+    cmpthese($count, \%modes);
+  }
+}
+
 sub _dump {
   require Data::Dumper;
   local $Data::Dumper::Sortkeys = 1;
@@ -834,3 +914,5 @@ benchmark_async_preresolved_leaf()
   if $include_async && (!@only || $only{async_preresolved_leaf});
 benchmark_async_multi_leaf()
   if $include_async && (!@only || $only{async_multi_leaf});
+benchmark_async_leaf_list()
+  if $include_async && (!@only || $only{async_leaf_list});

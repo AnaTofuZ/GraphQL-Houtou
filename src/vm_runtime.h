@@ -312,6 +312,15 @@ typedef struct {
    * GraphQL::Houtou::Error becomes a request-error envelope at the Perl
    * boundary - and the top-level entry croak_sv()s it after cleanup. */
   SV *fast_lane_deferred_croak_sv;
+  /* Item-level suspension channel for a list field, parallel to
+   * fast_lane_suspended_sv: when a list field's own resolver result
+   * settles to an array whose items are still pending (rather than the
+   * field's own call being pending), gql_runtime_vm_complete_current_list_fast_sv
+   * stashes the raw, not-yet-item-completed array here instead of
+   * completing (or, on the strict sync lanes, deferred-croaking) each item
+   * in place - a continuation owner must take and clear this before
+   * destroying this state, same contract as fast_lane_suspended_sv. */
+  SV *fast_lane_list_pending_source_sv;
 } gql_runtime_vm_exec_state_t;
 
 enum {

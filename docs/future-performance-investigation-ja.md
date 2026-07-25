@@ -1244,3 +1244,100 @@ widthが大きいほど改善幅が伸びる(width 2はほぼ横ばい、10で+1
 この新しい直接経路を通ることを確認する手動検証、500回のpromotionあり実行+500回の
 全同期実行を混ぜたリーク検証、49ファイル個別実行でのASan(複数hash seed)で
 確認した。
+
+### 14.20 root plain-leaf list fieldへの拡張(Phase 4)
+
+§11で挙げた境界(「listはchild blockを持たなくても各itemがPromiseの場合がある」)へ
+対応した。対象は`op->complete_code == GQL_VM_COMPLETE_LIST`かつ`child_block_index < 0`
+かつ`abstract_child_count == 0`の、object/abstract要素を持たないplain leaf list
+(`[String]`, `[Int!]`等)のみ。eligibility guardの他の条件(directive無し、
+nullable、bundle/native_program op_count一致)は既存のまま流用した。
+
+**item-level pendingの検出とfield-level pendingの分離不可能性。** §11で記録した
+とおり、resolverが返したlist全体をitem単位で検査するまでは、item内にpromise/Ticket
+が混じっているか分からない。かつ一度resolverを呼んだ後は「この形状は未対応」と
+判明しても旧async executorへやり直すことはできない(exactly-once保証を破る)。
+したがって、item-level pendingの対応をfield-level pendingの対応と同時に実装する
+必要があった。
+
+**実装。** `gql_runtime_vm_complete_current_list_fast_sv`の先頭(itemループの前)に
+`state->fast_lane_can_suspend`時のみ動くpre-scanを追加した。array中の各itemを見て、
+Promise::XSまたはgenuinely pendingなDataLoader Ticket(state 0)が1個でもあれば、
+生の(未completionの)array参照を新設フィールド`state->fast_lane_list_pending_source_sv`
+へ退避し、即座にplaceholderを返す(この時点でitemのleaf coercionは一切行わない)。
+1個も無ければ、従来のitemループをそのまま通す。既存のitemループ自体もTicket認識を
+追加し(fulfilled/rejectedをPromise::XSと同様に扱う)、strict syncレーンでの
+deferred croakが従来の「Promise::XSのみ検出」だった漏れを塞いだ。
+
+呼び出し元`gql_runtime_vm_execute_root_block_fast_multi_sv`のper-opループは、
+`fast_lane_suspended_sv`(field-level、既存)に加えて`fast_lane_list_pending_source_sv`
+(item-level、新規)も見るようにした。item-level pendingを検出した場合、
+Phase 3で「ループ終了後にのみ」構築していた実`exec_state_handle_t`
+(`gql_runtime_vm_new_exec_state_handle_sv`+`gql_runtime_vm_new_cursor_struct_for_program`)
+を、新設ヘルパ`gql_runtime_vm_ensure_root_fast_multi_promoted_sv`経由でループ**内**の
+最初に必要になった瞬間まで前倒しし(field-level/item-levelどちらが先でも1回だけ
+構築、以降のiterationは使い回す)、既存の`gql_runtime_vm_exec_state_complete_current_native_async_sv`
+のGQL_VM_COMPLETE_LISTケースへ生のarrayをそのまま渡して委譲する。このケースは
+既存のtwo-layer機構(Layer 1: `gql_runtime_vm_new_list_item_child_callback_sv`+
+`gql_runtime_vm_call_then_promise_for_state_sv`によるitem単位のsettle callback、
+Layer 2: `gql_runtime_vm_list_pending_handle_sv`によるitem集約+owner frame通知)を
+そのまま使うため、item-level pending専用のロジックを新たに書く必要はなかった。
+返ってきたlist_pendingは既存の`gql_runtime_vm_push_pending_list_pending`で
+frameのpending entryとして登録する(`GQL_VM_PENDING_LIST_PENDING_PTR`、既存の
+scheduler側処理がそのまま扱える)。
+
+呼び出し元の末尾(ループ後、`frame`が非NULLなら実handleを構築していた箇所)も、
+ループ内で既にpromotion済みなら`state_sv`を再利用し、二重構築を避けるよう変更した。
+
+単一op(`block->op_count == 1`)の直接構築レーン(Phase 1c/2で確立した、単一
+leaf field専用の軽量パス)は、単一opがLIST型の場合は使わず複数op用の共有ループへ
+フォールスルーするよう条件を追加した(`op->complete_code == GQL_VM_COMPLETE_GENERIC`
+の場合のみ直接構築レーンに入る)。単一list opのitem-level pendingは複数opの場合と
+同じ実handle構築が必要で、直接構築レーンにその機構を複製する意味がないため。
+
+**計測。** `benchmark_async_leaf_list`(新規、単一root list field、item全部が
+同じDataLoaderバッチでgenuinely pending)を追加し、旧executor(Phase 4導入前、
+LISTは常にineligibleでfallback)と比較した。5標本中央値:
+
+| width | 旧executor(fallback) | Phase 4 |
+|---|---:|---:|
+| 2 | 75,502 req/s (100%) | 73,215 req/s (97.0%) |
+| 5 | 47,117 req/s (100%) | 46,072 req/s (97.8%) |
+| 10 | 28,976 req/s (100%) | 28,572 req/s (98.6%) |
+
+誤差(実行間で±5〜8%程度のばれ)の範囲内で、明確な改善は確認できなかった
+(Phase 3と同じ結末)。理由も同型: item-level pendingが1件でもあれば結局
+Phase 4も旧経路もほぼ同じ実`exec_state_handle_t`+two-layer機構を構築するため、
+「pendingが起きるケース」では削減できるコストがほとんど無い。
+
+一方、sync-firstの主眼である**全item同期解決のケース**(DataLoader/Promiseを
+一切使わないlist resolver)では、async runtimeが従来LISTを問答無用でfallback
+していたぶんの差が消えることを確認した(`--case`に含めない手動ベンチマーク、
+単一root list field・5要素・全item同期):
+
+| | 旧executor(fallback) | Phase 4 |
+|---|---:|---:|
+| sync runtime | 160,776 req/s (100%) | 163,063〜165,257 req/s (101〜103%) |
+| async runtime | 150,367 req/s (93.5%) | 162,049〜164,622 req/s (100〜102%) |
+
+Phase 4適用前はasync runtimeがsync runtimeに対して-6〜7%の固定費を払っていた
+(list opが常にineligibleで実handle経由になるため)。Phase 4適用後はほぼ同速
+(sync-first原則どおり、全同期なら実handleを一切構築しない)。pendingが起きる
+ケースでの退行は確認できなかった一方、改善もこの「全同期list」ケースに限られる。
+
+**正しさの検証。** §11の回帰と同じ領域のため通常以上に慎重に検証した。
+t/39_fast_lane_promise_fallback.tへ6subtestを追加:全item同一batch pending、
+sync siblingとlist pendingの共存、field-level pendingとitem-level pendingの
+共存、item個別rejectがそのitemのみをnullにすること(§11相当の境界)、
+`[String!]`でitem-level non-null違反がlist全体をnullにしlist自身は
+nullable field としてnullになること、object list itemが引き続き旧経路へ
+fallbackすること。t/54_frame_leak_regression.tへ200回のitem-level list
+pending promotionのリークストレスを追加。全494テストが通過し、
+`debug_frame_live_counts_xs()`でblock_frame/path_frameとも0を確認した。
+
+ASanについては、この環境でXS moduleロード自体(`t/00_compile.t`)が
+Phase 4の変更と無関係にstash前後どちらのビルドでも数分規模で完了しない
+(catastrophically遅い)ことを確認した。49ファイル個別実行・複数hash seedの
+フルスイープは本セッションの時間内には終えられなかった。Phase 4の変更が
+原因でないことは、変更前コードで同じ遅さを再現させて確認済みだが、
+ASanでのメモリ安全性の実地確認は次回以降に持ち越しとなる。

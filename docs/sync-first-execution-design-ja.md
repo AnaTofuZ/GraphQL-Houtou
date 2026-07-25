@@ -293,6 +293,47 @@ settle後にresponseへなること、suspend前とresume後を通じてresolver
     安価な resolver 呼び出しの利益を相殺していると見られる)。ユーザーの判断で、
     正しさ・将来の最適化の土台としての価値を優先しこのまま採用した。
 
+13. §13(旧稿)step 3として、§11で挙げたroot plain-leaf list field
+    (`[String]`, `[Int!]`等、object/abstract itemを持たないもの)への拡張を
+    実装した(詳細は`docs/future-performance-investigation-ja.md`§14.20)。
+    eligibility guardへ`GQL_VM_COMPLETE_LIST`(かつ`abstract_child_count == 0`)
+    を追加し、resolverが返したlist自体がpendingな場合(field-level、既存の
+    Promise/Ticket suspension channelがそのまま扱う)に加えて、resolverが
+    同期的にarrayを返したがitem内にPromise/genuinely pendingなTicketが
+    混じっている場合(item-level、新規)も検出できるようにした。
+
+    §11で記録したとおりfield-levelとitem-levelの分離はできない(resolverを
+    二度呼ぶことになりexactly-once保証を破るため)。そのため、
+    `gql_runtime_vm_complete_current_list_fast_sv`のitemループの前に
+    `fast_lane_can_suspend`時のみ動くpre-scanを追加し、genuinely pendingな
+    itemが1個でもあれば生のarray参照を新設フィールド
+    `fast_lane_list_pending_source_sv`へ退避してitemのleaf coercionを
+    一切行わずに返すようにした。呼び出し元のper-opループはこのフィールドを
+    見て、既存の`gql_runtime_vm_exec_state_complete_current_native_async_sv`
+    (Layer 1: item単位のsettle callback、Layer 2:
+    `gql_runtime_vm_list_pending_handle_sv`によるitem集約)へ生のarrayを
+    そのまま委譲し、item-level pending専用のロジックは新設していない。
+    実`exec_state_handle_t`の構築(Phase 3ではloop終了後にのみ行っていた)は、
+    field-level/item-levelどちらのpendingが先に判明してもloop内の最初に
+    必要になった瞬間まで前倒しし、1回だけ構築して使い回す設計とした。
+
+    正しさはgenuinely pendingなitemの単体・複数同時(同一バッチ)・sync
+    siblingとの共存・field-level pendingとitem-level pendingの共存・item
+    個別rejectがそのitemのみをnullにすること(§11相当の境界)・
+    `[String!]`でのitem-level non-null違反・object list itemが引き続き
+    旧経路へfallbackすること、で確認し、全494テスト(新規回帰6subtest追加)、
+    200回のitem-level list pending promotionのリークストレスがクリーン。
+    ただし、genuinely pendingなitemが実際に発生するケースでの旧executorへの
+    fallbackに対する測定可能な性能改善は確認できなかった(Phase 3と同型の
+    結末 — pendingがあれば結局同じ実handle+two-layer機構を構築するため)。
+    改善が確認できたのは、DataLoader/Promiseを一切使わない全同期list
+    resolverのケースで、Phase 4適用前はasync runtimeがLISTの
+    unconditional ineligibleにより旧executor経由の固定費(-6〜7%)を
+    払っていたのが、Phase 4適用後はsync runtimeとほぼ同速になった点のみ。
+    ASanのフルスイープはこの環境での`t/00_compile.t`自体の実行時間の
+    問題(Phase 4の変更と無関係、stash前後どちらでも再現)により本
+    セッションでは完了できなかった。
+
 ## 11. 試行から分かった境界条件
 
 root fieldが1個で`child_block_index == -1`という条件だけでは、leaf continuationとして安全では
@@ -356,9 +397,11 @@ fulfilled Ticketの認識はsuspension channelにもderived objectにも触れ�
    heap allocationを減らす。~~ 実施済み(本節9)。
 2. leaf benchmarkをallocation profileと合わせて測り、Promise::XS自体の下限とHoutou側の固定費を
    分離する。
-3. settled root listを走査し、全itemがplainならfast completion、pending itemが1個でもあれば
-   item continuationまたは既存async schedulerへ部分昇格する境界を作る。**未着手**。
-4. `async_preresolved`のroot object listへ適用し、sync比と旧async比を測る。**未着手**(3が前提)。
+3. ~~settled root listを走査し、全itemがplainならfast completion、pending itemが1個でもあれば
+   item continuationまたは既存async schedulerへ部分昇格する境界を作る。~~ **plain leaf list
+   (object/abstract item除く)に限定して実施済み**(本節item 13)。
+4. `async_preresolved`のroot object listへ適用し、sync比と旧async比を測る。**未着手**
+   (対象がobject listのため3の現在のスコープ外。§14.20参照)。
 5. ~~nullable leaf/listでownershipが固まってからnon-null propagation、runtime directives、
    object child block、複数root siblingへ対象を広げる。~~ **複数root siblingは実施済み**
    (leafに限定、本節item 11)。non-null propagation・runtime directives・object child block
@@ -398,6 +441,15 @@ fast laneでの安価なresolver呼び出しの利益を相殺していると見
     width 10で+1.6%の改善を確認(width 2はほぼ横ばい)。全492テスト、ASan
     (49ファイル個別実行・複数hash seed)、unicode文字列siblingのUTF8保持、
     promotionありなしを混ぜた1000回のリーク検証で確認済み。
+
+13. 3の宿題を、object/abstract itemを持たないplain leaf listに限定して実施した
+    (詳細は`docs/future-performance-investigation-ja.md`§14.20、本節item 13)。
+    genuinely pendingなitemが実際に発生するケースでの旧executorへのfallbackに
+    対する測定可能な性能改善は確認できなかった(6と同型の結末)一方、
+    DataLoader/Promiseを一切使わない全同期list resolverでは、async runtimeが
+    従来LISTを問答無用でfallbackしていた分の固定費(-6〜7%)が解消し、sync
+    runtimeとほぼ同速になった。object/abstract itemを持つlist(4)は引き続き
+    スコープ外。
 
 旧async executorはfallbackとして残す。対象shapeが明示的に判定でき、correctnessと性能の両方を
 満たした範囲だけをsync-first経路へ移す。

@@ -129,19 +129,32 @@ In short:
 - the application callback is still Perl
 - `$info` is unavailable
 - the callback signature is part of the selected fast-resolver contract
-- return-value completion, errors, null propagation, and Promise handling
-  remain the runtime's responsibility
+- return-value completion, errors, null propagation, and Promise
+handling remain the runtime's responsibility
 
 `resolver_mode` selects one of these callback ABIs; it is not inferred from
 the number of field arguments. Use the regular resolver contract when the
 resolver needs `$info`, or unless profiling shows that a fast mode matters:
 
-| Field arguments | Recommended mode | Resolver arguments |
-|---:|---|---|
-| any count, regular API | omitted / default | `($source, $args, $context, $info, $return_type)` |
-| 0, fast path | `fast_resolve_no_args` | `($source, $context, $return_type)` |
-| exactly 1, fast path | `fast_resolve_one_arg` | `($source, $value, $context, $return_type)` |
-| 2 or more, fast path | `fast_resolve` | `($source, $args, $context, $return_type)` |
+- any count, regular API
+
+    Omit `resolver_mode`. The resolver receives
+    `($source, $args, $context, $info, $return_type)`.
+
+- zero arguments, fast path
+
+    Use `fast_resolve_no_args`. The resolver receives
+    `($source, $context, $return_type)`.
+
+- exactly one argument, fast path
+
+    Use `fast_resolve_one_arg`. The resolver receives
+    `($source, $value, $context, $return_type)`.
+
+- two or more arguments, fast path
+
+    Use `fast_resolve`. The resolver receives
+    `($source, $args, $context, $return_type)`.
 
 Use the mode matching the field's declared argument count.
 `fast_resolve` accepts any argument count and always passes a HashRef as
@@ -150,8 +163,8 @@ The specialized modes change the callback signature and are therefore
 never selected automatically. Schema compilation rejects
 `fast_resolve_no_args` on a field with arguments and
 `fast_resolve_one_arg` unless the field has exactly one. The older
-`native`, `native_args`, `native_no_args`, and `native_one_arg` spellings
-remain compatibility aliases.
+`native`, `native_args`, `native_no_args`, and `native_one_arg`
+spellings remain compatibility aliases.
 
     fields => {
       health => {
@@ -205,14 +218,14 @@ For fields backed by a zero-argument method on the source object, use
     );
 
 The first field calls `$user->id()` and the second calls
-`$user->display_name()`. The VM does not construct `$args` or `$info`, and
-does not call a separate resolver coderef. Accessor methods may return normal
-values or promises.
+`$user->display_name()`. The VM does not construct `$args` or `$info`,
+and does not call a separate resolver coderef. Accessor methods may return
+normal values or promises.
 
 `accessor` is deliberately limited to fields without GraphQL arguments.
 Use a regular resolver when the method needs field arguments, context, info,
-authorization logic, or DataLoader access. `accessor` and `resolve` cannot be
-specified together.
+authorization logic, or DataLoader access. `accessor` and `resolve` cannot
+be specified together.
 
 The inverse direction is `print_schema()` (also available as
 `$schema->to_doc`), which renders any schema back to SDL — including
@@ -274,7 +287,7 @@ use the reduced resolver contract:
     }
 
 This avoids constructing the generic args and info objects for every list
-item. The bundled DataLoader benchmark measures roughly 4–7% higher
+item. The bundled DataLoader benchmark measures roughly 4--7% higher
 end-to-end throughput for this shape. Use the regular resolver contract when
 the field needs GraphQL arguments or `$info`.
 

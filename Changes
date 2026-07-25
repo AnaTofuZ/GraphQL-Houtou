@@ -1,6 +1,8 @@
 Revision history for Perl extension GraphQL-Houtou
 
 {{$NEXT}}
+
+0.03_01 2026-07-25T10:45:54Z
     - Apply argument defaults when referenced variables are omitted.
     - Reject unknown resolver modes during schema compilation.
     - Preserve DataLoader ticket all/race Promise compatibility.

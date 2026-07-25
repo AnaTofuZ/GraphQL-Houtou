@@ -4,7 +4,7 @@ use 5.014;
 use strict;
 use warnings;
 
-our $VERSION = '0.03';
+our $VERSION = '0.03_01';
 
 use overload
   '""' => 'to_string',

@@ -357,6 +357,12 @@ gql_runtime_vm_fast_response_sv(
 
 typedef struct {
   UV refcount;
+  U8 arming;
+  SV *sync_response_sv;
+} gql_runtime_vm_fast_root_continuation_shared_t;
+
+typedef struct {
+  UV refcount;
   gql_runtime_vm_block_frame_t *frame;
   gql_runtime_vm_writer_t *writer;
   SV *state_sv;
@@ -406,6 +412,21 @@ typedef struct {
   SV *callback_sv;
   U8 reject_arm;
 } gql_runtime_vm_ticket_chain_ctx_t;
+
+typedef struct {
+  SV *runtime_sv;
+  SV *program_sv;
+  SV *runtime_schema_sv;
+  SV *root_value_sv;
+  SV *context_sv;
+  SV *variables_sv;
+  gql_runtime_vm_native_runtime_t *runtime;
+  gql_runtime_vm_native_bundle_t *bundle;
+  IV block_index;
+  IV op_index;
+  U8 reject_arm;
+  gql_runtime_vm_fast_root_continuation_shared_t *shared;
+} gql_runtime_vm_fast_root_continuation_ctx_t;
 
 
 typedef struct {
@@ -471,6 +492,13 @@ static int gql_runtime_vm_slot_uses_native_one_arg_abi(const gql_runtime_vm_nati
 static int gql_runtime_vm_slot_uses_explicit_generic_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_slot_resolver_sv(const gql_runtime_vm_native_runtime_t *runtime, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
+static SV *gql_runtime_vm_try_execute_fast_root_continuation_sv(
+  pTHX_ SV *runtime_sv, SV *program_sv,
+  gql_runtime_vm_native_runtime_t *runtime,
+  gql_runtime_vm_native_program_t *program,
+  SV *runtime_schema, SV *root_value, SV *context_value, SV *variables,
+  U8 json_mode, U8 *handled_out
+);
 static SV *gql_runtime_vm_try_execute_plain_hash_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *resolved);
 
@@ -503,6 +531,7 @@ static XS(gql_runtime_vm_xs_pending_reject_callback);
 static XS(gql_runtime_vm_xs_list_pending_callback);
 static XS(gql_runtime_vm_xs_error_callback);
 static XS(gql_runtime_vm_xs_finalize_callback);
+static XS(gql_runtime_vm_xs_fast_root_continuation_callback);
 
 static void
 gql_runtime_vm_cursor_incref(gql_runtime_vm_cursor_t *cursor)
@@ -841,6 +870,45 @@ static MGVTBL gql_runtime_vm_ticket_chain_ctx_vtbl = {
   NULL,
   NULL,
   gql_runtime_vm_ticket_chain_ctx_free
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
+
+static int
+gql_runtime_vm_fast_root_continuation_ctx_free(pTHX_ SV *sv, MAGIC *mg)
+{
+  gql_runtime_vm_fast_root_continuation_ctx_t *ctx = mg && mg->mg_ptr
+    ? INT2PTR(gql_runtime_vm_fast_root_continuation_ctx_t *, mg->mg_ptr)
+    : NULL;
+  if (ctx) {
+    SvREFCNT_dec(ctx->runtime_sv);
+    SvREFCNT_dec(ctx->program_sv);
+    SvREFCNT_dec(ctx->runtime_schema_sv);
+    SvREFCNT_dec(ctx->root_value_sv);
+    SvREFCNT_dec(ctx->context_sv);
+    SvREFCNT_dec(ctx->variables_sv);
+    if (ctx->shared && --ctx->shared->refcount == 0) {
+      SvREFCNT_dec(ctx->shared->sync_response_sv);
+      Safefree(ctx->shared);
+    }
+    Safefree(ctx);
+    mg->mg_ptr = NULL;
+  }
+  if (sv && SvTYPE(sv) == SVt_PVCV) {
+    CvXSUBANY((CV *)sv).any_ptr = NULL;
+  }
+  return 0;
+}
+
+static MGVTBL gql_runtime_vm_fast_root_continuation_ctx_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gql_runtime_vm_fast_root_continuation_ctx_free
 #if PERL_VERSION_GE(5, 15, 0)
   ,NULL
   ,NULL
@@ -7053,6 +7121,7 @@ gql_runtime_vm_execute_native_program_auto_impl_sv(
   SV *data_sv = NULL;
   SV *effective_root = root_value;
   SV *ret = NULL;
+  U8 fast_root_handled = 0;
 
   if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
     croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
@@ -7080,6 +7149,23 @@ gql_runtime_vm_execute_native_program_auto_impl_sv(
     program,
     provided_hv
   ));
+
+  ret = gql_runtime_vm_try_execute_fast_root_continuation_sv(
+    aTHX_
+    runtime_sv,
+    program_sv,
+    runtime,
+    program,
+    runtime_schema_sv,
+    root_value,
+    context_value,
+    prepared_variables_sv,
+    json_mode,
+    &fast_root_handled
+  );
+  if (fast_root_handled) {
+    return ret ? ret : newSVsv(&PL_sv_undef);
+  }
 
   cursor = gql_runtime_vm_new_cursor_struct_for_program(
     aTHX_
@@ -9598,6 +9684,270 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
   state->op_index = saved_op_index;
 
   return newRV_noinc((SV *)data_hv);
+}
+
+static gql_runtime_vm_fast_root_continuation_ctx_t *
+gql_runtime_vm_new_fast_root_continuation_ctx(
+  pTHX_
+  SV *runtime_sv,
+  SV *program_sv,
+  SV *runtime_schema_sv,
+  SV *root_value_sv,
+  SV *context_sv,
+  SV *variables_sv,
+  gql_runtime_vm_native_runtime_t *runtime,
+  gql_runtime_vm_native_bundle_t *bundle,
+  IV block_index,
+  IV op_index,
+  U8 reject_arm,
+  gql_runtime_vm_fast_root_continuation_shared_t *shared
+)
+{
+  gql_runtime_vm_fast_root_continuation_ctx_t *ctx;
+  Newxz(ctx, 1, gql_runtime_vm_fast_root_continuation_ctx_t);
+  ctx->runtime_sv = newSVsv(runtime_sv ? runtime_sv : &PL_sv_undef);
+  ctx->program_sv = newSVsv(program_sv ? program_sv : &PL_sv_undef);
+  ctx->runtime_schema_sv = newSVsv(runtime_schema_sv ? runtime_schema_sv : &PL_sv_undef);
+  ctx->root_value_sv = newSVsv(root_value_sv ? root_value_sv : &PL_sv_undef);
+  ctx->context_sv = newSVsv(context_sv ? context_sv : &PL_sv_undef);
+  ctx->variables_sv = newSVsv(variables_sv ? variables_sv : &PL_sv_undef);
+  ctx->runtime = runtime;
+  ctx->bundle = bundle;
+  ctx->block_index = block_index;
+  ctx->op_index = op_index;
+  ctx->reject_arm = reject_arm;
+  ctx->shared = shared;
+  if (shared) {
+    shared->refcount++;
+  }
+  return ctx;
+}
+
+static SV *
+gql_runtime_vm_new_fast_root_continuation_callback_sv(
+  pTHX_ gql_runtime_vm_fast_root_continuation_ctx_t *ctx
+)
+{
+  CV *cv = newXS(NULL, gql_runtime_vm_xs_fast_root_continuation_callback, __FILE__);
+  CvXSUBANY(cv).any_ptr = ctx;
+  gql_runtime_vm_attach_callback_magic_ptr(
+    aTHX_ (SV *)cv, &gql_runtime_vm_fast_root_continuation_ctx_vtbl, ctx
+  );
+  return newRV_noinc((SV *)cv);
+}
+
+static XS(gql_runtime_vm_xs_fast_root_continuation_callback)
+{
+  dVAR;
+  dXSARGS;
+  gql_runtime_vm_fast_root_continuation_ctx_t *ctx = INT2PTR(
+    gql_runtime_vm_fast_root_continuation_ctx_t *, CvXSUBANY(cv).any_ptr
+  );
+  gql_runtime_vm_exec_state_t state;
+  gql_runtime_vm_callback_context_t callback_ctx;
+  gql_runtime_vm_writer_t writer;
+  gql_runtime_vm_native_block_t *block;
+  const gql_runtime_vm_native_op_t *op;
+  const gql_runtime_vm_native_slot_t *slot;
+  gql_runtime_vm_path_frame_t *field_path;
+  SV *value = items > 0 && ST(0) ? ST(0) : &PL_sv_undef;
+  SV *completed = NULL;
+  SV *error_sv = NULL;
+  SV *data_sv;
+  SV *response_sv;
+  HV *data_hv;
+
+  if (!ctx || !ctx->bundle
+      || ctx->block_index < 0 || ctx->block_index >= ctx->bundle->block_count) {
+    XSRETURN_UNDEF;
+  }
+  block = &ctx->bundle->blocks[ctx->block_index];
+  if (ctx->op_index < 0 || ctx->op_index >= block->op_count) {
+    XSRETURN_UNDEF;
+  }
+  op = &block->ops[ctx->op_index];
+  if (op->slot_index < 0 || op->slot_index >= block->slot_count) {
+    XSRETURN_UNDEF;
+  }
+  slot = &block->slots[op->slot_index];
+
+  Zero(&state, 1, gql_runtime_vm_exec_state_t);
+  Zero(&callback_ctx, 1, gql_runtime_vm_callback_context_t);
+  gql_runtime_vm_init_writer_struct(&writer);
+  state.runtime = ctx->runtime;
+  state.bundle = ctx->bundle;
+  state.callback_ctx = &callback_ctx;
+  state.writer = &writer;
+  state.block = block;
+  state.op = op;
+  state.slot = slot;
+  state.block_index = ctx->block_index;
+  state.op_index = ctx->op_index;
+  callback_ctx.runtime_schema = ctx->runtime_schema_sv;
+  callback_ctx.context = ctx->context_sv;
+  callback_ctx.variables = ctx->variables_sv;
+  callback_ctx.root_value = ctx->root_value_sv;
+
+  field_path = gql_runtime_vm_new_result_path_frame(aTHX_ NULL, slot);
+  state.path_frame = field_path;
+  state.path_frame_is_current_field = 1;
+  if (ctx->reject_arm) {
+    gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ &state, value, field_path);
+    completed = newSVsv(&PL_sv_undef);
+  } else {
+    completed = gql_runtime_vm_complete_resolved_current_fast_sv(
+      aTHX_ &state, value, &error_sv
+    );
+    if (error_sv) {
+      gql_runtime_vm_fast_lane_record_error_for_path(
+        aTHX_ &state, error_sv, field_path
+      );
+      SvREFCNT_dec(error_sv);
+      SvREFCNT_dec(completed);
+      completed = newSVsv(&PL_sv_undef);
+    }
+  }
+  gql_runtime_vm_path_frame_decref(field_path);
+  data_hv = newHV();
+  hv_store(
+    data_hv,
+    slot->result_name,
+    (I32)slot->result_name_len,
+    completed ? completed : newSVsv(&PL_sv_undef),
+    0
+  );
+  data_sv = newRV_noinc((SV *)data_hv);
+  response_sv = gql_runtime_vm_fast_response_sv(aTHX_ data_sv, &writer);
+  gql_runtime_vm_clear_writer_struct(aTHX_ &writer);
+  SvREFCNT_dec(callback_ctx.materialized_variables);
+  if (ctx->shared && ctx->shared->arming && !ctx->shared->sync_response_sv) {
+    ctx->shared->sync_response_sv = newSVsv(response_sv);
+  }
+  ST(0) = sv_2mortal(response_sv);
+  XSRETURN(1);
+}
+
+static SV *
+gql_runtime_vm_try_execute_fast_root_continuation_sv(
+  pTHX_
+  SV *runtime_sv,
+  SV *program_sv,
+  gql_runtime_vm_native_runtime_t *runtime,
+  gql_runtime_vm_native_program_t *program,
+  SV *runtime_schema,
+  SV *root_value,
+  SV *context_value,
+  SV *variables,
+  U8 json_mode,
+  U8 *handled_out
+)
+{
+  gql_runtime_vm_native_bundle_t *bundle;
+  gql_runtime_vm_native_block_t *block;
+  gql_runtime_vm_native_op_t *op;
+  gql_runtime_vm_native_slot_t *slot;
+  gql_runtime_vm_exec_state_t state;
+  gql_runtime_vm_callback_context_t callback_ctx;
+  gql_runtime_vm_writer_t writer;
+  SV *empty_args_sv;
+  SV *data_sv;
+  SV *promise_sv;
+  SV *resolve_callback_sv;
+  SV *reject_callback_sv;
+  SV *ret;
+  gql_runtime_vm_fast_root_continuation_shared_t *shared;
+
+  *handled_out = 0;
+  if (json_mode) {
+    return NULL;
+  }
+  bundle = gql_runtime_vm_native_program_cached_bundle(aTHX_ runtime, program);
+  if (!bundle || bundle->root_block_index < 0
+      || bundle->root_block_index >= bundle->block_count) {
+    return NULL;
+  }
+  block = &bundle->blocks[bundle->root_block_index];
+  if (block->op_count != 1) {
+    return NULL;
+  }
+  op = &block->ops[0];
+  if (op->slot_index < 0 || op->slot_index >= block->slot_count) {
+    return NULL;
+  }
+  slot = &block->slots[op->slot_index];
+  if (op->complete_code != GQL_VM_COMPLETE_GENERIC
+      || op->has_runtime_directives || op->runtime_directives_sv
+      || slot->return_type_kind_code == 8
+      || op->child_block_index >= 0) {
+    return NULL;
+  }
+
+  Zero(&state, 1, gql_runtime_vm_exec_state_t);
+  Zero(&callback_ctx, 1, gql_runtime_vm_callback_context_t);
+  gql_runtime_vm_init_writer_struct(&writer);
+  state.runtime = runtime;
+  state.bundle = bundle;
+  state.callback_ctx = &callback_ctx;
+  state.writer = &writer;
+  state.fast_lane_can_suspend = 1;
+  callback_ctx.runtime_schema = runtime_schema ? runtime_schema : &PL_sv_undef;
+  callback_ctx.context = context_value;
+  callback_ctx.variables = variables;
+  callback_ctx.root_value = root_value;
+  callback_ctx.native_program = program;
+  state.empty_args_sv = empty_args_sv = gql_runtime_vm_empty_args_sv(aTHX);
+
+  data_sv = gql_runtime_vm_execute_block_fast_sv(
+    aTHX_ &state, bundle->root_block_index, root_value
+  );
+  if (!state.fast_lane_suspended_sv) {
+    ret = gql_runtime_vm_fast_response_sv(aTHX_ data_sv, &writer);
+    gql_runtime_vm_clear_writer_struct(aTHX_ &writer);
+    SvREFCNT_dec(callback_ctx.materialized_variables);
+    SvREFCNT_dec(empty_args_sv);
+    *handled_out = 1;
+    return ret;
+  }
+
+  promise_sv = state.fast_lane_suspended_sv;
+  state.fast_lane_suspended_sv = NULL;
+  Newxz(shared, 1, gql_runtime_vm_fast_root_continuation_shared_t);
+  shared->refcount = 1;
+  shared->arming = 1;
+  resolve_callback_sv = gql_runtime_vm_new_fast_root_continuation_callback_sv(
+    aTHX_ gql_runtime_vm_new_fast_root_continuation_ctx(
+      aTHX_ runtime_sv, program_sv, runtime_schema, root_value, context_value,
+      variables, runtime, bundle, bundle->root_block_index, 0, 0, shared
+    )
+  );
+  reject_callback_sv = gql_runtime_vm_new_fast_root_continuation_callback_sv(
+    aTHX_ gql_runtime_vm_new_fast_root_continuation_ctx(
+      aTHX_ runtime_sv, program_sv, runtime_schema, root_value, context_value,
+      variables, runtime, bundle, bundle->root_block_index, 0, 1, shared
+    )
+  );
+  ret = gql_runtime_vm_call_then_promise_xs_sv(
+    aTHX_ promise_sv, resolve_callback_sv, reject_callback_sv, NULL
+  );
+  shared->arming = 0;
+  if (shared->sync_response_sv) {
+    SV *sync_response_sv = shared->sync_response_sv;
+    shared->sync_response_sv = NULL;
+    SvREFCNT_dec(ret);
+    ret = sync_response_sv;
+  }
+  SvREFCNT_dec(resolve_callback_sv);
+  SvREFCNT_dec(reject_callback_sv);
+  SvREFCNT_dec(promise_sv);
+  gql_runtime_vm_clear_writer_struct(aTHX_ &writer);
+  SvREFCNT_dec(callback_ctx.materialized_variables);
+  SvREFCNT_dec(empty_args_sv);
+  if (--shared->refcount == 0) {
+    SvREFCNT_dec(shared->sync_response_sv);
+    Safefree(shared);
+  }
+  *handled_out = 1;
+  return ret;
 }
 
 /*

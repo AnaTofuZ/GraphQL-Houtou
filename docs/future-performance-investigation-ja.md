@@ -1200,3 +1200,47 @@ Phase 2の「退行」とは異なり「退行はないが改善もない」結�
 ループ中に解決済みsiblingを直接`native_value_t`へ書き込む設計へ作り直す必要が
 ある(promotionが起きるまでは何も確保しないというsync-first原則を保ったまま、
 promotion後のperl SV往復自体をなくす設計が要る)。
+
+### 14.19 data_hv往復の除去(§14.18の宿題を実施)
+
+§14.18末尾で指摘した最適化を実装した。`gql_runtime_vm_execute_root_block_fast_multi_sv`
+の返り値を`SV *`(RVラップされた`data_hv`)から`void`へ変更し、呼び出し側が
+`Newxz`した`block->op_count`要素の`SV **resolved_values`配列へ、op位置をindexとして
+解決済みの値を直接書き込む方式にした(suspendしたop・`should_execute_current_op_fast`
+でskipされたopはNULLのまま)。data_hvの構築は呼び出し側(`gql_runtime_vm_try_execute_fast_root_continuation_sv`)
+がこの配列を見て初めて行う:
+
+- `frame == NULL`(全同期): `resolved_values[]`から`data_hv`を構築し、従来通り
+  `gql_runtime_vm_fast_response_sv`へ渡す。1 hv_store/fieldという回数は変わらず、
+  単に「ループ中に都度」から「ループ後に一括」へタイミングが変わっただけなので、
+  全同期ケースのコストは変化しない(sync-first原則を維持)。
+- `frame != NULL`(1つ以上promotion): `data_hv`を一切経由せず、`resolved_values[]`
+  から直接`gql_runtime_vm_native_object_store(frame->values_value, slot->result_name,
+  /*borrowed=*/1, gql_runtime_vm_new_native_value_scalar(...))`を呼ぶ。
+
+従来の`gql_runtime_vm_native_value_from_sv(data_rv)`(HVの汎用変換)は、
+`hv_iterinit`/`hv_iternext`によるtraversalに加えて、`gql_runtime_vm_native_object_store`
+呼び出し時に`name_borrowed=0`を渡すため**フィールド名を再度savepvでコピーしていた**
+(元々`hv_store`で1回コピー済みの名前を、変換時にもう1回コピーする二重コピーになって
+いた)。今回の変更では、fast lane側がすでに知っている`slot->result_name`(plan所有の
+borrowed文字列)をそのまま`borrowed=1`で渡すため、このコピーが完全になくなる。
+
+5標本中央値(`benchmark_async_multi_leaf`、旧来のfallback、すなわちPhase 3導入前の
+基準との比較):
+
+| width | 旧executor(fallback) | Phase 3(§14.18時点) | 今回(data_hv除去後) |
+|---|---:|---:|---:|
+| 2 | 122,528 req/s (100%) | 124,254 req/s (101.4%) | 121,963 req/s (99.5%) |
+| 5 | 100,014 req/s (100%) | 100,019 req/s (100.0%) | 102,128 req/s (102.1%) |
+| 10 | 78,196 req/s (100%) | 75,156 req/s (95.9%) | 79,481 req/s (101.6%) |
+
+width 5・10では旧fallbackに対して初めて明確な(誤差を超えた)改善が確認できた。
+widthが大きいほど改善幅が伸びる(width 2はほぼ横ばい、10で+1.6pt)のは、削減した
+コストがフィールド数に比例するfixed costだからで、想定通りの傾向である。width 2では
+`Newxz`/`Safefree`した配列自体の確保コストが、削減できたコピー1回分の利益とほぼ
+相殺していると見られる。
+
+正しさは既存の全492テストに加え、unicode文字列siblingがUTF8フラグを保持したまま
+この新しい直接経路を通ることを確認する手動検証、500回のpromotionあり実行+500回の
+全同期実行を混ぜたリーク検証、49ファイル個別実行でのASan(複数hash seed)で
+確認した。

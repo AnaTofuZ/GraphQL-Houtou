@@ -503,7 +503,7 @@ static int gql_runtime_vm_slot_uses_native_one_arg_abi(const gql_runtime_vm_nati
 static int gql_runtime_vm_slot_uses_explicit_generic_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_slot_resolver_sv(const gql_runtime_vm_native_runtime_t *runtime, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
-static SV *gql_runtime_vm_execute_root_block_fast_multi_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source, gql_runtime_vm_block_frame_t **frame_out);
+static void gql_runtime_vm_execute_root_block_fast_multi_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source, SV **resolved_values, gql_runtime_vm_block_frame_t **frame_out);
 static SV *gql_runtime_vm_try_execute_fast_root_continuation_sv(
   pTHX_ SV *runtime_sv, SV *program_sv,
   gql_runtime_vm_native_runtime_t *runtime,
@@ -9749,19 +9749,30 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
  * GQL_VM_PENDING_PROMISE_(GENERIC|RESOLVED)_VALUE_SV pending entry on a
  * lazily-created block_frame_t and the loop simply continues. *frame_out
  * stays NULL when nothing suspended (the fully-synchronous, zero-tax
- * case); the returned data_hv always holds every field that resolved
- * without suspending, whether before or after the first suspension. */
-static SV *
+ * case).
+ *
+ * resolved_values is a caller-owned, block->op_count-sized, zeroed array;
+ * this function stores one owned SV reference per op that resolved
+ * without suspending (NULL for a suspended or should-execute-skipped op),
+ * indexed by op position. The caller - not this function - decides how to
+ * turn that into either a plain data_hv (the all-synchronous case) or
+ * frame->values_value (the promoted case): every value here is already a
+ * final, fully-coerced Perl scalar, so building an intermediate HV only to
+ * immediately walk and reconvert it via gql_runtime_vm_native_value_from_sv
+ * would redundantly re-copy each already plan-owned field name and pay
+ * hv_iterinit/hv_iternext traversal on top of the hv_store this loop would
+ * otherwise do - pure overhead the promoted path doesn't need. */
+static void
 gql_runtime_vm_execute_root_block_fast_multi_sv(
   pTHX_
   gql_runtime_vm_exec_state_t *state,
   IV block_index,
   SV *source,
+  SV **resolved_values,
   gql_runtime_vm_block_frame_t **frame_out
 )
 {
   gql_runtime_vm_native_block_t *block;
-  HV *data_hv;
   IV i;
   gql_runtime_vm_block_frame_t *frame = NULL;
 
@@ -9774,7 +9785,6 @@ gql_runtime_vm_execute_root_block_fast_multi_sv(
   block = &state->bundle->blocks[block_index];
   state->block = block;
   state->block_index = block_index;
-  data_hv = newHV();
 
   for (i = 0; i < block->op_count; i++) {
     gql_runtime_vm_native_op_t *op = &block->ops[i];
@@ -9847,17 +9857,13 @@ gql_runtime_vm_execute_root_block_fast_multi_sv(
      * non-null propagation here - unlike gql_runtime_vm_execute_block_fast_sv,
      * which must handle arbitrary blocks. */
     gql_runtime_vm_path_frame_decref(field_path);
-    if (!completed) {
-      completed = newSVsv(&PL_sv_undef);
-    }
-    hv_store(data_hv, slot->result_name, (I32)slot->result_name_len, completed, 0);
+    resolved_values[i] = completed ? completed : newSVsv(&PL_sv_undef);
   }
 
   state->path_frame = NULL;
   state->path_frame_is_current_field = 0;
 
   *frame_out = frame;
-  return newRV_noinc((SV *)data_hv);
 }
 
 static gql_runtime_vm_fast_root_continuation_ctx_t *
@@ -10222,33 +10228,62 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
     return ret;
   }
 
-  data_sv = gql_runtime_vm_execute_root_block_fast_multi_sv(
-    aTHX_ &state, bundle->root_block_index, root_value, &frame
-  );
-
-  if (!frame) {
-    ret = gql_runtime_vm_fast_response_sv(aTHX_ data_sv, writer);
-    gql_runtime_vm_writer_decref(aTHX_ writer);
-    SvREFCNT_dec(callback_ctx.materialized_variables);
-    SvREFCNT_dec(empty_args_sv);
-    *handled_out = 1;
-    return ret;
-  }
-
-  /* At least one sibling suspended: fold every sibling that DID resolve
-   * (whether before or after the first suspension) into the frame's
-   * native value tree in one shot, then hand off to the same
-   * finalize/arm/drain machinery the generic async executor's own root
-   * frame uses (gql_runtime_vm_block_frame_finalize_sv), instead of
-   * hand-rolling completion here as the single-field continuation does -
-   * with N siblings that could settle back-to-back, this needs the same
-   * async_scheduler_draining-guarded arm ordering the generic lane already
-   * relies on. */
   {
-    SV *data_rv = data_sv;
-    gql_runtime_vm_native_value_destroy(aTHX_ frame->values_value);
-    frame->values_value = gql_runtime_vm_native_value_from_sv(aTHX_ data_rv);
-    SvREFCNT_dec(data_rv);
+    SV **resolved_values;
+    Newxz(resolved_values, block->op_count, SV *);
+    gql_runtime_vm_execute_root_block_fast_multi_sv(
+      aTHX_ &state, bundle->root_block_index, root_value, resolved_values, &frame
+    );
+
+    if (!frame) {
+      /* Fully synchronous: build the plain response hash directly from the
+       * per-op array. No native_value_t ever gets built on this path. */
+      HV *data_hv = newHV();
+      for (i = 0; i < block->op_count; i++) {
+        gql_runtime_vm_native_slot_t *slot;
+        if (!resolved_values[i]) {
+          continue;
+        }
+        slot = &block->slots[block->ops[i].slot_index];
+        hv_store(data_hv, slot->result_name, (I32)slot->result_name_len, resolved_values[i], 0);
+      }
+      Safefree(resolved_values);
+      data_sv = newRV_noinc((SV *)data_hv);
+      ret = gql_runtime_vm_fast_response_sv(aTHX_ data_sv, writer);
+      gql_runtime_vm_writer_decref(aTHX_ writer);
+      SvREFCNT_dec(callback_ctx.materialized_variables);
+      SvREFCNT_dec(empty_args_sv);
+      *handled_out = 1;
+      return ret;
+    }
+
+    /* At least one sibling suspended: fold every sibling that DID resolve
+     * (whether before or after the first suspension) directly into the
+     * frame's native value tree - skipping the intermediate HV entirely,
+     * since every value here is already a final Perl scalar and every name
+     * is already a plan-owned string safe to borrow, unlike
+     * gql_runtime_vm_native_value_from_sv's generic HV-walking path, which
+     * would re-copy each name and pay hv_iterinit/hv_iternext traversal for
+     * no benefit here - then hand off to the same finalize/arm/drain
+     * machinery the generic async executor's own root frame uses
+     * (gql_runtime_vm_block_frame_finalize_sv), instead of hand-rolling
+     * completion here as the single-field continuation does: with N
+     * siblings that could settle back-to-back, this needs the same
+     * async_scheduler_draining-guarded arm ordering the generic lane
+     * already relies on. */
+    for (i = 0; i < block->op_count; i++) {
+      gql_runtime_vm_native_slot_t *slot;
+      if (!resolved_values[i]) {
+        continue;
+      }
+      slot = &block->slots[block->ops[i].slot_index];
+      gql_runtime_vm_native_object_store(
+        aTHX_ frame->values_value, slot->result_name, 1,
+        gql_runtime_vm_new_native_value_scalar(aTHX_ resolved_values[i])
+      );
+      SvREFCNT_dec(resolved_values[i]);
+    }
+    Safefree(resolved_values);
   }
   frame->deferred_resolves_response = 1;
 

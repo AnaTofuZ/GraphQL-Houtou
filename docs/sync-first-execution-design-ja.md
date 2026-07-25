@@ -387,5 +387,17 @@ fast laneでの安価なresolver呼び出しの利益を相殺していると見
 次に性能改善を狙うなら、`data_hv`を経由したPerl SVの一括変換をなくし、fast lane
 ループ中に解決済みsiblingを直接`native_value_t`へ書き込む設計へ作り直す必要がある。
 
+12. 上記の宿題を実施した(詳細は`docs/future-performance-investigation-ja.md`
+    §14.19)。ブロックループの返り値を`data_hv`のRVから、呼び出し側が確保した
+    `SV **resolved_values`配列(op位置でindexし、解決済みの値を直接格納)へ変更。
+    `frame`が作られなかった(全同期)場合のみループ後に`data_hv`を組み立て、
+    `frame`が作られた場合はdata_hvを一切経由せず`resolved_values[]`から直接
+    `frame->values_value`へ書き込む(plan所有のフィールド名をborrowedで渡すため、
+    従来`gql_runtime_vm_native_value_from_sv`が行っていた名前の二重コピーも
+    なくなった)。5標本中央値で、旧executorへのfallback比 width 5で+2.1%、
+    width 10で+1.6%の改善を確認(width 2はほぼ横ばい)。全492テスト、ASan
+    (49ファイル個別実行・複数hash seed)、unicode文字列siblingのUTF8保持、
+    promotionありなしを混ぜた1000回のリーク検証で確認済み。
+
 旧async executorはfallbackとして残す。対象shapeが明示的に判定でき、correctnessと性能の両方を
 満たした範囲だけをsync-first経路へ移す。

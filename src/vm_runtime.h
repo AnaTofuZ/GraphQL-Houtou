@@ -286,6 +286,18 @@ typedef struct {
   gql_runtime_vm_path_frame_t *path_frame;
   int path_frame_is_current_field;
   SV *empty_args_sv;
+  /* The request's program SV (the Perl-visible handle wrapping
+   * callback_ctx->native_program) and the true root block index, needed
+   * only when the fast lane must lazily promote to a real
+   * exec_state_handle_t (see gql_runtime_vm_ensure_fast_lane_state_sv) -
+   * stored here (rather than threaded through every intervening function
+   * signature) so a promotion trigger point nested arbitrarily deep in the
+   * dispatch chain (e.g. inside an object list item's own child block,
+   * where block_index above has already been overwritten with the ITEM's
+   * own block index) can still reach the true root block index. Set once,
+   * never overwritten, unlike block_index. */
+  SV *program_sv;
+  IV fast_lane_root_block_index;
   gql_runtime_vm_writer_t *writer;
   const gql_runtime_vm_native_block_t *block;
   const gql_runtime_vm_native_op_t *op;
@@ -297,6 +309,13 @@ typedef struct {
    * recorded), consumed by the enclosing field/item check so propagation
    * does not add one error per level. */
   U8 null_carries_error;
+  /* Sync-first suspension channel. Disabled on the strict sync lanes.
+   * When enabled, a promise-returning resolver transfers the owned promise
+   * SV here and the fast block loop unwinds without completing or storing
+   * the current field. A continuation owner must take and clear the SV
+   * before destroying this state. */
+  U8 fast_lane_can_suspend;
+  SV *fast_lane_suspended_sv;
   /* Deferred croak channel for the sync fast lanes: croaking from inside
    * the lane longjmps past the recursion that owns the live path frame
    * chain and leaks it. Detection sites (promise-returning resolver,
@@ -305,6 +324,37 @@ typedef struct {
    * GraphQL::Houtou::Error becomes a request-error envelope at the Perl
    * boundary - and the top-level entry croak_sv()s it after cleanup. */
   SV *fast_lane_deferred_croak_sv;
+  /* Item-level suspension channel for a list field, parallel to
+   * fast_lane_suspended_sv: when a list field's own resolver result
+   * settles to an array whose items are still pending (rather than the
+   * field's own call being pending), gql_runtime_vm_complete_current_list_fast_sv
+   * stashes the raw, not-yet-item-completed array here instead of
+   * completing (or, on the strict sync lanes, deferred-croaking) each item
+   * in place - a continuation owner must take and clear this before
+   * destroying this state, same contract as fast_lane_suspended_sv. */
+  SV *fast_lane_list_pending_source_sv;
+  /* Request-scoped exec_state_handle_t SV, shared between field-level
+   * suspension, leaf item-level list pending (fast_lane_list_pending_source_sv)
+   * and object/abstract item-level list pending (Phase 5,
+   * fast_lane_list_pending_result_sv below): a suspension discovered deep
+   * inside an item's own child block (nested under
+   * gql_runtime_vm_complete_current_list_fast_sv) needs this same handle to
+   * finalize that item's own child block_frame, without constructing a
+   * second, redundant handle for the same request. Built at most once per
+   * request; the owning root frame's response_frame pointer is kept in
+   * sync by whichever caller (always the root per-op loop) owns the root
+   * block_frame_t itself - this field only ever holds the handle SV. */
+  SV *fast_lane_root_state_sv;
+  /* Result of the object/abstract list item loop already having done the
+   * safe, exactly-once-preserving per-item work (unlike
+   * fast_lane_list_pending_source_sv, which stashes a raw, not-yet-
+   * item-completed array for the plain-leaf case): a list_pending handle
+   * (gql_runtime_vm_list_pending_handle_sv's return) built directly from an
+   * item array whose sync items are already final values and whose
+   * suspended items are already per-item Promise::XS promises. A
+   * continuation owner must take and clear this before destroying this
+   * state, same contract as fast_lane_suspended_sv. */
+  SV *fast_lane_list_pending_result_sv;
 } gql_runtime_vm_exec_state_t;
 
 enum {
@@ -342,6 +392,11 @@ typedef struct {
 struct gql_runtime_vm_native_value {
   U8 kind_code;
   U8 scalar_kind_code;
+  /* Whether scalar_pv holds UTF-8-flagged text (SvUTF8 on the source SV)
+   * rather than an unflagged byte/Latin-1 string; materialize_sv restores
+   * the flag from this so a resolver's wide-character string survives the
+   * round trip through this tree unchanged. */
+  U8 scalar_pv_is_utf8;
   IV scalar_iv;
   NV scalar_nv;
   char *scalar_pv;
@@ -857,6 +912,7 @@ gql_runtime_vm_new_native_value_scalar(pTHX_ SV *value)
   gql_runtime_vm_native_value_t *ret;
   ret = gql_runtime_vm_native_value_pool_get(GQL_VM_NATIVE_VALUE_SCALAR);
   ret->scalar_kind_code = GQL_VM_NATIVE_SCALAR_UNDEF;
+  ret->scalar_pv_is_utf8 = 0;
   ret->scalar_iv = 0;
   ret->scalar_nv = 0.0;
   ret->scalar_pv = NULL;
@@ -876,6 +932,7 @@ gql_runtime_vm_new_native_value_scalar(pTHX_ SV *value)
     ret->scalar_kind_code = GQL_VM_NATIVE_SCALAR_PV;
     ret->scalar_pv = savepvn(pv, len);
     ret->scalar_pv_len = len;
+    ret->scalar_pv_is_utf8 = SvUTF8(value) ? 1 : 0;
     return ret;
   }
   if (SvIOKp(value)) {
@@ -994,6 +1051,7 @@ gql_runtime_vm_native_value_destroy(pTHX_ gql_runtime_vm_native_value_t *value)
       break;
   }
   value->scalar_kind_code = GQL_VM_NATIVE_SCALAR_UNDEF;
+  value->scalar_pv_is_utf8 = 0;
   value->scalar_pv = NULL;
   value->scalar_pv_len = 0;
   value->scalar_fallback_sv = NULL;
@@ -1048,8 +1106,13 @@ gql_runtime_vm_native_value_materialize_sv(pTHX_ gql_runtime_vm_native_value_t *
           return newSViv(value->scalar_iv);
         case GQL_VM_NATIVE_SCALAR_NV:
           return newSVnv(value->scalar_nv);
-        case GQL_VM_NATIVE_SCALAR_PV:
-          return newSVpvn(value->scalar_pv ? value->scalar_pv : "", value->scalar_pv_len);
+        case GQL_VM_NATIVE_SCALAR_PV: {
+          SV *pv_sv = newSVpvn(value->scalar_pv ? value->scalar_pv : "", value->scalar_pv_len);
+          if (value->scalar_pv_is_utf8) {
+            SvUTF8_on(pv_sv);
+          }
+          return pv_sv;
+        }
         case GQL_VM_NATIVE_SCALAR_FALLBACK_SV:
         default:
           return value->scalar_fallback_sv ? newSVsv(value->scalar_fallback_sv) : newSVsv(&PL_sv_undef);
@@ -1146,6 +1209,7 @@ gql_runtime_vm_native_value_clone(pTHX_ const gql_runtime_vm_native_value_t *val
           if (value->scalar_pv && value->scalar_pv_len) {
             ret->scalar_pv = savepvn(value->scalar_pv, value->scalar_pv_len);
             ret->scalar_pv_len = value->scalar_pv_len;
+            ret->scalar_pv_is_utf8 = value->scalar_pv_is_utf8;
           }
           return ret;
         case GQL_VM_NATIVE_SCALAR_FALLBACK_SV:

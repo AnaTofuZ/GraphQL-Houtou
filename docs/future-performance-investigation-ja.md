@@ -997,3 +997,490 @@ batch callback自体と、callback実行中に次のloadを新しいqueueへ積�
 幅が増えるほどGraphQL executor自体の比率が高くなるため全体効果は薄まるが、例外、per-key
 error、`max_batch_size` chunkingを含む既存契約を変えず、すべてのdispatchで通るPerl/XS境界と
 一時配列操作を削減できる。
+
+### 14.16 sync-first root-leaf継続へのDataLoader Ticket統合
+
+GraphQL::HoutouはPSGI前提の同期Webアプリであり、Promise::XSとDataLoader Ticketは
+実行時間の重畳ではなくDataLoaderバッチ解決のためだけに存在する。したがって
+`docs/sync-first-execution-design-ja.md`で進めているroot-leaf継続の次段階は、汎用
+Promise::XSサポートより実際の主要トリガーであるDataLoader Ticketを先に統合する方が
+優先度が高いと判断した。
+
+`gql_runtime_vm_fast_lane_guard_promise_sv`にDataLoader Ticket認識を追加した。
+resolverの戻り値がTicketで、かつ既にfulfilled/rejected状態(`_dispatch_queue`の
+バッチ処理やcache hitで既に決着している場合)であれば、suspension channelへ触れずに
+その場で値/errorへ展開する。genuinely pending(state 0)のTicketのみ、従来の
+Promise::XSと同じsuspend-or-croak経路に合流する。
+
+genuinely pendingなTicketについては、`gql_runtime_vm_try_execute_fast_root_continuation_sv`
+から`gql_runtime_vm_call_then_promise_xs_sv`(Perlメソッド`then`経由)ではなく、
+`arm_frame`が既に使っている`gql_runtime_vm_subscribe_dataloader_ticket`をTicketへ
+直接呼ぶようにした。Promise::XSの`_settle_result`契約(`isa('Promise::XS::Promise')`
+判定)を壊さないよう、この分岐でのみ`Promise::XS::deferred()`を合成し、settle
+callbackがそれを`resolve`する側効果を持つ(callbackがG_VOID|G_DISCARD呼び出しに
+なるTicket subscriberから呼ばれた場合、戻り値そのものは読まれないため)。
+
+続けて、design docの §13 が次段階として明記していたresolve/reject継続ctxの統合を
+行った。従来はsuspendのたびに`gql_runtime_vm_fast_root_continuation_ctx_t`を
+resolve用・reject用に個別に2回確保していた(それぞれ6個の`newSVsv`を含む)。
+`gql_runtime_vm_pending_callback_ctx_t`が既に使っている`cv_refcnt`パターンを移植し、
+1回の`Newxz` + 6回の`newSVsv`で済むようにした。resolve/rejectの2つのXSUBは、ctxに
+フラグを持たせず、どちらのXSエントリポイント(`..._resolve_callback`/
+`..._reject_callback`)でCVが作られたかで区別する。
+
+回帰テストは`t/39_fast_lane_promise_fallback.t`に、単一のnullable root leaf field
+がfulfilled Ticket・pending Ticket(on_stall経由)・rejected Ticketをそれぞれ返す
+3ケースと、strict syncレーンでpending Ticketが引き続きactionableなcroakになることを
+追加した。`t/54_frame_leak_regression.t`には、200回のpending Ticket駆動root-leaf
+継続を連続実行してもblock/path frameがリークしないことを確認するstress testを
+追加した。全489 testが成功している。
+
+`util/execution-benchmark.pl`の`benchmark_async_preresolved_leaf`にTicket-ready
+(loaderを外側で一度だけprimeし、resolverはcache hitのみ行う)とTicket-pending
+(on_stall経由)の2バリアントを追加した。5標本中央値:
+
+| ワークロード | throughput | sync比 |
+|---|---:|---:|
+| sync leaf | 412,967 req/s | 100% |
+| async leaf (Promise::XS pre-resolved、既存) | 277,737 req/s | 67.3% |
+| async leaf (Ticket ready、新規) | 321,551 req/s | 77.9% |
+| async leaf (Ticket pending、on_stall経由、新規) | 139,515 req/s | 33.8% |
+
+Ticket readyはPromise::XS pre-resolvedに対して約+15.8%改善した。これは
+Promise::XSの`then()`が既に決着したpromiseに対しても呼び出しごとにderived promise
+objectを生成するのに対し、fulfilled Ticketの認識はsuspension channelにもderived
+objectにも触れず値を直接返すためである。Ticket pendingは新しい計測対象であり、
+before値は存在しない(旧来この形状のroot leafは全て汎用async executorを通っていた)。
+on_stallの駆動ループ自体(Perl側`_settle_result`のwhileループ)のコストが支配的で
+あるため、sync比は約34%に留まる。
+
+`util/dataloader-benchmark.pl --scenario execution`(root がobject listで今回の
+root-leaf継続の対象外)をPhase 1適用前後でstash比較したところ、unique/primed/repeated
+のいずれも数%以内の揺らぎに収まり、全resolver呼び出し箇所に追加したTicket判定
+(`gql_runtime_vm_sv_is_dataloader_ticket`、stashポインタ比較のみ)による広範な
+退行は見られなかった。
+
+次段階は、design docの§13 step 6が指摘する「Promise callback内で再帰的に完了処理を
+行う現在のresume方式をready queueへの統合に置き換える」作業であり、これは複数
+sibling pending fieldへ対象を広げる前の前提条件として扱う(`_dispatch_queue`が
+1つのCループでbatch内の複数Ticketを続けてsettleするため、現在の直接再帰方式は
+sibling数に比例したC stack再帰になり得る)。
+
+### 14.17 resume経路のscheduler統合を試作し、性能退行のため延期(Phase 2)
+
+design doc §13 step 6の実施として、settle callback(`gql_runtime_vm_fast_root_continuation_settle_sv`)
+がresponseを直接組み立てる代わりに、既存の汎用async executorが使っている
+`gql_runtime_vm_block_frame_t` + scheduler(`enqueue_frame`/`drain`/`process_frame`/
+`resolve_frame`)へ委譲する試作を行った。settleごとに最小限の`exec_state_handle_t`
+(`native_program`と`writer`のみ実質的に使う、他フィールドはゼロのまま既存の
+`ExecState::DESTROY`がNULL安全に解放する)と1エントリの`block_frame_t`を確保し、
+完了済みの値を`GQL_VM_PENDING_PROMISE_SV`としてpushしてdrainに委ねることで、
+汎用実行レーンと完全に同じ完了経路(response envelope組み立てを含む)を通した。
+
+`util/execution-benchmark.pl`の同一シナリオを共有する300件の独立したrootリーフ継続を
+1回の`DataLoader->dispatch`で一括settleするstress test(新規、恒久化はしていない)で
+正しさを確認し、ASan(hash seed 1/5/12)でもクリーンだった。
+
+性能面では、Ticket readyケース(suspendせず即決着するため元々settle_svを一切通らない)は
+無変化だったが、settle_svを実際に通るケースで実測の退行が出た。5標本中央値:
+
+| ワークロード | Phase 1 (直接構築) | Phase 2試作 (scheduler経由) | 差 |
+|---|---:|---:|---:|
+| async leaf (Promise::XS pre-resolved) | 277,737 req/s | 258,195 req/s | -7.0% |
+| async leaf (Ticket pending, on_stall経由) | 139,515 req/s | 135,886 req/s | -2.6% |
+| async leaf (Ticket ready) | 321,551 req/s | 326,123 req/s | ±0(settle_svを通らない) |
+
+settleのたびに`exec_state_handle_t`・heap writer・block_frameを確保し、さらに
+Perl SV → native_value_t → Perl SVの往復変換を経由するコストが、直接
+`hv_store`+`gql_runtime_vm_fast_response_sv`で組み立てる場合に対して測定可能な
+オーバーヘッドとして現れた。
+
+この試作の副産物として、`gql_runtime_vm_native_value_t`のscalar表現に
+UTF8フラグを保持するフィールドがなく、resolverが返したUnicode文字列がこの
+往復変換を経由すると(promise/ticket経由のフィールド全般、rootリーフに限らず)
+UTF8フラグが失われるという、既存の汎用async executorに元々存在していた
+バグを発見した(`gql_runtime_vm_native_value_t.scalar_pv_is_utf8`を追加し、
+constructor/destroy/materialize/cloneの4箇所で一貫して扱うよう修正)。これは
+Phase 2の成否とは独立に価値のある修正であり、Phase 2自体は延期したが
+このUTF8修正は採用した。
+
+性能退行が「正しさの検証が目的」というPhase 2自身の位置づけに対して無視できない
+規模だったため、ユーザーの判断でPhase 2を単独採用せず、Phase 3(複数sibling
+pending fieldへの拡張)を実装する段階まで延期することにした。単一fieldの場合は
+Phase 1の軽量な直接構築方式を維持し、block_frame_t/scheduler経由のresumeは
+実際に複数sibling を扱う必要が生じた時点で導入する。settle_svの実装は
+Phase 1cの状態(直接`hv_store`+`gql_runtime_vm_fast_response_sv`)へ戻した。
+
+### 14.18 複数sibling root fieldへの拡張(Phase 3)
+
+design docの§13 step 3/5、および§7の段階移行計画に沿って、rootの selection set が
+「nullableなscalar/enum leafが複数個」の場合に対応する fast root continuation の
+拡張を実装した(`perf/sync-first-continuation`ブランチ)。
+
+**eligibility guardの緩和**: `block->op_count != 1`の弾きを`op_count >= 1`へ緩和し、
+ブロック内の**全op**が既存の単一条件(GENERIC completion、runtime directiveなし、
+nullable、child blockなし)を満たすことを要求する。1つでも満たさないopがあれば
+block全体を旧executorへfallbackする。
+
+**重要な発見: bundle上のop_indexはnative_program(生の未剪定プログラム)上の
+op_indexと常に一致するとは限らない。** `gql_runtime_vm_prepare_cached_bundle_in_place`
+は、静的に評価可能な`@skip`/`@include`directive(`has_directives &&
+directives_mode_code == GQL_VM_ARGS_STATIC`)を持つopについて、条件がfalseなら
+そのopをbundleの`ops[]`配列から削除する。これにより、削除されたopより後ろにある
+opは(それ自身がdirectiveを一切持たなくても)bundle上でインデックスがズレる。
+fast laneはbundle上のopを列挙する一方、`gql_runtime_vm_exec_state_complete_async_sv`
+は`s->native_program->blocks[block_index]->ops[op_index]`という生のprogramを
+直接インデックスするため、この2つの空間が食い違うと誤ったopを参照しうる。対策として
+eligibility guardに「このblockで`bundle_block->op_count ==
+native_program->blocks[block_index].op_count`である」というblock単位のチェックを
+追加した(削除は常にop_countを減らす方向にしか働かないため、この一致は「1つも
+削除されていない」ことの十分条件になる)。
+
+なお実験的に検証したところ、今回のeligibility(全op が GENERIC completion 限定)の
+下では、`gql_runtime_vm_exec_state_complete_async_sv`は実際には`slot`を
+`entry->slot_index`という独立したパラメータ経由で参照しており(`op->slot_index`
+経由ではない)、かつ完了処理自体は`slot`の返り値型情報のみに依存するため、この
+チェックを外してもテストケースでは可視の破損は再現しなかった(候補となる全opが
+同じcomplete_code=GENERICを共有するため)。ただし、これは今回の限定的な
+eligibilityがたまたま`op`自身のフィールドに依存しないために表面化しないだけで、
+将来complete_codeの制限を緩めるような拡張が`op`の内容に依存するようになった場合に
+静かな破損を生みかねないため、コストがほぼゼロの防御的チェックとして維持した。
+
+**既存の汎用scheduler機構をそのまま再利用**: suspendしたopは
+`gql_runtime_vm_slot_leaf_kind(...)`が`GQL_VM_LEAF_NONE`(組み込みでないcustom
+scalar)かどうかで`GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV`または
+`GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV`を選び(`gql_runtime_vm_then_complete_current_sv`
+の判定をそのまま踏襲)、`gql_runtime_vm_block_frame_push_pending_pvn_with_meta`で
+push する。最初のsuspend時にのみ遅延的に`block_frame_t`と実`exec_state_handle_t`
+(実entry pointが使うのと同じ構成: `gql_runtime_vm_new_cursor_struct_for_program`
++ `gql_runtime_vm_new_writer_struct` + `gql_runtime_vm_new_exec_state_handle_sv`)を
+確保し、ループを継続する。ループ終了後、`data_hv`に溜まった同期解決済みsiblingを
+`gql_runtime_vm_native_value_from_sv`で一括変換して`frame->values_value`へ差し込み、
+`gql_runtime_vm_block_frame_finalize_sv`(汎用async executor自身のroot frame
+finalizeが使っているのと同じ関数)へ委譲する。専用のctx/callback型は新設していない。
+
+**reentrancy上の重要な発見**: `gql_runtime_vm_block_frame_finalize_sv`は、arm前に
+`exec_state->async_scheduler_draining = 1`を立ててから`arm_frame`を呼び、arm後に
+元へ戻す、という既存のidiomを使っている。これは、arm中にsiblingの1つが
+(Promise::XSの`then()`が同期的にcallbackを呼ぶ場合のように)同期的にsettleし、
+その結果`pending_unresolved`が0になった際、settleコールバック自身が
+`enqueue_frame`+`drain`を呼んで`process_frame`を再入的に実行してしまうと、
+`arm_frame`のループが**まだ回っている最中に**`frame->pending_entries`配列が
+`process_frame`によって作り直され(古い配列は`Safefree`される)、`arm_frame`が
+保持している古いエントリへのポインタがダングリングになる、という重大な
+reentrancy事故を防ぐためのものである。もしこのidiomを踏襲せず`arm_frame`を
+裸で呼んでいたら、複数siblingが同一バッチで同期settleするケース(Case B:
+pre-resolved Promise::XSとpending Ticketの混在)で発生しうる、検出困難な
+use-after-free になっていた可能性が高い。既存の汎用executorがすでにこの問題を
+解決済みだったため、車輪の再発明を避けてそのまま再利用した。
+
+**検証**: 正しさは以下のシナリオで手動・自動双方で確認した — 複数siblingが同一
+DataLoaderバッチでpending → 一括settle、rejectしたsiblingが他の健全なsiblingを
+巻き込まないこと、pre-resolved Promise::XSとpending Ticketの混在(arm中の同期
+settleを経由する経路)、50件の独立したrequestが1回のbatch dispatchで settle、
+non-null/runtime directive/静的prune各条件でのfallback。全492テスト、49ファイル
+個別実行でのASan(複数hash seed)がクリーン。全同期の場合(async runtimeでも
+全fieldが同期解決)はsync runtimeと完全に同速(実測差ゼロ)であり、「全同期なら
+一切課税しない」というsync-first原則は維持されている。
+
+**性能**: `benchmark_async_multi_leaf`(width 2/5/10、末尾1個がDataLoader
+Ticket pending)で、Phase 3導入前(常に旧executorへfallback)と導入後を
+git stash比較したところ、**測定可能な改善は見られなかった**(width 2:
+122.5k→124.3k req/s、width 5: 100.0k→100.0k req/s、width 10: 78.2k→75.2k req/s、
+いずれも誤差範囲)。分析の結果、新経路は「suspendしていないsiblingをfast lane
+で安く解決する」利点がある一方、promotion時に`data_hv`全体を
+`gql_runtime_vm_native_value_from_sv`で一括変換するコストが新たに発生し、
+両者がほぼ相殺していると考えられる。exec_state_handle_t/writer/frame/arm/drainの
+固定コストは旧経路と共通(`gql_runtime_vm_block_frame_finalize_sv`を再利用して
+いるため)であり、これが支配的である可能性が高い。
+
+Phase 2の「退行」とは異なり「退行はないが改善もない」結果だったが、ユーザーの
+判断で正しさ・将来の最適化の土台としての価値を優先し、そのまま採用することにした。
+次に性能改善を狙うなら、`data_hv`を経由したPerl SVの一括変換を避け、fast lane
+ループ中に解決済みsiblingを直接`native_value_t`へ書き込む設計へ作り直す必要が
+ある(promotionが起きるまでは何も確保しないというsync-first原則を保ったまま、
+promotion後のperl SV往復自体をなくす設計が要る)。
+
+### 14.19 data_hv往復の除去(§14.18の宿題を実施)
+
+§14.18末尾で指摘した最適化を実装した。`gql_runtime_vm_execute_root_block_fast_multi_sv`
+の返り値を`SV *`(RVラップされた`data_hv`)から`void`へ変更し、呼び出し側が
+`Newxz`した`block->op_count`要素の`SV **resolved_values`配列へ、op位置をindexとして
+解決済みの値を直接書き込む方式にした(suspendしたop・`should_execute_current_op_fast`
+でskipされたopはNULLのまま)。data_hvの構築は呼び出し側(`gql_runtime_vm_try_execute_fast_root_continuation_sv`)
+がこの配列を見て初めて行う:
+
+- `frame == NULL`(全同期): `resolved_values[]`から`data_hv`を構築し、従来通り
+  `gql_runtime_vm_fast_response_sv`へ渡す。1 hv_store/fieldという回数は変わらず、
+  単に「ループ中に都度」から「ループ後に一括」へタイミングが変わっただけなので、
+  全同期ケースのコストは変化しない(sync-first原則を維持)。
+- `frame != NULL`(1つ以上promotion): `data_hv`を一切経由せず、`resolved_values[]`
+  から直接`gql_runtime_vm_native_object_store(frame->values_value, slot->result_name,
+  /*borrowed=*/1, gql_runtime_vm_new_native_value_scalar(...))`を呼ぶ。
+
+従来の`gql_runtime_vm_native_value_from_sv(data_rv)`(HVの汎用変換)は、
+`hv_iterinit`/`hv_iternext`によるtraversalに加えて、`gql_runtime_vm_native_object_store`
+呼び出し時に`name_borrowed=0`を渡すため**フィールド名を再度savepvでコピーしていた**
+(元々`hv_store`で1回コピー済みの名前を、変換時にもう1回コピーする二重コピーになって
+いた)。今回の変更では、fast lane側がすでに知っている`slot->result_name`(plan所有の
+borrowed文字列)をそのまま`borrowed=1`で渡すため、このコピーが完全になくなる。
+
+5標本中央値(`benchmark_async_multi_leaf`、旧来のfallback、すなわちPhase 3導入前の
+基準との比較):
+
+| width | 旧executor(fallback) | Phase 3(§14.18時点) | 今回(data_hv除去後) |
+|---|---:|---:|---:|
+| 2 | 122,528 req/s (100%) | 124,254 req/s (101.4%) | 121,963 req/s (99.5%) |
+| 5 | 100,014 req/s (100%) | 100,019 req/s (100.0%) | 102,128 req/s (102.1%) |
+| 10 | 78,196 req/s (100%) | 75,156 req/s (95.9%) | 79,481 req/s (101.6%) |
+
+width 5・10では旧fallbackに対して初めて明確な(誤差を超えた)改善が確認できた。
+widthが大きいほど改善幅が伸びる(width 2はほぼ横ばい、10で+1.6pt)のは、削減した
+コストがフィールド数に比例するfixed costだからで、想定通りの傾向である。width 2では
+`Newxz`/`Safefree`した配列自体の確保コストが、削減できたコピー1回分の利益とほぼ
+相殺していると見られる。
+
+正しさは既存の全492テストに加え、unicode文字列siblingがUTF8フラグを保持したまま
+この新しい直接経路を通ることを確認する手動検証、500回のpromotionあり実行+500回の
+全同期実行を混ぜたリーク検証、49ファイル個別実行でのASan(複数hash seed)で
+確認した。
+
+### 14.20 root plain-leaf list fieldへの拡張(Phase 4)
+
+§11で挙げた境界(「listはchild blockを持たなくても各itemがPromiseの場合がある」)へ
+対応した。対象は`op->complete_code == GQL_VM_COMPLETE_LIST`かつ`child_block_index < 0`
+かつ`abstract_child_count == 0`の、object/abstract要素を持たないplain leaf list
+(`[String]`, `[Int!]`等)のみ。eligibility guardの他の条件(directive無し、
+nullable、bundle/native_program op_count一致)は既存のまま流用した。
+
+**item-level pendingの検出とfield-level pendingの分離不可能性。** §11で記録した
+とおり、resolverが返したlist全体をitem単位で検査するまでは、item内にpromise/Ticket
+が混じっているか分からない。かつ一度resolverを呼んだ後は「この形状は未対応」と
+判明しても旧async executorへやり直すことはできない(exactly-once保証を破る)。
+したがって、item-level pendingの対応をfield-level pendingの対応と同時に実装する
+必要があった。
+
+**実装。** `gql_runtime_vm_complete_current_list_fast_sv`の先頭(itemループの前)に
+`state->fast_lane_can_suspend`時のみ動くpre-scanを追加した。array中の各itemを見て、
+Promise::XSまたはgenuinely pendingなDataLoader Ticket(state 0)が1個でもあれば、
+生の(未completionの)array参照を新設フィールド`state->fast_lane_list_pending_source_sv`
+へ退避し、即座にplaceholderを返す(この時点でitemのleaf coercionは一切行わない)。
+1個も無ければ、従来のitemループをそのまま通す。既存のitemループ自体もTicket認識を
+追加し(fulfilled/rejectedをPromise::XSと同様に扱う)、strict syncレーンでの
+deferred croakが従来の「Promise::XSのみ検出」だった漏れを塞いだ。
+
+呼び出し元`gql_runtime_vm_execute_root_block_fast_multi_sv`のper-opループは、
+`fast_lane_suspended_sv`(field-level、既存)に加えて`fast_lane_list_pending_source_sv`
+(item-level、新規)も見るようにした。item-level pendingを検出した場合、
+Phase 3で「ループ終了後にのみ」構築していた実`exec_state_handle_t`
+(`gql_runtime_vm_new_exec_state_handle_sv`+`gql_runtime_vm_new_cursor_struct_for_program`)
+を、新設ヘルパ`gql_runtime_vm_ensure_root_fast_multi_promoted_sv`経由でループ**内**の
+最初に必要になった瞬間まで前倒しし(field-level/item-levelどちらが先でも1回だけ
+構築、以降のiterationは使い回す)、既存の`gql_runtime_vm_exec_state_complete_current_native_async_sv`
+のGQL_VM_COMPLETE_LISTケースへ生のarrayをそのまま渡して委譲する。このケースは
+既存のtwo-layer機構(Layer 1: `gql_runtime_vm_new_list_item_child_callback_sv`+
+`gql_runtime_vm_call_then_promise_for_state_sv`によるitem単位のsettle callback、
+Layer 2: `gql_runtime_vm_list_pending_handle_sv`によるitem集約+owner frame通知)を
+そのまま使うため、item-level pending専用のロジックを新たに書く必要はなかった。
+返ってきたlist_pendingは既存の`gql_runtime_vm_push_pending_list_pending`で
+frameのpending entryとして登録する(`GQL_VM_PENDING_LIST_PENDING_PTR`、既存の
+scheduler側処理がそのまま扱える)。
+
+呼び出し元の末尾(ループ後、`frame`が非NULLなら実handleを構築していた箇所)も、
+ループ内で既にpromotion済みなら`state_sv`を再利用し、二重構築を避けるよう変更した。
+
+単一op(`block->op_count == 1`)の直接構築レーン(Phase 1c/2で確立した、単一
+leaf field専用の軽量パス)は、単一opがLIST型の場合は使わず複数op用の共有ループへ
+フォールスルーするよう条件を追加した(`op->complete_code == GQL_VM_COMPLETE_GENERIC`
+の場合のみ直接構築レーンに入る)。単一list opのitem-level pendingは複数opの場合と
+同じ実handle構築が必要で、直接構築レーンにその機構を複製する意味がないため。
+
+**計測。** `benchmark_async_leaf_list`(新規、単一root list field、item全部が
+同じDataLoaderバッチでgenuinely pending)を追加し、旧executor(Phase 4導入前、
+LISTは常にineligibleでfallback)と比較した。5標本中央値:
+
+| width | 旧executor(fallback) | Phase 4 |
+|---|---:|---:|
+| 2 | 75,502 req/s (100%) | 73,215 req/s (97.0%) |
+| 5 | 47,117 req/s (100%) | 46,072 req/s (97.8%) |
+| 10 | 28,976 req/s (100%) | 28,572 req/s (98.6%) |
+
+誤差(実行間で±5〜8%程度のばれ)の範囲内で、明確な改善は確認できなかった
+(Phase 3と同じ結末)。理由も同型: item-level pendingが1件でもあれば結局
+Phase 4も旧経路もほぼ同じ実`exec_state_handle_t`+two-layer機構を構築するため、
+「pendingが起きるケース」では削減できるコストがほとんど無い。
+
+一方、sync-firstの主眼である**全item同期解決のケース**(DataLoader/Promiseを
+一切使わないlist resolver)では、async runtimeが従来LISTを問答無用でfallback
+していたぶんの差が消えることを確認した(`--case`に含めない手動ベンチマーク、
+単一root list field・5要素・全item同期):
+
+| | 旧executor(fallback) | Phase 4 |
+|---|---:|---:|
+| sync runtime | 160,776 req/s (100%) | 163,063〜165,257 req/s (101〜103%) |
+| async runtime | 150,367 req/s (93.5%) | 162,049〜164,622 req/s (100〜102%) |
+
+Phase 4適用前はasync runtimeがsync runtimeに対して-6〜7%の固定費を払っていた
+(list opが常にineligibleで実handle経由になるため)。Phase 4適用後はほぼ同速
+(sync-first原則どおり、全同期なら実handleを一切構築しない)。pendingが起きる
+ケースでの退行は確認できなかった一方、改善もこの「全同期list」ケースに限られる。
+
+**正しさの検証。** §11の回帰と同じ領域のため通常以上に慎重に検証した。
+t/39_fast_lane_promise_fallback.tへ6subtestを追加:全item同一batch pending、
+sync siblingとlist pendingの共存、field-level pendingとitem-level pendingの
+共存、item個別rejectがそのitemのみをnullにすること(§11相当の境界)、
+`[String!]`でitem-level non-null違反がlist全体をnullにしlist自身は
+nullable field としてnullになること、object list itemが引き続き旧経路へ
+fallbackすること。t/54_frame_leak_regression.tへ200回のitem-level list
+pending promotionのリークストレスを追加。全494テストが通過し、
+`debug_frame_live_counts_xs()`でblock_frame/path_frameとも0を確認した。
+
+**ASan環境問題の原因判明と解消。** 当初、この環境でXS moduleロード自体
+(`t/00_compile.t`)がPhase 4の変更と無関係にstash前後どちらのビルドでも
+数分規模で完了しない(catastrophically遅い)現象に遭遇した。`sample`で
+スタックを採取したところ、`__asan::AsanInitFromRtl()`の初期化中に
+`dyld_shared_cache_iterate_text_swift`経由で`_Block_copy`が呼ばれ、
+そこから再度mallocへ入り`AsanInitFromRtl()`を再入する形で
+`StaticSpinMutex::LockSlow()`上で自己デッドロックしていた
+(`/bin/echo`など他の実行ファイルでは踏まない、Perlバイナリ特有の
+init順序で顕在化)。原因は`DYLD_INSERT_LIBRARIES`に指定していた
+nix store配下の`libclang_rt.asan_osx_dynamic.dylib`(compiler-rt-libc-21.1.8)
+が、このmacOSバージョン(26.5.2、dyldの実装)と組み合わせたときに
+非互換だったこと。ビルド自体は`cc`(Apple clangバージョン21、
+`/usr/bin/cc`、Xcode Command Line Tools由来)で行っていたため、
+**同じバージョンのApple clang付属のASanランタイム**
+(`/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin/
+libclang_rt.asan_osx_dynamic.dylib`)に差し替えたところ、
+デッドロックは再現せず、`t/00_compile.t`は0.1秒台で完了した。
+コンパイラとASanランタイムのバージョンを揃える(同じツールチェイン由来の
+ものを使う)のが要点で、`DYLD_INSERT_LIBRARIES`に無関係なビルドの
+ASanランタイムを指定しないこと、というのがこの環境固有の教訓である。
+
+この置き換え後、49ファイル個別実行・`PERL_HASH_SEED`5点(1, 7, 42, 99,
+12345)のフルスイープを実施し、全245実行がクリーン(異常終了・ASan報告
+なし)であることを確認した。
+
+### 14.21 root object/abstract list fieldへの拡張(Phase 5)
+
+§13 item 4(`benchmark_async_preresolved`が対象とする形、object/abstract
+item を持つ root list)へ対応した。対象は Phase 4 と同様「item の child
+block(abstract の場合は取りうる全 member block)自体が flat」なものに
+限定する: item 自身の各フィールドは `GQL_VM_COMPLETE_GENERIC` または
+`GQL_VM_COMPLETE_LIST`(かつそのLISTもplain leaf)のみで、runtime
+directive無し、**ただし non-null(`return_type_kind_code == 8`)は許可**
+(Phase 4までのroot opでは禁止していたが、item自身のfieldでは後述の
+sync-first パターンが正しく処理できることを確認済み)。item の
+フィールドがさらに object/abstract を持つ場合(2階層目のネスト)は
+今回もスコープ外とし、既存の(exactly-once未対応な)経路へ従来通り
+fallbackさせる。
+
+**調査で発見した重大な設計課題(exactly-once違反のリスク)。**
+`gql_runtime_vm_complete_current_list_fast_sv`のobject/abstract item
+分岐は、各itemを`gql_runtime_vm_execute_block_fast_sv`(child block全般で
+共有される「1つでもsuspendしたらブロック全体を破棄してNULLを返す」設計)
+へ委譲していた。item のchild blockに複数フィールドがある場合(例:
+`{ name, team }`)、`name`がcustom resolverで同期解決した**後**に`team`が
+suspendすると、この設計ではブロック全体を破棄してNULLを返す。これを
+そのまま汎用executorへfallbackしてやり直すと、既に解決済みだった`name`
+のresolverが二重に呼ばれる(exactly-once保証違反)。加えて、
+`gql_runtime_vm_complete_current_list_fast_sv`の呼び出し側はこのNULLを
+「non-null違反による自己null化」と誤認するバグも同時に発見した
+(`state->fast_lane_suspended_sv`を一切チェックしていなかったため)。
+Phase 4時点ではeligibility guardが`child_block_index >= 0`を全面的に
+弾いていたため、この分岐が`fast_lane_can_suspend == 1`で到達すること
+自体がなく、出荷済みコードにこのバグは表面化していなかった。
+
+ユーザーの判断で、正しい形(exactly-onceを完全に守る形)で実装する
+ことを選択した。
+
+**設計: child blockにもlazy block-frame promotionを拡張する。** Phase
+3/4でroot block用に作った「全opを実行し、どれかがsuspendしたらその時点で
+初めて実`block_frame_t`/`exec_state_handle_t`を構築し、既に解決済みの
+siblingは保持したまま、suspendしたopだけpending entryとして登録する」
+というsync-firstパターン(`gql_runtime_vm_execute_root_block_fast_multi_sv`)
+を、root block専用から任意の(non-root)child blockでも使える形へ
+一般化した(`gql_runtime_vm_execute_block_fast_multi_sv`、
+`parent_path_frame`引数を追加、non-null propagationハンドリングも追加
+— root blockでは既存のeligibility guardによりdead codeのまま)。
+
+item自身のchild blockでsuspendが起きた場合、その場で
+`gql_runtime_vm_block_frame_finalize_sv(frame, PROMISE_XS, writer,
+state_sv, /*return_pending_handle=*/2)`を呼ぶ。このmode 2は既存の汎用
+async executorのper-item object分岐(`gql_runtime_vm_exec_state_execute_block_async_path_sv`
+の"mode 2"、`deferred_resolves_response`が0のケース)と全く同じ経路で、
+`pending_count == 0`ならその場でnative outcomeを、`pending_count > 0`
+なら本物の`Promise::XS`を返す。この結果を`gql_runtime_vm_list_pending_handle_sv`
+(Layer 2)へそのまま渡せば、Layer 1を新規に書かずに既存のitem集約機構が
+そのまま機能する(finalize mode 2が既に「item 1個分のPromise::XS」を
+作っているため、Layer 2の既存のpromise検出がそのまま働く)。
+
+state_sv/実handleは、Phase 4で作ったroot専用のヘルパを、request全体で
+共有される`state->fast_lane_root_state_sv`フィールド経由の汎用ヘルパ
+(`gql_runtime_vm_ensure_fast_lane_state_sv`)へ一般化した。これにより、
+root自身のfield-level suspensionと、item内部で深くネストした suspension
+のどちらが先に発生しても、同じ1つのhandleを再利用できる。
+
+**実装中に発見・修正した2つのバグ(いずれも既存テストが検出)。**
+
+1. 一般化した`gql_runtime_vm_execute_block_fast_multi_sv`は、
+   `gql_runtime_vm_execute_block_fast_sv`が行っている
+   `state->block/op/slot/block_index/op_index`の保存・復元を行っていな
+   かった(root専用だった頃はroot自身がstateの唯一の所有者だったため
+   不要だった)。item自身のchild block処理がこれらを書き換えたまま
+   呼び出し元(list opの処理)へ戻るため、呼び出し元が直後に参照する
+   `state->slot->item_non_null`等が誤った値になる。t/50_nonnull_propagation.t
+   の既存回帰テストが直ちに検出した。`gql_runtime_vm_execute_block_fast_sv`
+   と同じsave/restore規律を追加して修正。
+2. field-level suspension(`state->fast_lane_suspended_sv`)時の
+   payload_kind選択が、参照実装(`gql_runtime_vm_then_complete_current_sv`)
+   にある`complete_code == GQL_VM_COMPLETE_GENERIC`チェックを欠いていた
+   (Phase 3/4で simplified した際に落とした)。Phase 4までは対象が常に
+   plain leaf listだったため`leaf_kind == NONE`が真になることがなく
+   偶然正しく動いていたが、Phase 5でobject listが対象になると、
+   object list自体がfield-level promiseの場合に誤ったpayload_kind
+   (完了処理を素通りする`GENERIC_VALUE_SV`)を選んでしまう。手動検証
+   (t/16_runtime_promise.tの既存テストで表面化)で発見し、参照実装通りの
+   条件へ修正。
+3. さらに、field-level suspension分岐がstate_sv(実handle)を構築せずに
+   root呼び出し元の末尾へ委ねる設計だったため、item wrapperがその場で
+   `block_frame_finalize_sv`を呼ぼうとするとNULLハンドルを渡すことになる
+   バグも見つかった(独自の手動smoke testで発見、既存テストでは未検出)。
+   frame構築と同時にstate_svも構築するよう修正(root側のコストは
+   変わらない、同じタイミングで両方作るだけ)。
+
+**正しさの検証。** t/39_fast_lane_promise_fallback.tへ6subtest追加:
+全item同期(promotionなし)、item内で先に同期解決したsiblingが後続の
+suspendで二重呼び出しされないこと(呼び出し回数で確認)、self_nulled
+(先にsuspendしたsiblingがある状態でnon-null違反が起きてitem全体がnull
+になること)、複数itemが同一batchで同時suspend、abstract(union)item
+のmember選択+suspend、item内のネストしたobject fieldが引き続き
+fallbackすること(スコープ外の否定テスト)。t/54_frame_leak_regression.t
+へ200回のitem child block promotionのリークストレスを追加。全496
+テスト、49ファイル個別実行・`PERL_HASH_SEED`5点でのASanがクリーン。
+
+**計測。** `benchmark_async_object_list_item_field`(新規、単一root
+object-list field、各itemが1同期field+1 DataLoader-Ticket-pending
+fieldを持つ)を追加し、旧executor(Phase 5導入前)と比較した(5標本
+中央値):
+
+| width | 旧executor(fallback) | Phase 5 |
+|---|---:|---:|
+| 2 | 69,433 req/s (100%) | 71,411 req/s (102.8%) |
+| 5 | 41,080 req/s (100%) | 42,829 req/s (104.3%) |
+| 10 | 25,000 req/s (100%) | 26,064 req/s (104.3%) |
+
+誤差の範囲内で、Phase 3/4と同型の結末(itemが実際にsuspendするケース
+では、旧経路も新経路も結局同じ実`exec_state_handle_t`+two-layer機構を
+構築するため、削減できるコストがほとんど無い)。一方、DataLoader/Promise
+を一切使わない全同期object listのケースでは、Phase 4と同様の改善を
+確認した(単一root object-list field・5要素・全item同期、`--case`に
+含めない手動ベンチマーク):
+
+| | 旧executor(fallback) | Phase 5 |
+|---|---:|---:|
+| sync runtime | 138,223〜138,866 req/s (100%) | 138,223〜139,515 req/s (100〜101%) |
+| async runtime | 119,037 req/s (85.6〜86%) | 138,866〜141,499 req/s (100〜102%) |
+
+Phase 5適用前はasync runtimeがLISTの`child_block_index >= 0`
+unconditional ineligibleにより旧executor経由の固定費(-14〜17%)を
+払っていたのが、Phase 5適用後はsync runtimeとほぼ同速になった。

@@ -148,19 +148,10 @@ gql_runtime_vm_new_dataloader_ticket_sv(pTHX_ IV state, SV *value)
   return sv_bless(newRV_noinc((SV *)av), gql_runtime_vm_dataloader_ticket_stash);
 }
 
-static void
-gql_runtime_vm_call_ticket_callback(pTHX_ SV *callback, SV *value)
-{
-  dSP;
-  ENTER;
-  SAVETMPS;
-  PUSHMARK(SP);
-  XPUSHs(value ? value : &PL_sv_undef);
-  PUTBACK;
-  call_sv(callback, G_VOID | G_DISCARD);
-  FREETMPS;
-  LEAVE;
-}
+/* Defined later (after gql_runtime_vm_xs_pending_callback/_reject_callback
+ * and their shared settle helpers exist) - it fast-paths the common case
+ * where callback is one of our own pending_callback_pair CVs. */
+static void gql_runtime_vm_call_ticket_callback(pTHX_ SV *callback, SV *value);
 
 static void
 gql_runtime_vm_subscribe_dataloader_ticket(
@@ -3298,6 +3289,94 @@ gql_runtime_vm_chain_dataloader_ticket(
   return derived;
 }
 
+/* Shared resolve-arm settle logic for a single already-unpacked value -
+ * used both by the XS entry point below (the items==1 case, and the
+ * items>1 case after merging ST(0..) into one AV) and by
+ * gql_runtime_vm_call_ticket_callback's direct-call fast path, which never
+ * has more than one value to begin with. */
+static void
+gql_runtime_vm_pending_callback_resolve_direct(
+  pTHX_
+  gql_runtime_vm_pending_callback_ctx_t *ctx,
+  SV *resolved_sv
+)
+{
+  gql_runtime_vm_exec_state_handle_t *state;
+  gql_runtime_vm_pending_entry_t *entry;
+
+  if (!ctx || !ctx->state_sv || !ctx->frame) {
+    return;
+  }
+  state = gql_runtime_vm_expect_exec_state_handle(aTHX_ ctx->state_sv);
+  if (ctx->entry_index < 0 || ctx->entry_index >= ctx->frame->pending_count) {
+    return;
+  }
+
+  entry = &ctx->frame->pending_entries[ctx->entry_index];
+  if (resolved_sv && SvOK(resolved_sv) && gql_runtime_vm_sv_is_outcome(aTHX_ resolved_sv)) {
+    gql_runtime_vm_async_pending_entry_store_outcome(aTHX_ entry, resolved_sv);
+  } else {
+    gql_runtime_vm_async_pending_entry_store_sv(aTHX_ entry, resolved_sv ? resolved_sv : &PL_sv_undef);
+  }
+
+  if (ctx->frame->pending_unresolved > 0) {
+    ctx->frame->pending_unresolved--;
+  }
+  if (ctx->frame->pending_unresolved == 0) {
+    gql_runtime_vm_async_scheduler_enqueue_frame(state, ctx->frame);
+    if (!state->async_scheduler_draining) {
+      gql_runtime_vm_async_scheduler_drain(aTHX_ ctx->state_sv, state);
+    }
+  }
+  /* Last: nothing above may touch ctx once the pair is parked. */
+  gql_runtime_vm_pending_callback_pair_recycle(aTHX_ ctx);
+}
+
+/* Shared reject-arm settle logic, mirroring the resolve helper above. */
+static void
+gql_runtime_vm_pending_callback_reject_direct(
+  pTHX_
+  gql_runtime_vm_pending_callback_ctx_t *ctx,
+  SV *reason_sv
+)
+{
+  gql_runtime_vm_exec_state_handle_t *state;
+  gql_runtime_vm_pending_entry_t *entry;
+
+  if (!ctx || !ctx->state_sv || !ctx->frame) {
+    return;
+  }
+  state = gql_runtime_vm_expect_exec_state_handle(aTHX_ ctx->state_sv);
+  if (ctx->entry_index < 0 || ctx->entry_index >= ctx->frame->pending_count) {
+    return;
+  }
+
+  entry = &ctx->frame->pending_entries[ctx->entry_index];
+  if (reason_sv && SvOK(reason_sv) && gql_runtime_vm_sv_is_outcome(aTHX_ reason_sv)) {
+    gql_runtime_vm_async_pending_entry_store_outcome(aTHX_ entry, reason_sv);
+  } else {
+    SV *outcome_sv = gql_runtime_vm_new_error_outcome_for_path_sv(
+      aTHX_
+      reason_sv ? reason_sv : &PL_sv_undef,
+      entry->path_frame
+    );
+    gql_runtime_vm_async_pending_entry_store_outcome(aTHX_ entry, outcome_sv);
+    SvREFCNT_dec(outcome_sv);
+  }
+
+  if (ctx->frame->pending_unresolved > 0) {
+    ctx->frame->pending_unresolved--;
+  }
+  if (ctx->frame->pending_unresolved == 0) {
+    gql_runtime_vm_async_scheduler_enqueue_frame(state, ctx->frame);
+    if (!state->async_scheduler_draining) {
+      gql_runtime_vm_async_scheduler_drain(aTHX_ ctx->state_sv, state);
+    }
+  }
+  /* Last: nothing above may touch ctx once the pair is parked. */
+  gql_runtime_vm_pending_callback_pair_recycle(aTHX_ ctx);
+}
+
 static XS(gql_runtime_vm_xs_pending_callback)
 {
   dVAR;
@@ -3308,12 +3387,6 @@ static XS(gql_runtime_vm_xs_pending_callback)
   );
   SV *resolved_sv = &PL_sv_undef;
   SV *tmp_resolved = NULL;
-  gql_runtime_vm_exec_state_handle_t *state = NULL;
-  gql_runtime_vm_pending_entry_t *entry = NULL;
-
-  if (!ctx || !ctx->state_sv || !ctx->frame) {
-    XSRETURN_UNDEF;
-  }
 
   if (items == 1) {
     resolved_sv = ST(0) ? ST(0) : &PL_sv_undef;
@@ -3326,36 +3399,10 @@ static XS(gql_runtime_vm_xs_pending_callback)
     tmp_resolved = newRV_noinc((SV *)resolved_av);
     resolved_sv = tmp_resolved;
   }
-  state = gql_runtime_vm_expect_exec_state_handle(aTHX_ ctx->state_sv);
-  if (ctx->entry_index < 0 || ctx->entry_index >= ctx->frame->pending_count) {
-    if (tmp_resolved) {
-      SvREFCNT_dec(tmp_resolved);
-    }
-    XSRETURN_UNDEF;
-  }
-
-  entry = &ctx->frame->pending_entries[ctx->entry_index];
-  if (SvOK(resolved_sv) && gql_runtime_vm_sv_is_outcome(aTHX_ resolved_sv)) {
-    gql_runtime_vm_async_pending_entry_store_outcome(aTHX_ entry, resolved_sv);
-  } else {
-    gql_runtime_vm_async_pending_entry_store_sv(aTHX_ entry, resolved_sv);
-  }
-
-  if (ctx->frame->pending_unresolved > 0) {
-    ctx->frame->pending_unresolved--;
-  }
-  if (ctx->frame->pending_unresolved == 0) {
-    gql_runtime_vm_async_scheduler_enqueue_frame(state, ctx->frame);
-    if (!state->async_scheduler_draining) {
-      gql_runtime_vm_async_scheduler_drain(aTHX_ ctx->state_sv, state);
-    }
-  }
-
+  gql_runtime_vm_pending_callback_resolve_direct(aTHX_ ctx, resolved_sv);
   if (tmp_resolved) {
     SvREFCNT_dec(tmp_resolved);
   }
-  /* Last: nothing below may touch ctx once the pair is parked. */
-  gql_runtime_vm_pending_callback_pair_recycle(aTHX_ ctx);
   XSRETURN_UNDEF;
 }
 
@@ -3372,43 +3419,51 @@ static XS(gql_runtime_vm_xs_pending_reject_callback)
     CvXSUBANY(cv).any_ptr
   );
   SV *reason_sv = items > 0 && ST(0) ? ST(0) : &PL_sv_undef;
-  gql_runtime_vm_exec_state_handle_t *state = NULL;
-  gql_runtime_vm_pending_entry_t *entry = NULL;
 
-  if (!ctx || !ctx->state_sv || !ctx->frame) {
-    XSRETURN_UNDEF;
-  }
-  state = gql_runtime_vm_expect_exec_state_handle(aTHX_ ctx->state_sv);
-  if (ctx->entry_index < 0 || ctx->entry_index >= ctx->frame->pending_count) {
-    XSRETURN_UNDEF;
-  }
+  gql_runtime_vm_pending_callback_reject_direct(aTHX_ ctx, reason_sv);
+  XSRETURN_UNDEF;
+}
 
-  entry = &ctx->frame->pending_entries[ctx->entry_index];
-  if (SvOK(reason_sv) && gql_runtime_vm_sv_is_outcome(aTHX_ reason_sv)) {
-    gql_runtime_vm_async_pending_entry_store_outcome(aTHX_ entry, reason_sv);
-  } else {
-    SV *outcome_sv = gql_runtime_vm_new_error_outcome_for_path_sv(
-      aTHX_
-      reason_sv,
-      entry->path_frame
-    );
-    gql_runtime_vm_async_pending_entry_store_outcome(aTHX_ entry, outcome_sv);
-    SvREFCNT_dec(outcome_sv);
-  }
-
-  if (ctx->frame->pending_unresolved > 0) {
-    ctx->frame->pending_unresolved--;
-  }
-  if (ctx->frame->pending_unresolved == 0) {
-    gql_runtime_vm_async_scheduler_enqueue_frame(state, ctx->frame);
-    if (!state->async_scheduler_draining) {
-      gql_runtime_vm_async_scheduler_drain(aTHX_ ctx->state_sv, state);
+/* gql_runtime_vm_call_ticket_callback's real definition (forward-declared
+ * near gql_runtime_vm_new_dataloader_ticket_sv): callback is almost always
+ * one of our own pending_callback_pair CVs (gql_runtime_vm_new_pending_callback_pair,
+ * subscribed via gql_runtime_vm_subscribe_dataloader_ticket/gql_runtime_vm_settle_dataloader_ticket),
+ * so recognizing it and calling straight into the same settle helpers the
+ * XS entry points above use skips the entire generic Perl calling
+ * convention (ENTER/SAVETMPS/PUSHMARK/PUTBACK/call_sv/FREETMPS/LEAVE) for
+ * the common case. DataLoader::Ticket also exposes _subscribe/_subscribe_native
+ * to Perl directly, so a genuinely foreign callback is possible and must
+ * still go through call_sv correctly. */
+static void
+gql_runtime_vm_call_ticket_callback(pTHX_ SV *callback, SV *value)
+{
+  if (callback && SvROK(callback) && SvTYPE(SvRV(callback)) == SVt_PVCV) {
+    CV *cv = (CV *)SvRV(callback);
+    if (CvISXSUB(cv)) {
+      gql_runtime_vm_pending_callback_ctx_t *ctx;
+      if (CvXSUB(cv) == gql_runtime_vm_xs_pending_callback) {
+        ctx = INT2PTR(gql_runtime_vm_pending_callback_ctx_t *, CvXSUBANY(cv).any_ptr);
+        gql_runtime_vm_pending_callback_resolve_direct(aTHX_ ctx, value);
+        return;
+      }
+      if (CvXSUB(cv) == gql_runtime_vm_xs_pending_reject_callback) {
+        ctx = INT2PTR(gql_runtime_vm_pending_callback_ctx_t *, CvXSUBANY(cv).any_ptr);
+        gql_runtime_vm_pending_callback_reject_direct(aTHX_ ctx, value);
+        return;
+      }
     }
   }
-
-  /* Last: nothing below may touch ctx once the pair is parked. */
-  gql_runtime_vm_pending_callback_pair_recycle(aTHX_ ctx);
-  XSRETURN_UNDEF;
+  {
+    dSP;
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(value ? value : &PL_sv_undef);
+    PUTBACK;
+    call_sv(callback, G_VOID | G_DISCARD);
+    FREETMPS;
+    LEAVE;
+  }
 }
 
 static XS(gql_runtime_vm_xs_list_pending_callback)

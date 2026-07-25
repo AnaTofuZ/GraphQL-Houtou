@@ -241,4 +241,62 @@ subtest 'repeated root list-item-pending promotions stay clean' => sub {
   assert_no_live_frames('200 root list-item-pending promotions');
 };
 
+subtest 'repeated root object-list item-child-block promotions stay clean' => sub {
+  # Each request here promotes via Phase 5's per-item wrapper
+  # (gql_runtime_vm_execute_list_item_child_block_fast_sv): item 0's own
+  # child block resolves a sync sibling then suspends on a second field,
+  # finalizing that item's own frame (block_frame_finalize_sv mode 2)
+  # before Layer 2 aggregates it with the rest of the list. A leak in
+  # either the per-item frame's own lifecycle or its aggregation into the
+  # list_pending/root frame chain would only show up after many requests.
+  my $Row = GraphQL::Houtou::Type::Object->new(
+    name => 'LeakRow',
+    fields => {
+      name => { type => $String, resolve => sub { "n:$_[0]{id}" } },
+      pending => {
+        type => $String,
+        args => { key => { type => $String } },
+        resolve => sub {
+          my (undef, $args, $ctx) = @_;
+          return $ctx->{loader}->load($args->{key});
+        },
+      },
+    },
+  );
+  my $list_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        rows => {
+          type => GraphQL::Houtou::Type::List->new(of => $Row),
+          args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+          resolve => sub {
+            my (undef, $args) = @_;
+            return [ map { { id => $_ } } @{ $args->{ids} } ];
+          },
+        },
+      },
+    ),
+  );
+  my $runtime = build_native_runtime($list_schema, async => 1);
+  for my $i (1 .. 200) {
+    my $loader = GraphQL::Houtou::DataLoader->new(
+      batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+    );
+    my $r = $runtime->execute_document(
+      'query Q($ids: [String], $k: String) { rows(ids: $ids) { name pending(key: $k) } }',
+      variables => { ids => [ "r$i-1", "r$i-2" ], k => "k$i" },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, {
+      data => { rows => [
+        { name => "n:r$i-1", pending => "v:k$i" },
+        { name => "n:r$i-2", pending => "v:k$i" },
+      ] },
+    }, "iteration $i resolved" or last;
+  }
+  assert_no_live_frames('200 root object-list item-child-block promotions');
+};
+
 done_testing;

@@ -359,6 +359,12 @@ typedef struct {
   UV refcount;
   U8 arming;
   SV *sync_response_sv;
+  /* Set only on the DataLoader-Ticket branch: a Ticket subscription never
+   * fires synchronously for a still-pending ticket (unlike Promise::XS
+   * then()), so the request-level result is always this deferred's
+   * promise, resolved later by the settle callback. NULL on the
+   * Promise::XS branch. */
+  SV *deferred_sv;
 } gql_runtime_vm_fast_root_continuation_shared_t;
 
 typedef struct {
@@ -424,8 +430,13 @@ typedef struct {
   gql_runtime_vm_native_bundle_t *bundle;
   IV block_index;
   IV op_index;
-  U8 reject_arm;
   gql_runtime_vm_fast_root_continuation_shared_t *shared;
+  /* The resolve and reject arms share this ctx, distinguished by which XS
+   * entry point (gql_runtime_vm_xs_fast_root_continuation_resolve_callback
+   * vs. ..._reject_callback) their CV was created with, not by a stored
+   * flag - mirroring gql_runtime_vm_pending_callback_ctx_t. cv_refcnt
+   * counts the two CVs still holding the ctx. */
+  U8 cv_refcnt;
 } gql_runtime_vm_fast_root_continuation_ctx_t;
 
 
@@ -500,12 +511,12 @@ static SV *gql_runtime_vm_try_execute_fast_root_continuation_sv(
   U8 json_mode, U8 *handled_out
 );
 static SV *gql_runtime_vm_try_execute_plain_hash_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, gql_runtime_vm_path_frame_t *path_frame);
-static SV *gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *resolved);
+static SV *gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *resolved, SV **error_out);
 
 /* Shared by the mid-lane detection sites and the top-level croak so the
  * deferred error keeps the exact wording tests and users rely on. */
 #define GQL_RUNTIME_VM_FAST_LANE_PROMISE_ERROR \
-  "a resolver returned a Promise::XS promise in the synchronous fast lane; build the runtime with async => 1 (or pass on_stall) so requests start on the async lane"
+  "a resolver returned a pending Promise::XS promise or DataLoader ticket in the synchronous fast lane; build the runtime with async => 1 (or pass on_stall) so requests start on the async lane"
 static SV *gql_runtime_vm_promise_xs_new_deferred_sv(pTHX);
 static SV *gql_runtime_vm_promise_xs_deferred_promise_sv(pTHX_ SV *deferred_sv);
 static void gql_runtime_vm_promise_xs_deferred_resolve_sv(pTHX_ SV *deferred_sv, SV *value_sv);
@@ -531,7 +542,8 @@ static XS(gql_runtime_vm_xs_pending_reject_callback);
 static XS(gql_runtime_vm_xs_list_pending_callback);
 static XS(gql_runtime_vm_xs_error_callback);
 static XS(gql_runtime_vm_xs_finalize_callback);
-static XS(gql_runtime_vm_xs_fast_root_continuation_callback);
+static XS(gql_runtime_vm_xs_fast_root_continuation_resolve_callback);
+static XS(gql_runtime_vm_xs_fast_root_continuation_reject_callback);
 
 static void
 gql_runtime_vm_cursor_incref(gql_runtime_vm_cursor_t *cursor)
@@ -884,17 +896,25 @@ gql_runtime_vm_fast_root_continuation_ctx_free(pTHX_ SV *sv, MAGIC *mg)
     ? INT2PTR(gql_runtime_vm_fast_root_continuation_ctx_t *, mg->mg_ptr)
     : NULL;
   if (ctx) {
-    SvREFCNT_dec(ctx->runtime_sv);
-    SvREFCNT_dec(ctx->program_sv);
-    SvREFCNT_dec(ctx->runtime_schema_sv);
-    SvREFCNT_dec(ctx->root_value_sv);
-    SvREFCNT_dec(ctx->context_sv);
-    SvREFCNT_dec(ctx->variables_sv);
-    if (ctx->shared && --ctx->shared->refcount == 0) {
-      SvREFCNT_dec(ctx->shared->sync_response_sv);
-      Safefree(ctx->shared);
+    /* The ctx is shared by the resolve/reject pair's two CVs; members go
+     * with the last one, exactly like gql_runtime_vm_pending_callback_ctx_free. */
+    if (ctx->cv_refcnt > 0) {
+      ctx->cv_refcnt--;
     }
-    Safefree(ctx);
+    if (ctx->cv_refcnt == 0) {
+      SvREFCNT_dec(ctx->runtime_sv);
+      SvREFCNT_dec(ctx->program_sv);
+      SvREFCNT_dec(ctx->runtime_schema_sv);
+      SvREFCNT_dec(ctx->root_value_sv);
+      SvREFCNT_dec(ctx->context_sv);
+      SvREFCNT_dec(ctx->variables_sv);
+      if (ctx->shared && --ctx->shared->refcount == 0) {
+        SvREFCNT_dec(ctx->shared->sync_response_sv);
+        SvREFCNT_dec(ctx->shared->deferred_sv);
+        Safefree(ctx->shared);
+      }
+      Safefree(ctx);
+    }
     mg->mg_ptr = NULL;
   }
   if (sv && SvTYPE(sv) == SVt_PVCV) {
@@ -8395,7 +8415,8 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
           state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
           return_type_sv ? return_type_sv : &PL_sv_undef,
           error_out
-        )
+        ),
+        error_out
       );
     }
     if (gql_runtime_vm_slot_uses_native_one_arg_abi(slot)) {
@@ -8413,7 +8434,7 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
         state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
         return_type_sv ? return_type_sv : &PL_sv_undef,
         error_out
-      ));
+      ), error_out);
     }
     args = gql_runtime_vm_build_current_args_sv(aTHX_ state);
     if (!args) {
@@ -8433,7 +8454,7 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
         state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
         return_type_sv ? return_type_sv : &PL_sv_undef,
         error_out
-      ));
+      ), error_out);
     }
 
     return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
@@ -8457,7 +8478,7 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
       sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state)),
       return_type_sv ? return_type_sv : &PL_sv_undef,
       error_out
-    ));
+    ), error_out);
   }
 
   if (slot->field_name
@@ -8469,7 +8490,8 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
   if (slot->accessor_name && slot->accessor_name_len) {
     return gql_runtime_vm_fast_lane_guard_promise_sv(
       aTHX_ state,
-      gql_runtime_vm_call_accessor_nonfatal(aTHX_ source, slot, error_out)
+      gql_runtime_vm_call_accessor_nonfatal(aTHX_ source, slot, error_out),
+      error_out
     );
   }
 
@@ -8489,7 +8511,7 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
         state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
         info, error_out
       );
-      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ state, resolved);
+      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ state, resolved, error_out);
     }
   }
 
@@ -8510,7 +8532,7 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
         state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
         info, error_out
       );
-      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ state, resolved);
+      return gql_runtime_vm_fast_lane_guard_promise_sv(aTHX_ state, resolved, error_out);
     }
     return gql_runtime_vm_clone_value_sv(aTHX_ (value_svp && SvOK(*value_svp)) ? *value_svp : &PL_sv_undef);
   }
@@ -8520,35 +8542,62 @@ gql_runtime_vm_resolve_current_field_default_fast_sv(
 
 
 static SV *
-gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *resolved)
+gql_runtime_vm_fast_lane_guard_promise_sv(
+  pTHX_ gql_runtime_vm_exec_state_t *state, SV *resolved, SV **error_out
+)
 {
-  /* The sync fast lanes cannot suspend, so a promise-returning resolver
-   * is a routing misconfiguration: async schemas declare themselves with
-   * async => 1 on the runtime (or pass on_stall per request). Croaking
-   * from mid-lane would leak the live path frame chain (each recursion
-   * level holds one reference the unwind never releases - R5 leak 3), so
-   * this completes the field as null, records the deferred croak, and the
-   * top-level entry raises it after the lane unwound normally. */
-  if (resolved
-      && SvROK(resolved)
-      && SvOBJECT(SvRV(resolved))
-      && sv_derived_from(resolved, "Promise::XS::Promise")) {
-    if (state && state->fast_lane_can_suspend) {
-      if (!state->fast_lane_suspended_sv) {
-        state->fast_lane_suspended_sv = resolved;
-      } else {
-        SvREFCNT_dec(resolved);
+  /* A DataLoader Ticket is settle-once and notifies subscribers
+   * synchronously (no derived-object churn like Promise::XS::then), so an
+   * already-settled Ticket is unwrapped in place regardless of lane - this
+   * never touches the suspension channel, matching the unwrap done for the
+   * generic async path (see the ticket_state handling around the async
+   * current-op resolver). Only a genuinely pending Ticket (state 0) needs
+   * the same suspend-or-croak treatment as a Promise below. */
+  if (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ resolved)) {
+    IV ticket_state = gql_runtime_vm_dataloader_ticket_state(aTHX_ resolved);
+    if (ticket_state == 1) {
+      SV *value_sv = newSVsv(gql_runtime_vm_dataloader_ticket_value(aTHX_ resolved));
+      SvREFCNT_dec(resolved);
+      return value_sv;
+    }
+    if (ticket_state == 2) {
+      if (error_out && !*error_out) {
+        *error_out = newSVsv(gql_runtime_vm_dataloader_ticket_value(aTHX_ resolved));
       }
-      return NULL;
+      SvREFCNT_dec(resolved);
+      return newSVsv(&PL_sv_undef);
     }
-    SvREFCNT_dec(resolved);
-    if (state && !state->fast_lane_deferred_croak_sv) {
-      state->fast_lane_deferred_croak_sv =
-        newSVpv(GQL_RUNTIME_VM_FAST_LANE_PROMISE_ERROR, 0);
-    }
-    return newSVsv(&PL_sv_undef);
+    /* ticket_state == 0: fall through to the pending/suspend handling
+     * below, shared with the Promise::XS case. */
+  } else if (!resolved
+      || !SvROK(resolved)
+      || !SvOBJECT(SvRV(resolved))
+      || !sv_derived_from(resolved, "Promise::XS::Promise")) {
+    return resolved;
   }
-  return resolved;
+
+  /* The sync fast lanes cannot suspend, so a promise/ticket-returning
+   * resolver is a routing misconfiguration: async schemas declare
+   * themselves with async => 1 on the runtime (or pass on_stall per
+   * request). Croaking from mid-lane would leak the live path frame chain
+   * (each recursion level holds one reference the unwind never releases -
+   * R5 leak 3), so this completes the field as null, records the deferred
+   * croak, and the top-level entry raises it after the lane unwound
+   * normally. */
+  if (state && state->fast_lane_can_suspend) {
+    if (!state->fast_lane_suspended_sv) {
+      state->fast_lane_suspended_sv = resolved;
+    } else {
+      SvREFCNT_dec(resolved);
+    }
+    return NULL;
+  }
+  SvREFCNT_dec(resolved);
+  if (state && !state->fast_lane_deferred_croak_sv) {
+    state->fast_lane_deferred_croak_sv =
+      newSVpv(GQL_RUNTIME_VM_FAST_LANE_PROMISE_ERROR, 0);
+  }
+  return newSVsv(&PL_sv_undef);
 }
 
 static SV *
@@ -8586,7 +8635,8 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
         state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
         return_type_sv ? return_type_sv : &PL_sv_undef,
         error_out
-      )
+      ),
+      error_out
     );
   }
   if (gql_runtime_vm_slot_uses_native_one_arg_abi(slot)) {
@@ -8604,7 +8654,7 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
       state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
       return_type_sv ? return_type_sv : &PL_sv_undef,
       error_out
-    ));
+    ), error_out);
   }
 
   {
@@ -8626,7 +8676,7 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
         state->callback_ctx ? state->callback_ctx->context : &PL_sv_undef,
         return_type_sv ? return_type_sv : &PL_sv_undef,
         error_out
-      ));
+      ), error_out);
     }
 
     return_type_sv = gql_runtime_vm_direct_slot_type_object_sv(runtime, slot);
@@ -8647,7 +8697,7 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
       sv_2mortal(gql_runtime_vm_new_callback_info_sv(aTHX_ state)),
       return_type_sv ? return_type_sv : &PL_sv_undef,
       error_out
-    ));
+    ), error_out);
   }
 }
 
@@ -9699,7 +9749,6 @@ gql_runtime_vm_new_fast_root_continuation_ctx(
   gql_runtime_vm_native_bundle_t *bundle,
   IV block_index,
   IV op_index,
-  U8 reject_arm,
   gql_runtime_vm_fast_root_continuation_shared_t *shared
 )
 {
@@ -9715,34 +9764,56 @@ gql_runtime_vm_new_fast_root_continuation_ctx(
   ctx->bundle = bundle;
   ctx->block_index = block_index;
   ctx->op_index = op_index;
-  ctx->reject_arm = reject_arm;
   ctx->shared = shared;
+  ctx->cv_refcnt = 2;
   if (shared) {
     shared->refcount++;
   }
   return ctx;
 }
 
-static SV *
-gql_runtime_vm_new_fast_root_continuation_callback_sv(
-  pTHX_ gql_runtime_vm_fast_root_continuation_ctx_t *ctx
+/* One ctx, one allocation, shared by both arms of the pair - the resolve
+ * and reject CVs are distinguished by which XS entry point they wrap, not
+ * by a flag stored on the shared ctx (mirroring
+ * gql_runtime_vm_new_pending_callback_pair). */
+static void
+gql_runtime_vm_new_fast_root_continuation_callback_pair_sv(
+  pTHX_
+  gql_runtime_vm_fast_root_continuation_ctx_t *ctx,
+  SV **resolve_rv_out,
+  SV **reject_rv_out
 )
 {
-  CV *cv = newXS(NULL, gql_runtime_vm_xs_fast_root_continuation_callback, __FILE__);
-  CvXSUBANY(cv).any_ptr = ctx;
-  gql_runtime_vm_attach_callback_magic_ptr(
-    aTHX_ (SV *)cv, &gql_runtime_vm_fast_root_continuation_ctx_vtbl, ctx
+  CV *resolve_cv = newXS(
+    NULL, gql_runtime_vm_xs_fast_root_continuation_resolve_callback, __FILE__
   );
-  return newRV_noinc((SV *)cv);
+  CV *reject_cv = newXS(
+    NULL, gql_runtime_vm_xs_fast_root_continuation_reject_callback, __FILE__
+  );
+  CvXSUBANY(resolve_cv).any_ptr = ctx;
+  CvXSUBANY(reject_cv).any_ptr = ctx;
+  gql_runtime_vm_attach_callback_magic_ptr(
+    aTHX_ (SV *)resolve_cv, &gql_runtime_vm_fast_root_continuation_ctx_vtbl, ctx
+  );
+  gql_runtime_vm_attach_callback_magic_ptr(
+    aTHX_ (SV *)reject_cv, &gql_runtime_vm_fast_root_continuation_ctx_vtbl, ctx
+  );
+  *resolve_rv_out = newRV_noinc((SV *)resolve_cv);
+  *reject_rv_out = newRV_noinc((SV *)reject_cv);
 }
 
-static XS(gql_runtime_vm_xs_fast_root_continuation_callback)
+/* Shared settle body for both arms; reject_arm is passed in directly by
+ * the caller rather than read off ctx, since ctx is common to both arms.
+ * Returns NULL (bounds-check failure on a stale/corrupt ctx) or an owned
+ * response SV the caller must hand back via ST(0)/XSRETURN. */
+static SV *
+gql_runtime_vm_fast_root_continuation_settle_sv(
+  pTHX_
+  gql_runtime_vm_fast_root_continuation_ctx_t *ctx,
+  SV *value,
+  U8 reject_arm
+)
 {
-  dVAR;
-  dXSARGS;
-  gql_runtime_vm_fast_root_continuation_ctx_t *ctx = INT2PTR(
-    gql_runtime_vm_fast_root_continuation_ctx_t *, CvXSUBANY(cv).any_ptr
-  );
   gql_runtime_vm_exec_state_t state;
   gql_runtime_vm_callback_context_t callback_ctx;
   gql_runtime_vm_writer_t writer;
@@ -9750,7 +9821,6 @@ static XS(gql_runtime_vm_xs_fast_root_continuation_callback)
   const gql_runtime_vm_native_op_t *op;
   const gql_runtime_vm_native_slot_t *slot;
   gql_runtime_vm_path_frame_t *field_path;
-  SV *value = items > 0 && ST(0) ? ST(0) : &PL_sv_undef;
   SV *completed = NULL;
   SV *error_sv = NULL;
   SV *data_sv;
@@ -9759,15 +9829,15 @@ static XS(gql_runtime_vm_xs_fast_root_continuation_callback)
 
   if (!ctx || !ctx->bundle
       || ctx->block_index < 0 || ctx->block_index >= ctx->bundle->block_count) {
-    XSRETURN_UNDEF;
+    return NULL;
   }
   block = &ctx->bundle->blocks[ctx->block_index];
   if (ctx->op_index < 0 || ctx->op_index >= block->op_count) {
-    XSRETURN_UNDEF;
+    return NULL;
   }
   op = &block->ops[ctx->op_index];
   if (op->slot_index < 0 || op->slot_index >= block->slot_count) {
-    XSRETURN_UNDEF;
+    return NULL;
   }
   slot = &block->slots[op->slot_index];
 
@@ -9791,7 +9861,7 @@ static XS(gql_runtime_vm_xs_fast_root_continuation_callback)
   field_path = gql_runtime_vm_new_result_path_frame(aTHX_ NULL, slot);
   state.path_frame = field_path;
   state.path_frame_is_current_field = 1;
-  if (ctx->reject_arm) {
+  if (reject_arm) {
     gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ &state, value, field_path);
     completed = newSVsv(&PL_sv_undef);
   } else {
@@ -9820,8 +9890,52 @@ static XS(gql_runtime_vm_xs_fast_root_continuation_callback)
   response_sv = gql_runtime_vm_fast_response_sv(aTHX_ data_sv, &writer);
   gql_runtime_vm_clear_writer_struct(aTHX_ &writer);
   SvREFCNT_dec(callback_ctx.materialized_variables);
+  if (ctx->shared && ctx->shared->deferred_sv) {
+    /* Ticket subscribers are invoked with G_VOID|G_DISCARD (see
+     * gql_runtime_vm_call_ticket_callback), so the caller's ST(0)/XSRETURN
+     * is never read by that caller - the deferred must be resolved here
+     * as a side effect instead. */
+    gql_runtime_vm_promise_xs_deferred_resolve_sv(
+      aTHX_ ctx->shared->deferred_sv, response_sv
+    );
+  }
   if (ctx->shared && ctx->shared->arming && !ctx->shared->sync_response_sv) {
     ctx->shared->sync_response_sv = newSVsv(response_sv);
+  }
+  return response_sv;
+}
+
+static XS(gql_runtime_vm_xs_fast_root_continuation_resolve_callback)
+{
+  dVAR;
+  dXSARGS;
+  gql_runtime_vm_fast_root_continuation_ctx_t *ctx = INT2PTR(
+    gql_runtime_vm_fast_root_continuation_ctx_t *, CvXSUBANY(cv).any_ptr
+  );
+  SV *value = items > 0 && ST(0) ? ST(0) : &PL_sv_undef;
+  SV *response_sv = gql_runtime_vm_fast_root_continuation_settle_sv(
+    aTHX_ ctx, value, 0
+  );
+  if (!response_sv) {
+    XSRETURN_UNDEF;
+  }
+  ST(0) = sv_2mortal(response_sv);
+  XSRETURN(1);
+}
+
+static XS(gql_runtime_vm_xs_fast_root_continuation_reject_callback)
+{
+  dVAR;
+  dXSARGS;
+  gql_runtime_vm_fast_root_continuation_ctx_t *ctx = INT2PTR(
+    gql_runtime_vm_fast_root_continuation_ctx_t *, CvXSUBANY(cv).any_ptr
+  );
+  SV *value = items > 0 && ST(0) ? ST(0) : &PL_sv_undef;
+  SV *response_sv = gql_runtime_vm_fast_root_continuation_settle_sv(
+    aTHX_ ctx, value, 1
+  );
+  if (!response_sv) {
+    XSRETURN_UNDEF;
   }
   ST(0) = sv_2mortal(response_sv);
   XSRETURN(1);
@@ -9913,28 +10027,38 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
   state.fast_lane_suspended_sv = NULL;
   Newxz(shared, 1, gql_runtime_vm_fast_root_continuation_shared_t);
   shared->refcount = 1;
-  shared->arming = 1;
-  resolve_callback_sv = gql_runtime_vm_new_fast_root_continuation_callback_sv(
-    aTHX_ gql_runtime_vm_new_fast_root_continuation_ctx(
+  gql_runtime_vm_new_fast_root_continuation_callback_pair_sv(
+    aTHX_
+    gql_runtime_vm_new_fast_root_continuation_ctx(
       aTHX_ runtime_sv, program_sv, runtime_schema, root_value, context_value,
-      variables, runtime, bundle, bundle->root_block_index, 0, 0, shared
-    )
+      variables, runtime, bundle, bundle->root_block_index, 0, shared
+    ),
+    &resolve_callback_sv, &reject_callback_sv
   );
-  reject_callback_sv = gql_runtime_vm_new_fast_root_continuation_callback_sv(
-    aTHX_ gql_runtime_vm_new_fast_root_continuation_ctx(
-      aTHX_ runtime_sv, program_sv, runtime_schema, root_value, context_value,
-      variables, runtime, bundle, bundle->root_block_index, 0, 1, shared
-    )
-  );
-  ret = gql_runtime_vm_call_then_promise_xs_sv(
-    aTHX_ promise_sv, resolve_callback_sv, reject_callback_sv, NULL
-  );
-  shared->arming = 0;
-  if (shared->sync_response_sv) {
-    SV *sync_response_sv = shared->sync_response_sv;
-    shared->sync_response_sv = NULL;
-    SvREFCNT_dec(ret);
-    ret = sync_response_sv;
+  if (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ promise_sv)) {
+    /* The guard already filtered out a settled Ticket (state 1/2), so this
+     * is genuinely pending: gql_runtime_vm_subscribe_dataloader_ticket
+     * never fires synchronously in that case (unlike Promise::XS then()),
+     * so the request-level result is always the fresh deferred's promise -
+     * subscribe directly to the ticket's C-level notification instead of
+     * bridging through the slower Perl-method _subscribe path. */
+    shared->deferred_sv = gql_runtime_vm_promise_xs_new_deferred_sv(aTHX);
+    ret = gql_runtime_vm_promise_xs_deferred_promise_sv(aTHX_ shared->deferred_sv);
+    gql_runtime_vm_subscribe_dataloader_ticket(
+      aTHX_ promise_sv, resolve_callback_sv, reject_callback_sv
+    );
+  } else {
+    shared->arming = 1;
+    ret = gql_runtime_vm_call_then_promise_xs_sv(
+      aTHX_ promise_sv, resolve_callback_sv, reject_callback_sv, NULL
+    );
+    shared->arming = 0;
+    if (shared->sync_response_sv) {
+      SV *sync_response_sv = shared->sync_response_sv;
+      shared->sync_response_sv = NULL;
+      SvREFCNT_dec(ret);
+      ret = sync_response_sv;
+    }
   }
   SvREFCNT_dec(resolve_callback_sv);
   SvREFCNT_dec(reject_callback_sv);
@@ -9944,6 +10068,7 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
   SvREFCNT_dec(empty_args_sv);
   if (--shared->refcount == 0) {
     SvREFCNT_dec(shared->sync_response_sv);
+    SvREFCNT_dec(shared->deferred_sv);
     Safefree(shared);
   }
   *handled_out = 1;

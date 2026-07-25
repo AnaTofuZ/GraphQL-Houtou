@@ -997,3 +997,116 @@ batch callback自体と、callback実行中に次のloadを新しいqueueへ積�
 幅が増えるほどGraphQL executor自体の比率が高くなるため全体効果は薄まるが、例外、per-key
 error、`max_batch_size` chunkingを含む既存契約を変えず、すべてのdispatchで通るPerl/XS境界と
 一時配列操作を削減できる。
+
+### 14.16 sync-first root-leaf継続へのDataLoader Ticket統合
+
+GraphQL::HoutouはPSGI前提の同期Webアプリであり、Promise::XSとDataLoader Ticketは
+実行時間の重畳ではなくDataLoaderバッチ解決のためだけに存在する。したがって
+`docs/sync-first-execution-design-ja.md`で進めているroot-leaf継続の次段階は、汎用
+Promise::XSサポートより実際の主要トリガーであるDataLoader Ticketを先に統合する方が
+優先度が高いと判断した。
+
+`gql_runtime_vm_fast_lane_guard_promise_sv`にDataLoader Ticket認識を追加した。
+resolverの戻り値がTicketで、かつ既にfulfilled/rejected状態(`_dispatch_queue`の
+バッチ処理やcache hitで既に決着している場合)であれば、suspension channelへ触れずに
+その場で値/errorへ展開する。genuinely pending(state 0)のTicketのみ、従来の
+Promise::XSと同じsuspend-or-croak経路に合流する。
+
+genuinely pendingなTicketについては、`gql_runtime_vm_try_execute_fast_root_continuation_sv`
+から`gql_runtime_vm_call_then_promise_xs_sv`(Perlメソッド`then`経由)ではなく、
+`arm_frame`が既に使っている`gql_runtime_vm_subscribe_dataloader_ticket`をTicketへ
+直接呼ぶようにした。Promise::XSの`_settle_result`契約(`isa('Promise::XS::Promise')`
+判定)を壊さないよう、この分岐でのみ`Promise::XS::deferred()`を合成し、settle
+callbackがそれを`resolve`する側効果を持つ(callbackがG_VOID|G_DISCARD呼び出しに
+なるTicket subscriberから呼ばれた場合、戻り値そのものは読まれないため)。
+
+続けて、design docの §13 が次段階として明記していたresolve/reject継続ctxの統合を
+行った。従来はsuspendのたびに`gql_runtime_vm_fast_root_continuation_ctx_t`を
+resolve用・reject用に個別に2回確保していた(それぞれ6個の`newSVsv`を含む)。
+`gql_runtime_vm_pending_callback_ctx_t`が既に使っている`cv_refcnt`パターンを移植し、
+1回の`Newxz` + 6回の`newSVsv`で済むようにした。resolve/rejectの2つのXSUBは、ctxに
+フラグを持たせず、どちらのXSエントリポイント(`..._resolve_callback`/
+`..._reject_callback`)でCVが作られたかで区別する。
+
+回帰テストは`t/39_fast_lane_promise_fallback.t`に、単一のnullable root leaf field
+がfulfilled Ticket・pending Ticket(on_stall経由)・rejected Ticketをそれぞれ返す
+3ケースと、strict syncレーンでpending Ticketが引き続きactionableなcroakになることを
+追加した。`t/54_frame_leak_regression.t`には、200回のpending Ticket駆動root-leaf
+継続を連続実行してもblock/path frameがリークしないことを確認するstress testを
+追加した。全489 testが成功している。
+
+`util/execution-benchmark.pl`の`benchmark_async_preresolved_leaf`にTicket-ready
+(loaderを外側で一度だけprimeし、resolverはcache hitのみ行う)とTicket-pending
+(on_stall経由)の2バリアントを追加した。5標本中央値:
+
+| ワークロード | throughput | sync比 |
+|---|---:|---:|
+| sync leaf | 412,967 req/s | 100% |
+| async leaf (Promise::XS pre-resolved、既存) | 277,737 req/s | 67.3% |
+| async leaf (Ticket ready、新規) | 321,551 req/s | 77.9% |
+| async leaf (Ticket pending、on_stall経由、新規) | 139,515 req/s | 33.8% |
+
+Ticket readyはPromise::XS pre-resolvedに対して約+15.8%改善した。これは
+Promise::XSの`then()`が既に決着したpromiseに対しても呼び出しごとにderived promise
+objectを生成するのに対し、fulfilled Ticketの認識はsuspension channelにもderived
+objectにも触れず値を直接返すためである。Ticket pendingは新しい計測対象であり、
+before値は存在しない(旧来この形状のroot leafは全て汎用async executorを通っていた)。
+on_stallの駆動ループ自体(Perl側`_settle_result`のwhileループ)のコストが支配的で
+あるため、sync比は約34%に留まる。
+
+`util/dataloader-benchmark.pl --scenario execution`(root がobject listで今回の
+root-leaf継続の対象外)をPhase 1適用前後でstash比較したところ、unique/primed/repeated
+のいずれも数%以内の揺らぎに収まり、全resolver呼び出し箇所に追加したTicket判定
+(`gql_runtime_vm_sv_is_dataloader_ticket`、stashポインタ比較のみ)による広範な
+退行は見られなかった。
+
+次段階は、design docの§13 step 6が指摘する「Promise callback内で再帰的に完了処理を
+行う現在のresume方式をready queueへの統合に置き換える」作業であり、これは複数
+sibling pending fieldへ対象を広げる前の前提条件として扱う(`_dispatch_queue`が
+1つのCループでbatch内の複数Ticketを続けてsettleするため、現在の直接再帰方式は
+sibling数に比例したC stack再帰になり得る)。
+
+### 14.17 resume経路のscheduler統合を試作し、性能退行のため延期(Phase 2)
+
+design doc §13 step 6の実施として、settle callback(`gql_runtime_vm_fast_root_continuation_settle_sv`)
+がresponseを直接組み立てる代わりに、既存の汎用async executorが使っている
+`gql_runtime_vm_block_frame_t` + scheduler(`enqueue_frame`/`drain`/`process_frame`/
+`resolve_frame`)へ委譲する試作を行った。settleごとに最小限の`exec_state_handle_t`
+(`native_program`と`writer`のみ実質的に使う、他フィールドはゼロのまま既存の
+`ExecState::DESTROY`がNULL安全に解放する)と1エントリの`block_frame_t`を確保し、
+完了済みの値を`GQL_VM_PENDING_PROMISE_SV`としてpushしてdrainに委ねることで、
+汎用実行レーンと完全に同じ完了経路(response envelope組み立てを含む)を通した。
+
+`util/execution-benchmark.pl`の同一シナリオを共有する300件の独立したrootリーフ継続を
+1回の`DataLoader->dispatch`で一括settleするstress test(新規、恒久化はしていない)で
+正しさを確認し、ASan(hash seed 1/5/12)でもクリーンだった。
+
+性能面では、Ticket readyケース(suspendせず即決着するため元々settle_svを一切通らない)は
+無変化だったが、settle_svを実際に通るケースで実測の退行が出た。5標本中央値:
+
+| ワークロード | Phase 1 (直接構築) | Phase 2試作 (scheduler経由) | 差 |
+|---|---:|---:|---:|
+| async leaf (Promise::XS pre-resolved) | 277,737 req/s | 258,195 req/s | -7.0% |
+| async leaf (Ticket pending, on_stall経由) | 139,515 req/s | 135,886 req/s | -2.6% |
+| async leaf (Ticket ready) | 321,551 req/s | 326,123 req/s | ±0(settle_svを通らない) |
+
+settleのたびに`exec_state_handle_t`・heap writer・block_frameを確保し、さらに
+Perl SV → native_value_t → Perl SVの往復変換を経由するコストが、直接
+`hv_store`+`gql_runtime_vm_fast_response_sv`で組み立てる場合に対して測定可能な
+オーバーヘッドとして現れた。
+
+この試作の副産物として、`gql_runtime_vm_native_value_t`のscalar表現に
+UTF8フラグを保持するフィールドがなく、resolverが返したUnicode文字列がこの
+往復変換を経由すると(promise/ticket経由のフィールド全般、rootリーフに限らず)
+UTF8フラグが失われるという、既存の汎用async executorに元々存在していた
+バグを発見した(`gql_runtime_vm_native_value_t.scalar_pv_is_utf8`を追加し、
+constructor/destroy/materialize/cloneの4箇所で一貫して扱うよう修正)。これは
+Phase 2の成否とは独立に価値のある修正であり、Phase 2自体は延期したが
+このUTF8修正は採用した。
+
+性能退行が「正しさの検証が目的」というPhase 2自身の位置づけに対して無視できない
+規模だったため、ユーザーの判断でPhase 2を単独採用せず、Phase 3(複数sibling
+pending fieldへの拡張)を実装する段階まで延期することにした。単一fieldの場合は
+Phase 1の軽量な直接構築方式を維持し、block_frame_t/scheduler経由のresumeは
+実際に複数sibling を扱う必要が生じた時点で導入する。settle_svの実装は
+Phase 1cの状態(直接`hv_store`+`gql_runtime_vm_fast_response_sv`)へ戻した。

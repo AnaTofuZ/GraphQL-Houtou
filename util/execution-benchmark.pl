@@ -554,6 +554,7 @@ sub benchmark_async_preresolved {
 
 sub benchmark_async_preresolved_leaf {
   require Promise::XS;
+  require GraphQL::Houtou::DataLoader;
 
   my $query = 'query q($name: String) { greeting(name: $name) }';
   my $vars = { name => 'Houtou' };
@@ -583,6 +584,33 @@ sub benchmark_async_preresolved_leaf {
       return Promise::XS::resolved("hello $args->{name}");
     }
   )->build_native_runtime(async => 1);
+  # Ticket-ready: a DataLoader ticket already fulfilled (primed) by the time
+  # the resolver returns it - fast_lane_guard_promise_sv unwraps it in place
+  # without ever entering the suspension channel. The loader is built and
+  # primed once, outside the timed closure, so this isolates the XS-level
+  # unwrap cost from Perl-level DataLoader construction cost (which is a
+  # separate, already-benchmarked concern in util/dataloader-benchmark.pl).
+  my $ticket_ready_loader = GraphQL::Houtou::DataLoader->new(
+    batch => sub { my ($keys) = @_; return [map { "hello $_" } @$keys] },
+  );
+  $ticket_ready_loader->prime($vars->{name}, "hello $vars->{name}");
+  my $ticket_ready_rt = $make_schema->(
+    sub {
+      my ($source, $args) = @_;
+      return $ticket_ready_loader->load($args->{name});
+    }
+  )->build_native_runtime(async => 1);
+  # Ticket-pending: a genuinely pending DataLoader ticket, driven to
+  # completion via on_stall - exercises the direct
+  # gql_runtime_vm_subscribe_dataloader_ticket suspend/resume path instead
+  # of the Promise::XS then() bridge.
+  my $pending_loader;
+  my $ticket_pending_rt = $make_schema->(
+    sub {
+      my ($source, $args) = @_;
+      return $pending_loader->load($args->{name});
+    }
+  )->build_native_runtime(async => 1);
   my %modes = (
     houtou_sync_leaf_sv => sub {
       return $sync_rt->execute_document($query, variables => $vars);
@@ -590,6 +618,23 @@ sub benchmark_async_preresolved_leaf {
     houtou_async_leaf_sv => sub {
       return maybe_get_promise_xs(
         $async_rt->execute_document($query, variables => $vars)
+      );
+    },
+    houtou_async_leaf_ticket_ready_sv => sub {
+      return maybe_get_promise_xs(
+        $ticket_ready_rt->execute_document($query, variables => $vars)
+      );
+    },
+    houtou_async_leaf_ticket_pending_sv => sub {
+      $pending_loader = GraphQL::Houtou::DataLoader->new(
+        batch => sub { my ($keys) = @_; return [map { "hello $_" } @$keys] },
+      );
+      return maybe_get_promise_xs(
+        $ticket_pending_rt->execute_document(
+          $query,
+          variables => $vars,
+          on_stall => GraphQL::Houtou::DataLoader->on_stall_for($pending_loader),
+        )
       );
     },
   );
@@ -602,7 +647,7 @@ sub benchmark_async_preresolved_leaf {
 
   print "\n=== async_preresolved_leaf ===\n";
   print "Query: $query\n";
-  print "Mode: native runtime, pre-resolved Promise::XS leaf vs sync leaf\n";
+  print "Mode: native runtime, pre-resolved Promise::XS/Ticket leaf vs sync leaf\n";
   cmpthese($count, \%modes);
 }
 

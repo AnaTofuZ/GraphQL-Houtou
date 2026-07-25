@@ -110,6 +110,37 @@ subtest 'sync runtime: promise on the fast lane fails with an actionable error' 
   }
 };
 
+subtest 'sync runtime: a pending DataLoader ticket also fails with an actionable error' => sub {
+  require GraphQL::Houtou::DataLoader;
+  my $loader = GraphQL::Houtou::DataLoader->new(
+    batch => sub { my ($keys) = @_; return [ map { "v:$_" } @$keys ] },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        greeting => {
+          type => $String,
+          args => { id => { type => $String } },
+          resolve => sub { my (undef, $args) = @_; return $loader->load($args->{id}) },
+        },
+      },
+    ),
+  );
+  my $runtime = build_native_runtime($schema);
+  my $err = do {
+    local $@;
+    eval {
+      $runtime->execute_document(
+        'query Q($id: String) { greeting(id: $id) }', variables => { id => 'p1' });
+    };
+    $@;
+  };
+  like $err, qr/synchronous fast lane/, 'error names the synchronous fast lane';
+  like $err, qr/async => 1/, 'error tells you to declare async => 1';
+  like $err, qr/on_stall/, 'error also offers on_stall';
+};
+
 subtest 'async runtime with strict_sync stays strict' => sub {
   my $runtime = build_native_runtime(new_schema(), async => 1);
   for my $case (
@@ -178,6 +209,111 @@ subtest 'sync runtime: promise LIST ITEMS also croak with the hint (issue #33)' 
     rows => [ { name => 'r1' }, { name => 'r2' } ],
     tags => [ 't1', 't2' ],
   }, 'async runtime completes pre-resolved promise list items';
+};
+
+subtest 'async runtime: root-leaf DataLoader ticket resumes through the fast continuation' => sub {
+  require GraphQL::Houtou::DataLoader;
+  # A single nullable root field with no directives and no child block is
+  # exactly the shape gql_runtime_vm_try_execute_fast_root_continuation_sv
+  # accepts, so these cases exercise the new Ticket-aware continuation
+  # rather than the pre-existing generic async executor.
+  my $one_field_query = 'query Q($id: String) { greeting(id: $id) }';
+
+  subtest 'already-fulfilled ticket unwraps without suspending' => sub {
+    my $calls = 0;
+    my $loader = GraphQL::Houtou::DataLoader->new(
+      batch => sub { my ($keys) = @_; return [ map { "v:$_" } @$keys ] },
+    );
+    $loader->prime('k1', 'primed-v1');
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          greeting => {
+            type => $String,
+            args => { id => { type => $String } },
+            resolve => sub {
+              my (undef, $args) = @_;
+              $calls++;
+              return $loader->load($args->{id});
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document($one_field_query, variables => { id => 'k1' });
+    is_deeply $r, { data => { greeting => 'primed-v1' } }, 'ready ticket value flows through';
+    is $calls, 1, 'resolver ran exactly once';
+  };
+
+  subtest 'genuinely pending ticket resumes via on_stall' => sub {
+    my $calls = 0;
+    my $dispatches = 0;
+    my $loader = GraphQL::Houtou::DataLoader->new(
+      batch => sub {
+        my ($keys) = @_;
+        $dispatches++;
+        return [ map { "batched:$_" } @$keys ];
+      },
+    );
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          greeting => {
+            type => $String,
+            args => { id => { type => $String } },
+            resolve => sub {
+              my (undef, $args) = @_;
+              $calls++;
+              return $loader->load($args->{id});
+            },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      $one_field_query,
+      variables => { id => 'k2' },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, { data => { greeting => 'batched:k2' } }, 'pending ticket resolves via on_stall';
+    is $calls, 1, 'resolver ran exactly once';
+    is $dispatches, 1, 'loader dispatched exactly once';
+  };
+
+  subtest 'rejected ticket produces a field error, not a request croak' => sub {
+    my $loader = GraphQL::Houtou::DataLoader->new(
+      batch => sub {
+        my ($keys) = @_;
+        return [ map { GraphQL::Houtou::DataLoader::Error->new("missing: $_") } @$keys ];
+      },
+    );
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          greeting => {
+            type => $String,
+            args => { id => { type => $String } },
+            resolve => sub { my (undef, $args) = @_; return $loader->load($args->{id}) },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      $one_field_query,
+      variables => { id => 'bad' },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is $r->{data}{greeting}, undef, 'field nulled on rejection';
+    is scalar @{ $r->{errors} }, 1, 'one error record';
+    is $r->{errors}[0]{message}, 'missing: bad', 'rejection reason surfaces as the error message';
+    is_deeply $r->{errors}[0]{path}, [ 'greeting' ], 'error path points at the field';
+  };
 };
 
 subtest 'async runtime still honors on_stall batching' => sub {

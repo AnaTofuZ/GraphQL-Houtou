@@ -124,4 +124,40 @@ subtest 'a completed DataLoader request stays clean' => sub {
   assert_no_live_frames('completed loader request');
 };
 
+subtest 'repeated root-leaf DataLoader ticket continuations stay clean' => sub {
+  # gql_runtime_vm_fast_root_continuation_ctx_t is shared by the resolve and
+  # reject arms via a cv_refcnt pair, mirroring
+  # gql_runtime_vm_pending_callback_ctx_t; a refcounting mistake there would
+  # only show up after many suspend/resume cycles, not a single request.
+  my $leaf_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        greeting => {
+          type => $String,
+          args => { id => { type => $String } },
+          resolve => sub {
+            my (undef, $args, $ctx) = @_;
+            return $ctx->{loader}->load($args->{id});
+          },
+        },
+      },
+    ),
+  );
+  my $runtime = build_native_runtime($leaf_schema, async => 1);
+  for my $i (1 .. 200) {
+    my $loader = GraphQL::Houtou::DataLoader->new(
+      batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+    );
+    my $r = $runtime->execute_document(
+      'query Q($id: String) { greeting(id: $id) }',
+      variables => { id => "k$i" },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is $r->{data}{greeting}, "v:k$i", "iteration $i resolved" or last;
+  }
+  assert_no_live_frames('200 pending-ticket root-leaf continuations');
+};
+
 done_testing;

@@ -231,7 +231,42 @@ frame loweringと同型である。GraphQL固有の点はresolver call siteがsu
 
 追加した回帰テストは、pre-resolved Promiseが同期responseになること、pending Promiseが
 settle後にresponseへなること、suspend前とresume後を通じてresolverが一度しか呼ばれないことを
-確認する。現時点で全486テストとXS ownership lintが通る。
+確認する。この時点で全486テストとXS ownership lintが通っていた。
+
+8. GraphQL::HoutouはPSGI前提の同期Webアプリであり、Promise::XS/Ticketは実行時間の
+   重畳ではなくDataLoaderバッチ解決のためだけに存在するという前提を踏まえ、汎用
+   Promise::XSサポートより実際の主要トリガーであるDataLoader Ticketの統合を優先した
+   (詳細は`docs/future-performance-investigation-ja.md`の§14.16)。
+   `gql_runtime_vm_fast_lane_guard_promise_sv`にTicket認識を追加し、fulfilled/rejected
+   なTicketはsuspension channelに触れず即座に値/errorへ展開する。genuinely pendingな
+   Ticketのみ、Perlメソッド`then`経由ではなく`gql_runtime_vm_subscribe_dataloader_ticket`
+   を直接呼ぶ経路へ合流させ、`Promise::XS::deferred()`を合成してAPI互換
+   (`_settle_result`が見る`isa('Promise::XS::Promise')`契約)を保った。
+9. 本節の次ステップ1に挙げていたresolve/reject継続ctxの共有を実施した。
+   `gql_runtime_vm_pending_callback_ctx_t`と同じ`cv_refcnt`パターンを移植し、
+   1 suspendあたりのctx確保を2回から1回(`newSVsv`は12回から6回)へ減らした。
+
+追加した回帰テストは、単一root leaf fieldがfulfilled/pending/rejected Ticketをそれぞれ
+返す3ケース、strict syncレーンでpending Ticketも引き続きactionableなcroakになること、
+200回のpending Ticket駆動継続を連続実行してもframeがリークしないことを確認する。
+現時点で全489テストとXS ownership lintが通る。
+
+10. §13(旧稿)step 6として、settle callbackのresume経路を既存の汎用async executorの
+    `block_frame_t` + scheduler(`enqueue_frame`/`drain`/`process_frame`/`resolve_frame`)
+    へ委譲する試作を行った(詳細・計測値は`docs/future-performance-investigation-ja.md`
+    §14.17)。正しさは検証できた(300件の独立したroot leaf継続が1回のDataLoader batch
+    dispatchで一括settleするstress testも含めASanでクリーン)が、settleのたびに
+    `exec_state_handle_t`/heap writer/block_frameを確保しnative_value_t経由の
+    往復変換を追加するコストが、Promise::XS pre-resolvedケースで-7.0%、Ticket
+    pending(on_stall経由)ケースで-2.6%の実測retreatとして現れた。「正しさの検証が
+    目的」というPhase 2自身の位置づけに対して無視できない規模だったため、ユーザーの
+    判断でこの試作は単独採用せず、複数sibling pending fieldへの拡張(旧稿の
+    step 3-5、後述の複数siblingサポート)を実装する段階まで延期した。単一fieldの
+    resumeはsettle_svによる直接構築(item 5-9の状態)へ戻している。副産物として
+    見つかった`gql_runtime_vm_native_value_t`のUTF8フラグ欠落バグ(resolverが返した
+    Unicode文字列がPromise/Ticket経由でこの型を通ると、rootリーフに限らず既存の
+    汎用async executor全体でUTF8フラグが失われていた)の修正は、Phase 2の採否とは
+    独立に価値があるため採用した。
 
 ## 11. 試行から分かった境界条件
 
@@ -276,10 +311,24 @@ sync leaf SV    414.4k/s
 suspend/resumeできる足場はできたが、sync同等という目標には未到達である。残る固定費の候補は
 Promise::XSの`then`、resolve/reject CV、continuation contextと所有SVの割当である。
 
+Ticket統合(本節8, 9)後の5標本中央値は次のとおり(詳細は
+`docs/future-performance-investigation-ja.md`の§14.16)。
+
+```text
+sync leaf                      412.9k/s (100%)
+async leaf (Promise::XS, 既存)  277.7k/s (67.3%)
+async leaf (Ticket ready, 新規) 321.5k/s (77.9%)
+async leaf (Ticket pending, 新規, on_stall経由) 139.5k/s (33.8%)
+```
+
+Ticket readyはPromise::XS pre-resolvedに対して約+15.8%改善した。Promise::XSの`then()`が
+既に決着したpromiseに対しても呼び出しごとにderived promise objectを生成するのに対し、
+fulfilled Ticketの認識はsuspension channelにもderived objectにも触れず値を直接返すためである。
+
 ## 13. 次に進める順序
 
-1. resolve/rejectが別々に保持しているroot continuation contextを共有し、所有SVのrefcount操作と
-   heap allocationを減らす。
+1. ~~resolve/rejectが別々に保持しているroot continuation contextを共有し、所有SVのrefcount操作と
+   heap allocationを減らす。~~ 実施済み(本節9)。
 2. leaf benchmarkをallocation profileと合わせて測り、Promise::XS自体の下限とHoutou側の固定費を
    分離する。
 3. settled root listを走査し、全itemがplainならfast completion、pending itemが1個でもあれば
@@ -289,6 +338,24 @@ Promise::XSの`then`、resolve/reject CV、continuation contextと所有SVの割
    object child block、複数root siblingへ対象を広げる。
 6. Promise callback内でcompletionを再帰実行する形はroot単一fieldに限定し、複数siblingへ
    広げる段階ではready queueへ統合してreentrancyを防ぐ。
+
+GraphQL::HoutouはPSGI前提の同期Webアプリで、実際にsuspendが起きる主因はDataLoader
+バッチ解決(Ticket)であり、任意のresolverが返す汎用Promise::XSは相対的に稀なケースである。
+そのため上記の順序に加えて、DataLoader Ticketの認識・直接subscribe・継続ctx統合(本節8, 9)を
+先行させた。
+
+6は単独で試作・計測済み(本節item 10、詳細は`docs/future-performance-investigation-ja.md`
+§14.17)。正しさ(300件独立継続の一括batch settle、ASan)は確認できたが、settleごとの
+`exec_state_handle_t`/heap writer/block_frame確保とnative_value_t往復変換のコストが
+Promise::XS pre-resolvedで-7.0%、Ticket pendingで-2.6%の実測retreatとなり、「正しさの
+検証が目的」という位置づけに対して単独採用するには重すぎると判断し延期した。単一field
+のresumeは直接構築方式(item 5-9)へ戻している。
+
+6は単独では割に合わなかったが、3・5(複数sibling pending fieldへの拡張)を実装する
+段階では前提として必要になる可能性が高い — その時点では1つの`block_frame_t`が
+複数siblingの結果をまとめて保持するため、確保コストをsibling数で償却できる。次に
+3・5へ着手する際は、6のblock_frame_t/scheduler委譲をその実装に組み込む形で
+再評価する(単独の内部リファクタとして別PRにはしない)。
 
 旧async executorはfallbackとして残す。対象shapeが明示的に判定でき、correctnessと性能の両方を
 満たした範囲だけをsync-first経路へ移す。

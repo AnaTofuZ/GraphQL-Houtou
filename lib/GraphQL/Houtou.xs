@@ -12305,6 +12305,149 @@ _enqueue_load_miss(self, key, cache_key, cache)
   OUTPUT:
     RETVAL
 
+IV
+_dispatch_queue(self, queue_sv)
+    SV *self
+    SV *queue_sv
+  PREINIT:
+    HV *loader_hv;
+    SV **batch_svp;
+    SV **max_svp;
+    AV *queue_av;
+    Size_t queue_count;
+    Size_t offset;
+    Size_t chunk_count;
+    IV max_batch_size;
+    IV dispatched;
+  CODE:
+    if (!self || !SvROK(self) || SvTYPE(SvRV(self)) != SVt_PVHV
+        || !queue_sv || !SvROK(queue_sv)
+        || SvTYPE(SvRV(queue_sv)) != SVt_PVAV) {
+      croak("invalid DataLoader dispatch state");
+    }
+    loader_hv = (HV *)SvRV(self);
+    batch_svp = hv_fetch(loader_hv, "batch", 5, 0);
+    max_svp = hv_fetch(loader_hv, "max_batch_size", 14, 0);
+    if (!batch_svp || !*batch_svp || !SvROK(*batch_svp)
+        || SvTYPE(SvRV(*batch_svp)) != SVt_PVCV) {
+      croak("invalid DataLoader batch function");
+    }
+    max_batch_size = (max_svp && *max_svp) ? SvIV(*max_svp) : 0;
+    queue_av = (AV *)SvRV(queue_sv);
+    queue_count = av_count(queue_av);
+    dispatched = 0;
+
+    for (offset = 0; offset < queue_count; offset += chunk_count) {
+      AV *keys_av;
+      SV *values_sv;
+      SV *reason_sv;
+      Size_t i;
+      I32 callback_count;
+
+      chunk_count = queue_count - offset;
+      if (max_batch_size > 0 && (Size_t)max_batch_size < chunk_count) {
+        chunk_count = (Size_t)max_batch_size;
+      }
+      keys_av = newAV();
+      av_extend(keys_av, (SSize_t)chunk_count - 1);
+      for (i = 0; i < chunk_count; i++) {
+        SV **entry_svp = av_fetch(queue_av, (SSize_t)(offset + i), 0);
+        AV *entry_av;
+        SV **key_svp;
+        if (!entry_svp || !*entry_svp || !SvROK(*entry_svp)
+            || SvTYPE(SvRV(*entry_svp)) != SVt_PVAV) {
+          SvREFCNT_dec((SV *)keys_av);
+          croak("invalid DataLoader queue entry at index %ld", (long)(offset + i));
+        }
+        entry_av = (AV *)SvRV(*entry_svp);
+        key_svp = av_fetch(entry_av, 0, 0);
+        av_push(keys_av, newSVsv(
+          (key_svp && *key_svp) ? *key_svp : &PL_sv_undef
+        ));
+      }
+
+      values_sv = NULL;
+      reason_sv = NULL;
+      {
+        dSP;
+        ENTER;
+        SAVETMPS;
+        PUSHMARK(SP);
+        XPUSHs(sv_2mortal(newRV_noinc((SV *)keys_av)));
+        PUTBACK;
+        callback_count = call_sv(*batch_svp, G_SCALAR | G_EVAL);
+        SPAGAIN;
+        if (SvTRUE(ERRSV)) {
+          reason_sv = newSVsv(ERRSV);
+          sv_setsv(ERRSV, &PL_sv_undef);
+        } else if (callback_count == 1) {
+          values_sv = newSVsv(POPs);
+        }
+        PUTBACK;
+        FREETMPS;
+        LEAVE;
+      }
+
+      if (!reason_sv
+          && (!values_sv || !SvROK(values_sv)
+              || SvTYPE(SvRV(values_sv)) != SVt_PVAV
+              || av_count((AV *)SvRV(values_sv)) != chunk_count)) {
+        reason_sv = newSVpvs(
+          "DataLoader batch function must return an arrayref with one entry per key\n"
+        );
+      }
+
+      for (i = 0; i < chunk_count; i++) {
+        SV **entry_svp = av_fetch(queue_av, (SSize_t)(offset + i), 0);
+        AV *entry_av = (AV *)SvRV(*entry_svp);
+        SV **ticket_svp = av_fetch(entry_av, 1, 0);
+        if (!ticket_svp || !*ticket_svp
+            || !gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ *ticket_svp)) {
+          SvREFCNT_dec(values_sv);
+          SvREFCNT_dec(reason_sv);
+          croak("invalid DataLoader ticket at index %ld", (long)(offset + i));
+        }
+        if (reason_sv) {
+          gql_runtime_vm_settle_dataloader_ticket(
+            aTHX_ *ticket_svp, 2, reason_sv
+          );
+        } else {
+          AV *values_av = (AV *)SvRV(values_sv);
+          SV **value_svp = av_fetch(values_av, (SSize_t)i, 0);
+          SV *value_sv = (value_svp && *value_svp)
+            ? *value_svp
+            : &PL_sv_undef;
+          if (sv_isobject(value_sv)
+              && sv_derived_from(
+                value_sv, "GraphQL::Houtou::DataLoader::Error"
+              )) {
+            SV *entry_reason_sv = &PL_sv_undef;
+            if (SvROK(value_sv) && SvTYPE(SvRV(value_sv)) == SVt_PVHV) {
+              SV **message_svp = hv_fetch(
+                (HV *)SvRV(value_sv), "message", 7, 0
+              );
+              if (message_svp && *message_svp) {
+                entry_reason_sv = *message_svp;
+              }
+            }
+            gql_runtime_vm_settle_dataloader_ticket(
+              aTHX_ *ticket_svp, 2, entry_reason_sv
+            );
+          } else {
+            gql_runtime_vm_settle_dataloader_ticket(
+              aTHX_ *ticket_svp, 1, value_sv
+            );
+          }
+        }
+      }
+      dispatched += (IV)chunk_count;
+      SvREFCNT_dec(values_sv);
+      SvREFCNT_dec(reason_sv);
+    }
+    RETVAL = dispatched;
+  OUTPUT:
+    RETVAL
+
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::DataLoader::Ticket
 
 SV *

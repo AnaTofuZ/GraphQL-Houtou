@@ -10074,11 +10074,29 @@ gql_runtime_vm_execute_block_fast_multi_sv(
       if (!frame) {
         frame = gql_runtime_vm_new_block_frame_struct(aTHX);
       }
-      /* Mirrors gql_runtime_vm_then_complete_current_sv's choice: a
-       * built-in scalar/enum leaf just needs result coercion once the
-       * value settles (RESOLVED_VALUE_SV); anything else (custom scalar)
-       * is stored as-is and re-completed generically (GENERIC_VALUE_SV). */
-      payload_kind = gql_runtime_vm_slot_leaf_kind(state->runtime, slot) == GQL_VM_LEAF_NONE
+      /* The root caller defers building sched_state_sv to its own tail
+       * (only field-level suspension ever needed it there, and only after
+       * the loop). An item child block wrapper
+       * (gql_runtime_vm_execute_list_item_child_block_fast_sv) instead
+       * finalizes its frame immediately, right after this function
+       * returns, so it needs a real state_sv NOW - ensuring it here is a
+       * no-op cost-wise for the root case (the frame is already being
+       * built this same branch either way), so do it unconditionally
+       * rather than threading a "do we need it now" flag through. */
+      gql_runtime_vm_ensure_fast_lane_state_sv(aTHX_ state, &sched_state_sv);
+      /* Mirrors gql_runtime_vm_then_complete_current_sv's choice exactly
+       * (Phase 3/4 dropped the complete_code check here, which happened to
+       * still choose correctly only because that eligibility guard never
+       * let a non-leaf LIST reach this branch - Phase 5 does, and a GENERIC-
+       * only check on leaf_kind is wrong for it): a built-in scalar/enum
+       * leaf on a plain GENERIC op just needs result coercion once the
+       * value settles (RESOLVED_VALUE_SV); a custom scalar on a GENERIC op
+       * is stored as-is (GENERIC_VALUE_SV). Any other complete_code (LIST,
+       * including a list of objects/abstract items) always needs full
+       * re-completion through gql_runtime_vm_exec_state_complete_async_sv,
+       * i.e. RESOLVED_VALUE_SV, regardless of leaf_kind. */
+      payload_kind = (op->complete_code == GQL_VM_COMPLETE_GENERIC
+                      && gql_runtime_vm_slot_leaf_kind(state->runtime, slot) == GQL_VM_LEAF_NONE)
         ? GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
         : GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV;
       gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
@@ -10420,6 +10438,55 @@ static XS(gql_runtime_vm_xs_fast_root_continuation_reject_callback)
   XSRETURN(1);
 }
 
+/* Phase 5 eligibility: an object/abstract list item's own child block must
+ * itself be a "flat" block, matching the same restrictions the root loop
+ * already applies to root ops (no runtime directives, stable bundle/
+ * native_program op indices) - except non-null (return_type_kind_code ==
+ * 8) IS allowed here, since gql_runtime_vm_execute_block_fast_multi_sv
+ * handles that correctly (unlike the root loop, where it stays dead code).
+ * A nested OBJECT/ABSTRACT field (the item has a field that is itself
+ * another object) still goes through the exactly-once-unsafe
+ * gql_runtime_vm_execute_child_block_fast_sv, so it is intentionally
+ * excluded from this phase rather than risked - deeper object nesting is
+ * future work. A nested LIST field is allowed, but only if it is itself
+ * plain-leaf (no child block/abstract dispatch of its own), since nested
+ * list completion reuses this same now-safe machinery regardless of
+ * depth, but validating ITS OWN possible item shapes recursively is out
+ * of scope for this phase. */
+static int
+gql_runtime_vm_fast_lane_list_item_block_is_eligible(
+  gql_runtime_vm_native_bundle_t *bundle,
+  gql_runtime_vm_native_program_t *program,
+  IV block_index
+)
+{
+  gql_runtime_vm_native_block_t *block;
+  IV i;
+
+  if (block_index < 0 || block_index >= bundle->block_count) {
+    return 0;
+  }
+  block = &bundle->blocks[block_index];
+  if (block_index >= program->block_count
+      || block->op_count != program->blocks[block_index].op_count) {
+    return 0;
+  }
+  for (i = 0; i < block->op_count; i++) {
+    gql_runtime_vm_native_op_t *op = &block->ops[i];
+    if (op->slot_index < 0 || op->slot_index >= block->slot_count) {
+      return 0;
+    }
+    if ((op->complete_code != GQL_VM_COMPLETE_GENERIC
+         && op->complete_code != GQL_VM_COMPLETE_LIST)
+        || op->has_runtime_directives || op->runtime_directives_sv
+        || op->child_block_index >= 0
+        || op->abstract_child_count > 0) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
 static SV *
 gql_runtime_vm_try_execute_fast_root_continuation_sv(
   pTHX_
@@ -10486,10 +10553,32 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
     if ((op->complete_code != GQL_VM_COMPLETE_GENERIC
          && op->complete_code != GQL_VM_COMPLETE_LIST)
         || op->has_runtime_directives || op->runtime_directives_sv
-        || slot->return_type_kind_code == 8
-        || op->child_block_index >= 0
-        || op->abstract_child_count > 0) {
+        || slot->return_type_kind_code == 8) {
       return NULL;
+    }
+    if (op->complete_code == GQL_VM_COMPLETE_GENERIC
+        && (op->child_block_index >= 0 || op->abstract_child_count > 0)) {
+      /* A single (non-list) root object field: out of scope for this
+       * phase (see gql_runtime_vm_fast_lane_list_item_block_is_eligible's
+       * doc comment - §13 item 5, not item 4). */
+      return NULL;
+    }
+    if (op->complete_code == GQL_VM_COMPLETE_LIST && op->child_block_index >= 0) {
+      if (!gql_runtime_vm_fast_lane_list_item_block_is_eligible(
+            bundle, program, op->child_block_index
+          )) {
+        return NULL;
+      }
+    }
+    if (op->complete_code == GQL_VM_COMPLETE_LIST && op->abstract_child_count > 0) {
+      IV ai;
+      for (ai = 0; ai < op->abstract_child_count; ai++) {
+        if (!gql_runtime_vm_fast_lane_list_item_block_is_eligible(
+              bundle, program, op->abstract_child_indexes[ai]
+            )) {
+          return NULL;
+        }
+      }
     }
   }
 

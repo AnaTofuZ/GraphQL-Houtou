@@ -2,6 +2,7 @@ use strict;
 use warnings;
 
 use Test::More;
+use Scalar::Util qw(refaddr);
 
 BEGIN {
   eval { require Promise::XS; 1 }
@@ -158,6 +159,27 @@ subtest 'per-request cache dedupes and prime seeds it' => sub {
   is $result->{data}{a}{author}{name}, 'cached-alice', 'primed value used';
   is $result->{data}{b}{author}{name}, 'cached-alice', 'cache dedupes same key';
   is scalar @user_batches, 0, 'no batch needed when everything was primed';
+};
+
+subtest 'load preserves custom cache keys and disabled caching' => sub {
+  my $empty_key = GraphQL::Houtou::DataLoader->new(
+    cache_key => sub { '' },
+    batch => sub { return [ map { $_ } @{ $_[0] } ] },
+  );
+  my $first = $empty_key->load('first');
+  my $second = $empty_key->load('second');
+  is refaddr($second), refaddr($first), 'an empty custom cache key dedupes';
+  is $empty_key->pending_count, 1, 'deduped key is queued once';
+
+  my $uncached = GraphQL::Houtou::DataLoader->new(
+    cache => 0,
+    batch => sub { return [ map { $_ } @{ $_[0] } ] },
+  );
+  my $uncached_first = $uncached->load('same');
+  my $uncached_second = $uncached->load('same');
+  isnt refaddr($uncached_second), refaddr($uncached_first),
+    'disabled caching creates distinct tickets';
+  is $uncached->pending_count, 2, 'disabled caching queues both loads';
 };
 
 subtest 'per-key errors fail only that field' => sub {

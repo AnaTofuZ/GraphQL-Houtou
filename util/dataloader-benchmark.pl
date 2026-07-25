@@ -31,13 +31,14 @@ GetOptions(
   'width=i' => \$width,
   'scenario=s' => \$scenario,
   'access=s' => \$access,
-) or die "Usage: $0 [--count Benchmark-count] [--width key-count] [--scenario loader|execution] [--access unique|repeated|primed]\n";
+) or die "Usage: $0 [--count Benchmark-count] [--width key-count] [--scenario loader|execution] [--access unique|cold|repeated|primed]\n";
 
 die "--width must be positive\n" unless $width > 0;
 die "--scenario must be loader or execution\n"
   unless $scenario eq 'loader' || $scenario eq 'execution';
-die "--access must be unique, repeated, or primed\n"
-  unless $access eq 'unique' || $access eq 'repeated' || $access eq 'primed';
+die "--access must be unique, cold, repeated, or primed\n"
+  unless $access eq 'unique' || $access eq 'cold'
+    || $access eq 'repeated' || $access eq 'primed';
 
 my @keys = map { "key$_" } 1 .. $width;
 my @request_keys = $access eq 'repeated' ? (($keys[0]) x $width) : @keys;

@@ -30,7 +30,7 @@ sub new {
     batch => $batch,
     max_batch_size => $args{max_batch_size} || 0,
     cache => exists $args{cache} ? ($args{cache} ? 1 : 0) : 1,
-    cache_key => ref($args{cache_key}) eq 'CODE' ? $args{cache_key} : sub { $_[0] },
+    cache_key => ref($args{cache_key}) eq 'CODE' ? $args{cache_key} : undef,
     _promises => {},
     _queue => [],
   }, $class;
@@ -39,14 +39,13 @@ sub new {
 sub load {
   my ($self, $key) = @_;
   die "GraphQL::Houtou::DataLoader::load requires a defined key\n" if !defined $key;
-  my $cache_key = $self->{cache_key}->($key);
+  my $cache_key = $self->{cache}
+    ? ($self->{cache_key} ? $self->{cache_key}->($key) : $key)
+    : undef;
   if ($self->{cache} && exists $self->{_promises}{$cache_key}) {
     return $self->{_promises}{$cache_key};
   }
-  my $ticket = GraphQL::Houtou::DataLoader::Ticket->new;
-  push @{ $self->{_queue} }, [ $key, $ticket ];
-  $self->{_promises}{$cache_key} = $ticket if $self->{cache};
-  return $ticket;
+  return $self->_enqueue_load_miss($key, $cache_key, $self->{cache});
 }
 
 # dataloader-js semantics: takes an arrayref of keys, returns one promise
@@ -91,7 +90,7 @@ sub load_many {
 
 sub prime {
   my ($self, $key, $value) = @_;
-  my $cache_key = $self->{cache_key}->($key);
+  my $cache_key = $self->{cache_key} ? $self->{cache_key}->($key) : $key;
   return $self if !$self->{cache} || exists $self->{_promises}{$cache_key};
   $self->{_promises}{$cache_key} =
     GraphQL::Houtou::DataLoader::Ticket->resolved($value);
@@ -100,7 +99,8 @@ sub prime {
 
 sub clear {
   my ($self, $key) = @_;
-  delete $self->{_promises}{ $self->{cache_key}->($key) };
+  my $cache_key = $self->{cache_key} ? $self->{cache_key}->($key) : $key;
+  delete $self->{_promises}{$cache_key};
   return $self;
 }
 

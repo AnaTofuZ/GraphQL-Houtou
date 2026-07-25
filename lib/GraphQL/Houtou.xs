@@ -7151,12 +7151,48 @@ gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
   gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);
 }
 
+/* Core of gql_runtime_vm_cancel_pending_response_sv, factored out so a
+ * caller that already holds the exec_state_handle_t directly (Phase 8's
+ * C-level on_stall drive loop, which never attaches the response-state
+ * magic in the first place since it never builds a promise - see
+ * finalize_sv mode 3) can cancel the same way without unwrapping a
+ * promise's magic first. */
+static void
+gql_runtime_vm_cancel_exec_state_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *state)
+{
+  IV i;
+
+  if (!state) {
+    return;
+  }
+  if (state->response_frame) {
+    gql_runtime_vm_cancel_frame_tree(aTHX_ state->response_frame);
+  }
+  if (state->frame && state->frame != state->response_frame) {
+    gql_runtime_vm_cancel_frame_tree(aTHX_ state->frame);
+  }
+  for (i = 0; i < state->frame_stack_count; i++) {
+    if (state->frame_stack[i] && state->frame_stack[i] != state->response_frame) {
+      gql_runtime_vm_cancel_frame_tree(aTHX_ state->frame_stack[i]);
+    }
+  }
+  /* Request-scoped user data can close a second cycle around the exec
+   * state (context -> DataLoader -> queued deferred -> promise -> armed
+   * callback -> exec state -> context), so a cancelled request drops
+   * these references too. Cancelled continuations no-op before touching
+   * any of them, and ExecState DESTROY's SvREFCNT_dec is NULL-safe. */
+  SvREFCNT_dec(state->context);
+  state->context = NULL;
+  SvREFCNT_dec(state->root_value);
+  state->root_value = NULL;
+  SvREFCNT_dec(state->variables);
+  state->variables = NULL;
+}
+
 static void
 gql_runtime_vm_cancel_pending_response_sv(pTHX_ SV *promise_rv)
 {
   MAGIC *mg;
-  gql_runtime_vm_exec_state_handle_t *state;
-  IV i;
 
   if (!promise_rv || !SvROK(promise_rv)) {
     return;
@@ -7166,31 +7202,7 @@ gql_runtime_vm_cancel_pending_response_sv(pTHX_ SV *promise_rv)
   if (!mg || !mg->mg_obj) {
     return;
   }
-  state = gql_runtime_vm_expect_exec_state_handle(aTHX_ mg->mg_obj);
-  if (state) {
-    if (state->response_frame) {
-      gql_runtime_vm_cancel_frame_tree(aTHX_ state->response_frame);
-    }
-    if (state->frame && state->frame != state->response_frame) {
-      gql_runtime_vm_cancel_frame_tree(aTHX_ state->frame);
-    }
-    for (i = 0; i < state->frame_stack_count; i++) {
-      if (state->frame_stack[i] && state->frame_stack[i] != state->response_frame) {
-        gql_runtime_vm_cancel_frame_tree(aTHX_ state->frame_stack[i]);
-      }
-    }
-    /* Request-scoped user data can close a second cycle around the exec
-     * state (context -> DataLoader -> queued deferred -> promise -> armed
-     * callback -> exec state -> context), so a cancelled request drops
-     * these references too. Cancelled continuations no-op before touching
-     * any of them, and ExecState DESTROY's SvREFCNT_dec is NULL-safe. */
-    SvREFCNT_dec(state->context);
-    state->context = NULL;
-    SvREFCNT_dec(state->root_value);
-    state->root_value = NULL;
-    SvREFCNT_dec(state->variables);
-    state->variables = NULL;
-  }
+  gql_runtime_vm_cancel_exec_state_sv(aTHX_ gql_runtime_vm_expect_exec_state_handle(aTHX_ mg->mg_obj));
   /* Drop the magic so the promise no longer pins the exec state. */
   sv_unmagicext(SvRV(promise_rv), PERL_MAGIC_ext,
                 &gql_runtime_vm_response_state_magic_vtbl);

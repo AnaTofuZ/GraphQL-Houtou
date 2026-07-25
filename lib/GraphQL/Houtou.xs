@@ -503,6 +503,7 @@ static int gql_runtime_vm_slot_uses_native_one_arg_abi(const gql_runtime_vm_nati
 static int gql_runtime_vm_slot_uses_explicit_generic_fast_abi(const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_slot_resolver_sv(const gql_runtime_vm_native_runtime_t *runtime, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
+static SV *gql_runtime_vm_execute_root_block_fast_multi_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source, gql_runtime_vm_block_frame_t **frame_out);
 static SV *gql_runtime_vm_try_execute_fast_root_continuation_sv(
   pTHX_ SV *runtime_sv, SV *program_sv,
   gql_runtime_vm_native_runtime_t *runtime,
@@ -9736,6 +9737,129 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
   return newRV_noinc((SV *)data_hv);
 }
 
+/* Root-block loop for the multi-sibling fast continuation. Unlike
+ * gql_runtime_vm_execute_block_fast_sv (shared with the plain-hash-block
+ * fast path and list item completion, where any suspension aborts the
+ * whole block), a suspension here must not throw away sibling fields
+ * already resolved earlier in the same loop or skip fields still to come:
+ * the caller only reaches this function once every op in the block has
+ * already passed the fast-root-continuation eligibility guard (leaf,
+ * nullable, no directives, no child block, and stable bundle/native_program
+ * op indices), so every suspended op can be parked as a
+ * GQL_VM_PENDING_PROMISE_(GENERIC|RESOLVED)_VALUE_SV pending entry on a
+ * lazily-created block_frame_t and the loop simply continues. *frame_out
+ * stays NULL when nothing suspended (the fully-synchronous, zero-tax
+ * case); the returned data_hv always holds every field that resolved
+ * without suspending, whether before or after the first suspension. */
+static SV *
+gql_runtime_vm_execute_root_block_fast_multi_sv(
+  pTHX_
+  gql_runtime_vm_exec_state_t *state,
+  IV block_index,
+  SV *source,
+  gql_runtime_vm_block_frame_t **frame_out
+)
+{
+  gql_runtime_vm_native_block_t *block;
+  HV *data_hv;
+  IV i;
+  gql_runtime_vm_block_frame_t *frame = NULL;
+
+  *frame_out = NULL;
+
+  if (!state->bundle || block_index < 0 || block_index >= state->bundle->block_count) {
+    croak("native VM block index %ld is invalid", (long)block_index);
+  }
+
+  block = &state->bundle->blocks[block_index];
+  state->block = block;
+  state->block_index = block_index;
+  data_hv = newHV();
+
+  for (i = 0; i < block->op_count; i++) {
+    gql_runtime_vm_native_op_t *op = &block->ops[i];
+    gql_runtime_vm_native_slot_t *slot;
+    SV *completed;
+    SV *error_sv = NULL;
+    gql_runtime_vm_path_frame_t *field_path;
+
+    if (op->slot_index < 0 || op->slot_index >= block->slot_count) {
+      croak("native VM op slot_index %ld is invalid in block %ld", (long)op->slot_index, (long)block_index);
+    }
+    slot = &block->slots[op->slot_index];
+    state->op = op;
+    state->slot = slot;
+    state->op_index = i;
+
+    if (!gql_runtime_vm_should_execute_current_op_fast(aTHX_ state)) {
+      continue;
+    }
+
+    /* Every op here is already known to be a directive-free leaf (the
+     * eligibility guard checked this for the whole block), so there is no
+     * benefit to gql_runtime_vm_slot_can_delay_field_path's lazy path: a
+     * suspended op needs a real, refcounted path_frame that survives past
+     * this call, so always build one eagerly. */
+    field_path = gql_runtime_vm_new_result_path_frame(aTHX_ NULL, slot);
+    state->path_frame = field_path;
+    state->path_frame_is_current_field = 1;
+
+    completed = gql_runtime_vm_execute_current_op_fast_sv(aTHX_ state, source, &error_sv);
+    state->path_frame = NULL;
+    state->path_frame_is_current_field = 0;
+
+    if (state->fast_lane_suspended_sv) {
+      SV *promise_sv = state->fast_lane_suspended_sv;
+      U8 payload_kind;
+      state->fast_lane_suspended_sv = NULL;
+      if (completed) {
+        SvREFCNT_dec(completed);
+      }
+      if (error_sv) {
+        SvREFCNT_dec(error_sv);
+      }
+      if (!frame) {
+        frame = gql_runtime_vm_new_block_frame_struct(aTHX);
+      }
+      /* Mirrors gql_runtime_vm_then_complete_current_sv's choice: a
+       * built-in scalar/enum leaf just needs result coercion once the
+       * value settles (RESOLVED_VALUE_SV); anything else (custom scalar)
+       * is stored as-is and re-completed generically (GENERIC_VALUE_SV). */
+      payload_kind = gql_runtime_vm_slot_leaf_kind(state->runtime, slot) == GQL_VM_LEAF_NONE
+        ? GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
+        : GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV;
+      gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
+        aTHX_ frame, slot->result_name, slot->result_name_len, 1,
+        promise_sv, payload_kind, field_path, block_index, op->slot_index, i
+      );
+      SvREFCNT_dec(promise_sv);
+      gql_runtime_vm_path_frame_decref(field_path);
+      continue;
+    }
+
+    if (error_sv) {
+      gql_runtime_vm_fast_lane_record_error_for_path(aTHX_ state, error_sv, field_path);
+      SvREFCNT_dec(error_sv);
+      completed = completed ? completed : newSVsv(&PL_sv_undef);
+    }
+    /* Every op is nullable per the eligibility guard, so a null result
+     * (whether from the resolver or a field error above) never triggers
+     * non-null propagation here - unlike gql_runtime_vm_execute_block_fast_sv,
+     * which must handle arbitrary blocks. */
+    gql_runtime_vm_path_frame_decref(field_path);
+    if (!completed) {
+      completed = newSVsv(&PL_sv_undef);
+    }
+    hv_store(data_hv, slot->result_name, (I32)slot->result_name_len, completed, 0);
+  }
+
+  state->path_frame = NULL;
+  state->path_frame_is_current_field = 0;
+
+  *frame_out = frame;
+  return newRV_noinc((SV *)data_hv);
+}
+
 static gql_runtime_vm_fast_root_continuation_ctx_t *
 gql_runtime_vm_new_fast_root_continuation_ctx(
   pTHX_
@@ -9958,11 +10082,9 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
 {
   gql_runtime_vm_native_bundle_t *bundle;
   gql_runtime_vm_native_block_t *block;
-  gql_runtime_vm_native_op_t *op;
-  gql_runtime_vm_native_slot_t *slot;
   gql_runtime_vm_exec_state_t state;
   gql_runtime_vm_callback_context_t callback_ctx;
-  gql_runtime_vm_writer_t writer;
+  gql_runtime_vm_writer_t *writer;
   SV *empty_args_sv;
   SV *data_sv;
   SV *promise_sv;
@@ -9970,6 +10092,8 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
   SV *reject_callback_sv;
   SV *ret;
   gql_runtime_vm_fast_root_continuation_shared_t *shared;
+  gql_runtime_vm_block_frame_t *frame = NULL;
+  IV i;
 
   *handled_out = 0;
   if (json_mode) {
@@ -9981,28 +10105,43 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
     return NULL;
   }
   block = &bundle->blocks[bundle->root_block_index];
-  if (block->op_count != 1) {
+  if (block->op_count < 1) {
     return NULL;
   }
-  op = &block->ops[0];
-  if (op->slot_index < 0 || op->slot_index >= block->slot_count) {
+  /* Bundle prep (gql_runtime_vm_prepare_cached_bundle_in_place) can delete
+   * ops whose static directive evaluates to false, shifting every later
+   * op's bundle-relative index away from its native_program-relative
+   * index. A block-level op_count match is a cheap, sufficient proof that
+   * nothing in this block was deleted, so the op_index recorded below for
+   * a suspended field is safe to hand to gql_runtime_vm_exec_state_complete_async_sv
+   * later, which looks the field up against the raw native_program, not
+   * the bundle. */
+  if (bundle->root_block_index >= program->block_count
+      || block->op_count != program->blocks[bundle->root_block_index].op_count) {
     return NULL;
   }
-  slot = &block->slots[op->slot_index];
-  if (op->complete_code != GQL_VM_COMPLETE_GENERIC
-      || op->has_runtime_directives || op->runtime_directives_sv
-      || slot->return_type_kind_code == 8
-      || op->child_block_index >= 0) {
-    return NULL;
+  for (i = 0; i < block->op_count; i++) {
+    gql_runtime_vm_native_op_t *op = &block->ops[i];
+    gql_runtime_vm_native_slot_t *slot;
+    if (op->slot_index < 0 || op->slot_index >= block->slot_count) {
+      return NULL;
+    }
+    slot = &block->slots[op->slot_index];
+    if (op->complete_code != GQL_VM_COMPLETE_GENERIC
+        || op->has_runtime_directives || op->runtime_directives_sv
+        || slot->return_type_kind_code == 8
+        || op->child_block_index >= 0) {
+      return NULL;
+    }
   }
 
   Zero(&state, 1, gql_runtime_vm_exec_state_t);
   Zero(&callback_ctx, 1, gql_runtime_vm_callback_context_t);
-  gql_runtime_vm_init_writer_struct(&writer);
+  writer = gql_runtime_vm_new_writer_struct(aTHX);
   state.runtime = runtime;
   state.bundle = bundle;
   state.callback_ctx = &callback_ctx;
-  state.writer = &writer;
+  state.writer = writer;
   state.fast_lane_can_suspend = 1;
   callback_ctx.runtime_schema = runtime_schema ? runtime_schema : &PL_sv_undef;
   callback_ctx.context = context_value;
@@ -10011,66 +10150,137 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
   callback_ctx.native_program = program;
   state.empty_args_sv = empty_args_sv = gql_runtime_vm_empty_args_sv(aTHX);
 
-  data_sv = gql_runtime_vm_execute_block_fast_sv(
-    aTHX_ &state, bundle->root_block_index, root_value
+  if (block->op_count == 1) {
+    /* Single field: keep the light direct-construction resume (no
+     * block_frame_t/exec_state_handle_t at all). Phase 2 measured this to
+     * be ~7%/~2.6% cheaper than routing a lone suspension through the
+     * generic scheduler - only worth paying for once N > 1 siblings can
+     * amortize the block_frame_t/exec_state_handle_t cost (see
+     * docs/future-performance-investigation-ja.md §14.17). */
+    data_sv = gql_runtime_vm_execute_block_fast_sv(
+      aTHX_ &state, bundle->root_block_index, root_value
+    );
+    if (!state.fast_lane_suspended_sv) {
+      ret = gql_runtime_vm_fast_response_sv(aTHX_ data_sv, writer);
+      gql_runtime_vm_writer_decref(aTHX_ writer);
+      SvREFCNT_dec(callback_ctx.materialized_variables);
+      SvREFCNT_dec(empty_args_sv);
+      *handled_out = 1;
+      return ret;
+    }
+
+    promise_sv = state.fast_lane_suspended_sv;
+    state.fast_lane_suspended_sv = NULL;
+    Newxz(shared, 1, gql_runtime_vm_fast_root_continuation_shared_t);
+    shared->refcount = 1;
+    gql_runtime_vm_new_fast_root_continuation_callback_pair_sv(
+      aTHX_
+      gql_runtime_vm_new_fast_root_continuation_ctx(
+        aTHX_ runtime_sv, program_sv, runtime_schema, root_value, context_value,
+        variables, runtime, bundle, bundle->root_block_index, 0, shared
+      ),
+      &resolve_callback_sv, &reject_callback_sv
+    );
+    if (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ promise_sv)) {
+      /* The guard already filtered out a settled Ticket (state 1/2), so
+       * this is genuinely pending: gql_runtime_vm_subscribe_dataloader_ticket
+       * never fires synchronously in that case (unlike Promise::XS
+       * then()), so the request-level result is always the fresh
+       * deferred's promise - subscribe directly to the ticket's C-level
+       * notification instead of bridging through the slower Perl-method
+       * _subscribe path. */
+      shared->deferred_sv = gql_runtime_vm_promise_xs_new_deferred_sv(aTHX);
+      ret = gql_runtime_vm_promise_xs_deferred_promise_sv(aTHX_ shared->deferred_sv);
+      gql_runtime_vm_subscribe_dataloader_ticket(
+        aTHX_ promise_sv, resolve_callback_sv, reject_callback_sv
+      );
+    } else {
+      shared->arming = 1;
+      ret = gql_runtime_vm_call_then_promise_xs_sv(
+        aTHX_ promise_sv, resolve_callback_sv, reject_callback_sv, NULL
+      );
+      shared->arming = 0;
+      if (shared->sync_response_sv) {
+        SV *sync_response_sv = shared->sync_response_sv;
+        shared->sync_response_sv = NULL;
+        SvREFCNT_dec(ret);
+        ret = sync_response_sv;
+      }
+    }
+    SvREFCNT_dec(resolve_callback_sv);
+    SvREFCNT_dec(reject_callback_sv);
+    SvREFCNT_dec(promise_sv);
+    gql_runtime_vm_writer_decref(aTHX_ writer);
+    SvREFCNT_dec(callback_ctx.materialized_variables);
+    SvREFCNT_dec(empty_args_sv);
+    if (--shared->refcount == 0) {
+      SvREFCNT_dec(shared->sync_response_sv);
+      SvREFCNT_dec(shared->deferred_sv);
+      Safefree(shared);
+    }
+    *handled_out = 1;
+    return ret;
+  }
+
+  data_sv = gql_runtime_vm_execute_root_block_fast_multi_sv(
+    aTHX_ &state, bundle->root_block_index, root_value, &frame
   );
-  if (!state.fast_lane_suspended_sv) {
-    ret = gql_runtime_vm_fast_response_sv(aTHX_ data_sv, &writer);
-    gql_runtime_vm_clear_writer_struct(aTHX_ &writer);
+
+  if (!frame) {
+    ret = gql_runtime_vm_fast_response_sv(aTHX_ data_sv, writer);
+    gql_runtime_vm_writer_decref(aTHX_ writer);
     SvREFCNT_dec(callback_ctx.materialized_variables);
     SvREFCNT_dec(empty_args_sv);
     *handled_out = 1;
     return ret;
   }
 
-  promise_sv = state.fast_lane_suspended_sv;
-  state.fast_lane_suspended_sv = NULL;
-  Newxz(shared, 1, gql_runtime_vm_fast_root_continuation_shared_t);
-  shared->refcount = 1;
-  gql_runtime_vm_new_fast_root_continuation_callback_pair_sv(
-    aTHX_
-    gql_runtime_vm_new_fast_root_continuation_ctx(
-      aTHX_ runtime_sv, program_sv, runtime_schema, root_value, context_value,
-      variables, runtime, bundle, bundle->root_block_index, 0, shared
-    ),
-    &resolve_callback_sv, &reject_callback_sv
-  );
-  if (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ promise_sv)) {
-    /* The guard already filtered out a settled Ticket (state 1/2), so this
-     * is genuinely pending: gql_runtime_vm_subscribe_dataloader_ticket
-     * never fires synchronously in that case (unlike Promise::XS then()),
-     * so the request-level result is always the fresh deferred's promise -
-     * subscribe directly to the ticket's C-level notification instead of
-     * bridging through the slower Perl-method _subscribe path. */
-    shared->deferred_sv = gql_runtime_vm_promise_xs_new_deferred_sv(aTHX);
-    ret = gql_runtime_vm_promise_xs_deferred_promise_sv(aTHX_ shared->deferred_sv);
-    gql_runtime_vm_subscribe_dataloader_ticket(
-      aTHX_ promise_sv, resolve_callback_sv, reject_callback_sv
+  /* At least one sibling suspended: fold every sibling that DID resolve
+   * (whether before or after the first suspension) into the frame's
+   * native value tree in one shot, then hand off to the same
+   * finalize/arm/drain machinery the generic async executor's own root
+   * frame uses (gql_runtime_vm_block_frame_finalize_sv), instead of
+   * hand-rolling completion here as the single-field continuation does -
+   * with N siblings that could settle back-to-back, this needs the same
+   * async_scheduler_draining-guarded arm ordering the generic lane already
+   * relies on. */
+  {
+    SV *data_rv = data_sv;
+    gql_runtime_vm_native_value_destroy(aTHX_ frame->values_value);
+    frame->values_value = gql_runtime_vm_native_value_from_sv(aTHX_ data_rv);
+    SvREFCNT_dec(data_rv);
+  }
+  frame->deferred_resolves_response = 1;
+
+  {
+    gql_runtime_vm_cursor_t *cursor = gql_runtime_vm_new_cursor_struct_for_program(
+      aTHX_ program, bundle->root_block_index, 0, 0
     );
-  } else {
-    shared->arming = 1;
-    ret = gql_runtime_vm_call_then_promise_xs_sv(
-      aTHX_ promise_sv, resolve_callback_sv, reject_callback_sv, NULL
+    SV *sched_state_sv = sv_2mortal(gql_runtime_vm_new_exec_state_handle_sv(
+      aTHX_ "GraphQL::Houtou::Runtime::ExecState",
+      runtime_schema, program_sv, cursor, writer,
+      context_value, variables, root_value, empty_args_sv
+    ));
+    gql_runtime_vm_exec_state_handle_t *sched_state =
+      gql_runtime_vm_expect_exec_state_handle(aTHX_ sched_state_sv);
+    gql_runtime_vm_cursor_decref(aTHX_ cursor);
+    gql_runtime_vm_writer_decref(aTHX_ writer);
+    sched_state->native_runtime = runtime;
+    sched_state->native_runtime_is_borrowed = 1;
+    sched_state->response_frame = frame;
+
+    ret = gql_runtime_vm_block_frame_finalize_sv(
+      aTHX_ frame, GQL_VM_PROMISE_BACKEND_PROMISE_XS, sched_state->writer,
+      sched_state_sv, 0
     );
-    shared->arming = 0;
-    if (shared->sync_response_sv) {
-      SV *sync_response_sv = shared->sync_response_sv;
-      shared->sync_response_sv = NULL;
+    if (sched_state->completed_response_sv) {
       SvREFCNT_dec(ret);
-      ret = sync_response_sv;
+      ret = SvREFCNT_inc_simple_NN(sched_state->completed_response_sv);
     }
   }
-  SvREFCNT_dec(resolve_callback_sv);
-  SvREFCNT_dec(reject_callback_sv);
-  SvREFCNT_dec(promise_sv);
-  gql_runtime_vm_clear_writer_struct(aTHX_ &writer);
+
   SvREFCNT_dec(callback_ctx.materialized_variables);
   SvREFCNT_dec(empty_args_sv);
-  if (--shared->refcount == 0) {
-    SvREFCNT_dec(shared->sync_response_sv);
-    SvREFCNT_dec(shared->deferred_sv);
-    Safefree(shared);
-  }
   *handled_out = 1;
   return ret;
 }

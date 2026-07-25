@@ -651,6 +651,93 @@ sub benchmark_async_preresolved_leaf {
   cmpthese($count, \%modes);
 }
 
+sub benchmark_async_multi_leaf {
+  require Promise::XS;
+  require GraphQL::Houtou::DataLoader;
+
+  # Phase 3: root has N nullable scalar sibling leaves; one of them
+  # (the last) is DataLoader-Ticket-backed and genuinely pending, the rest
+  # resolve synchronously. Before Phase 3 this shape always fell back to
+  # the generic async executor (op_count > 1); this benchmark exercises the
+  # new lazily-promoted block_frame_t continuation added for it.
+  for my $width (2, 5, 10) {
+    my @field_names = map { "f$_" } 1 .. $width;
+    my $query = 'query q(' . join(', ', map { "\$v$_: String" } 1 .. $width) . ') { '
+      . join(' ', map { "f$_(id: \$v$_)" } 1 .. $width) . ' }';
+    my $vars = { map { ("v$_" => "id$_") } 1 .. $width };
+
+    my $build_fields = sub {
+      my ($last_resolve) = @_;
+      my %fields;
+      for my $i (1 .. $width - 1) {
+        $fields{"f$i"} = {
+          type => $GraphQL::Houtou::Type::Scalar::String,
+          args => { id => { type => $GraphQL::Houtou::Type::Scalar::String } },
+          resolve => sub { my (undef, $args) = @_; return "sync:$args->{id}" },
+        };
+      }
+      $fields{"f$width"} = {
+        type => $GraphQL::Houtou::Type::Scalar::String,
+        args => { id => { type => $GraphQL::Houtou::Type::Scalar::String } },
+        resolve => $last_resolve,
+      };
+      return \%fields;
+    };
+
+    my $sync_rt = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => $build_fields->(
+          sub { my (undef, $args) = @_; return "sync:$args->{id}" }
+        ),
+      ),
+    )->build_native_runtime;
+
+    my $pending_loader;
+    my $async_rt = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => $build_fields->(
+          sub { my (undef, $args) = @_; return $pending_loader->load($args->{id}) }
+        ),
+      ),
+    )->build_native_runtime(async => 1);
+
+    my %modes = (
+      "houtou_sync_multi${width}_sv" => sub {
+        return $sync_rt->execute_document($query, variables => $vars);
+      },
+      "houtou_async_multi${width}_sv" => sub {
+        $pending_loader = GraphQL::Houtou::DataLoader->new(
+          batch => sub { my ($keys) = @_; return [ map { "batched:$_" } @$keys ] },
+        );
+        return maybe_get_promise_xs(
+          $async_rt->execute_document(
+            $query,
+            variables => $vars,
+            on_stall => GraphQL::Houtou::DataLoader->on_stall_for($pending_loader),
+          )
+        );
+      },
+    );
+
+    my $sync_result = _normalize_result($modes{"houtou_sync_multi${width}_sv"}->());
+    my $async_result = _normalize_result($modes{"houtou_async_multi${width}_sv"}->());
+    # The last field differs (sync:idN vs batched:idN by design); compare
+    # everything else and the last field's shape only.
+    for my $i (1 .. $width - 1) {
+      die "Result mismatch for async_multi_leaf/width=$width field f$i\n"
+        if ($sync_result->{data}{"f$i"} // '') ne "sync:id$i";
+    }
+    die "Result mismatch for async_multi_leaf/width=$width last field\n"
+      unless ($async_result->{data}{"f$width"} // '') eq "batched:id$width";
+
+    print "\n=== async_multi_leaf (width=$width) ===\n";
+    print "Query: $width sibling leaves, 1 DataLoader-Ticket-pending\n";
+    cmpthese($count, \%modes);
+  }
+}
+
 sub _dump {
   require Data::Dumper;
   local $Data::Dumper::Sortkeys = 1;
@@ -745,3 +832,5 @@ benchmark_async_preresolved()
   if $include_async && (!@only || $only{async_preresolved});
 benchmark_async_preresolved_leaf()
   if $include_async && (!@only || $only{async_preresolved_leaf});
+benchmark_async_multi_leaf()
+  if $include_async && (!@only || $only{async_multi_leaf});

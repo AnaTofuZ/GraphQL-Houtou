@@ -286,6 +286,18 @@ typedef struct {
   gql_runtime_vm_path_frame_t *path_frame;
   int path_frame_is_current_field;
   SV *empty_args_sv;
+  /* The request's program SV (the Perl-visible handle wrapping
+   * callback_ctx->native_program) and the true root block index, needed
+   * only when the fast lane must lazily promote to a real
+   * exec_state_handle_t (see gql_runtime_vm_ensure_fast_lane_state_sv) -
+   * stored here (rather than threaded through every intervening function
+   * signature) so a promotion trigger point nested arbitrarily deep in the
+   * dispatch chain (e.g. inside an object list item's own child block,
+   * where block_index above has already been overwritten with the ITEM's
+   * own block index) can still reach the true root block index. Set once,
+   * never overwritten, unlike block_index. */
+  SV *program_sv;
+  IV fast_lane_root_block_index;
   gql_runtime_vm_writer_t *writer;
   const gql_runtime_vm_native_block_t *block;
   const gql_runtime_vm_native_op_t *op;
@@ -321,6 +333,28 @@ typedef struct {
    * in place - a continuation owner must take and clear this before
    * destroying this state, same contract as fast_lane_suspended_sv. */
   SV *fast_lane_list_pending_source_sv;
+  /* Request-scoped exec_state_handle_t SV, shared between field-level
+   * suspension, leaf item-level list pending (fast_lane_list_pending_source_sv)
+   * and object/abstract item-level list pending (Phase 5,
+   * fast_lane_list_pending_result_sv below): a suspension discovered deep
+   * inside an item's own child block (nested under
+   * gql_runtime_vm_complete_current_list_fast_sv) needs this same handle to
+   * finalize that item's own child block_frame, without constructing a
+   * second, redundant handle for the same request. Built at most once per
+   * request; the owning root frame's response_frame pointer is kept in
+   * sync by whichever caller (always the root per-op loop) owns the root
+   * block_frame_t itself - this field only ever holds the handle SV. */
+  SV *fast_lane_root_state_sv;
+  /* Result of the object/abstract list item loop already having done the
+   * safe, exactly-once-preserving per-item work (unlike
+   * fast_lane_list_pending_source_sv, which stashes a raw, not-yet-
+   * item-completed array for the plain-leaf case): a list_pending handle
+   * (gql_runtime_vm_list_pending_handle_sv's return) built directly from an
+   * item array whose sync items are already final values and whose
+   * suspended items are already per-item Promise::XS promises. A
+   * continuation owner must take and clear this before destroying this
+   * state, same contract as fast_lane_suspended_sv. */
+  SV *fast_lane_list_pending_result_sv;
 } gql_runtime_vm_exec_state_t;
 
 enum {

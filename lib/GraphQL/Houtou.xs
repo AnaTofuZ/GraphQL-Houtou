@@ -505,7 +505,7 @@ static SV *gql_runtime_vm_slot_resolver_sv(const gql_runtime_vm_native_runtime_t
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
 static void gql_runtime_vm_execute_block_fast_multi_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source, gql_runtime_vm_path_frame_t *parent_path_frame, SV **resolved_values, gql_runtime_vm_block_frame_t **frame_out, SV **state_sv_out, U8 *self_nulled_out);
 static gql_runtime_vm_exec_state_handle_t *gql_runtime_vm_ensure_fast_lane_state_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV **state_sv_out);
-static SV *gql_runtime_vm_execute_safe_child_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV item_block_index, SV *item, gql_runtime_vm_path_frame_t *item_path_frame);
+static SV *gql_runtime_vm_execute_safe_child_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV item_block_index, SV *item, gql_runtime_vm_path_frame_t *item_path_frame, U8 want_promise);
 static SV *gql_runtime_vm_try_execute_fast_root_continuation_sv(
   pTHX_ SV *runtime_sv, SV *program_sv,
   gql_runtime_vm_native_runtime_t *runtime,
@@ -7051,53 +7051,18 @@ gql_runtime_vm_attach_response_state_magic(pTHX_ SV *promise_rv, SV *state_sv)
               &gql_runtime_vm_response_state_magic_vtbl, NULL, 0);
 }
 
-/* An OBJECT/ABSTRACT field's own child block (Phase 5/6:
- * gql_runtime_vm_execute_safe_child_block_fast_sv) suspends by handing back a
- * plain Promise::XS bridging its own still-pending block_frame_t, stored by
- * the parent as an ordinary GQL_VM_PENDING_PROMISE_*_VALUE_SV pending entry -
- * unlike a list item's own pending sub-tree, which the parent tracks via a
- * GQL_VM_PENDING_BLOCK_FRAME_PTR entry cancel_frame_tree already knows how to
- * walk into. Tagging the bridging promise with the child frame's raw pointer
- * (via magic, not an owned reference - the frame's own allocation reference
- * stays exactly where gql_runtime_vm_new_block_frame_struct left it) lets
- * cancel_frame_tree find and cancel that nested frame too on a deadlocked
- * abandonment, the same way it already does for GQL_VM_PENDING_BLOCK_FRAME_PTR
- * children. */
-static MGVTBL gql_runtime_vm_child_frame_magic_vtbl;
-
-static void
-gql_runtime_vm_attach_child_frame_magic(pTHX_ SV *promise_rv, gql_runtime_vm_block_frame_t *frame)
-{
-  if (!promise_rv || !SvROK(promise_rv) || !frame) {
-    return;
-  }
-  sv_magicext(SvRV(promise_rv), NULL, PERL_MAGIC_ext,
-              &gql_runtime_vm_child_frame_magic_vtbl,
-              (const char *)&frame, sizeof(frame));
-}
-
-static gql_runtime_vm_block_frame_t *
-gql_runtime_vm_child_frame_from_promise_sv(pTHX_ SV *promise_rv)
-{
-  MAGIC *mg;
-  if (!promise_rv || !SvROK(promise_rv)) {
-    return NULL;
-  }
-  mg = mg_findext(SvRV(promise_rv), PERL_MAGIC_ext, &gql_runtime_vm_child_frame_magic_vtbl);
-  if (!mg || !mg->mg_ptr) {
-    return NULL;
-  }
-  return *(gql_runtime_vm_block_frame_t **)mg->mg_ptr;
-}
-
 /* Cancel a suspended frame and its pending subtree, depth-first. A
  * BLOCK_FRAME_PTR payload is a suspended child that still owns its
  * allocation reference (resolve_frame, which would have released it, never
  * ran), so each child gets one extra release beyond the entry reference
  * that clear_pending drops. Entries form a tree, so the recursion
- * terminates. A promise-kind payload tagged with gql_runtime_vm_attach_child_frame_magic
- * (a nested OBJECT/ABSTRACT field's own bridging promise) is the same
- * situation wearing a Promise::XS wrapper instead of a raw pointer. */
+ * terminates. An OBJECT/ABSTRACT field's own suspended child block (Phase
+ * 5/6/7: gql_runtime_vm_execute_safe_child_block_fast_sv,
+ * gql_runtime_vm_push_pending_block_frame) is pushed as exactly this same
+ * BLOCK_FRAME_PTR shape, so it needs no special handling here - only a list
+ * item's own per-item pending sub-tree (GQL_VM_PENDING_LIST_PENDING_PTR,
+ * genuinely Promise::XS-shaped for Layer 2's per-item aggregation) is not
+ * reachable from here yet. */
 static void
 gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
 {
@@ -7112,16 +7077,6 @@ gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
         frame->pending_entries[i].payload.block_frame_ptr;
       gql_runtime_vm_cancel_frame_tree(aTHX_ child);
       gql_runtime_vm_free_block_frame(aTHX_ child);
-    } else if ((frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
-                || frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV)
-               && frame->pending_entries[i].payload.promise_sv) {
-      gql_runtime_vm_block_frame_t *child = gql_runtime_vm_child_frame_from_promise_sv(
-        aTHX_ frame->pending_entries[i].payload.promise_sv
-      );
-      if (child) {
-        gql_runtime_vm_cancel_frame_tree(aTHX_ child);
-        gql_runtime_vm_free_block_frame(aTHX_ child);
-      }
     }
   }
   gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);
@@ -9002,7 +8957,7 @@ gql_runtime_vm_complete_current_abstract_fast_sv(
       ? state->path_frame
       : gql_runtime_vm_new_result_path_frame(aTHX_ state->path_frame, state->slot);
     SV *ret = gql_runtime_vm_execute_safe_child_block_fast_sv(
-      aTHX_ state, child_block_index, value, field_path
+      aTHX_ state, child_block_index, value, field_path, 0
     );
     if (!state->path_frame_is_current_field) {
       gql_runtime_vm_path_frame_decref(field_path);
@@ -9046,7 +9001,7 @@ gql_runtime_vm_complete_current_object_fast_sv(pTHX_ gql_runtime_vm_exec_state_t
         ? state->path_frame
         : gql_runtime_vm_new_result_path_frame(aTHX_ state->path_frame, state->slot);
       SV *ret = gql_runtime_vm_execute_safe_child_block_fast_sv(
-        aTHX_ state, op->child_block_index, value, field_path
+        aTHX_ state, op->child_block_index, value, field_path, 0
       );
       if (!state->path_frame_is_current_field) {
         gql_runtime_vm_path_frame_decref(field_path);
@@ -9099,14 +9054,28 @@ gql_runtime_vm_fast_lane_record_error_for_path(
  * how Phase 6 reuses this same function one or more levels deeper than
  * Phase 5's list-item call site, recursively, for as many nested object/
  * abstract fields as gql_runtime_vm_fast_lane_list_item_block_is_eligible
- * allows. */
+ * allows.
+ *
+ * want_promise selects what a genuinely pending result looks like: 1 (the
+ * list-item call site) asks gql_runtime_vm_block_frame_finalize_sv for its
+ * promise-producing mode, since Layer 2's list_pending aggregation expects
+ * a Promise::XS-shaped per-item value; 0 (every other call site - a plain
+ * OBJECT/ABSTRACT field, at any depth, root included) asks for its raw
+ * block-frame-handle mode instead (Phase 7), which skips the deferred_sv/
+ * promise_sv pair and the arm/drain call entirely when nothing needs it
+ * yet - the caller then threads the frame straight into its own pending
+ * tree via gql_runtime_vm_push_pending_block_frame, the same raw frame-to-
+ * frame linkage the generic executor's own gql_runtime_vm_consume_current_result_now
+ * already uses for this exact shape (and which gql_runtime_vm_cancel_frame_tree
+ * already knows how to cancel, unlike a bespoke Promise::XS wrapper). */
 static SV *
 gql_runtime_vm_execute_safe_child_block_fast_sv(
   pTHX_
   gql_runtime_vm_exec_state_t *state,
   IV item_block_index,
   SV *item,
-  gql_runtime_vm_path_frame_t *item_path_frame
+  gql_runtime_vm_path_frame_t *item_path_frame,
+  U8 want_promise
 )
 {
   gql_runtime_vm_native_block_t *block = &state->bundle->blocks[item_block_index];
@@ -9158,10 +9127,8 @@ gql_runtime_vm_execute_safe_child_block_fast_sv(
    * on the frame, per above). Fold every resolved sibling into the frame's
    * native value tree, same as the root loop, then finalize right here:
    * frame is only ever created once something is genuinely pending, so
-   * this always takes block_frame_finalize_sv's promise branch - never
-   * its sync-outcome branch - producing a plain Promise::XS the ordinary
-   * list_pending machinery (Layer 2) already knows how to consume as a
-   * per-item value, without any item-specific wrapper. */
+   * this always takes block_frame_finalize_sv's pending branch (mode 1 or
+   * 2 per want_promise), never its sync-outcome branch. */
   for (i = 0; i < block->op_count; i++) {
     gql_runtime_vm_native_slot_t *slot;
     if (!resolved_values[i]) {
@@ -9177,14 +9144,9 @@ gql_runtime_vm_execute_safe_child_block_fast_sv(
   Safefree(resolved_values);
 
   ret = gql_runtime_vm_block_frame_finalize_sv(
-    aTHX_ frame, GQL_VM_PROMISE_BACKEND_PROMISE_XS, state->writer, state_sv, 2
+    aTHX_ frame, GQL_VM_PROMISE_BACKEND_PROMISE_XS, state->writer, state_sv,
+    want_promise ? 2 : 1
   );
-  /* frame is only ever created once something is genuinely pending (the
-   * !frame branch above already returned), so ret is always the bridging
-   * promise here, never a materialized value - tag it so a deadlocked
-   * abandonment's cancel_frame_tree (see its own doc comment) can find and
-   * cancel this frame too, not just the caller's own. */
-  gql_runtime_vm_attach_child_frame_magic(aTHX_ ret, frame);
   return ret;
 }
 
@@ -9305,7 +9267,7 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
         item_had_error = 1;
       } else if (item_block_index >= 0) {
         completed = gql_runtime_vm_execute_safe_child_block_fast_sv(
-          aTHX_ state, item_block_index, item, item_path
+          aTHX_ state, item_block_index, item, item_path, 1
         );
         if (!completed) {
           /* The item block nulled itself (non-null propagation) with
@@ -10240,19 +10202,26 @@ gql_runtime_vm_execute_block_fast_multi_sv(
       continue;
     }
 
-    if (completed && SvOK(completed) && gql_runtime_vm_sv_is_promise_xs(aTHX_ completed)) {
-      /* Phase 6: this op's own COMPLETION (not its resolver) produced a
-       * genuine Promise::XS - an OBJECT/ABSTRACT field whose own child
-       * block suspended (gql_runtime_vm_execute_safe_child_block_fast_sv),
-       * discovered only after gql_runtime_vm_execute_current_op_fast_sv
-       * already returned, unlike fast_lane_suspended_sv (set before
-       * completion ever runs, for a resolver that itself returned a
-       * pending value). Because gql_runtime_vm_block_frame_finalize_sv's
-       * mode 2 always materializes the settled child frame into a plain,
-       * fully-completed Perl value (see its own doc comment), this promise
-       * needs no re-completion at settle time - GENERIC_VALUE_SV (store
-       * as-is) is correct here regardless of the field's own leaf kind,
-       * unlike the field-level fast_lane_suspended_sv case just above. */
+    if (completed && SvOK(completed) && gql_runtime_vm_is_block_frame_value_sv(completed)) {
+      /* Phase 6/7: this op's own COMPLETION (not its resolver) produced a
+       * child block_frame_t still pending - an OBJECT/ABSTRACT field whose
+       * own child block suspended (gql_runtime_vm_execute_safe_child_block_fast_sv,
+       * called with want_promise=0 here), discovered only after
+       * gql_runtime_vm_execute_current_op_fast_sv already returned, unlike
+       * fast_lane_suspended_sv (set before completion ever runs, for a
+       * resolver that itself returned a pending value). Phase 6 originally
+       * wrapped this in a fresh Promise::XS and parked it as a plain
+       * promise-kind pending entry; that cost an extra deferred/promise
+       * pair (and, once reused at the root - Phase 7 - a second one on top
+       * of that) for no benefit outside the list-item case that actually
+       * needs a Promise::XS-shaped value. gql_runtime_vm_push_pending_block_frame
+       * threads the raw frame in directly instead, mirroring exactly what
+       * the generic executor's own gql_runtime_vm_consume_current_result_now
+       * already does for this shape - no extra Promise::XS, and
+       * gql_runtime_vm_cancel_frame_tree already knows how to cancel a
+       * BLOCK_FRAME_PTR child on a deadlocked abandonment. */
+      gql_runtime_vm_block_frame_t *child_frame = gql_runtime_vm_expect_block_frame(aTHX_ completed);
+      gql_runtime_vm_exec_state_handle_t *sched_state;
       if (error_sv) {
         SvREFCNT_dec(error_sv);
         error_sv = NULL;
@@ -10260,20 +10229,27 @@ gql_runtime_vm_execute_block_fast_multi_sv(
       if (!frame) {
         frame = gql_runtime_vm_new_block_frame_struct(aTHX);
       }
-      /* This frame's own finalize (in gql_runtime_vm_execute_safe_child_block_fast_sv,
-       * for the item/field this block belongs to) runs before returning to
-       * whatever caller ultimately needs state_sv - without ensuring it
-       * here, finalize would be handed a NULL state_sv and silently take
-       * its legacy no-exec_state fallback path instead of the real arm/
-       * drain machinery, leaking this frame (its own creation refcount is
-       * never released because arm_frame - and the settle callback's
-       * eventual resolve_frame call - never run on it). */
+      /* Unconditional, matching every other channel above: this frame's own
+       * finalize (in gql_runtime_vm_execute_safe_child_block_fast_sv, for
+       * the item/field this block belongs to) runs before returning to
+       * whatever caller ultimately needs state_sv - a call gated behind the
+       * "settled immediately" branch below would leave *state_sv_out NULL
+       * whenever child_frame is still genuinely pending (the common case),
+       * silently routing finalize through its legacy no-exec-state
+       * fallback instead of the real arm/drain machinery this child_frame
+       * is already armed against. */
       gql_runtime_vm_ensure_fast_lane_state_sv(aTHX_ state, &sched_state_sv);
-      gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
-        aTHX_ frame, slot->result_name, slot->result_name_len, 1,
-        completed, GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV, field_path,
-        block_index, op->slot_index, i
+      gql_runtime_vm_push_pending_block_frame(
+        aTHX_ frame, slot->result_name, slot->result_name_len, field_path,
+        child_frame, block_index, op->slot_index, i
       );
+      if (child_frame->pending_unresolved == 0) {
+        sched_state = gql_runtime_vm_ensure_fast_lane_state_sv(aTHX_ state, &sched_state_sv);
+        gql_runtime_vm_async_scheduler_enqueue_frame(sched_state, child_frame);
+        if (!sched_state->async_scheduler_draining) {
+          gql_runtime_vm_async_scheduler_drain(aTHX_ sched_state_sv, sched_state);
+        }
+      }
       SvREFCNT_dec(completed);
       gql_runtime_vm_path_frame_decref(field_path);
       continue;

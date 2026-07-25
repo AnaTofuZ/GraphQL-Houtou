@@ -999,6 +999,95 @@ sub benchmark_async_nested_object_list_item_field {
   }
 }
 
+sub benchmark_async_single_root_object_field {
+  require GraphQL::Houtou::DataLoader;
+
+  # Phase 7: root has a single (non-list) object field, whose own "team"
+  # field is itself another object with one sync field and one
+  # DataLoader-Ticket-pending field. Before Phase 7 any root op with
+  # complete_code OBJECT/ABSTRACT forced the whole request back to the
+  # generic async executor; this benchmark exercises the eligibility guard
+  # widening that reuses Phase 5/6's per-field/per-nested-field wrapper
+  # (gql_runtime_vm_execute_safe_child_block_fast_sv) from the root itself.
+  my $query = 'query q($id: String) { user(id: $id) { name team { name } } }';
+  my $vars = { id => 'u1' };
+
+  my $build_schema = sub {
+    my ($team_name_resolve) = @_;
+    my $Team = GraphQL::Houtou::Type::Object->new(
+      name => 'Team',
+      fields => {
+        name => { type => $GraphQL::Houtou::Type::Scalar::String, resolve => $team_name_resolve },
+      },
+    );
+    my $User = GraphQL::Houtou::Type::Object->new(
+      name => 'User',
+      fields => {
+        name => { type => $GraphQL::Houtou::Type::Scalar::String, resolve => sub { "n:$_[0]{id}" } },
+        team => { type => $Team, resolve => sub { { id => $_[0]{id} } } },
+      },
+    );
+    return GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          user => {
+            type => $User,
+            args => { id => { type => $GraphQL::Houtou::Type::Scalar::String } },
+            resolve => sub { my (undef, $args) = @_; return { id => $args->{id} } },
+          },
+        },
+      ),
+    );
+  };
+
+  my $sync_rt = $build_schema->(
+    sub { return "sync:$_[0]{id}" }
+  )->build_native_runtime;
+
+  # Same shape, but built async => 1 with a plain synchronous resolver: this
+  # is the case Phase 7's eligibility widening targets - the fixed cost of
+  # the previously-unconditional generic-executor fallback for this shape,
+  # not the genuinely-suspending case below.
+  my $async_all_sync_rt = $build_schema->(
+    sub { return "sync:$_[0]{id}" }
+  )->build_native_runtime(async => 1);
+
+  my $pending_loader;
+  my $async_rt = $build_schema->(
+    sub { my ($source, undef, $ctx) = @_; return $pending_loader->load($source->{id}) }
+  )->build_native_runtime(async => 1);
+
+  my %modes = (
+    'houtou_sync_single_root_object_field_sv' => sub {
+      return $sync_rt->execute_document($query, variables => $vars);
+    },
+    'houtou_async_all_sync_single_root_object_field_sv' => sub {
+      return $async_all_sync_rt->execute_document($query, variables => $vars);
+    },
+    'houtou_async_single_root_object_field_sv' => sub {
+      $pending_loader = GraphQL::Houtou::DataLoader->new(
+        batch => sub { my ($keys) = @_; return [ map { "batched:$_" } @$keys ] },
+      );
+      return maybe_get_promise_xs(
+        $async_rt->execute_document(
+          $query,
+          variables => $vars,
+          on_stall => GraphQL::Houtou::DataLoader->on_stall_for($pending_loader),
+        )
+      );
+    },
+  );
+
+  my $async_result = _normalize_result($modes{'houtou_async_single_root_object_field_sv'}->());
+  die "Result mismatch for single_root_object_field\n"
+    unless ($async_result->{data}{user}{team}{name} // '') eq 'batched:u1';
+
+  print "\n=== async_single_root_object_field ===\n";
+  print "Query: single root object field, whose nested team field is DataLoader-Ticket-pending\n";
+  cmpthese($count, \%modes);
+}
+
 sub _dump {
   require Data::Dumper;
   local $Data::Dumper::Sortkeys = 1;
@@ -1101,3 +1190,5 @@ benchmark_async_object_list_item_field()
   if $include_async && (!@only || $only{async_object_list_item_field});
 benchmark_async_nested_object_list_item_field()
   if $include_async && (!@only || $only{async_nested_object_list_item_field});
+benchmark_async_single_root_object_field()
+  if $include_async && (!@only || $only{async_single_root_object_field});

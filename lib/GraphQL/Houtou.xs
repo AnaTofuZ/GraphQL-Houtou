@@ -9086,6 +9086,38 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
   return gql_runtime_vm_clone_value_sv(aTHX_ value);
 }
 
+/* Resume boundary for sync-first execution. `value` is an already resolved
+ * field value, so callers resuming a continuation must not invoke the
+ * resolver again. Runtime directives are applied before this boundary. */
+static SV *
+gql_runtime_vm_complete_resolved_current_fast_sv(
+  pTHX_
+  gql_runtime_vm_exec_state_t *state,
+  SV *value,
+  SV **error_out
+)
+{
+  switch (state->op->complete_code) {
+    case GQL_VM_COMPLETE_OBJECT:
+      return gql_runtime_vm_complete_current_object_fast_sv(
+        aTHX_ state, value
+      );
+    case GQL_VM_COMPLETE_LIST:
+      return gql_runtime_vm_complete_current_list_fast_sv(
+        aTHX_ state, value
+      );
+    case GQL_VM_COMPLETE_ABSTRACT:
+      return gql_runtime_vm_complete_current_abstract_fast_sv(
+        aTHX_ state, value, error_out
+      );
+    case GQL_VM_COMPLETE_GENERIC:
+    default:
+      return gql_runtime_vm_complete_current_generic_fast_sv(
+        aTHX_ state, value, error_out
+      );
+  }
+}
+
 static SV *
 gql_runtime_vm_execute_current_op_fast_sv(
   pTHX_
@@ -9128,7 +9160,7 @@ OP_DEFAULT_GENERIC:
     SvREFCNT_dec(resolved);
     resolved = applied;
   }
-  completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved, &error_sv);
+  completed = gql_runtime_vm_complete_resolved_current_fast_sv(aTHX_ state, resolved, &error_sv);
   goto DISPATCH_DONE;
 OP_DEFAULT_OBJECT:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
@@ -9140,7 +9172,7 @@ OP_DEFAULT_OBJECT:
     SvREFCNT_dec(resolved);
     resolved = applied;
   }
-  completed = gql_runtime_vm_complete_current_object_fast_sv(aTHX_ state, resolved);
+  completed = gql_runtime_vm_complete_resolved_current_fast_sv(aTHX_ state, resolved, &error_sv);
   goto DISPATCH_DONE;
 OP_DEFAULT_LIST:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
@@ -9152,7 +9184,7 @@ OP_DEFAULT_LIST:
     SvREFCNT_dec(resolved);
     resolved = applied;
   }
-  completed = gql_runtime_vm_complete_current_list_fast_sv(aTHX_ state, resolved);
+  completed = gql_runtime_vm_complete_resolved_current_fast_sv(aTHX_ state, resolved, &error_sv);
   goto DISPATCH_DONE;
 OP_DEFAULT_ABSTRACT:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
@@ -9164,7 +9196,7 @@ OP_DEFAULT_ABSTRACT:
     SvREFCNT_dec(resolved);
     resolved = applied;
   }
-  completed = gql_runtime_vm_complete_current_abstract_fast_sv(aTHX_ state, resolved, &error_sv);
+  completed = gql_runtime_vm_complete_resolved_current_fast_sv(aTHX_ state, resolved, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
   goto DISPATCH_DONE;
 OP_EXPLICIT_GENERIC:
@@ -9177,7 +9209,7 @@ OP_EXPLICIT_GENERIC:
     SvREFCNT_dec(resolved);
     resolved = applied;
   }
-  completed = gql_runtime_vm_complete_current_generic_fast_sv(aTHX_ state, resolved, &error_sv);
+  completed = gql_runtime_vm_complete_resolved_current_fast_sv(aTHX_ state, resolved, &error_sv);
   goto DISPATCH_DONE;
 OP_EXPLICIT_OBJECT:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
@@ -9189,7 +9221,7 @@ OP_EXPLICIT_OBJECT:
     SvREFCNT_dec(resolved);
     resolved = applied;
   }
-  completed = gql_runtime_vm_complete_current_object_fast_sv(aTHX_ state, resolved);
+  completed = gql_runtime_vm_complete_resolved_current_fast_sv(aTHX_ state, resolved, &error_sv);
   goto DISPATCH_DONE;
 OP_EXPLICIT_LIST:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
@@ -9201,7 +9233,7 @@ OP_EXPLICIT_LIST:
     SvREFCNT_dec(resolved);
     resolved = applied;
   }
-  completed = gql_runtime_vm_complete_current_list_fast_sv(aTHX_ state, resolved);
+  completed = gql_runtime_vm_complete_resolved_current_fast_sv(aTHX_ state, resolved, &error_sv);
   goto DISPATCH_DONE;
 OP_EXPLICIT_ABSTRACT:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
@@ -9213,7 +9245,7 @@ OP_EXPLICIT_ABSTRACT:
     SvREFCNT_dec(resolved);
     resolved = applied;
   }
-  completed = gql_runtime_vm_complete_current_abstract_fast_sv(aTHX_ state, resolved, &error_sv);
+  completed = gql_runtime_vm_complete_resolved_current_fast_sv(aTHX_ state, resolved, &error_sv);
   if (error_sv) goto DISPATCH_ERROR;
   goto DISPATCH_DONE;
 DISPATCH_DONE:

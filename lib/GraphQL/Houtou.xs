@@ -8447,6 +8447,14 @@ gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ gql_runtime_vm_exec_state_t *sta
       && SvROK(resolved)
       && SvOBJECT(SvRV(resolved))
       && sv_derived_from(resolved, "Promise::XS::Promise")) {
+    if (state && state->fast_lane_can_suspend) {
+      if (!state->fast_lane_suspended_sv) {
+        state->fast_lane_suspended_sv = resolved;
+      } else {
+        SvREFCNT_dec(resolved);
+      }
+      return NULL;
+    }
     SvREFCNT_dec(resolved);
     if (state && !state->fast_lane_deferred_croak_sv) {
       state->fast_lane_deferred_croak_sv =
@@ -9112,6 +9120,7 @@ gql_runtime_vm_execute_current_op_fast_sv(
   goto *dispatch_table[dispatch_index];
 OP_DEFAULT_GENERIC:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
+  if (state->fast_lane_suspended_sv) goto DISPATCH_SUSPENDED;
   if (error_sv) goto DISPATCH_ERROR;
   if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
     SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9123,6 +9132,7 @@ OP_DEFAULT_GENERIC:
   goto DISPATCH_DONE;
 OP_DEFAULT_OBJECT:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
+  if (state->fast_lane_suspended_sv) goto DISPATCH_SUSPENDED;
   if (error_sv) goto DISPATCH_ERROR;
   if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
     SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9134,6 +9144,7 @@ OP_DEFAULT_OBJECT:
   goto DISPATCH_DONE;
 OP_DEFAULT_LIST:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
+  if (state->fast_lane_suspended_sv) goto DISPATCH_SUSPENDED;
   if (error_sv) goto DISPATCH_ERROR;
   if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
     SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9145,6 +9156,7 @@ OP_DEFAULT_LIST:
   goto DISPATCH_DONE;
 OP_DEFAULT_ABSTRACT:
   resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
+  if (state->fast_lane_suspended_sv) goto DISPATCH_SUSPENDED;
   if (error_sv) goto DISPATCH_ERROR;
   if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
     SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9157,6 +9169,7 @@ OP_DEFAULT_ABSTRACT:
   goto DISPATCH_DONE;
 OP_EXPLICIT_GENERIC:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
+  if (state->fast_lane_suspended_sv) goto DISPATCH_SUSPENDED;
   if (error_sv) goto DISPATCH_ERROR;
   if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
     SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9168,6 +9181,7 @@ OP_EXPLICIT_GENERIC:
   goto DISPATCH_DONE;
 OP_EXPLICIT_OBJECT:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
+  if (state->fast_lane_suspended_sv) goto DISPATCH_SUSPENDED;
   if (error_sv) goto DISPATCH_ERROR;
   if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
     SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9179,6 +9193,7 @@ OP_EXPLICIT_OBJECT:
   goto DISPATCH_DONE;
 OP_EXPLICIT_LIST:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
+  if (state->fast_lane_suspended_sv) goto DISPATCH_SUSPENDED;
   if (error_sv) goto DISPATCH_ERROR;
   if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
     SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9190,6 +9205,7 @@ OP_EXPLICIT_LIST:
   goto DISPATCH_DONE;
 OP_EXPLICIT_ABSTRACT:
   resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
+  if (state->fast_lane_suspended_sv) goto DISPATCH_SUSPENDED;
   if (error_sv) goto DISPATCH_ERROR;
   if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
     SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9201,10 +9217,17 @@ OP_EXPLICIT_ABSTRACT:
   if (error_sv) goto DISPATCH_ERROR;
   goto DISPATCH_DONE;
 DISPATCH_DONE:
+  goto DISPATCH_FINISH;
+DISPATCH_SUSPENDED:
+  if (error_sv) {
+    SvREFCNT_dec(error_sv);
+  }
+  return NULL;
 #else
   switch (dispatch_index) {
     case 0:
       resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
+      if (state->fast_lane_suspended_sv) break;
       if (error_sv) break;
       if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
         SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9216,6 +9239,7 @@ DISPATCH_DONE:
       break;
     case 1:
       resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
+      if (state->fast_lane_suspended_sv) break;
       if (error_sv) break;
       if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
         SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9227,6 +9251,7 @@ DISPATCH_DONE:
       break;
     case 2:
       resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
+      if (state->fast_lane_suspended_sv) break;
       if (error_sv) break;
       if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
         SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9238,6 +9263,7 @@ DISPATCH_DONE:
       break;
     case 3:
       resolved = gql_runtime_vm_resolve_current_field_default_fast_sv(aTHX_ state, source, &error_sv);
+      if (state->fast_lane_suspended_sv) break;
       if (error_sv) break;
       if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
         SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9249,6 +9275,7 @@ DISPATCH_DONE:
       break;
     case 4:
       resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
+      if (state->fast_lane_suspended_sv) break;
       if (error_sv) break;
       if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
         SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9260,6 +9287,7 @@ DISPATCH_DONE:
       break;
     case 5:
       resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
+      if (state->fast_lane_suspended_sv) break;
       if (error_sv) break;
       if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
         SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9271,6 +9299,7 @@ DISPATCH_DONE:
       break;
     case 6:
       resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
+      if (state->fast_lane_suspended_sv) break;
       if (error_sv) break;
       if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
         SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9282,6 +9311,7 @@ DISPATCH_DONE:
       break;
     case 7:
       resolved = gql_runtime_vm_resolve_current_field_explicit_fast_sv(aTHX_ state, source, &error_sv);
+      if (state->fast_lane_suspended_sv) break;
       if (error_sv) break;
       if (state->op->has_runtime_directives || state->op->runtime_directives_sv) {
         SV *applied = gql_runtime_vm_apply_runtime_directives_nonfatal(aTHX_ state, source, resolved, &error_sv);
@@ -9294,6 +9324,19 @@ DISPATCH_DONE:
   }
 #endif
 
+DISPATCH_FINISH:
+  if (state->fast_lane_suspended_sv) {
+    if (resolved) {
+      SvREFCNT_dec(resolved);
+    }
+    if (completed) {
+      SvREFCNT_dec(completed);
+    }
+    if (error_sv) {
+      SvREFCNT_dec(error_sv);
+    }
+    return NULL;
+  }
   if (resolved) {
     SvREFCNT_dec(resolved);
   }
@@ -9418,6 +9461,27 @@ gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, I
     completed = gql_runtime_vm_execute_current_op_fast_sv(aTHX_ state, source, &error_sv);
     state->path_frame = saved_path_frame;
     state->path_frame_is_current_field = saved_path_is_current_field;
+
+    if (state->fast_lane_suspended_sv) {
+      if (field_path) {
+        gql_runtime_vm_path_frame_decref(field_path);
+      }
+      if (completed) {
+        SvREFCNT_dec(completed);
+      }
+      if (error_sv) {
+        SvREFCNT_dec(error_sv);
+      }
+      SvREFCNT_dec((SV *)data_hv);
+      state->block = saved_block;
+      state->op = saved_op;
+      state->slot = saved_slot;
+      state->path_frame = saved_path_frame;
+      state->path_frame_is_current_field = saved_path_is_current_field;
+      state->block_index = saved_block_index;
+      state->op_index = saved_op_index;
+      return NULL;
+    }
 
     if (!eager_path_frame && error_sv) {
       field_path = gql_runtime_vm_new_result_path_frame(aTHX_ saved_path_frame, slot);

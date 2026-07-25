@@ -297,6 +297,13 @@ typedef struct {
    * recorded), consumed by the enclosing field/item check so propagation
    * does not add one error per level. */
   U8 null_carries_error;
+  /* Sync-first suspension channel. Disabled on the strict sync lanes.
+   * When enabled, a promise-returning resolver transfers the owned promise
+   * SV here and the fast block loop unwinds without completing or storing
+   * the current field. A continuation owner must take and clear the SV
+   * before destroying this state. */
+  U8 fast_lane_can_suspend;
+  SV *fast_lane_suspended_sv;
   /* Deferred croak channel for the sync fast lanes: croaking from inside
    * the lane longjmps past the recursion that owns the live path frame
    * chain and leaks it. Detection sites (promise-returning resolver,

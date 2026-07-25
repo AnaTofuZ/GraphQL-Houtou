@@ -7051,12 +7051,53 @@ gql_runtime_vm_attach_response_state_magic(pTHX_ SV *promise_rv, SV *state_sv)
               &gql_runtime_vm_response_state_magic_vtbl, NULL, 0);
 }
 
+/* An OBJECT/ABSTRACT field's own child block (Phase 5/6:
+ * gql_runtime_vm_execute_safe_child_block_fast_sv) suspends by handing back a
+ * plain Promise::XS bridging its own still-pending block_frame_t, stored by
+ * the parent as an ordinary GQL_VM_PENDING_PROMISE_*_VALUE_SV pending entry -
+ * unlike a list item's own pending sub-tree, which the parent tracks via a
+ * GQL_VM_PENDING_BLOCK_FRAME_PTR entry cancel_frame_tree already knows how to
+ * walk into. Tagging the bridging promise with the child frame's raw pointer
+ * (via magic, not an owned reference - the frame's own allocation reference
+ * stays exactly where gql_runtime_vm_new_block_frame_struct left it) lets
+ * cancel_frame_tree find and cancel that nested frame too on a deadlocked
+ * abandonment, the same way it already does for GQL_VM_PENDING_BLOCK_FRAME_PTR
+ * children. */
+static MGVTBL gql_runtime_vm_child_frame_magic_vtbl;
+
+static void
+gql_runtime_vm_attach_child_frame_magic(pTHX_ SV *promise_rv, gql_runtime_vm_block_frame_t *frame)
+{
+  if (!promise_rv || !SvROK(promise_rv) || !frame) {
+    return;
+  }
+  sv_magicext(SvRV(promise_rv), NULL, PERL_MAGIC_ext,
+              &gql_runtime_vm_child_frame_magic_vtbl,
+              (const char *)&frame, sizeof(frame));
+}
+
+static gql_runtime_vm_block_frame_t *
+gql_runtime_vm_child_frame_from_promise_sv(pTHX_ SV *promise_rv)
+{
+  MAGIC *mg;
+  if (!promise_rv || !SvROK(promise_rv)) {
+    return NULL;
+  }
+  mg = mg_findext(SvRV(promise_rv), PERL_MAGIC_ext, &gql_runtime_vm_child_frame_magic_vtbl);
+  if (!mg || !mg->mg_ptr) {
+    return NULL;
+  }
+  return *(gql_runtime_vm_block_frame_t **)mg->mg_ptr;
+}
+
 /* Cancel a suspended frame and its pending subtree, depth-first. A
  * BLOCK_FRAME_PTR payload is a suspended child that still owns its
  * allocation reference (resolve_frame, which would have released it, never
  * ran), so each child gets one extra release beyond the entry reference
  * that clear_pending drops. Entries form a tree, so the recursion
- * terminates. */
+ * terminates. A promise-kind payload tagged with gql_runtime_vm_attach_child_frame_magic
+ * (a nested OBJECT/ABSTRACT field's own bridging promise) is the same
+ * situation wearing a Promise::XS wrapper instead of a raw pointer. */
 static void
 gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
 {
@@ -7071,6 +7112,16 @@ gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
         frame->pending_entries[i].payload.block_frame_ptr;
       gql_runtime_vm_cancel_frame_tree(aTHX_ child);
       gql_runtime_vm_free_block_frame(aTHX_ child);
+    } else if ((frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV
+                || frame->pending_entries[i].payload_kind == GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV)
+               && frame->pending_entries[i].payload.promise_sv) {
+      gql_runtime_vm_block_frame_t *child = gql_runtime_vm_child_frame_from_promise_sv(
+        aTHX_ frame->pending_entries[i].payload.promise_sv
+      );
+      if (child) {
+        gql_runtime_vm_cancel_frame_tree(aTHX_ child);
+        gql_runtime_vm_free_block_frame(aTHX_ child);
+      }
     }
   }
   gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);
@@ -9128,6 +9179,12 @@ gql_runtime_vm_execute_safe_child_block_fast_sv(
   ret = gql_runtime_vm_block_frame_finalize_sv(
     aTHX_ frame, GQL_VM_PROMISE_BACKEND_PROMISE_XS, state->writer, state_sv, 2
   );
+  /* frame is only ever created once something is genuinely pending (the
+   * !frame branch above already returned), so ret is always the bridging
+   * promise here, never a materialized value - tag it so a deadlocked
+   * abandonment's cancel_frame_tree (see its own doc comment) can find and
+   * cancel this frame too, not just the caller's own. */
+  gql_runtime_vm_attach_child_frame_magic(aTHX_ ret, frame);
   return ret;
 }
 
@@ -10498,9 +10555,12 @@ static XS(gql_runtime_vm_xs_fast_root_continuation_reject_callback)
  * (unlike the root loop, where it stays dead code). A nested OBJECT/
  * ABSTRACT field now recurses into ITS OWN child block(s) via this same
  * function, since gql_runtime_vm_execute_safe_child_block_fast_sv (Phase 6)
- * is exactly-once-safe at any depth - only a single (non-list) root
- * object field (`{ user { name } }`) stays out of scope, that being a
- * different eligibility site entirely (the root op loop below, unchanged).
+ * is exactly-once-safe at any depth. Phase 7 reuses this same function to
+ * validate a single (non-list) root object/abstract field's own child
+ * block too (`{ user { name } }`) - the root op loop below now accepts
+ * COMPLETE_OBJECT/COMPLETE_ABSTRACT root ops and calls this function on
+ * their child_block_index/abstract_child_indexes exactly like a list
+ * item's does.
  *
  * depth is a purely defensive recursion-depth guard, not a correctness
  * requirement: compiled blocks mirror the query document's (finite,
@@ -10629,27 +10689,29 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
       return NULL;
     }
     slot = &block->slots[op->slot_index];
+    /* Phase 7: a root op may now be a single (non-list) object/abstract
+     * field too (e.g. `{ user { name } }`) - execute_block_fast_multi_sv
+     * already handles GQL_VM_COMPLETE_OBJECT/ABSTRACT ops generically
+     * (Phase 5/6 exercise this same per-op loop from list items and
+     * nested fields), so only the child block itself needs the same
+     * recursive eligibility check list items already require. Root
+     * non-null (return_type_kind_code == 8) stays rejected regardless of
+     * complete_code - that is a separate, still out-of-scope item. */
     if ((op->complete_code != GQL_VM_COMPLETE_GENERIC
-         && op->complete_code != GQL_VM_COMPLETE_LIST)
+         && op->complete_code != GQL_VM_COMPLETE_LIST
+         && op->complete_code != GQL_VM_COMPLETE_OBJECT
+         && op->complete_code != GQL_VM_COMPLETE_ABSTRACT)
         || op->has_runtime_directives || op->runtime_directives_sv
         || slot->return_type_kind_code == 8) {
       return NULL;
     }
-    if (op->complete_code == GQL_VM_COMPLETE_GENERIC
-        && (op->child_block_index >= 0 || op->abstract_child_count > 0)) {
-      /* A single (non-list) root object field: out of scope for this
-       * phase (see gql_runtime_vm_fast_lane_list_item_block_is_eligible's
-       * doc comment - §13 item 5, not item 4). */
+    if (op->child_block_index >= 0
+        && !gql_runtime_vm_fast_lane_list_item_block_is_eligible(
+             bundle, program, op->child_block_index, 0
+           )) {
       return NULL;
     }
-    if (op->complete_code == GQL_VM_COMPLETE_LIST && op->child_block_index >= 0) {
-      if (!gql_runtime_vm_fast_lane_list_item_block_is_eligible(
-            bundle, program, op->child_block_index, 0
-          )) {
-        return NULL;
-      }
-    }
-    if (op->complete_code == GQL_VM_COMPLETE_LIST && op->abstract_child_count > 0) {
+    if (op->abstract_child_count > 0) {
       IV ai;
       for (ai = 0; ai < op->abstract_child_count; ai++) {
         if (!gql_runtime_vm_fast_lane_list_item_block_is_eligible(
@@ -10837,6 +10899,18 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
     if (sched_state->completed_response_sv) {
       SvREFCNT_dec(ret);
       ret = SvREFCNT_inc_simple_NN(sched_state->completed_response_sv);
+    } else if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ sched_state, ret)) {
+      /* A genuinely pending response built through the real exec_state_handle_t
+       * machinery forms the same reference cycle the generic executor's own
+       * root frame does (see gql_runtime_vm_cancel_pending_response_sv's R5
+       * leak 2 comment) - this call site just never attached the magic that
+       * lets the Perl driver break it on a deadlocked stall. Every shape that
+       * reaches this block (multi-sibling root, root list, object/abstract
+       * root list, and now Phase 7's single root object/abstract field) needs
+       * it equally; the omission was simply never reached by a genuine
+       * deadlock in the existing regression coverage until a single root
+       * object field with a never-settling nested promise exposed it. */
+      gql_runtime_vm_attach_response_state_magic(aTHX_ ret, sched_state_sv);
     }
   }
 

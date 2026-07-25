@@ -1443,4 +1443,200 @@ subtest 'async runtime: nested object/abstract fields inside a list item promote
   };
 };
 
+subtest 'async runtime: a single (non-list) root object/abstract field promotes through the fast continuation (Phase 7)' => sub {
+  # `{ user { name } }`-shaped queries: before Phase 7,
+  # gql_runtime_vm_try_execute_fast_root_continuation_sv's root eligibility
+  # loop rejected any root op whose complete_code was GQL_VM_COMPLETE_OBJECT
+  # or GQL_VM_COMPLETE_ABSTRACT outright, so these always fell back to the
+  # generic executor. Phase 7 lifts that restriction and reuses the same
+  # recursive child-block eligibility check and execute_block_fast_multi_sv/
+  # execute_safe_child_block_fast_sv machinery Phase 5/6 already exercise
+  # from list items and nested fields - the root op loop now just calls it
+  # on the root op's own child_block_index/abstract_child_indexes too.
+
+  subtest 'fully synchronous single object root field needs no promotion' => sub {
+    my $User = GraphQL::Houtou::Type::Object->new(
+      name => 'SyncUser', fields => { id => { type => $String }, name => { type => $String } });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          user => { type => $User, resolve => sub { { id => 'u1', name => 'Ada' } } },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document('{ user { id name } }');
+    is_deeply $r, { data => { user => { id => 'u1', name => 'Ada' } } },
+      'no DataLoader involved, resolves synchronously';
+  };
+
+  subtest 'a later field in the child block suspends without re-running an earlier sibling resolver' => sub {
+    my %calls = (name => 0, pending => 0);
+    my $User = GraphQL::Houtou::Type::Object->new(
+      name => 'MixedUser',
+      fields => {
+        name => { type => $String, resolve => sub { $calls{name}++; 'Ada' } },
+        pending => {
+          type => $String,
+          args => { key => { type => $String } },
+          resolve => sub {
+            my (undef, $args, $ctx) = @_;
+            $calls{pending}++;
+            return $ctx->{loader}->load($args->{key});
+          },
+        },
+      },
+    );
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { "loaded:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => { user => { type => $User, resolve => sub { {} } } },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($k: String) { user { name pending(key: $k) } }',
+      variables => { k => 'k1' },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, { data => { user => { name => 'Ada', pending => 'loaded:k1' } } },
+      'both fields resolve correctly';
+    is $calls{name}, 1, 'the already-resolved sibling resolver ran exactly once, not twice';
+    is $calls{pending}, 1, 'the suspending resolver also ran exactly once';
+  };
+
+  subtest 'a non-null field violation after an earlier sibling suspended nulls the whole field' => sub {
+    my $User = GraphQL::Houtou::Type::Object->new(
+      name => 'NonNullUser',
+      fields => {
+        pending => {
+          type => $String,
+          args => { key => { type => $String } },
+          resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader}->load($a->{key}) },
+        },
+        req => {
+          type => $String->non_null,
+          args => { key => { type => $String } },
+          resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader2}->load($a->{key}) },
+        },
+      },
+    );
+    my $loader = GraphQL::Houtou::DataLoader->new(
+      batch => sub { return [ map { "v:$_" } @{ $_[0] } ] },
+    );
+    my $loader2 = GraphQL::Houtou::DataLoader->new(
+      batch => sub { return [ map { undef } @{ $_[0] } ] },
+    );
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => { user => { type => $User, resolve => sub { {} } } },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($k1: String, $k2: String) { user { pending(key: $k1) req(key: $k2) } }',
+      variables => { k1 => 'p1', k2 => 'r1' },
+      context => { loader => $loader, loader2 => $loader2 },
+      on_stall => sub {
+        my $progressed = 0;
+        $progressed = 1 if $loader->pending_count && $loader->dispatch;
+        $progressed = 1 if $loader2->pending_count && $loader2->dispatch;
+        return $progressed;
+      },
+    );
+    is $r->{data}{user}, undef, 'the field is null, not partially filled with the already-resolved sibling';
+    is scalar @{ $r->{errors} }, 1, 'one error record';
+    like $r->{errors}[0]{message}, qr/Cannot return null for non-nullable field NonNullUser\.req/,
+      'error names the non-null violation';
+    is_deeply $r->{errors}[0]{path}, [ 'user', 'req' ], 'error path points at the offending field';
+  };
+
+  subtest 'a single root abstract (union) field dispatches to the right member and can suspend' => sub {
+    my $Cat = GraphQL::Houtou::Type::Object->new(
+      name => 'CatP7', runtime_tag => 'cat',
+      fields => {
+        name => { type => $String },
+        meow => {
+          type => $String,
+          args => { key => { type => $String } },
+          resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader}->load($a->{key}) },
+        },
+      },
+    );
+    my $Dog = GraphQL::Houtou::Type::Object->new(
+      name => 'DogP7', runtime_tag => 'dog',
+      fields => { name => { type => $String } },
+    );
+    my $Pet = GraphQL::Houtou::Type::Union->new(
+      name => 'PetP7', types => [ $Cat, $Dog ], tag_resolver => sub { $_[0]{kind} },
+    );
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { "sound:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => { pet => { type => $Pet, resolve => sub { { kind => 'cat', name => 'Tama' } } } },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($k: String) { pet { ... on CatP7 { name meow(key: $k) } ... on DogP7 { name } } }',
+      variables => { k => 'purr' },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, { data => { pet => { name => 'Tama', meow => 'sound:purr' } } },
+      'the cat member suspends and resolves';
+  };
+
+  subtest 'the child block may itself nest a further object field (Phase 6 reuse)' => sub {
+    # team's own resolver settles synchronously; the suspension happens one
+    # level deeper, inside team's own child block (team.name) - the exact
+    # gql_runtime_vm_execute_safe_child_block_fast_sv recursion Phase 6 added
+    # for list items, now reached from a single root object field instead.
+    my $Team = GraphQL::Houtou::Type::Object->new(
+      name => 'TeamP7',
+      fields => {
+        name => {
+          type => $String,
+          args => { key => { type => $String } },
+          resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader}->load($a->{key}) },
+        },
+      },
+    );
+    my $User = GraphQL::Houtou::Type::Object->new(
+      name => 'NestedUser',
+      fields => {
+        name => { type => $String },
+        team => { type => $Team, resolve => sub { {} } },
+      },
+    );
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { "team:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => { user => { type => $User, resolve => sub { { name => 'Ada' } } } },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($k: String) { user { name team { name(key: $k) } } }',
+      variables => { k => 't1' },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, { data => { user => { name => 'Ada', team => { name => 'team:t1' } } } },
+      'the nested object field resolves through the reused Phase 6 machinery';
+  };
+};
+
 done_testing;

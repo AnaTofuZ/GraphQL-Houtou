@@ -61,6 +61,13 @@ subtest 'baseline' => sub {
 };
 
 subtest 'deadlocked stall releases the pending frames' => sub {
+  # `{ inner { hang } }` is a single root object field whose own child block
+  # suspends - before Phase 7 this always fell back to the generic executor,
+  # so this case only started exercising gql_runtime_vm_try_execute_fast_root_continuation_sv's
+  # multi-op path (and its cancel-on-deadlock handling) once Phase 7 widened
+  # that path's eligibility guard. It is the regression test that caught
+  # both bugs described in 'repeated single root object field promotions
+  # stay clean' below.
   for my $query ('{ hang }', '{ inner { hang } }') {
     my $err = do { local $@; eval { execute($schema, $query, undef, on_stall => sub { 0 }) }; $@ };
     like $err, qr/stalled.*no progress/s, "$query reports the deadlock";
@@ -362,6 +369,74 @@ subtest 'repeated 2-level nested object field promotions stay clean' => sub {
     }, "iteration $i resolved" or last;
   }
   assert_no_live_frames('200 nested object field promotions');
+};
+
+subtest 'repeated single root object field promotions stay clean' => sub {
+  # Phase 7: a single (non-list) root object field now reaches
+  # gql_runtime_vm_try_execute_fast_root_continuation_sv's multi-op path
+  # too (previously only multi-sibling/list-shaped root queries did).
+  # Developing this phase caught two real, previously-unreached bugs, both
+  # only visible via a genuine stall/abandonment, not this happy-path
+  # stress loop:
+  #   1. that path's returned promise never carried the magic that lets
+  #      the Perl driver break the exec_state reference cycle on a
+  #      deadlocked stall (gql_runtime_vm_attach_response_state_magic was
+  #      only ever called from the generic executor's own entry point) -
+  #      a pre-existing gap in every multi-sibling/list root shape, just
+  #      never exercised by a deadlock in that combination before.
+  #   2. gql_runtime_vm_cancel_frame_tree only walked GQL_VM_PENDING_BLOCK_FRAME_PTR
+  #      children, so it could not reach a nested OBJECT/ABSTRACT field's own
+  #      suspended child frame - reachable only via its bridging Promise::XS
+  #      (see gql_runtime_vm_attach_child_frame_magic/gql_runtime_vm_child_frame_from_promise_sv).
+  # Both are exercised by the existing 'deadlocked stall releases the
+  # pending frames' subtest above (its `{ inner { hang } }` case), now that
+  # Phase 7 makes that shape reach this path; this subtest instead stresses
+  # the ordinary happy-path settle/free cycle many times over.
+  my $Team = GraphQL::Houtou::Type::Object->new(
+    name => 'LeakTeam',
+    fields => {
+      name => {
+        type => $String,
+        args => { key => { type => $String } },
+        resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader}->load($a->{key}) },
+      },
+    },
+  );
+  my $User = GraphQL::Houtou::Type::Object->new(
+    name => 'LeakUser',
+    fields => {
+      name => { type => $String, resolve => sub { "n:$_[0]{id}" } },
+      team => { type => $Team, resolve => sub { {} } },
+    },
+  );
+  my $root_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        user => {
+          type => $User,
+          args => { id => { type => $String } },
+          resolve => sub { my (undef, $args) = @_; return { id => $args->{id} } },
+        },
+      },
+    ),
+  );
+  my $runtime = build_native_runtime($root_schema, async => 1);
+  for my $i (1 .. 200) {
+    my $loader = GraphQL::Houtou::DataLoader->new(
+      batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+    );
+    my $r = $runtime->execute_document(
+      'query q($id: String, $k: String) { user(id: $id) { name team { name(key: $k) } } }',
+      variables => { id => "u$i", k => "k$i" },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, {
+      data => { user => { name => "n:u$i", team => { name => "v:k$i" } } },
+    }, "iteration $i resolved" or last;
+  }
+  assert_no_live_frames('200 single root object field promotions');
 };
 
 done_testing;

@@ -330,9 +330,13 @@ settle後にresponseへなること、suspend前とresume後を通じてresolver
     resolverのケースで、Phase 4適用前はasync runtimeがLISTの
     unconditional ineligibleにより旧executor経由の固定費(-6〜7%)を
     払っていたのが、Phase 4適用後はsync runtimeとほぼ同速になった点のみ。
-    ASanのフルスイープはこの環境での`t/00_compile.t`自体の実行時間の
-    問題(Phase 4の変更と無関係、stash前後どちらでも再現)により本
-    セッションでは完了できなかった。
+    ASanは当初この環境で`t/00_compile.t`自体が完了しない現象に遭遇したが、
+    原因は`DYLD_INSERT_LIBRARIES`に指定していたnix store配下のASan
+    ランタイムとこのmacOSバージョンの非互換(init中の自己デッドロック、
+    詳細は`docs/future-performance-investigation-ja.md`§14.20)で、
+    ビルドに使ったApple clangと同じツールチェイン由来のASanランタイムへ
+    差し替えて解消した。差し替え後、49ファイル個別実行・`PERL_HASH_SEED`
+    5点のフルスイープで全245実行がクリーンであることを確認した。
 
 ## 11. 試行から分かった境界条件
 

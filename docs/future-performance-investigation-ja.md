@@ -1335,9 +1335,27 @@ fallbackすること。t/54_frame_leak_regression.tへ200回のitem-level list
 pending promotionのリークストレスを追加。全494テストが通過し、
 `debug_frame_live_counts_xs()`でblock_frame/path_frameとも0を確認した。
 
-ASanについては、この環境でXS moduleロード自体(`t/00_compile.t`)が
-Phase 4の変更と無関係にstash前後どちらのビルドでも数分規模で完了しない
-(catastrophically遅い)ことを確認した。49ファイル個別実行・複数hash seedの
-フルスイープは本セッションの時間内には終えられなかった。Phase 4の変更が
-原因でないことは、変更前コードで同じ遅さを再現させて確認済みだが、
-ASanでのメモリ安全性の実地確認は次回以降に持ち越しとなる。
+**ASan環境問題の原因判明と解消。** 当初、この環境でXS moduleロード自体
+(`t/00_compile.t`)がPhase 4の変更と無関係にstash前後どちらのビルドでも
+数分規模で完了しない(catastrophically遅い)現象に遭遇した。`sample`で
+スタックを採取したところ、`__asan::AsanInitFromRtl()`の初期化中に
+`dyld_shared_cache_iterate_text_swift`経由で`_Block_copy`が呼ばれ、
+そこから再度mallocへ入り`AsanInitFromRtl()`を再入する形で
+`StaticSpinMutex::LockSlow()`上で自己デッドロックしていた
+(`/bin/echo`など他の実行ファイルでは踏まない、Perlバイナリ特有の
+init順序で顕在化)。原因は`DYLD_INSERT_LIBRARIES`に指定していた
+nix store配下の`libclang_rt.asan_osx_dynamic.dylib`(compiler-rt-libc-21.1.8)
+が、このmacOSバージョン(26.5.2、dyldの実装)と組み合わせたときに
+非互換だったこと。ビルド自体は`cc`(Apple clangバージョン21、
+`/usr/bin/cc`、Xcode Command Line Tools由来)で行っていたため、
+**同じバージョンのApple clang付属のASanランタイム**
+(`/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin/
+libclang_rt.asan_osx_dynamic.dylib`)に差し替えたところ、
+デッドロックは再現せず、`t/00_compile.t`は0.1秒台で完了した。
+コンパイラとASanランタイムのバージョンを揃える(同じツールチェイン由来の
+ものを使う)のが要点で、`DYLD_INSERT_LIBRARIES`に無関係なビルドの
+ASanランタイムを指定しないこと、というのがこの環境固有の教訓である。
+
+この置き換え後、49ファイル個別実行・`PERL_HASH_SEED`5点(1, 7, 42, 99,
+12345)のフルスイープを実施し、全245実行がクリーン(異常終了・ASan報告
+なし)であることを確認した。

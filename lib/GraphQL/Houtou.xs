@@ -504,6 +504,8 @@ static int gql_runtime_vm_slot_uses_explicit_generic_fast_abi(const gql_runtime_
 static SV *gql_runtime_vm_slot_resolver_sv(const gql_runtime_vm_native_runtime_t *runtime, const gql_runtime_vm_native_slot_t *slot);
 static SV *gql_runtime_vm_execute_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source);
 static void gql_runtime_vm_execute_block_fast_multi_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV block_index, SV *source, gql_runtime_vm_path_frame_t *parent_path_frame, SV **resolved_values, gql_runtime_vm_block_frame_t **frame_out, SV **state_sv_out, U8 *self_nulled_out);
+static gql_runtime_vm_exec_state_handle_t *gql_runtime_vm_ensure_fast_lane_state_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV **state_sv_out);
+static SV *gql_runtime_vm_execute_list_item_child_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, IV item_block_index, SV *item, gql_runtime_vm_path_frame_t *item_path_frame);
 static SV *gql_runtime_vm_try_execute_fast_root_continuation_sv(
   pTHX_ SV *runtime_sv, SV *program_sv,
   gql_runtime_vm_native_runtime_t *runtime,
@@ -9032,6 +9034,103 @@ gql_runtime_vm_fast_lane_record_error_for_path(
   gql_runtime_vm_outcome_decref(aTHX_ outcome);
 }
 
+/* Phase 5: drop-in replacement for gql_runtime_vm_execute_block_fast_sv at
+ * the object/abstract list-item call site. Returns the exact same shapes
+ * that function does - NULL for a definite non-null violation with
+ * nothing async in flight (the caller's existing item_had_error handling
+ * via state->null_carries_error is unchanged), or an owned plain hashref
+ * SV when every field in the item's own child block resolved
+ * synchronously - PLUS one new shape gql_runtime_vm_execute_block_fast_sv
+ * could never produce: a genuine Promise::XS when a field inside the
+ * item's own child block suspended (or a non-null violation happened
+ * after an earlier sibling in the SAME item already suspended - the
+ * frame's self_nulled flag carries that through to settle time). The
+ * caller's existing per-item loop already treats any such promise
+ * correctly (item_non_null's own null check is false for a blessed
+ * reference, so it does not fire early), so no other change is needed
+ * there beyond swapping the call. */
+static SV *
+gql_runtime_vm_execute_list_item_child_block_fast_sv(
+  pTHX_
+  gql_runtime_vm_exec_state_t *state,
+  IV item_block_index,
+  SV *item,
+  gql_runtime_vm_path_frame_t *item_path_frame
+)
+{
+  gql_runtime_vm_native_block_t *block = &state->bundle->blocks[item_block_index];
+  SV **resolved_values;
+  gql_runtime_vm_block_frame_t *frame = NULL;
+  SV *state_sv = NULL;
+  U8 self_nulled = 0;
+  SV *ret;
+  IV i;
+
+  Newxz(resolved_values, block->op_count, SV *);
+  gql_runtime_vm_execute_block_fast_multi_sv(
+    aTHX_ state, item_block_index, item, item_path_frame,
+    resolved_values, &frame, &state_sv, &self_nulled
+  );
+
+  if (self_nulled) {
+    /* A definite non-null violation with no earlier sibling suspension:
+     * nothing async is in flight, so there is nothing to wait for -
+     * discard whatever earlier siblings resolved and return NULL exactly
+     * like gql_runtime_vm_execute_block_fast_sv would have. */
+    for (i = 0; i < block->op_count; i++) {
+      if (resolved_values[i]) {
+        SvREFCNT_dec(resolved_values[i]);
+      }
+    }
+    Safefree(resolved_values);
+    return NULL;
+  }
+
+  if (!frame) {
+    /* Fully synchronous: build the same plain hashref
+     * gql_runtime_vm_execute_block_fast_sv builds today - zero added cost
+     * for the common case, unchanged output shape. */
+    HV *data_hv = newHV();
+    for (i = 0; i < block->op_count; i++) {
+      gql_runtime_vm_native_slot_t *slot;
+      if (!resolved_values[i]) {
+        continue;
+      }
+      slot = &block->slots[block->ops[i].slot_index];
+      hv_store(data_hv, slot->result_name, (I32)slot->result_name_len, resolved_values[i], 0);
+    }
+    Safefree(resolved_values);
+    return newRV_noinc((SV *)data_hv);
+  }
+
+  /* Something inside this item's own child block suspended (or self_nulled
+   * on the frame, per above). Fold every resolved sibling into the frame's
+   * native value tree, same as the root loop, then finalize right here:
+   * frame is only ever created once something is genuinely pending, so
+   * this always takes block_frame_finalize_sv's promise branch - never
+   * its sync-outcome branch - producing a plain Promise::XS the ordinary
+   * list_pending machinery (Layer 2) already knows how to consume as a
+   * per-item value, without any item-specific wrapper. */
+  for (i = 0; i < block->op_count; i++) {
+    gql_runtime_vm_native_slot_t *slot;
+    if (!resolved_values[i]) {
+      continue;
+    }
+    slot = &block->slots[block->ops[i].slot_index];
+    gql_runtime_vm_native_object_store(
+      aTHX_ frame->values_value, slot->result_name, 1,
+      gql_runtime_vm_new_native_value_scalar(aTHX_ resolved_values[i])
+    );
+    SvREFCNT_dec(resolved_values[i]);
+  }
+  Safefree(resolved_values);
+
+  ret = gql_runtime_vm_block_frame_finalize_sv(
+    aTHX_ frame, GQL_VM_PROMISE_BACKEND_PROMISE_XS, state->writer, state_sv, 2
+  );
+  return ret;
+}
+
 static SV *
 gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *value)
 {
@@ -9148,9 +9247,15 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
         completed = newSVsv(&PL_sv_undef);
         item_had_error = 1;
       } else if (item_block_index >= 0) {
-        completed = gql_runtime_vm_execute_block_fast_sv(aTHX_ state, item_block_index, item);
+        completed = gql_runtime_vm_execute_list_item_child_block_fast_sv(
+          aTHX_ state, item_block_index, item, item_path
+        );
         if (!completed) {
-          /* The item block nulled itself (non-null propagation). */
+          /* The item block nulled itself (non-null propagation) with
+           * nothing async in flight - a genuine suspension inside the
+           * item's own child block instead comes back as a Promise::XS
+           * (never NULL), handled by the item_non_null/av_store code
+           * below exactly like any other already-known value. */
           item_had_error = state->null_carries_error;
           state->null_carries_error = 0;
         }
@@ -9251,6 +9356,35 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
     if (field_path) {
       state->path_frame = saved_path_frame;
       gql_runtime_vm_path_frame_decref(field_path);
+    }
+    if (base_path) {
+      /* Phase 5: an object/abstract item may have come back as a genuine
+       * Promise::XS (gql_runtime_vm_execute_list_item_child_block_fast_sv,
+       * above) instead of an already-final value. Every item that reached
+       * this point already did its own exactly-once-safe work (this is
+       * NOT the raw, not-yet-item-completed array the leaf pre-scan above
+       * stashes), so there is nothing left to delegate to Layer 1 -
+       * gql_runtime_vm_list_pending_handle_sv's own promise detection
+       * subscribes directly to any such item. */
+      IV pi;
+      int any_promise = 0;
+      for (pi = 0; pi <= av_len(out_av); pi++) {
+        SV **item_svp = av_fetch(out_av, pi, 0);
+        if (item_svp && *item_svp && gql_runtime_vm_sv_is_promise_xs(aTHX_ *item_svp)) {
+          any_promise = 1;
+          break;
+        }
+      }
+      if (any_promise) {
+        SV *state_sv;
+        gql_runtime_vm_exec_state_handle_t *sched_state =
+          gql_runtime_vm_ensure_fast_lane_state_sv(aTHX_ state, &state_sv);
+        state->fast_lane_list_pending_result_sv = gql_runtime_vm_list_pending_handle_sv(
+          aTHX_ state_sv, sched_state, out_av, base_path
+        );
+        SvREFCNT_dec((SV *)out_av);
+        return newSVsv(&PL_sv_undef);
+      }
     }
     return newRV_noinc((SV *)out_av);
   }
@@ -9876,6 +10010,13 @@ gql_runtime_vm_execute_block_fast_multi_sv(
   IV i;
   gql_runtime_vm_block_frame_t *frame = NULL;
   SV *sched_state_sv = NULL;
+  gql_runtime_vm_native_block_t *saved_block = (gql_runtime_vm_native_block_t *)state->block;
+  const gql_runtime_vm_native_op_t *saved_op = state->op;
+  const gql_runtime_vm_native_slot_t *saved_slot = state->slot;
+  gql_runtime_vm_path_frame_t *saved_path_frame = state->path_frame;
+  int saved_path_is_current_field = state->path_frame_is_current_field;
+  IV saved_block_index = state->block_index;
+  IV saved_op_index = state->op_index;
 
   *frame_out = NULL;
   *state_sv_out = NULL;
@@ -10062,8 +10203,13 @@ gql_runtime_vm_execute_block_fast_multi_sv(
     resolved_values[i] = completed ? completed : newSVsv(&PL_sv_undef);
   }
 
-  state->path_frame = NULL;
-  state->path_frame_is_current_field = 0;
+  state->block = saved_block;
+  state->op = saved_op;
+  state->slot = saved_slot;
+  state->path_frame = saved_path_frame;
+  state->path_frame_is_current_field = saved_path_is_current_field;
+  state->block_index = saved_block_index;
+  state->op_index = saved_op_index;
 
   *frame_out = frame;
   *state_sv_out = sched_state_sv;

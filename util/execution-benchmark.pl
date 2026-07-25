@@ -552,6 +552,60 @@ sub benchmark_async_preresolved {
   cmpthese($count, \%modes);
 }
 
+sub benchmark_async_preresolved_leaf {
+  require Promise::XS;
+
+  my $query = 'query q($name: String) { greeting(name: $name) }';
+  my $vars = { name => 'Houtou' };
+  my $make_schema = sub {
+    my ($resolve) = @_;
+    return GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          greeting => {
+            type => $GraphQL::Houtou::Type::Scalar::String,
+            args => {
+              name => { type => $GraphQL::Houtou::Type::Scalar::String },
+            },
+            resolve => $resolve,
+          },
+        },
+      ),
+    );
+  };
+  my $sync_rt = $make_schema->(
+    sub { my ($source, $args) = @_; return "hello $args->{name}" }
+  )->build_native_runtime;
+  my $async_rt = $make_schema->(
+    sub {
+      my ($source, $args) = @_;
+      return Promise::XS::resolved("hello $args->{name}");
+    }
+  )->build_native_runtime(async => 1);
+  my %modes = (
+    houtou_sync_leaf_sv => sub {
+      return $sync_rt->execute_document($query, variables => $vars);
+    },
+    houtou_async_leaf_sv => sub {
+      return maybe_get_promise_xs(
+        $async_rt->execute_document($query, variables => $vars)
+      );
+    },
+  );
+  my $expected = _normalize_result($modes{houtou_sync_leaf_sv}->());
+  for my $mode (sort keys %modes) {
+    my $got = _normalize_result($modes{$mode}->());
+    die "Result mismatch for async_preresolved_leaf/$mode\n"
+      if _dump($got) ne _dump($expected);
+  }
+
+  print "\n=== async_preresolved_leaf ===\n";
+  print "Query: $query\n";
+  print "Mode: native runtime, pre-resolved Promise::XS leaf vs sync leaf\n";
+  cmpthese($count, \%modes);
+}
+
 sub _dump {
   require Data::Dumper;
   local $Data::Dumper::Sortkeys = 1;
@@ -644,3 +698,5 @@ for my $case (@cases) {
 
 benchmark_async_preresolved()
   if $include_async && (!@only || $only{async_preresolved});
+benchmark_async_preresolved_leaf()
+  if $include_async && (!@only || $only{async_preresolved_leaf});

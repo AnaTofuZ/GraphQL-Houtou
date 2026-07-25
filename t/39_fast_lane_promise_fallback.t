@@ -353,4 +353,263 @@ subtest 'async runtime still honors on_stall batching' => sub {
   is scalar @batches, 1, 'one batch per level';
 };
 
+subtest 'async runtime: multiple sibling root leaves promote together' => sub {
+  require GraphQL::Houtou::DataLoader;
+  # Every field here is a nullable scalar leaf with no directives and no
+  # child block, so a root block with more than one of them is exactly the
+  # shape gql_runtime_vm_try_execute_fast_root_continuation_sv's multi-
+  # sibling path (lazy block_frame_t promotion) accepts, rather than
+  # falling back to the generic async executor.
+
+  subtest 'one pending sibling among synchronous ones' => sub {
+    my $calls = { a => 0, b => 0, c => 0 };
+    my $dispatches = 0;
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      $dispatches++;
+      return [ map { "loaded:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          a => { type => $String, resolve => sub { $calls->{a}++; 'sync-a' } },
+          b => {
+            type => $String,
+            args => { id => { type => $String } },
+            resolve => sub { my (undef, $args) = @_; $calls->{b}++; return $loader->load($args->{id}) },
+          },
+          c => { type => $String, resolve => sub { $calls->{c}++; 'sync-c' } },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($id: String) { a b(id: $id) c }',
+      variables => { id => 'k1' },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, { data => { a => 'sync-a', b => 'loaded:k1', c => 'sync-c' } },
+      'sync siblings and the pending one all resolve';
+    is $calls->{$_}, 1, "resolver $_ ran exactly once" for qw(a b c);
+    is $dispatches, 1, 'one batch dispatch';
+  };
+
+  subtest 'two siblings pending on the same batch settle together' => sub {
+    my $dispatches = 0;
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      $dispatches++;
+      return [ map { "v:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          f1 => { type => $String, resolve => sub { 'sync1' } },
+          f2 => {
+            type => $String, args => { id => { type => $String } },
+            resolve => sub { my (undef, $a) = @_; return $loader->load($a->{id}) },
+          },
+          f3 => { type => $String, resolve => sub { 'sync3' } },
+          f4 => {
+            type => $String, args => { id => { type => $String } },
+            resolve => sub { my (undef, $a) = @_; return $loader->load($a->{id}) },
+          },
+          f5 => { type => $String, resolve => sub { 'sync5' } },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($x: String, $y: String) { f1 f2(id: $x) f3 f4(id: $y) f5 }',
+      variables => { x => 'x1', y => 'y1' },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, {
+      data => { f1 => 'sync1', f2 => 'v:x1', f3 => 'sync3', f4 => 'v:y1', f5 => 'sync5' },
+    }, 'both pending siblings and every sync sibling resolve';
+    is $dispatches, 1, 'one batch dispatch settles both pending siblings';
+  };
+
+  subtest 'a rejected sibling nulls only its own field' => sub {
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { GraphQL::Houtou::DataLoader::Error->new("bad: $_") } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          ok => { type => $String, resolve => sub { 'still-ok' } },
+          bad => {
+            type => $String, args => { id => { type => $String } },
+            resolve => sub { my (undef, $a) = @_; return $loader->load($a->{id}) },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($id: String) { ok bad(id: $id) }',
+      variables => { id => 'z1' },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is $r->{data}{ok}, 'still-ok', 'sibling of a rejected field still resolves';
+    is $r->{data}{bad}, undef, 'rejected field is null';
+    is scalar @{ $r->{errors} }, 1, 'one error record';
+    is $r->{errors}[0]{message}, 'bad: z1', 'rejection reason surfaces as the error message';
+    is_deeply $r->{errors}[0]{path}, [ 'bad' ], 'error path points at the rejected field';
+  };
+
+  subtest 'pre-resolved Promise::XS mixed with a pending Ticket sibling' => sub {
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { "tk:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          sync_f => { type => $String, resolve => sub { 'plain' } },
+          promise_f => { type => $String, resolve => sub { Promise::XS::resolved('pre-resolved') } },
+          ticket_f => {
+            type => $String, args => { id => { type => $String } },
+            resolve => sub { my (undef, $a) = @_; return $loader->load($a->{id}) },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($id: String) { sync_f promise_f ticket_f(id: $id) }',
+      variables => { id => 't1' },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, {
+      data => { sync_f => 'plain', promise_f => 'pre-resolved', ticket_f => 'tk:t1' },
+    }, 'a promise settling synchronously during arm and a genuinely pending ticket both resolve';
+  };
+
+  subtest 'a non-null sibling forces the whole block back to the generic executor' => sub {
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { "v:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          strict => { type => $String->non_null, resolve => sub { 'must-have' } },
+          loose => {
+            type => $String, args => { id => { type => $String } },
+            resolve => sub { my (undef, $a) = @_; return $loader->load($a->{id}) },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($id: String) { strict loose(id: $id) }',
+      variables => { id => 'nn1' },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, { data => { strict => 'must-have', loose => 'v:nn1' } },
+      'still correct via the generic executor fallback';
+  };
+
+  subtest 'a runtime-directive sibling forces fallback' => sub {
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { "v:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          plain => { type => $String, resolve => sub { 'plain-val' } },
+          loaded => {
+            type => $String, args => { id => { type => $String } },
+            resolve => sub { my (undef, $a) = @_; return $loader->load($a->{id}) },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my $r = $runtime->execute_document(
+      'query Q($id: String, $skipIt: Boolean!) { plain @skip(if: $skipIt) loaded(id: $id) }',
+      variables => { id => 'd1', skipIt => 1 },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    ok !exists($r->{data}{plain}), 'skipped field is absent';
+    is $r->{data}{loaded}, 'v:d1', 'the pending sibling still resolves via the fallback';
+  };
+
+  subtest 'a statically-pruned sibling forces fallback (bundle/native_program op_index parity)' => sub {
+    my $loader = GraphQL::Houtou::DataLoader->new(batch => sub {
+      return [ map { "v:$_" } @{ $_[0] } ];
+    });
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          plain => { type => $String, resolve => sub { die "must not run: statically skipped" } },
+          other => { type => $String, resolve => sub { 'other-val' } },
+          loaded => {
+            type => $String, args => { id => { type => $String } },
+            resolve => sub { my (undef, $a) = @_; return $loader->load($a->{id}) },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    # A literal (not variable) @skip condition is statically evaluated at
+    # bundle-prep time, deleting the op outright - this is the shape the
+    # bundle/native_program op_count parity guard exists for.
+    my $r = $runtime->execute_document(
+      'query Q($id: String) { plain @skip(if: true) other loaded(id: $id) }',
+      variables => { id => 's1' },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    ok !exists($r->{data}{plain}), 'statically skipped field is absent';
+    is $r->{data}{other}, 'other-val', 'the field after the pruned one still resolves correctly';
+    is $r->{data}{loaded}, 'v:s1', 'the pending sibling still resolves correctly';
+  };
+
+  subtest 'many independent requests settle in one shared batch dispatch' => sub {
+    my $n = 50;
+    my $dispatches = 0;
+    my $loader = GraphQL::Houtou::DataLoader->new(
+      cache => 0,
+      batch => sub { $dispatches++; return [ map { "b:$_" } @{ $_[0] } ] },
+    );
+    my $schema = GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          s1 => { type => $String, resolve => sub { 'sync' } },
+          p1 => {
+            type => $String, args => { id => { type => $String } },
+            resolve => sub { my (undef, $a) = @_; return $loader->load($a->{id}) },
+          },
+        },
+      ),
+    );
+    my $runtime = build_native_runtime($schema, async => 1);
+    my @pending;
+    for my $i (1 .. $n) {
+      # No on_stall: returns the still-pending Promise::XS directly instead
+      # of auto-driving it, so all n requests' loads queue on the same
+      # loader before anything dispatches.
+      push @pending, [ $i, $runtime->execute_document(
+        'query Q($id: String) { s1 p1(id: $id) }', variables => { id => "k$i" }) ];
+    }
+    is $loader->pending_count, $n, "all $n loads queued before dispatch";
+    my $dispatched = $loader->dispatch;
+    is $dispatches, 1, 'exactly one batch dispatch';
+    is $dispatched, $n, "dispatch settled all $n tickets";
+    my $ok = 0;
+    for my $pair (@pending) {
+      my ($i, $r) = @$pair;
+      my $settled = maybe_get_promise_xs($r);
+      $ok++ if $settled->{data}{s1} eq 'sync' && $settled->{data}{p1} eq "b:k$i";
+    }
+    is $ok, $n, 'every request settled with the correct value';
+  };
+};
+
 done_testing;

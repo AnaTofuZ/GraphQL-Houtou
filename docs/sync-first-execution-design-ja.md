@@ -268,6 +268,31 @@ settle後にresponseへなること、suspend前とresume後を通じてresolver
     汎用async executor全体でUTF8フラグが失われていた)の修正は、Phase 2の採否とは
     独立に価値があるため採用した。
 
+11. §13(旧稿)step 3/5として、rootが複数のnullable scalar/enum leaf siblingを
+    持つ場合への拡張を実装した(詳細は`docs/future-performance-investigation-ja.md`
+    §14.18)。eligibility guardをop_count==1からop_count>=1へ緩和し、ブロック内の
+    **全op**が既存の単一field条件を満たすことを要求、さらに「bundle上のop_countが
+    native_program上のop_countと一致する」というblock単位のチェックを追加した
+    (静的directiveでの部分的なop削除がbundle/native_program間のop_indexズレを
+    起こしうるため)。suspendしたsiblingは既存の`GQL_VM_PENDING_PROMISE_(GENERIC|
+    RESOLVED)_VALUE_SV`entryとしてpushし、最初のsuspend時にのみ実
+    `exec_state_handle_t`/`block_frame_t`へ遅延promotionした上で、汎用async
+    executor自身のroot frame finalizeが使っている`gql_runtime_vm_block_frame_finalize_sv`
+    (arm前に`async_scheduler_draining`を立てる、という既存のreentrancy-safeな
+    idiomを内包する)へそのまま委譲する設計とした。専用のctx/callback型は新設して
+    いない。単一fieldの場合(Phase 2で退行が出た形)は引き続きitem 5-9の軽量な
+    直接構築方式を使う。
+
+    正しさは複数sibling同時pending・reject混在・pre-resolved Promise::XSと
+    pending Ticketの混在(arm中の同期settleを経由)・50件の独立requestが1バッチで
+    settle・non-null/directive/静的prune各fallback、で確認し、全492テスト・49
+    ファイル個別実行でのASan(複数hash seed)がクリーン。全同期の場合は
+    sync runtimeと完全に同速(sync-first原則は維持)。ただし、旧executorへの
+    fallbackに対する測定可能な性能改善は確認できなかった(§14.18参照 —
+    promotion時の`data_hv`→`native_value_t`一括変換コストが、fast laneでの
+    安価な resolver 呼び出しの利益を相殺していると見られる)。ユーザーの判断で、
+    正しさ・将来の最適化の土台としての価値を優先しこのまま採用した。
+
 ## 11. 試行から分かった境界条件
 
 root fieldが1個で`child_block_index == -1`という条件だけでは、leaf continuationとして安全では
@@ -332,30 +357,35 @@ fulfilled Ticketの認識はsuspension channelにもderived objectにも触れ�
 2. leaf benchmarkをallocation profileと合わせて測り、Promise::XS自体の下限とHoutou側の固定費を
    分離する。
 3. settled root listを走査し、全itemがplainならfast completion、pending itemが1個でもあれば
-   item continuationまたは既存async schedulerへ部分昇格する境界を作る。
-4. `async_preresolved`のroot object listへ適用し、sync比と旧async比を測る。
-5. nullable leaf/listでownershipが固まってからnon-null propagation、runtime directives、
-   object child block、複数root siblingへ対象を広げる。
-6. Promise callback内でcompletionを再帰実行する形はroot単一fieldに限定し、複数siblingへ
-   広げる段階ではready queueへ統合してreentrancyを防ぐ。
+   item continuationまたは既存async schedulerへ部分昇格する境界を作る。**未着手**。
+4. `async_preresolved`のroot object listへ適用し、sync比と旧async比を測る。**未着手**(3が前提)。
+5. ~~nullable leaf/listでownershipが固まってからnon-null propagation、runtime directives、
+   object child block、複数root siblingへ対象を広げる。~~ **複数root siblingは実施済み**
+   (leafに限定、本節item 11)。non-null propagation・runtime directives・object child block
+   は引き続き未着手(混在時はfallback)。
+6. ~~Promise callback内でcompletionを再帰実行する形はroot単一fieldに限定し、複数siblingへ
+   広げる段階ではready queueへ統合してreentrancyを防ぐ。~~ 実施済み(本節item 10で単独試作、
+   item 11で複数sibling実装に組み込んだ形で採用)。
 
 GraphQL::HoutouはPSGI前提の同期Webアプリで、実際にsuspendが起きる主因はDataLoader
 バッチ解決(Ticket)であり、任意のresolverが返す汎用Promise::XSは相対的に稀なケースである。
 そのため上記の順序に加えて、DataLoader Ticketの認識・直接subscribe・継続ctx統合(本節8, 9)を
 先行させた。
 
-6は単独で試作・計測済み(本節item 10、詳細は`docs/future-performance-investigation-ja.md`
-§14.17)。正しさ(300件独立継続の一括batch settle、ASan)は確認できたが、settleごとの
-`exec_state_handle_t`/heap writer/block_frame確保とnative_value_t往復変換のコストが
-Promise::XS pre-resolvedで-7.0%、Ticket pendingで-2.6%の実測retreatとなり、「正しさの
-検証が目的」という位置づけに対して単独採用するには重すぎると判断し延期した。単一field
-のresumeは直接構築方式(item 5-9)へ戻している。
+6は単独で試作・計測した段階(本節item 10、詳細は`docs/future-performance-investigation-ja.md`
+§14.17)では、settleごとの`exec_state_handle_t`/heap writer/block_frame確保と
+native_value_t往復変換のコストがPromise::XS pre-resolvedで-7.0%、Ticket pendingで-2.6%の
+実測retreatとなり、単独採用するには重すぎると判断して延期した。宣言通り、5(複数root
+sibling、leafに限定)を実装する段階(本節item 11)で6のblock_frame_t/scheduler委譲を
+組み込んだところ、全同期ケースはsync runtimeと完全に同速(退行なし)だったが、
+suspendが起きるケースでも旧executorへのfallバックに対する**測定可能な改善は
+確認できなかった**(§14.18)。1つの`block_frame_t`確保コストをsibling数で償却できる
+という見込みは外れ、promotion時の`data_hv`→`native_value_t`一括変換コストが
+fast laneでの安価なresolver呼び出しの利益を相殺していると見られる。ユーザーの
+判断で、正しさ・将来の最適化の土台としての価値を優先しこのまま採用した。
 
-6は単独では割に合わなかったが、3・5(複数sibling pending fieldへの拡張)を実装する
-段階では前提として必要になる可能性が高い — その時点では1つの`block_frame_t`が
-複数siblingの結果をまとめて保持するため、確保コストをsibling数で償却できる。次に
-3・5へ着手する際は、6のblock_frame_t/scheduler委譲をその実装に組み込む形で
-再評価する(単独の内部リファクタとして別PRにはしない)。
+次に性能改善を狙うなら、`data_hv`を経由したPerl SVの一括変換をなくし、fast lane
+ループ中に解決済みsiblingを直接`native_value_t`へ書き込む設計へ作り直す必要がある。
 
 旧async executorはfallbackとして残す。対象shapeが明示的に判定でき、correctnessと性能の両方を
 満たした範囲だけをsync-first経路へ移す。

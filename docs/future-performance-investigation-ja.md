@@ -1110,3 +1110,93 @@ pending fieldへの拡張)を実装する段階まで延期することにした
 Phase 1の軽量な直接構築方式を維持し、block_frame_t/scheduler経由のresumeは
 実際に複数sibling を扱う必要が生じた時点で導入する。settle_svの実装は
 Phase 1cの状態(直接`hv_store`+`gql_runtime_vm_fast_response_sv`)へ戻した。
+
+### 14.18 複数sibling root fieldへの拡張(Phase 3)
+
+design docの§13 step 3/5、および§7の段階移行計画に沿って、rootの selection set が
+「nullableなscalar/enum leafが複数個」の場合に対応する fast root continuation の
+拡張を実装した(`perf/sync-first-continuation`ブランチ)。
+
+**eligibility guardの緩和**: `block->op_count != 1`の弾きを`op_count >= 1`へ緩和し、
+ブロック内の**全op**が既存の単一条件(GENERIC completion、runtime directiveなし、
+nullable、child blockなし)を満たすことを要求する。1つでも満たさないopがあれば
+block全体を旧executorへfallbackする。
+
+**重要な発見: bundle上のop_indexはnative_program(生の未剪定プログラム)上の
+op_indexと常に一致するとは限らない。** `gql_runtime_vm_prepare_cached_bundle_in_place`
+は、静的に評価可能な`@skip`/`@include`directive(`has_directives &&
+directives_mode_code == GQL_VM_ARGS_STATIC`)を持つopについて、条件がfalseなら
+そのopをbundleの`ops[]`配列から削除する。これにより、削除されたopより後ろにある
+opは(それ自身がdirectiveを一切持たなくても)bundle上でインデックスがズレる。
+fast laneはbundle上のopを列挙する一方、`gql_runtime_vm_exec_state_complete_async_sv`
+は`s->native_program->blocks[block_index]->ops[op_index]`という生のprogramを
+直接インデックスするため、この2つの空間が食い違うと誤ったopを参照しうる。対策として
+eligibility guardに「このblockで`bundle_block->op_count ==
+native_program->blocks[block_index].op_count`である」というblock単位のチェックを
+追加した(削除は常にop_countを減らす方向にしか働かないため、この一致は「1つも
+削除されていない」ことの十分条件になる)。
+
+なお実験的に検証したところ、今回のeligibility(全op が GENERIC completion 限定)の
+下では、`gql_runtime_vm_exec_state_complete_async_sv`は実際には`slot`を
+`entry->slot_index`という独立したパラメータ経由で参照しており(`op->slot_index`
+経由ではない)、かつ完了処理自体は`slot`の返り値型情報のみに依存するため、この
+チェックを外してもテストケースでは可視の破損は再現しなかった(候補となる全opが
+同じcomplete_code=GENERICを共有するため)。ただし、これは今回の限定的な
+eligibilityがたまたま`op`自身のフィールドに依存しないために表面化しないだけで、
+将来complete_codeの制限を緩めるような拡張が`op`の内容に依存するようになった場合に
+静かな破損を生みかねないため、コストがほぼゼロの防御的チェックとして維持した。
+
+**既存の汎用scheduler機構をそのまま再利用**: suspendしたopは
+`gql_runtime_vm_slot_leaf_kind(...)`が`GQL_VM_LEAF_NONE`(組み込みでないcustom
+scalar)かどうかで`GQL_VM_PENDING_PROMISE_GENERIC_VALUE_SV`または
+`GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV`を選び(`gql_runtime_vm_then_complete_current_sv`
+の判定をそのまま踏襲)、`gql_runtime_vm_block_frame_push_pending_pvn_with_meta`で
+push する。最初のsuspend時にのみ遅延的に`block_frame_t`と実`exec_state_handle_t`
+(実entry pointが使うのと同じ構成: `gql_runtime_vm_new_cursor_struct_for_program`
++ `gql_runtime_vm_new_writer_struct` + `gql_runtime_vm_new_exec_state_handle_sv`)を
+確保し、ループを継続する。ループ終了後、`data_hv`に溜まった同期解決済みsiblingを
+`gql_runtime_vm_native_value_from_sv`で一括変換して`frame->values_value`へ差し込み、
+`gql_runtime_vm_block_frame_finalize_sv`(汎用async executor自身のroot frame
+finalizeが使っているのと同じ関数)へ委譲する。専用のctx/callback型は新設していない。
+
+**reentrancy上の重要な発見**: `gql_runtime_vm_block_frame_finalize_sv`は、arm前に
+`exec_state->async_scheduler_draining = 1`を立ててから`arm_frame`を呼び、arm後に
+元へ戻す、という既存のidiomを使っている。これは、arm中にsiblingの1つが
+(Promise::XSの`then()`が同期的にcallbackを呼ぶ場合のように)同期的にsettleし、
+その結果`pending_unresolved`が0になった際、settleコールバック自身が
+`enqueue_frame`+`drain`を呼んで`process_frame`を再入的に実行してしまうと、
+`arm_frame`のループが**まだ回っている最中に**`frame->pending_entries`配列が
+`process_frame`によって作り直され(古い配列は`Safefree`される)、`arm_frame`が
+保持している古いエントリへのポインタがダングリングになる、という重大な
+reentrancy事故を防ぐためのものである。もしこのidiomを踏襲せず`arm_frame`を
+裸で呼んでいたら、複数siblingが同一バッチで同期settleするケース(Case B:
+pre-resolved Promise::XSとpending Ticketの混在)で発生しうる、検出困難な
+use-after-free になっていた可能性が高い。既存の汎用executorがすでにこの問題を
+解決済みだったため、車輪の再発明を避けてそのまま再利用した。
+
+**検証**: 正しさは以下のシナリオで手動・自動双方で確認した — 複数siblingが同一
+DataLoaderバッチでpending → 一括settle、rejectしたsiblingが他の健全なsiblingを
+巻き込まないこと、pre-resolved Promise::XSとpending Ticketの混在(arm中の同期
+settleを経由する経路)、50件の独立したrequestが1回のbatch dispatchで settle、
+non-null/runtime directive/静的prune各条件でのfallback。全492テスト、49ファイル
+個別実行でのASan(複数hash seed)がクリーン。全同期の場合(async runtimeでも
+全fieldが同期解決)はsync runtimeと完全に同速(実測差ゼロ)であり、「全同期なら
+一切課税しない」というsync-first原則は維持されている。
+
+**性能**: `benchmark_async_multi_leaf`(width 2/5/10、末尾1個がDataLoader
+Ticket pending)で、Phase 3導入前(常に旧executorへfallback)と導入後を
+git stash比較したところ、**測定可能な改善は見られなかった**(width 2:
+122.5k→124.3k req/s、width 5: 100.0k→100.0k req/s、width 10: 78.2k→75.2k req/s、
+いずれも誤差範囲)。分析の結果、新経路は「suspendしていないsiblingをfast lane
+で安く解決する」利点がある一方、promotion時に`data_hv`全体を
+`gql_runtime_vm_native_value_from_sv`で一括変換するコストが新たに発生し、
+両者がほぼ相殺していると考えられる。exec_state_handle_t/writer/frame/arm/drainの
+固定コストは旧経路と共通(`gql_runtime_vm_block_frame_finalize_sv`を再利用して
+いるため)であり、これが支配的である可能性が高い。
+
+Phase 2の「退行」とは異なり「退行はないが改善もない」結果だったが、ユーザーの
+判断で正しさ・将来の最適化の土台としての価値を優先し、そのまま採用することにした。
+次に性能改善を狙うなら、`data_hv`を経由したPerl SVの一括変換を避け、fast lane
+ループ中に解決済みsiblingを直接`native_value_t`へ書き込む設計へ作り直す必要が
+ある(promotionが起きるまでは何も確保しないというsync-first原則を保ったまま、
+promotion後のperl SV往復自体をなくす設計が要る)。

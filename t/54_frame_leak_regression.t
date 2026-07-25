@@ -160,4 +160,43 @@ subtest 'repeated root-leaf DataLoader ticket continuations stay clean' => sub {
   assert_no_live_frames('200 pending-ticket root-leaf continuations');
 };
 
+subtest 'repeated multi-sibling root promotions stay clean' => sub {
+  # Each request here promotes to a real block_frame_t + exec_state_handle_t
+  # (gql_runtime_vm_try_execute_fast_root_continuation_sv's multi-sibling
+  # path); a leak in that construction or in gql_runtime_vm_block_frame_finalize_sv's
+  # arm/drain handoff would only show up after many requests, not one.
+  my $multi_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        a => { type => $String, resolve => sub { 'sync-a' } },
+        b => {
+          type => $String,
+          args => { id => { type => $String } },
+          resolve => sub {
+            my (undef, $args, $ctx) = @_;
+            return $ctx->{loader}->load($args->{id});
+          },
+        },
+        c => { type => $String, resolve => sub { 'sync-c' } },
+      },
+    ),
+  );
+  my $runtime = build_native_runtime($multi_schema, async => 1);
+  for my $i (1 .. 200) {
+    my $loader = GraphQL::Houtou::DataLoader->new(
+      batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+    );
+    my $r = $runtime->execute_document(
+      'query Q($id: String) { a b(id: $id) c }',
+      variables => { id => "m$i" },
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+    is_deeply $r, { data => { a => 'sync-a', b => "v:m$i", c => 'sync-c' } }, "iteration $i resolved"
+      or last;
+  }
+  assert_no_live_frames('200 multi-sibling root promotions');
+};
+
 done_testing;

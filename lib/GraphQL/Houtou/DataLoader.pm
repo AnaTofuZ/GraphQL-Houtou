@@ -121,31 +121,7 @@ sub dispatch {
   my $queue = $self->{_queue};
   return 0 if !@$queue;
   $self->{_queue} = [];
-
-  my $dispatched = 0;
-  my $max = $self->{max_batch_size};
-  while (@$queue) {
-    my @chunk = splice(@$queue, 0, ($max > 0 && $max < @$queue) ? $max : scalar @$queue);
-    my @keys = map { $_->[0] } @chunk;
-    my $values = eval { $self->{batch}->(\@keys) };
-    my $batch_error = $@;
-
-    if ($batch_error || ref($values) ne 'ARRAY' || @$values != @keys) {
-      my $reason = $batch_error
-        || "DataLoader batch function must return an arrayref with one entry per key\n";
-      $dispatched += GraphQL::Houtou::DataLoader::Ticket->_reject_batch(
-        \@chunk,
-        $reason,
-      );
-      next;
-    }
-
-    $dispatched += GraphQL::Houtou::DataLoader::Ticket->_settle_batch(
-      \@chunk,
-      $values,
-    );
-  }
-  return $dispatched;
+  return $self->_dispatch_queue($queue);
 }
 
 # Build an on_stall callback that keeps dispatching a set of loaders until

@@ -984,3 +984,16 @@ Ticket subscriberからexecutorのpending entryを直接更新し、fieldごと�
 通常のcache有効・全key missではloader単体が約4%、GraphQL実行が約3%改善し、repeated hitは
 概ね同等だった。DataLoader全体をC handle化せず、hotなmiss処理だけを移す小さい変更でも効果が
 得られるため、dispatchのnative化は別の変更として評価する。
+
+### 14.15 DataLoader dispatch制御のXS統合
+
+DataLoaderの公開APIとPerl hash構造を維持したまま、`dispatch`内のqueue chunk抽出、key配列生成、
+batch callbackの例外捕捉、戻り値検証、Ticket settlementを一つのXS呼び出しへまとめた。
+batch callback自体と、callback実行中に次のloadを新しいqueueへ積むstall契約はPerl側のまま
+維持している。
+
+20 keysのmain比較ではloader単体がaccess patternにより約4--9%、GraphQL実行が約1--3%
+改善した。100 unique keysではloader単体が約5%、GraphQL実行は同等から約1%改善だった。
+幅が増えるほどGraphQL executor自体の比率が高くなるため全体効果は薄まるが、例外、per-key
+error、`max_batch_size` chunkingを含む既存契約を変えず、すべてのdispatchで通るPerl/XS境界と
+一時配列操作を削減できる。

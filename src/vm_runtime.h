@@ -410,6 +410,13 @@ struct gql_runtime_vm_native_value {
 struct gql_runtime_vm_native_dynamic_value {
   U8 kind_code;
   U8 scalar_kind_code;
+  /* Whether scalar_pv holds UTF-8-flagged text (SvUTF8 on the source SV),
+   * mirroring gql_runtime_vm_native_value::scalar_pv_is_utf8 - this struct
+   * caches a query's STATIC argument literals (compiled once, reused
+   * across requests), so a literal string argument containing raw
+   * (non-escaped) multibyte characters needs the same flag tracking or it
+   * loses its UTF8-ness on every materialize. */
+  U8 scalar_pv_is_utf8;
   IV scalar_iv;
   NV scalar_nv;
   char *scalar_pv;
@@ -1329,6 +1336,7 @@ gql_runtime_vm_native_dynamic_value_from_sv(pTHX_ SV *value)
     ret->scalar_kind_code = GQL_VM_NATIVE_SCALAR_PV;
     ret->scalar_pv = savepvn(pv, len);
     ret->scalar_pv_len = len;
+    ret->scalar_pv_is_utf8 = SvUTF8(value) ? 1 : 0;
     return ret;
   }
   if (SvIOKp(value)) {
@@ -1399,6 +1407,7 @@ gql_runtime_vm_native_dynamic_value_from_native_value(
       if (value->scalar_kind_code == GQL_VM_NATIVE_SCALAR_PV && value->scalar_pv) {
         ret->scalar_pv = savepvn(value->scalar_pv, value->scalar_pv_len);
         ret->scalar_pv_len = value->scalar_pv_len;
+        ret->scalar_pv_is_utf8 = value->scalar_pv_is_utf8;
       } else if (value->scalar_kind_code == GQL_VM_NATIVE_SCALAR_FALLBACK_SV && value->scalar_fallback_sv) {
         gql_runtime_vm_native_dynamic_value_destroy(aTHX_ ret);
         return gql_runtime_vm_native_dynamic_value_from_sv(aTHX_ value->scalar_fallback_sv);
@@ -1572,8 +1581,13 @@ gql_runtime_vm_native_dynamic_value_materialize_sv(
           return newSViv(value->scalar_iv);
         case GQL_VM_NATIVE_SCALAR_NV:
           return newSVnv(value->scalar_nv);
-        case GQL_VM_NATIVE_SCALAR_PV:
-          return newSVpvn(value->scalar_pv ? value->scalar_pv : "", value->scalar_pv_len);
+        case GQL_VM_NATIVE_SCALAR_PV: {
+          SV *pv_sv = newSVpvn(value->scalar_pv ? value->scalar_pv : "", value->scalar_pv_len);
+          if (value->scalar_pv_is_utf8) {
+            SvUTF8_on(pv_sv);
+          }
+          return pv_sv;
+        }
         default:
           return newSV(0);
       }

@@ -2052,3 +2052,78 @@ fallbackを強制、nested fieldがDataLoader Ticket pending、count=-3で
 Phase 8の考察(§14.24末尾のitem数依存の解釈)と整合する結果。
 Phase 3〜7と同じ「改善なしだが正しさ・保守性の観点で妥当」という
 カテゴリの変更。
+
+### 14.27 list itemのraw frame直結(Phase 7の仕組みをlistへ拡張、Phase 11)
+
+「async経路は調査し尽くした」という本セッションの結論に対し、ユーザー
+から具体的な再検証を受けた。`lib/GraphQL/Houtou.xs:9567`付近のコメントと
+`src/vm_runtime.h`の`gql_runtime_vm_list_pending_t`定義を確認したところ、
+指摘は正確だった: `gql_runtime_vm_execute_safe_child_block_fast_sv`は
+`want_promise`引数で`finalize_sv`のモードを切り替えており、非list
+のobject/abstract child field(Phase 7、`want_promise=0`→モード1)は
+suspend時に生のblock_frame_tハンドルを返し
+`gql_runtime_vm_push_pending_block_frame`で親へ直結できる一方、list
+item(`want_promise=1`→モード2)だけは常にPromise::XSを強制構築して
+`gql_runtime_vm_list_pending_handle_sv`が`.then()`で購読していた。
+
+**実装。** list item呼び出し箇所を`want_promise=0`に変更。
+`gql_runtime_vm_list_pending_t`に`pending_child_frames[]`(list_pendingの
+各slotに対応する、まだ決着していない生のchild frameへのポインタ配列)
+を追加し、`gql_runtime_vm_block_frame_t`に`parent_list_pending`/
+`parent_list_index`(既存の`parent_frame`/`parent_entry_index`と排他的な
+別種の親)を追加。新設した`gql_runtime_vm_list_pending_link_child_frame`
+が生frameをlist_pendingのslotへ直結し、
+`gql_runtime_vm_async_scheduler_resolve_frame`に`parent_list_pending`分岐
+を追加してPromise::XS/SV往復なしにnative valueを直接list_pendingへ
+書き込むようにした。`gql_runtime_vm_cancel_frame_tree`にも
+`GQL_VM_PENDING_LIST_PENDING_PTR`分岐を追加し、`pending_child_frames[]`
+を辿ってabandoned requestでも生frameを正しく解放するようにした。
+
+**開発中に発見・修正した実バグ(リーク2件)。** どちらもASanではなく
+`t/54_frame_leak_regression.t`の`debug_frame_live_counts_xs()`カウンタで
+発見した。(1) `resolve_frame`の新分岐は最初`free_block_frame`を1回しか
+呼んでおらず、child frameが持つべき2つの参照(linkが取った分と、生成時
+からのcreation分)のうち1つしか解放していなかった - 既存の
+`parent_frame`分岐が`gql_runtime_vm_async_pending_entry_store_outcome_ptr`
+内で1回、明示的に末尾でもう1回、計2回`free_block_frame`を呼んでいるのと
+同じ構造が必要だった。参照カウントの値を`fprintf(stderr, ...)`で一時的に
+出力し、非list(既存・正常動作)のケースと比較して原因を特定した。(2)
+`cancel_frame_tree`の新分岐にも同じ問題があった - 既存の
+`BLOCK_FRAME_PTR`分岐は`clear_pending`自身の処理から2回目の解放を
+「タダで」得られるが、`pending_child_frames[]`は`clear_pending`から見えない
+別の配列のため、2回の解放を両方とも自分で行う必要があった。
+
+**検証。** `t/54_frame_leak_regression.t`へ2 subtestを追加: 生frame直結
+されたlist itemがpendingなままrequestがabandonされるケース(on_stall
+die・stall検出のいずれも)が0/0になることを確認するsubtestと、同期item・
+Ticket直接購読のleaf item・生frame直結itemを1 requestに混在させて
+正しく決着することを確認するsubtest。既存のPhase 5/6/7テスト一式
+(非null伝播、abstract member dispatch、error record、混在sibling)は
+無変更のまま全て通過。全519テスト・ASan(5 hash seed)・Perl 5.24
+(Docker)がクリーン。
+
+**計測(訂正を含む)。** 最初`git worktree`比較なしに、単発実行の数値を
+本セッション前半(Phase 10検証時)の数値と単純比較し、「width=10で
++40%超」という誤った改善を報告してしまった。Phase 10自体が
+「別プロセス起動を交互に行うことで環境ドリフトの影響を抑える」ために
+確立した手法を、自分で怠った結果である。`git worktree`でPhase 11適用前
+(main)を用意し正しくインターリーブして再測定したところ、
+`async_nested_object_list_item_field`のwidth=10で適用前
+約30,200〜31,000 req/s、適用後約30,000〜30,900 req/sとなり、**実質的な
+改善は確認できなかった**。
+
+`sample`で原因を確認したところ、**適用前のビルドですら`Promise::XS`/
+`xspr_*`関連の関数は5秒間のプロファイルにほぼ出現しない**(0〜6サンプル
+程度)。除去したPromise::XS生成+`.then()`登録+SV往復の仕組みは、この
+benchmark shapeにおいて元々全体コストに占める割合が小さく、削っても
+測定可能な差にならなかったということである。適用後のプロファイルでは
+該当シンボルが完全に消えており、狙った通りの経路変更ができていることは
+確認できるが、体感できる速度改善には繋がらなかった。
+
+**結論。** Phase 9のfallback駆動化と同じ「正しさ・設計上の妥当性はあるが
+測定可能な改善なし」というカテゴリの変更。ユーザーの指摘通り
+「async経路は調査し尽くした」は言い過ぎだったが、この具体的な実装が
+実際に効果を持つかは実装して測るまで分からなかった - 「効かなければ
+それはそれで頭打ちの証拠になる」というユーザー自身の見立て通りの結果
+になった。correctness面の価値(Phase 7の仕組みの一貫した適用、
+Promise::XS依存の削減)を理由に採用する。

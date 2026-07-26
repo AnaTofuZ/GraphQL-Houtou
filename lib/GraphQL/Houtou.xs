@@ -2232,6 +2232,41 @@ gql_runtime_vm_pending_callback_pair_recycle(
   }
 }
 
+/* Cancellation counterpart to gql_runtime_vm_pending_callback_pair_recycle:
+ * an armed entry whose promise/ticket never settled (the request was
+ * abandoned - on_stall died, or a stall was detected) still needs its
+ * ctx's state_sv/frame references dropped, exactly like a normal settle
+ * would, or they leak (a still-pending DataLoader Ticket's own subscriber
+ * list - populated by gql_runtime_vm_subscribe_dataloader_ticket - holds
+ * this ctx's resolve/reject CVs alive independent of anything the exec
+ * state owns, since the ticket can outlive the request via the
+ * DataLoader's own queue). Unlike recycle, this does NOT pool the CV
+ * pair: the ticket/promise might still fire it later (a buggy caller
+ * holding the loader past abandonment), and handing that live CV to an
+ * unrelated future request would corrupt it. Left disarmed, the CV pair
+ * is permanently inert instead - gql_runtime_vm_xs_pending_callback and
+ * its reject counterpart already no-op once ctx->state_sv/ctx->frame are
+ * NULL - trading the leak for a single bounded, harmless CV+ctx. */
+static void
+gql_runtime_vm_pending_callback_ctx_disarm(
+  pTHX_
+  gql_runtime_vm_pending_callback_ctx_t *ctx
+)
+{
+  if (!ctx) {
+    return;
+  }
+  if (ctx->state_sv) {
+    SvREFCNT_dec(ctx->state_sv);
+    ctx->state_sv = NULL;
+  }
+  if (ctx->frame) {
+    gql_runtime_vm_free_block_frame(aTHX_ ctx->frame);
+    ctx->frame = NULL;
+  }
+  ctx->entry_index = -1;
+}
+
 static void
 gql_runtime_vm_async_scheduler_resolve_frame(
   pTHX_
@@ -7131,7 +7166,14 @@ gql_runtime_vm_attach_response_state_magic(pTHX_ SV *promise_rv, SV *state_sv)
  * BLOCK_FRAME_PTR shape, so it needs no special handling here - only a list
  * item's own per-item pending sub-tree (GQL_VM_PENDING_LIST_PENDING_PTR,
  * genuinely Promise::XS-shaped for Layer 2's per-item aggregation) is not
- * reachable from here yet. */
+ * reachable from here yet.
+ *
+ * Any armed entry (promise or DataLoader ticket alike - arm_frame sets
+ * armed_resolve_ctx/armed_reject_ctx to the same pair_ctx regardless of
+ * payload kind) is disarmed here too, before clear_pending drops our own
+ * promise_sv reference: see gql_runtime_vm_pending_callback_ctx_disarm's
+ * comment for why cancellation cannot just recycle the pair like a normal
+ * settle does. */
 static void
 gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
 {
@@ -7140,6 +7182,12 @@ gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
     return;
   }
   for (i = 0; i < frame->pending_count; i++) {
+    if (frame->pending_entries[i].armed_resolve_ctx) {
+      gql_runtime_vm_pending_callback_ctx_disarm(
+        aTHX_
+        (gql_runtime_vm_pending_callback_ctx_t *)frame->pending_entries[i].armed_resolve_ctx
+      );
+    }
     if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_BLOCK_FRAME_PTR
         && frame->pending_entries[i].payload.block_frame_ptr) {
       gql_runtime_vm_block_frame_t *child =

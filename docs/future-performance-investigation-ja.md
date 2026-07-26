@@ -1921,3 +1921,134 @@ resolverクロージャをN回呼ぶという本質コスト(entersub/eval scope
 sv_clear)自体は変わらない。field単位のバッチresolver APIは
 GraphQLのAPIとして筋が悪いと判断し見送ったため、この方向での
 「抜本的な一手」は現時点で見つかっていない。
+
+### 14.26 Ticketキャンセル時リークの修正とgeneric executor fallbackへのon_stallドライブ拡張(Phase 9)
+
+Phase 8で見つけた2件の既存課題(§14.24末尾)を先に片付けてから、
+今後のasync経路高速化(§14.13系)の検討に戻る、という順で着手した。
+
+**課題1の修正: DataLoader Ticketキャンセル時のリーク。**
+
+原因は次の通りだった。`gql_runtime_vm_async_scheduler_arm_frame`が
+pending entryをarmする際、`entry->armed_resolve_ctx`と
+`entry->armed_reject_ctx`の両方に同じ`pair_ctx`
+(`gql_runtime_vm_new_pending_callback_pair`が返すctx)を格納する。
+通常の決着ではどちらかのarmが発火し
+`gql_runtime_vm_pending_callback_pair_recycle`がctxの
+`state_sv`/`frame`参照を破棄するが、`gql_runtime_vm_cancel_frame_tree`
+はこれまで`armed_resolve_ctx`を一切見ておらず、キャンセル時にはこの
+2参照が破棄されないままだった。生のPromise::XSはリクエスト内部に
+閉じているため実害がない(Phase 8の`G_EVAL`捕捉で解消済み)一方、
+DataLoaderの`Ticket`は`gql_runtime_vm_subscribe_dataloader_ticket`
+経由で自分のsubscriberリストへ同じresolve/reject callbackペアを
+追加しており、Ticket自体はDataLoaderの`_queue`から参照が続くため、
+`cancel_exec_state_sv`側から辿れる経路が存在しなかった。
+
+`pending_callback_pair_recycle`をそのままキャンセル時にも呼べない
+理由: この関数はCVペアを次回再利用のためプールへ戻す。だが
+キャンセルされたTicketは(settleされていない=state==0のまま)
+DataLoaderの`_queue`に生き続ける可能性があり、後になって万一
+dispatchされれば同じCVペアが発火してしまう。プールに戻していると
+そのCVは既に別の無関係なリクエストに再利用されている可能性があり、
+発火時にその無関係なリクエストのframeを破壊しかねない。そこで
+`gql_runtime_vm_pending_callback_ctx_disarm`を新設し、
+`state_sv`/`frame`参照の破棄はrecycleと同じだがCVプールへは戻さない
+ようにした(CV自体は「二度と有効な処理をしない」まま生き続けるだけの
+小さく無害な残留物になる - 各callback XSUBは元々`ctx->state_sv`/
+`ctx->frame`がNULLなら早期return する設計のため)。`cancel_frame_tree`
+のpending entryループへ、`armed_resolve_ctx`が非NULLなら
+disarmを呼ぶ処理を追加した。
+
+`t/59_on_stall_native_drive.t`の末尾に「既知のリークとして固定した」
+2 subtestを、他のsubtestと同じ`assert_no_live_frames`で0/0を要求する
+形に書き換え、ファイル末尾固定という制約も撤廃した(通常のsubtestと
+同じ位置に戻した)。全510テスト・ASan(5 hash seed)・200イテレーション
+の混在ストレス(通常決着/on_stall die/stall検出をランダムに混ぜる)
+がクリーン。Perl 5.24(Docker)でも再検証済み。
+
+**課題2の対応: generic executor fallbackもC側でon_stallドライブする。**
+
+Phase 8はfast laneが対象shapeを扱える場合限定だった。fast lane非対応
+shape(runtime directives・再帰深さ上限超過)は、`execute_native_program_auto_with_on_stall_sv`
+のfallback分岐が`execute_native_program_auto_impl_sv`をそのまま
+(`on_stall_sv`を渡さず)呼んでおり、genuinely pendingなら本物の
+Promise::XSを返してPerl側`_settle_result`が駆動していた。
+
+**設計判断: generic executor自体には手を入れない。**
+`gql_runtime_vm_exec_state_execute_block_async_path_sv`はmutationの
+直列実行や通常のネスト実行など複数の呼び出し元に共有されており、
+`finalize_sv`のモード3をそこまで通す変更は対象範囲の狭さ(fast lane
+非対応shapeのみ)に対してリスクが大きい。そこで generic executor
+自身は変更せず(今まで通り本物のPromise::XSを内部で構築する)、
+「誰がそのpromiseを消費するか」だけを変えた: `gql_runtime_vm_drive_promise_with_on_stall_sv`
+がC側で`.then()`を直接登録し、Perlの`_settle_result`へ渡す代わりに
+その場でon_stallを駆動する。generic executor内部は変わらず本物の
+Promise::XSを作るため、fast laneほどの削減(Promise::XS生成自体の
+省略)にはならず、外側のPerlレベル`.then()`登録+whileループの往復
+だけを省く形になる。
+
+**実装。**
+1. `gql_runtime_vm_settle_capture_ctx_t`(`value`/`settled`/`cv_refcnt`)
+   と、それを共有するresolve/reject CVペア
+   (`gql_runtime_vm_new_settle_capture_pair`)を追加。`settled`は
+   0=未決着・1=resolve・2=reject。
+2. `execute_native_program_auto_with_on_stall_sv`のfallback分岐:
+   `execute_native_program_auto_impl_sv`の戻り値に応答magic
+   (`gql_runtime_vm_response_state_magic_vtbl`)が付いていれば
+   (genuinely pendingの目印)、`gql_runtime_vm_drive_promise_with_on_stall_sv`
+   へ渡して駆動する。付いていなければ(既に完了している)そのまま
+   返す。
+3. 駆動ループは`gql_runtime_vm_call_then_promise_xs_sv`で`.then()`を
+   登録した後、`gql_runtime_vm_call_on_stall_once`(Phase 8と共通)で
+   on_stallを呼び、`ctx->settled`をポーリングする。進捗0なら
+   `gql_runtime_vm_cancel_pending_response_sv`(既存の
+   `_settle_result`と同じキャンセル関数)を呼んでからcroak。
+   `_settle_result`と同じ文言・契約を維持。
+
+**開発中に発見・修正した実バグ(use-after-free)。**
+最初の実装では`ctx->cv_refcnt`をresolve/reject CVの2つ分だけで
+初期化していた。ASan(ローカル、Apple clang 21のASanランタイムを
+`DYLD_INSERT_LIBRARIES`で明示指定)で検証したところ、
+`heap-use-after-free`が`gql_runtime_vm_drive_promise_with_on_stall_sv`
+の`while (!ctx->settled)`条件式で発生した。原因はPromise::XSの
+`then()`実装が、どちらかのarmを発火させた直後に**両方の**保持していた
+callback参照を一括で解放すること: 呼び出し元(このドライブ関数)が
+`.then()`登録直後に自分の参照を`SvREFCNT_dec`していたため、
+CV側の参照だけが最後の1本になっており、発火直後にCVが即座に破棄され
+`ctx`(cv_refcnt経由で共有)もその場で`Safefree`されてしまっていた -
+数フレーム上の呼び出し元がまだ`ctx->settled`を読もうとしている
+最中に。修正として`cv_refcnt`の初期値を3(resolve CV・reject CV・
+呼び出し元自身の3口分)にし、呼び出し元はctxを読み終えた後
+(正常決着・reject・stall検出によるcroak、いずれの経路でも)明示的に
+自分の持ち分を`gql_runtime_vm_settle_capture_ctx_release`で解放する
+よう変更した。CIのASan(gcc/Linux)はheap corruptionを検出するはずの
+レイヤーだが、この不具合はheap allocatorのレイアウトに依存して
+発現有無が変わる類のもので(`minil test`のように毎回別プロセスの
+Perlを起動する経路では再現し、単発の`perl`/`prove`実行では再現しない、
+という形で最初に気づいた)、ローカルでのASan検証(Apple clang由来の
+ランタイムを明示指定)が実際に有効だったケース。
+
+**検証。** `t/59_on_stall_native_drive.t`へ5 subtestを追加:
+runtime directiveでfallbackを強制するケース(正常決着)、再帰深さ
+上限を1超えるケース(正常決着)、fallback経由のresolver/batch die
+(field errorへの変換)、fallback中のon_stall自身のdie、fallback中の
+stall検出。全515テスト・ASan(5 hash seed、上記use-after-free修正後は
+クリーン)・300イテレーションの混在ストレス(正常決着/on_stall die/
+stall検出/reject伝播をランダムに混ぜる)がクリーン。Perl 5.24
+(Docker)でも再検証済み。
+
+**計測。** `async_fallback_runtime_directive`(runtime directiveで
+fallbackを強制、nested fieldがDataLoader Ticket pending、count=-3で
+複数回計測):
+
+| | 旧経路(fallback+`_settle_result`) | Phase 9(fallbackをC駆動) |
+|---|---:|---:|
+| suspendケース | 112,065〜114,473 req/s | 113,400〜116,693 req/s |
+
+誤差の範囲内で、測定可能な改善は確認できなかった。generic executor
+自体のリクエストあたりコスト(fast lane非対応shapeなので相対的に
+重い)が支配的で、外側のPromise::XS `.then()`登録+whileループという
+比較的小さい固定コストを削っても全体に対する寄与が薄い、という
+Phase 8の考察(§14.24末尾のitem数依存の解釈)と整合する結果。
+Phase 3〜7と同じ「改善なしだが正しさ・保守性の観点で妥当」という
+カテゴリの変更。

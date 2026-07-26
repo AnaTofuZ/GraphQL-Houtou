@@ -430,6 +430,21 @@ typedef struct {
   U8 cv_refcnt;
 } gql_runtime_vm_fast_root_continuation_ctx_t;
 
+/* Item 1 (Phase 9): captures a generic-executor response promise's eventual
+ * settlement into plain fields instead of a Perl _settle_result closure -
+ * see gql_runtime_vm_drive_promise_with_on_stall_sv. settled: 0 = pending,
+ * 1 = resolved, 2 = rejected (value holds the resolved value or rejection
+ * reason either way). cv_refcnt is shared three ways - the resolve CV, the
+ * reject CV, and the drive loop's own read of ctx after settlement - not
+ * just the CV pair (see gql_runtime_vm_settle_capture_ctx_release's doc
+ * comment for why the drive loop needs its own share here, unlike
+ * gql_runtime_vm_pending_callback_ctx_t). */
+typedef struct {
+  SV *value;
+  U8 settled;
+  U8 cv_refcnt;
+} gql_runtime_vm_settle_capture_ctx_t;
+
 
 typedef struct {
   SV *state_sv;
@@ -743,6 +758,48 @@ gql_runtime_vm_list_pending_callback_ctx_free(pTHX_ SV *sv, MAGIC *mg)
   return 0;
 }
 
+/* Shared by the resolve/reject CVs' magic-free (below) and the drive loop
+ * itself (gql_runtime_vm_drive_promise_with_on_stall_sv), which holds its
+ * own share of cv_refcnt precisely because Promise::XS releases both
+ * stored callbacks together as soon as one of them fires (confirmed via
+ * ASan: without this third share the ctx was freed mid-settle, inside the
+ * nested call_sv that fired the callback, while the drive loop's own
+ * ctx->settled/ctx->value read a few frames up was still pending - a
+ * use-after-free). Whichever of the three releases (resolve_cv, reject_cv,
+ * the drive loop) happens last actually frees ctx. */
+static void
+gql_runtime_vm_settle_capture_ctx_release(pTHX_ gql_runtime_vm_settle_capture_ctx_t *ctx)
+{
+  if (!ctx) {
+    return;
+  }
+  if (ctx->cv_refcnt > 0) {
+    ctx->cv_refcnt--;
+  }
+  if (ctx->cv_refcnt == 0) {
+    if (ctx->value) {
+      SvREFCNT_dec(ctx->value);
+    }
+    Safefree(ctx);
+  }
+}
+
+static int
+gql_runtime_vm_settle_capture_ctx_free(pTHX_ SV *sv, MAGIC *mg)
+{
+  gql_runtime_vm_settle_capture_ctx_t *ctx = mg && mg->mg_ptr
+    ? INT2PTR(gql_runtime_vm_settle_capture_ctx_t *, mg->mg_ptr)
+    : NULL;
+  if (ctx) {
+    gql_runtime_vm_settle_capture_ctx_release(aTHX_ ctx);
+    mg->mg_ptr = NULL;
+  }
+  if (sv && SvTYPE(sv) == SVt_PVCV) {
+    CvXSUBANY((CV *)sv).any_ptr = NULL;
+  }
+  return 0;
+}
+
 static int
 gql_runtime_vm_error_callback_ctx_free(pTHX_ SV *sv, MAGIC *mg)
 {
@@ -832,6 +889,19 @@ static MGVTBL gql_runtime_vm_list_pending_callback_ctx_vtbl = {
   NULL,
   NULL,
   gql_runtime_vm_list_pending_callback_ctx_free
+#if PERL_VERSION_GE(5, 15, 0)
+  ,NULL
+  ,NULL
+  ,NULL
+#endif
+};
+
+static MGVTBL gql_runtime_vm_settle_capture_ctx_vtbl = {
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  gql_runtime_vm_settle_capture_ctx_free
 #if PERL_VERSION_GE(5, 15, 0)
   ,NULL
   ,NULL
@@ -2268,6 +2338,41 @@ gql_runtime_vm_pending_callback_pair_recycle(
       SvREFCNT_inc_simple_NN(ctx->reject_cv);
     gql_runtime_vm_pending_cb_pool_count++;
   }
+}
+
+/* Cancellation counterpart to gql_runtime_vm_pending_callback_pair_recycle:
+ * an armed entry whose promise/ticket never settled (the request was
+ * abandoned - on_stall died, or a stall was detected) still needs its
+ * ctx's state_sv/frame references dropped, exactly like a normal settle
+ * would, or they leak (a still-pending DataLoader Ticket's own subscriber
+ * list - populated by gql_runtime_vm_subscribe_dataloader_ticket - holds
+ * this ctx's resolve/reject CVs alive independent of anything the exec
+ * state owns, since the ticket can outlive the request via the
+ * DataLoader's own queue). Unlike recycle, this does NOT pool the CV
+ * pair: the ticket/promise might still fire it later (a buggy caller
+ * holding the loader past abandonment), and handing that live CV to an
+ * unrelated future request would corrupt it. Left disarmed, the CV pair
+ * is permanently inert instead - gql_runtime_vm_xs_pending_callback and
+ * its reject counterpart already no-op once ctx->state_sv/ctx->frame are
+ * NULL - trading the leak for a single bounded, harmless CV+ctx. */
+static void
+gql_runtime_vm_pending_callback_ctx_disarm(
+  pTHX_
+  gql_runtime_vm_pending_callback_ctx_t *ctx
+)
+{
+  if (!ctx) {
+    return;
+  }
+  if (ctx->state_sv) {
+    SvREFCNT_dec(ctx->state_sv);
+    ctx->state_sv = NULL;
+  }
+  if (ctx->frame) {
+    gql_runtime_vm_free_block_frame(aTHX_ ctx->frame);
+    ctx->frame = NULL;
+  }
+  ctx->entry_index = -1;
 }
 
 /* Shared by gql_runtime_vm_xs_list_pending_callback (a settled item that
@@ -7288,6 +7393,13 @@ gql_runtime_vm_attach_response_state_magic(pTHX_ SV *promise_rv, SV *state_sv)
  * gql_runtime_vm_push_pending_block_frame) is pushed as exactly this same
  * BLOCK_FRAME_PTR shape, so it needs no special handling here.
  *
+ * Any armed entry (promise or DataLoader ticket alike - arm_frame sets
+ * armed_resolve_ctx/armed_reject_ctx to the same pair_ctx regardless of
+ * payload kind) is disarmed here too, before clear_pending drops our own
+ * promise_sv reference: see gql_runtime_vm_pending_callback_ctx_disarm's
+ * comment for why cancellation cannot just recycle the pair like a normal
+ * settle does.
+ *
  * Phase 11: a GQL_VM_PENDING_LIST_PENDING_PTR entry's list_pending may now
  * itself hold raw child block_frame_t pointers
  * (gql_runtime_vm_list_pending_link_child_frame, one per still-suspended
@@ -7307,6 +7419,12 @@ gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
     return;
   }
   for (i = 0; i < frame->pending_count; i++) {
+    if (frame->pending_entries[i].armed_resolve_ctx) {
+      gql_runtime_vm_pending_callback_ctx_disarm(
+        aTHX_
+        (gql_runtime_vm_pending_callback_ctx_t *)frame->pending_entries[i].armed_resolve_ctx
+      );
+    }
     if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_BLOCK_FRAME_PTR
         && frame->pending_entries[i].payload.block_frame_ptr) {
       gql_runtime_vm_block_frame_t *child =
@@ -7472,6 +7590,125 @@ gql_runtime_vm_drive_with_on_stall_sv(
     }
   }
   return SvREFCNT_inc_simple_NN(state->completed_response_sv);
+}
+
+static XS(gql_runtime_vm_xs_settle_capture_resolve_callback)
+{
+  dVAR;
+  dXSARGS;
+  gql_runtime_vm_settle_capture_ctx_t *ctx = INT2PTR(
+    gql_runtime_vm_settle_capture_ctx_t *,
+    CvXSUBANY(cv).any_ptr
+  );
+  if (ctx && !ctx->settled) {
+    SV *resolved_sv = items > 0 && ST(0) ? ST(0) : &PL_sv_undef;
+    ctx->value = newSVsv(resolved_sv);
+    ctx->settled = 1;
+  }
+  XSRETURN_UNDEF;
+}
+
+static XS(gql_runtime_vm_xs_settle_capture_reject_callback)
+{
+  dVAR;
+  dXSARGS;
+  gql_runtime_vm_settle_capture_ctx_t *ctx = INT2PTR(
+    gql_runtime_vm_settle_capture_ctx_t *,
+    CvXSUBANY(cv).any_ptr
+  );
+  if (ctx && !ctx->settled) {
+    SV *reason_sv = items > 0 && ST(0) ? ST(0) : &PL_sv_undef;
+    ctx->value = newSVsv(reason_sv);
+    ctx->settled = 2;
+  }
+  XSRETURN_UNDEF;
+}
+
+static gql_runtime_vm_settle_capture_ctx_t *
+gql_runtime_vm_new_settle_capture_pair(pTHX_ SV **resolve_rv_out, SV **reject_rv_out)
+{
+  gql_runtime_vm_settle_capture_ctx_t *ctx;
+  CV *resolve_cv;
+  CV *reject_cv;
+
+  Newxz(ctx, 1, gql_runtime_vm_settle_capture_ctx_t);
+  /* 3 shares: the resolve CV, the reject CV, and the caller's own promised
+   * release once it is done reading ctx after the loop settles - see
+   * gql_runtime_vm_settle_capture_ctx_release's doc comment. */
+  ctx->cv_refcnt = 3;
+
+  resolve_cv = newXS(NULL, gql_runtime_vm_xs_settle_capture_resolve_callback, __FILE__);
+  CvXSUBANY(resolve_cv).any_ptr = ctx;
+  gql_runtime_vm_attach_callback_magic_ptr(aTHX_ (SV *)resolve_cv, &gql_runtime_vm_settle_capture_ctx_vtbl, ctx);
+  reject_cv = newXS(NULL, gql_runtime_vm_xs_settle_capture_reject_callback, __FILE__);
+  CvXSUBANY(reject_cv).any_ptr = ctx;
+  gql_runtime_vm_attach_callback_magic_ptr(aTHX_ (SV *)reject_cv, &gql_runtime_vm_settle_capture_ctx_vtbl, ctx);
+
+  *resolve_rv_out = newRV_noinc((SV *)resolve_cv);
+  *reject_rv_out = newRV_noinc((SV *)reject_cv);
+  return ctx;
+}
+
+/* Item 1 (Phase 9): drives a genuine Promise::XS response the generic
+ * executor built (a shape the fast lane does not cover - runtime
+ * directives present, or the nesting-depth guard exceeded) to completion
+ * from C, instead of returning it for a Perl-level _settle_result to
+ * drive. Unlike gql_runtime_vm_drive_with_on_stall_sv, the generic
+ * executor itself is unchanged and still builds a real Promise::XS for
+ * its response - this only changes who drains it, registering a plain
+ * then() via gql_runtime_vm_call_then_promise_xs_sv and polling the
+ * capture ctx instead of state->completed_response_sv. Mirrors
+ * _settle_result's exact contract and wording (stall message,
+ * cancel-then-croak, rejection re-raised as-is) so behavior is unchanged
+ * from the caller's perspective. state_to_cancel is the exec state the
+ * response promise's own magic already carries (see
+ * gql_runtime_vm_attach_response_state_magic), reused here so on_stall
+ * dying cancels it exactly like the fast-lane path does. */
+static SV *
+gql_runtime_vm_drive_promise_with_on_stall_sv(
+  pTHX_
+  SV *promise_rv,
+  SV *on_stall_sv,
+  gql_runtime_vm_exec_state_handle_t *state_to_cancel
+)
+{
+  gql_runtime_vm_settle_capture_ctx_t *ctx;
+  SV *resolve_rv = NULL;
+  SV *reject_rv = NULL;
+  SV *chain;
+  SV *ret;
+
+  ctx = gql_runtime_vm_new_settle_capture_pair(aTHX_ &resolve_rv, &reject_rv);
+  chain = gql_runtime_vm_call_then_promise_xs_sv(aTHX_ promise_rv, resolve_rv, reject_rv, NULL);
+  SvREFCNT_dec(chain);
+  SvREFCNT_dec(resolve_rv);
+  SvREFCNT_dec(reject_rv);
+
+  while (!ctx->settled) {
+    int progressed = gql_runtime_vm_call_on_stall_once(aTHX_ state_to_cancel, on_stall_sv);
+    if (ctx->settled) {
+      break;
+    }
+    if (!progressed) {
+      gql_runtime_vm_cancel_pending_response_sv(aTHX_ promise_rv);
+      gql_runtime_vm_settle_capture_ctx_release(aTHX_ ctx);
+      croak(
+        "GraphQL execution stalled: promises are pending but on_stall made no progress"
+        " (a resolver returned a promise that no registered loader will resolve)\n"
+      );
+    }
+  }
+
+  /* ctx->value is read into a local before releasing the drive loop's own
+   * share (which may be the last share, freeing ctx and ctx->value along
+   * with it - see gql_runtime_vm_settle_capture_ctx_release). */
+  ret = ctx->value ? SvREFCNT_inc_simple_NN(ctx->value) : newSVsv(&PL_sv_undef);
+  if (ctx->settled == 2) {
+    gql_runtime_vm_settle_capture_ctx_release(aTHX_ ctx);
+    croak_sv(ret);
+  }
+  gql_runtime_vm_settle_capture_ctx_release(aTHX_ ctx);
+  return ret;
 }
 
 static SV *
@@ -7647,10 +7884,13 @@ gql_runtime_vm_execute_native_program_auto_json_sv(
  * every shape the fast lane already covers (Phase 3-7's eligibility work).
  * If the fast lane does not handle this shape (runtime directives present,
  * the nesting-depth guard exceeded, json_mode, ...), falls back to the
- * generic executor completely unchanged - it may still return a genuine
- * magic-tagged Promise::XS, which the Perl driver's _settle_result
- * (unchanged) drives exactly as it does today; that shape simply does not
- * get this phase's saving yet (see docs for the follow-up candidate). */
+ * generic executor completely unchanged. Item 1 (Phase 9): if that
+ * fallback genuinely suspends, drive its response promise from here too
+ * (gql_runtime_vm_drive_promise_with_on_stall_sv) instead of handing it
+ * back to Perl's _settle_result - the generic executor still builds a
+ * real Promise::XS internally, so this shape does not get the fast lane's
+ * full saving, but it does skip the outer Perl-level then()/while-loop
+ * round trip. */
 static SV *
 gql_runtime_vm_execute_native_program_auto_with_on_stall_sv(
   pTHX_
@@ -7710,9 +7950,23 @@ gql_runtime_vm_execute_native_program_auto_with_on_stall_sv(
   if (fast_root_handled) {
     return ret ? ret : newSVsv(&PL_sv_undef);
   }
-  return gql_runtime_vm_execute_native_program_auto_impl_sv(
+  ret = gql_runtime_vm_execute_native_program_auto_impl_sv(
     aTHX_ runtime_sv, program_sv, root_value, context_value, variables, 0
   );
+  if (ret && SvROK(ret)) {
+    MAGIC *mg = mg_findext(SvRV(ret), PERL_MAGIC_ext, &gql_runtime_vm_response_state_magic_vtbl);
+    if (mg && mg->mg_obj) {
+      SV *driven = gql_runtime_vm_drive_promise_with_on_stall_sv(
+        aTHX_
+        ret,
+        on_stall_sv,
+        gql_runtime_vm_expect_exec_state_handle(aTHX_ mg->mg_obj)
+      );
+      SvREFCNT_dec(ret);
+      return driven;
+    }
+  }
+  return ret;
 }
 
 static CV *

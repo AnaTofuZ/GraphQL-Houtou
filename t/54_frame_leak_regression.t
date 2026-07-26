@@ -489,4 +489,175 @@ subtest 'repeated args-bearing resolver calls exercise the LazyInfo pool cleanly
   assert_no_live_frames('200 args-bearing resolver iterations (LazyInfo pool)');
 };
 
+subtest 'cancelling a request with a suspended list-item child block stays clean' => sub {
+  # Phase 11: a list item's own child block now suspends via a raw
+  # block_frame_t linked directly into list_pending (gql_runtime_vm_
+  # list_pending_link_child_frame), not a Promise::XS. Abandoning the
+  # request while that item is still genuinely pending - on_stall dies,
+  # or a stall is detected - must reach and release that linked child
+  # frame via gql_runtime_vm_cancel_frame_tree's new LIST_PENDING_PTR
+  # recursion, or it (and the list_pending itself) leaks.
+  my $Row = GraphQL::Houtou::Type::Object->new(
+    name => 'CancelRow',
+    fields => {
+      name => { type => $String, resolve => sub { "n:$_[0]{id}" } },
+      pending => {
+        type => $String,
+        args => { key => { type => $String } },
+        resolve => sub {
+          my (undef, $args, $ctx) = @_;
+          return $ctx->{loader}->load($args->{key});
+        },
+      },
+    },
+  );
+  my $cancel_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        rows => {
+          type => GraphQL::Houtou::Type::List->new(of => $Row),
+          args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+          resolve => sub {
+            my (undef, $args) = @_;
+            return [ map { { id => $_ } } @{ $args->{ids} } ];
+          },
+        },
+      },
+    ),
+  );
+  my $runtime = build_native_runtime($cancel_schema, async => 1);
+
+  my $loader1 = GraphQL::Houtou::DataLoader->new(
+    batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+  );
+  my $err1 = do {
+    local $@;
+    eval {
+      $runtime->execute_document(
+        'query Q($ids: [String], $k: String) { rows(ids: $ids) { name pending(key: $k) } }',
+        variables => { ids => [ 'a1', 'a2' ], k => 'k1' },
+        context => { loader => $loader1 },
+        on_stall => sub { die "on_stall boom\n" },
+      );
+    };
+    $@;
+  };
+  like $err1, qr/on_stall boom/, 'the on_stall die propagates';
+  assert_no_live_frames('after on_stall die with a suspended list item');
+
+  my $loader2 = GraphQL::Houtou::DataLoader->new(
+    batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+  );
+  my $err2 = do {
+    local $@;
+    eval {
+      $runtime->execute_document(
+        'query Q($ids: [String], $k: String) { rows(ids: $ids) { name pending(key: $k) } }',
+        variables => { ids => [ 'b1', 'b2' ], k => 'k2' },
+        context => { loader => $loader2 },
+        on_stall => sub { 0 },
+      );
+    };
+    $@;
+  };
+  like $err2, qr/GraphQL execution stalled.*on_stall made no progress/s, 'reports the stall';
+  assert_no_live_frames('after stall detection with a suspended list item');
+
+  my $loader3 = GraphQL::Houtou::DataLoader->new(
+    batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+  );
+  my $r = $runtime->execute_document(
+    'query Q($ids: [String], $k: String) { rows(ids: $ids) { name pending(key: $k) } }',
+    variables => { ids => [ 'c1', 'c2' ], k => 'k3' },
+    context => { loader => $loader3 },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader3),
+  );
+  is_deeply $r, {
+    data => { rows => [
+      { name => 'n:c1', pending => 'v:k3' },
+      { name => 'n:c2', pending => 'v:k3' },
+    ] },
+  }, 'the runtime executes normally after the earlier cancellations';
+  assert_no_live_frames('after a normal request following the cancellations');
+};
+
+subtest 'a mix of sync, ticket-mediated, and raw-linked list items settles together' => sub {
+  # Phase 11 only changes items whose OWN child block suspends (an
+  # object/abstract item field); a leaf-typed list item whose resolver
+  # directly returns a pending Ticket (no child block at all) still goes
+  # through the existing Promise::XS/Ticket-subscribe path in
+  # gql_runtime_vm_list_pending_handle_sv. Mix both shapes plus an
+  # already-synchronous item in one request to confirm they settle
+  # together correctly.
+  my $Item = GraphQL::Houtou::Type::Object->new(
+    name => 'MixedItem',
+    fields => {
+      label => { type => $String, resolve => sub { "label:$_[0]{id}" } },
+      pending => {
+        type => $String,
+        args => { key => { type => $String } },
+        resolve => sub {
+          my (undef, $args, $ctx) = @_;
+          return $ctx->{loader}->load($args->{key});
+        },
+      },
+    },
+  );
+  my $mixed_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        # An object-typed list: items whose own "pending" field suspends
+        # go through the new raw-frame linkage.
+        items => {
+          type => GraphQL::Houtou::Type::List->new(of => $Item),
+          args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+          resolve => sub {
+            my (undef, $args) = @_;
+            return [ map { { id => $_ } } @{ $args->{ids} } ];
+          },
+        },
+        # A leaf-typed list whose resolver returns the tickets directly:
+        # no child block, so this stays on the existing Ticket-subscribe
+        # path in list_pending_handle_sv.
+        leaves => {
+          type => GraphQL::Houtou::Type::List->new(of => $String),
+          args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+          resolve => sub {
+            my (undef, $args, $ctx) = @_;
+            return [ map { $ctx->{leaf_loader}->load($_) } @{ $args->{ids} } ];
+          },
+        },
+      },
+    ),
+  );
+  my $mixed_runtime = build_native_runtime($mixed_schema, async => 1);
+  my $loader = GraphQL::Houtou::DataLoader->new(
+    batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+  );
+  my $leaf_loader = GraphQL::Houtou::DataLoader->new(
+    batch => sub { my ($ids) = @_; return [ map { "leaf:$_" } @$ids ] },
+  );
+  my $r = $mixed_runtime->execute_document(
+    'query Q($ids: [String], $lids: [String], $k: String) {
+      items(ids: $ids) { label pending(key: $k) }
+      leaves(ids: $lids)
+    }',
+    variables => { ids => [ 'm1', 'm2' ], lids => [ 'l1', 'l2' ], k => 'k1' },
+    context => { loader => $loader, leaf_loader => $leaf_loader },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader, $leaf_loader),
+  );
+  is_deeply $r, {
+    data => {
+      items => [
+        { label => 'label:m1', pending => 'v:k1' },
+        { label => 'label:m2', pending => 'v:k1' },
+      ],
+      leaves => [ 'leaf:l1', 'leaf:l2' ],
+    },
+  }, 'raw-linked object items and ticket-mediated leaf items both settle correctly';
+  assert_no_live_frames('after a mixed sync/ticket/raw-linked request');
+};
+
 done_testing;

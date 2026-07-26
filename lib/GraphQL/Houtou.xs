@@ -5253,10 +5253,10 @@ gql_runtime_vm_lazy_info_decref(pTHX_ gql_runtime_vm_lazy_info_t *info)
   }
 
   SvREFCNT_dec(info->field_name_sv);
-  Safefree(info->field_name_pv);
+  /* field_name_pv/parent_type_name_pv/return_type_name_pv are borrowed
+   * from the compiled native program/schema (see new_lazy_info_handle_sv)
+   * - not owned, so not freed here. */
   SvREFCNT_dec(info->parent_type_sv);
-  Safefree(info->parent_type_name_pv);
-  Safefree(info->return_type_name_pv);
   SvREFCNT_dec(info->return_type_sv);
   gql_runtime_vm_path_frame_decref(info->path_frame);
   SvREFCNT_dec(info->context_value);
@@ -5266,7 +5266,14 @@ gql_runtime_vm_lazy_info_decref(pTHX_ gql_runtime_vm_lazy_info_t *info)
   SvREFCNT_dec(info->runtime_schema);
   SvREFCNT_dec(info->directives);
   SvREFCNT_dec(info->materialized_sv);
-  Safefree(info);
+  gql_runtime_vm_lazy_info_live_count--;
+  if (gql_runtime_vm_lazy_info_pool_count < GQL_RUNTIME_VM_LAZY_INFO_POOL_MAX) {
+    info->pool_next = gql_runtime_vm_lazy_info_pool_head;
+    gql_runtime_vm_lazy_info_pool_head = info;
+    gql_runtime_vm_lazy_info_pool_count++;
+  } else {
+    Safefree(info);
+  }
 }
 
 static SV *
@@ -5291,13 +5298,18 @@ gql_runtime_vm_new_lazy_info_handle_sv(
 {
   gql_runtime_vm_lazy_info_t *info;
 
-  Newxz(info, 1, gql_runtime_vm_lazy_info_t);
+  info = gql_runtime_vm_lazy_info_pool_get(aTHX);
   info->refcount = 1;
   info->field_name_sv = field_name_sv ? SvREFCNT_inc_simple_NN(field_name_sv) : NULL;
-  info->field_name_pv = gql_runtime_vm_copy_cstr(field_name_pv);
+  /* Both callers (new_lazy_info_for_path_sv, new_callback_info_sv) always
+   * source these three strings from slot->field_name/block->type_name/
+   * slot->return_type_name - fields of the compiled native program, which
+   * outlives every request. Borrowing instead of copy_cstr-duplicating them
+   * avoids a Newx+Copy (and matching Safefree) on every single call. */
+  info->field_name_pv = (char *)field_name_pv;
   info->parent_type_sv = parent_type_sv ? SvREFCNT_inc_simple_NN(parent_type_sv) : NULL;
-  info->parent_type_name_pv = gql_runtime_vm_copy_cstr(parent_type_name_pv);
-  info->return_type_name_pv = gql_runtime_vm_copy_cstr(return_type_name_pv);
+  info->parent_type_name_pv = (char *)parent_type_name_pv;
+  info->return_type_name_pv = (char *)return_type_name_pv;
   info->return_type_sv = return_type_sv ? SvREFCNT_inc_simple_NN(return_type_sv) : NULL;
   if (path_frame) {
     path_frame->refcount++;
@@ -12565,6 +12577,7 @@ debug_frame_live_counts_xs()
       HV *hv = newHV();
       hv_store(hv, "block_frame", 11, newSViv(gql_runtime_vm_block_frame_live_count), 0);
       hv_store(hv, "path_frame", 10, newSViv(gql_runtime_vm_path_frame_live_count), 0);
+      hv_store(hv, "lazy_info", 9, newSViv(gql_runtime_vm_lazy_info_live_count), 0);
       RETVAL = newRV_noinc((SV *)hv);
     }
   OUTPUT:

@@ -5161,7 +5161,14 @@ gql_runtime_vm_lazy_info_decref(pTHX_ gql_runtime_vm_lazy_info_t *info)
   SvREFCNT_dec(info->runtime_schema);
   SvREFCNT_dec(info->directives);
   SvREFCNT_dec(info->materialized_sv);
-  Safefree(info);
+  gql_runtime_vm_lazy_info_live_count--;
+  if (gql_runtime_vm_lazy_info_pool_count < GQL_RUNTIME_VM_LAZY_INFO_POOL_MAX) {
+    info->pool_next = gql_runtime_vm_lazy_info_pool_head;
+    gql_runtime_vm_lazy_info_pool_head = info;
+    gql_runtime_vm_lazy_info_pool_count++;
+  } else {
+    Safefree(info);
+  }
 }
 
 static SV *
@@ -5186,7 +5193,7 @@ gql_runtime_vm_new_lazy_info_handle_sv(
 {
   gql_runtime_vm_lazy_info_t *info;
 
-  Newxz(info, 1, gql_runtime_vm_lazy_info_t);
+  info = gql_runtime_vm_lazy_info_pool_get(aTHX);
   info->refcount = 1;
   info->field_name_sv = field_name_sv ? SvREFCNT_inc_simple_NN(field_name_sv) : NULL;
   /* Both callers (new_lazy_info_for_path_sv, new_callback_info_sv) always
@@ -12316,6 +12323,7 @@ debug_frame_live_counts_xs()
       HV *hv = newHV();
       hv_store(hv, "block_frame", 11, newSViv(gql_runtime_vm_block_frame_live_count), 0);
       hv_store(hv, "path_frame", 10, newSViv(gql_runtime_vm_path_frame_live_count), 0);
+      hv_store(hv, "lazy_info", 9, newSViv(gql_runtime_vm_lazy_info_live_count), 0);
       RETVAL = newRV_noinc((SV *)hv);
     }
   OUTPUT:

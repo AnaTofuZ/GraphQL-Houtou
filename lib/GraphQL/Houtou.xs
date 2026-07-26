@@ -5148,10 +5148,10 @@ gql_runtime_vm_lazy_info_decref(pTHX_ gql_runtime_vm_lazy_info_t *info)
   }
 
   SvREFCNT_dec(info->field_name_sv);
-  Safefree(info->field_name_pv);
+  /* field_name_pv/parent_type_name_pv/return_type_name_pv are borrowed
+   * from the compiled native program/schema (see new_lazy_info_handle_sv)
+   * - not owned, so not freed here. */
   SvREFCNT_dec(info->parent_type_sv);
-  Safefree(info->parent_type_name_pv);
-  Safefree(info->return_type_name_pv);
   SvREFCNT_dec(info->return_type_sv);
   gql_runtime_vm_path_frame_decref(info->path_frame);
   SvREFCNT_dec(info->context_value);
@@ -5189,10 +5189,15 @@ gql_runtime_vm_new_lazy_info_handle_sv(
   Newxz(info, 1, gql_runtime_vm_lazy_info_t);
   info->refcount = 1;
   info->field_name_sv = field_name_sv ? SvREFCNT_inc_simple_NN(field_name_sv) : NULL;
-  info->field_name_pv = gql_runtime_vm_copy_cstr(field_name_pv);
+  /* Both callers (new_lazy_info_for_path_sv, new_callback_info_sv) always
+   * source these three strings from slot->field_name/block->type_name/
+   * slot->return_type_name - fields of the compiled native program, which
+   * outlives every request. Borrowing instead of copy_cstr-duplicating them
+   * avoids a Newx+Copy (and matching Safefree) on every single call. */
+  info->field_name_pv = (char *)field_name_pv;
   info->parent_type_sv = parent_type_sv ? SvREFCNT_inc_simple_NN(parent_type_sv) : NULL;
-  info->parent_type_name_pv = gql_runtime_vm_copy_cstr(parent_type_name_pv);
-  info->return_type_name_pv = gql_runtime_vm_copy_cstr(return_type_name_pv);
+  info->parent_type_name_pv = (char *)parent_type_name_pv;
+  info->return_type_name_pv = (char *)return_type_name_pv;
   info->return_type_sv = return_type_sv ? SvREFCNT_inc_simple_NN(return_type_sv) : NULL;
   if (path_frame) {
     path_frame->refcount++;

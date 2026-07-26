@@ -410,6 +410,13 @@ struct gql_runtime_vm_native_value {
 struct gql_runtime_vm_native_dynamic_value {
   U8 kind_code;
   U8 scalar_kind_code;
+  /* Whether scalar_pv holds UTF-8-flagged text (SvUTF8 on the source SV),
+   * mirroring gql_runtime_vm_native_value::scalar_pv_is_utf8 - this struct
+   * caches a query's STATIC argument literals (compiled once, reused
+   * across requests), so a literal string argument containing raw
+   * (non-escaped) multibyte characters needs the same flag tracking or it
+   * loses its UTF8-ness on every materialize. */
+  U8 scalar_pv_is_utf8;
   IV scalar_iv;
   NV scalar_nv;
   char *scalar_pv;
@@ -493,6 +500,13 @@ struct gql_runtime_vm_path_frame {
 typedef struct {
   UV refcount;
   char *message_pv;
+  /* Whether message_pv holds UTF-8-flagged text (SvUTF8 on the source
+   * message SV), mirroring gql_runtime_vm_native_value::scalar_pv_is_utf8
+   * - without this, every field error message (from a resolver/serialize
+   * die, or a validation failure) silently lost its UTF8 flag on the way
+   * into the response's errors array, even though message_pv's bytes were
+   * already the correct UTF-8 encoding. */
+  U8 message_pv_is_utf8;
   gql_runtime_vm_path_frame_t *path_frame;
 } gql_runtime_vm_error_record_t;
 
@@ -1329,6 +1343,7 @@ gql_runtime_vm_native_dynamic_value_from_sv(pTHX_ SV *value)
     ret->scalar_kind_code = GQL_VM_NATIVE_SCALAR_PV;
     ret->scalar_pv = savepvn(pv, len);
     ret->scalar_pv_len = len;
+    ret->scalar_pv_is_utf8 = SvUTF8(value) ? 1 : 0;
     return ret;
   }
   if (SvIOKp(value)) {
@@ -1399,6 +1414,7 @@ gql_runtime_vm_native_dynamic_value_from_native_value(
       if (value->scalar_kind_code == GQL_VM_NATIVE_SCALAR_PV && value->scalar_pv) {
         ret->scalar_pv = savepvn(value->scalar_pv, value->scalar_pv_len);
         ret->scalar_pv_len = value->scalar_pv_len;
+        ret->scalar_pv_is_utf8 = value->scalar_pv_is_utf8;
       } else if (value->scalar_kind_code == GQL_VM_NATIVE_SCALAR_FALLBACK_SV && value->scalar_fallback_sv) {
         gql_runtime_vm_native_dynamic_value_destroy(aTHX_ ret);
         return gql_runtime_vm_native_dynamic_value_from_sv(aTHX_ value->scalar_fallback_sv);
@@ -1572,8 +1588,13 @@ gql_runtime_vm_native_dynamic_value_materialize_sv(
           return newSViv(value->scalar_iv);
         case GQL_VM_NATIVE_SCALAR_NV:
           return newSVnv(value->scalar_nv);
-        case GQL_VM_NATIVE_SCALAR_PV:
-          return newSVpvn(value->scalar_pv ? value->scalar_pv : "", value->scalar_pv_len);
+        case GQL_VM_NATIVE_SCALAR_PV: {
+          SV *pv_sv = newSVpvn(value->scalar_pv ? value->scalar_pv : "", value->scalar_pv_len);
+          if (value->scalar_pv_is_utf8) {
+            SvUTF8_on(pv_sv);
+          }
+          return pv_sv;
+        }
         default:
           return newSV(0);
       }
@@ -2711,6 +2732,7 @@ gql_runtime_vm_new_error_record_struct_for_path(
     Newxz(record->message_pv, len + 1, char);
     Copy(pv, record->message_pv, len, char);
     record->message_pv[len] = '\0';
+    record->message_pv_is_utf8 = SvUTF8(message) ? 1 : 0;
   }
   if (path_frame) {
     record->path_frame = path_frame;
@@ -2796,7 +2818,15 @@ gql_runtime_vm_error_record_to_error_sv(pTHX_ const gql_runtime_vm_error_record_
     return newRV_noinc((SV *)error_hv);
   }
 
-  hv_store(error_hv, "message", 7, record->message_pv ? newSVpv(record->message_pv, 0) : newSVsv(&PL_sv_undef), 0);
+  if (record->message_pv) {
+    SV *message_sv = newSVpv(record->message_pv, 0);
+    if (record->message_pv_is_utf8) {
+      SvUTF8_on(message_sv);
+    }
+    hv_store(error_hv, "message", 7, message_sv, 0);
+  } else {
+    hv_store(error_hv, "message", 7, newSVsv(&PL_sv_undef), 0);
+  }
 
   if (record->path_frame) {
     path_sv = gql_runtime_vm_path_frame_to_path_sv(aTHX_ record->path_frame);

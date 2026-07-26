@@ -502,7 +502,7 @@ static SV *gql_runtime_vm_try_execute_fast_root_continuation_sv(
   gql_runtime_vm_native_runtime_t *runtime,
   gql_runtime_vm_native_program_t *program,
   SV *runtime_schema, SV *root_value, SV *context_value, SV *variables,
-  U8 json_mode, U8 *handled_out
+  U8 json_mode, SV *on_stall_sv, U8 *handled_out
 );
 static SV *gql_runtime_vm_try_execute_plain_hash_block_fast_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *s, IV block_index, SV *source, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ gql_runtime_vm_exec_state_t *state, SV *resolved, SV **error_out);
@@ -1605,7 +1605,19 @@ gql_runtime_vm_block_frame_finalize_sv(
    *       handle when pendings remain.
    *   2 - native-first hot path: native outcome on sync completion (no
    *       materialize/reconvert round trip), but still a promise when
-   *       pendings remain so the existing then-wrap machinery applies. */
+   *       pendings remain so the existing then-wrap machinery applies.
+   *   3 - Phase 8: never build a Promise::XS deferred/promise pair, even for
+   *       the response frame (which modes 0-2 all force one for via
+   *       resolve_response). The caller drives completion itself (a C-level
+   *       on_stall loop) instead of registering then() on a returned
+   *       promise, and polls exec_state->completed_response_sv - the same
+   *       stash gql_runtime_vm_async_scheduler_resolve_frame's "no deferred
+   *       was ever created" branch already writes to when the response
+   *       settles without ever needing a promise. The raw block-frame
+   *       handle returned when pendings remain is not meant to be used by
+   *       the caller (arm_frame/enqueue below are what matter); it is
+   *       returned only because the same branch already builds it for mode
+   *       1. */
   if (!frame) {
     return newSVsv(&PL_sv_undef);
   }
@@ -1642,7 +1654,9 @@ gql_runtime_vm_block_frame_finalize_sv(
     SV *ret_sv;
     U8 saved_draining = exec_state->async_scheduler_draining;
     U8 resolve_response = frame->deferred_resolves_response ? 1 : 0;
-    U8 return_promise = (resolve_response || return_pending_handle != 1) ? 1 : 0;
+    U8 return_promise = (return_pending_handle == 3)
+      ? 0
+      : ((resolve_response || return_pending_handle != 1) ? 1 : 0);
     U8 armed = 0;
 
     /* Response frame at the top level: try to complete the request inside
@@ -7137,12 +7151,48 @@ gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
   gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);
 }
 
+/* Core of gql_runtime_vm_cancel_pending_response_sv, factored out so a
+ * caller that already holds the exec_state_handle_t directly (Phase 8's
+ * C-level on_stall drive loop, which never attaches the response-state
+ * magic in the first place since it never builds a promise - see
+ * finalize_sv mode 3) can cancel the same way without unwrapping a
+ * promise's magic first. */
+static void
+gql_runtime_vm_cancel_exec_state_sv(pTHX_ gql_runtime_vm_exec_state_handle_t *state)
+{
+  IV i;
+
+  if (!state) {
+    return;
+  }
+  if (state->response_frame) {
+    gql_runtime_vm_cancel_frame_tree(aTHX_ state->response_frame);
+  }
+  if (state->frame && state->frame != state->response_frame) {
+    gql_runtime_vm_cancel_frame_tree(aTHX_ state->frame);
+  }
+  for (i = 0; i < state->frame_stack_count; i++) {
+    if (state->frame_stack[i] && state->frame_stack[i] != state->response_frame) {
+      gql_runtime_vm_cancel_frame_tree(aTHX_ state->frame_stack[i]);
+    }
+  }
+  /* Request-scoped user data can close a second cycle around the exec
+   * state (context -> DataLoader -> queued deferred -> promise -> armed
+   * callback -> exec state -> context), so a cancelled request drops
+   * these references too. Cancelled continuations no-op before touching
+   * any of them, and ExecState DESTROY's SvREFCNT_dec is NULL-safe. */
+  SvREFCNT_dec(state->context);
+  state->context = NULL;
+  SvREFCNT_dec(state->root_value);
+  state->root_value = NULL;
+  SvREFCNT_dec(state->variables);
+  state->variables = NULL;
+}
+
 static void
 gql_runtime_vm_cancel_pending_response_sv(pTHX_ SV *promise_rv)
 {
   MAGIC *mg;
-  gql_runtime_vm_exec_state_handle_t *state;
-  IV i;
 
   if (!promise_rv || !SvROK(promise_rv)) {
     return;
@@ -7152,34 +7202,94 @@ gql_runtime_vm_cancel_pending_response_sv(pTHX_ SV *promise_rv)
   if (!mg || !mg->mg_obj) {
     return;
   }
-  state = gql_runtime_vm_expect_exec_state_handle(aTHX_ mg->mg_obj);
-  if (state) {
-    if (state->response_frame) {
-      gql_runtime_vm_cancel_frame_tree(aTHX_ state->response_frame);
-    }
-    if (state->frame && state->frame != state->response_frame) {
-      gql_runtime_vm_cancel_frame_tree(aTHX_ state->frame);
-    }
-    for (i = 0; i < state->frame_stack_count; i++) {
-      if (state->frame_stack[i] && state->frame_stack[i] != state->response_frame) {
-        gql_runtime_vm_cancel_frame_tree(aTHX_ state->frame_stack[i]);
-      }
-    }
-    /* Request-scoped user data can close a second cycle around the exec
-     * state (context -> DataLoader -> queued deferred -> promise -> armed
-     * callback -> exec state -> context), so a cancelled request drops
-     * these references too. Cancelled continuations no-op before touching
-     * any of them, and ExecState DESTROY's SvREFCNT_dec is NULL-safe. */
-    SvREFCNT_dec(state->context);
-    state->context = NULL;
-    SvREFCNT_dec(state->root_value);
-    state->root_value = NULL;
-    SvREFCNT_dec(state->variables);
-    state->variables = NULL;
-  }
+  gql_runtime_vm_cancel_exec_state_sv(aTHX_ gql_runtime_vm_expect_exec_state_handle(aTHX_ mg->mg_obj));
   /* Drop the magic so the promise no longer pins the exec state. */
   sv_unmagicext(SvRV(promise_rv), PERL_MAGIC_ext,
                 &gql_runtime_vm_response_state_magic_vtbl);
+}
+
+/* Phase 8: call the caller's on_stall closure once, the same batching
+ * contract gql_runtime_vm's Perl-level _settle_result documents (must
+ * return a true dispatch count to report progress). Every user-callback
+ * invocation in this file uses G_EVAL (see gql_runtime_vm_call_cb3_nonfatal
+ * and friends) so a die() here is caught as a scalar return + ERRSV, never
+ * a raw longjmp through this C frame - matching that established idiom
+ * lets on_stall die safely without reintroducing the R5/PR21 class of
+ * dead-C-stack-pointer bugs t/34_exec_state_croak_safety.t guards against.
+ * On a caught die, state_to_cancel is cancelled (the same reference-cycle
+ * teardown gql_runtime_vm_cancel_pending_response_sv does) before
+ * re-raising via croak_sv, mirroring the nonfatal callback helpers'
+ * "catch, decide, then croak" structure exactly (no manual FREETMPS/LEAVE
+ * before the croak - Perl's own unwind pops the save stack for us). */
+static int
+gql_runtime_vm_call_on_stall_once(
+  pTHX_
+  gql_runtime_vm_exec_state_handle_t *state_to_cancel,
+  SV *on_stall_sv
+)
+{
+  dSP;
+  I32 count;
+  int progressed = 0;
+
+  ENTER;
+  SAVETMPS;
+  PUSHMARK(SP);
+  PUTBACK;
+  count = call_sv(on_stall_sv, G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV)) {
+    SV *err = newSVsv(ERRSV);
+    sv_setsv(ERRSV, &PL_sv_undef);
+    gql_runtime_vm_cancel_exec_state_sv(aTHX_ state_to_cancel);
+    croak_sv(err);
+  }
+  if (count > 0) {
+    /* POPs has the side effect of decrementing sp; binding it to a plain
+     * variable first (instead of writing SvTRUE(POPs) directly) avoids
+     * handing a self-mutating expression to a macro that may reference its
+     * argument more than once - some Perl versions' SvTRUE expansion does,
+     * which silently walked sp past the real stack contents here (found via
+     * a real SIGSEGV on Perl 5.24, unreproducible on 5.44 where SvTRUE
+     * happens to evaluate its argument only once). */
+    SV *result_sv = POPs;
+    if (SvTRUE(result_sv)) {
+      progressed = 1;
+    }
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return progressed;
+}
+
+/* Drives a response frame armed via finalize_sv mode 3 (never wrapped in a
+ * Promise::XS - see that mode's doc comment) to completion by calling
+ * on_stall directly from C instead of returning a promise for a Perl-level
+ * _settle_result to drive. Mirrors _settle_result's exact contract and
+ * wording (stall message, cancel-then-croak) so behavior is unchanged from
+ * the caller's perspective - only the promise/then() round trip is gone. */
+static SV *
+gql_runtime_vm_drive_with_on_stall_sv(
+  pTHX_
+  gql_runtime_vm_exec_state_handle_t *state,
+  SV *on_stall_sv
+)
+{
+  while (!state->completed_response_sv) {
+    int progressed = gql_runtime_vm_call_on_stall_once(aTHX_ state, on_stall_sv);
+    if (state->completed_response_sv) {
+      break;
+    }
+    if (!progressed) {
+      gql_runtime_vm_cancel_exec_state_sv(aTHX_ state);
+      croak(
+        "GraphQL execution stalled: promises are pending but on_stall made no progress"
+        " (a resolver returned a promise that no registered loader will resolve)\n"
+      );
+    }
+  }
+  return SvREFCNT_inc_simple_NN(state->completed_response_sv);
 }
 
 static SV *
@@ -7245,6 +7355,7 @@ gql_runtime_vm_execute_native_program_auto_impl_sv(
     context_value,
     prepared_variables_sv,
     json_mode,
+    NULL,
     &fast_root_handled
   );
   if (fast_root_handled) {
@@ -7343,6 +7454,82 @@ gql_runtime_vm_execute_native_program_auto_json_sv(
 {
   return gql_runtime_vm_execute_native_program_auto_impl_sv(
     aTHX_ runtime_sv, program_sv, root_value, context_value, variables, 1
+  );
+}
+
+/* Phase 8: on_stall-driven entry point. Tries the fast lane first, passing
+ * on_stall_sv through so a genuinely pending response drives to completion
+ * right here in C (gql_runtime_vm_drive_with_on_stall_sv) instead of
+ * returning a Promise::XS for a Perl-level _settle_result to drive -
+ * eliminating that promise's deferred/then/resolve round trip entirely for
+ * every shape the fast lane already covers (Phase 3-7's eligibility work).
+ * If the fast lane does not handle this shape (runtime directives present,
+ * the nesting-depth guard exceeded, json_mode, ...), falls back to the
+ * generic executor completely unchanged - it may still return a genuine
+ * magic-tagged Promise::XS, which the Perl driver's _settle_result
+ * (unchanged) drives exactly as it does today; that shape simply does not
+ * get this phase's saving yet (see docs for the follow-up candidate). */
+static SV *
+gql_runtime_vm_execute_native_program_auto_with_on_stall_sv(
+  pTHX_
+  SV *runtime_sv,
+  SV *program_sv,
+  SV *root_value,
+  SV *context_value,
+  SV *variables,
+  SV *on_stall_sv
+)
+{
+  gql_runtime_vm_native_runtime_t *runtime;
+  gql_runtime_vm_native_program_t *program;
+  HV *provided_hv = NULL;
+  SV *runtime_schema_sv = &PL_sv_undef;
+  SV *prepared_variables_sv;
+  SV *ret;
+  U8 fast_root_handled = 0;
+
+  if (!on_stall_sv || !SvOK(on_stall_sv)) {
+    return gql_runtime_vm_execute_native_program_auto_impl_sv(
+      aTHX_ runtime_sv, program_sv, root_value, context_value, variables, 0
+    );
+  }
+  if (!runtime_sv || !SvROK(runtime_sv) || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+    croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
+  }
+  runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
+  if (!runtime) {
+    croak("native VM runtime handle is no longer valid");
+  }
+  program = gql_runtime_vm_native_program_from_sv(aTHX_ program_sv);
+  if (variables && SvOK(variables) && SvROK(variables) && SvTYPE(SvRV(variables)) == SVt_PVHV) {
+    provided_hv = (HV *)SvRV(variables);
+  }
+  if (runtime->callback_catalog && runtime->callback_catalog->runtime_schema) {
+    runtime_schema_sv = runtime->callback_catalog->runtime_schema;
+  }
+  prepared_variables_sv = sv_2mortal(gql_runtime_vm_prepare_program_variables_sv(
+    aTHX_ runtime_schema_sv, program, provided_hv
+  ));
+
+  ret = gql_runtime_vm_try_execute_fast_root_continuation_sv(
+    aTHX_
+    runtime_sv,
+    program_sv,
+    runtime,
+    program,
+    runtime_schema_sv,
+    root_value,
+    context_value,
+    prepared_variables_sv,
+    0,
+    on_stall_sv,
+    &fast_root_handled
+  );
+  if (fast_root_handled) {
+    return ret ? ret : newSVsv(&PL_sv_undef);
+  }
+  return gql_runtime_vm_execute_native_program_auto_impl_sv(
+    aTHX_ runtime_sv, program_sv, root_value, context_value, variables, 0
   );
 }
 
@@ -10669,6 +10856,7 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
   SV *context_value,
   SV *variables,
   U8 json_mode,
+  SV *on_stall_sv,
   U8 *handled_out
 )
 {
@@ -10771,7 +10959,7 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
   callback_ctx.native_program = program;
   state.empty_args_sv = empty_args_sv = gql_runtime_vm_empty_args_sv(aTHX);
 
-  if (block->op_count == 1 && block->ops[0].complete_code == GQL_VM_COMPLETE_GENERIC) {
+  if (!on_stall_sv && block->op_count == 1 && block->ops[0].complete_code == GQL_VM_COMPLETE_GENERIC) {
     /* Single field: keep the light direct-construction resume (no
      * block_frame_t/exec_state_handle_t at all). Phase 2 measured this to
      * be ~7%/~2.6% cheaper than routing a lone suspension through the
@@ -10780,7 +10968,13 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
      * docs/future-performance-investigation-ja.md §14.17). A lone LIST op
      * falls through to the shared multi path below instead: item-level
      * list pending needs the real exec_state_handle_t machinery Phase 4
-     * adds there, so there is no cheap direct-construction variant for it. */
+     * adds there, so there is no cheap direct-construction variant for it.
+     * Phase 8: this shortcut builds its own lightweight Promise::XS-based
+     * continuation (gql_runtime_vm_fast_root_continuation_shared_t) that
+     * predates and does not know about the C-level on_stall drive loop, so
+     * skip it entirely when on_stall_sv is given - the multi-op path below
+     * (which does know about it) handles op_count == 1 just fine, just
+     * without this shortcut's extra ~7% saving for that narrower case. */
     data_sv = gql_runtime_vm_execute_block_fast_sv(
       aTHX_ &state, bundle->root_block_index, root_value
     );
@@ -10925,11 +11119,18 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
 
     ret = gql_runtime_vm_block_frame_finalize_sv(
       aTHX_ frame, GQL_VM_PROMISE_BACKEND_PROMISE_XS, sched_state->writer,
-      sched_state_sv, 0
+      sched_state_sv, on_stall_sv ? 3 : 0
     );
     if (sched_state->completed_response_sv) {
       SvREFCNT_dec(ret);
       ret = SvREFCNT_inc_simple_NN(sched_state->completed_response_sv);
+    } else if (on_stall_sv) {
+      /* Phase 8: genuinely pending, and mode 3 above means finalize never
+       * built a promise for it (ret is just a throwaway raw block-frame
+       * handle) - drive it to completion right here instead of handing
+       * anything back for the caller to await. */
+      SvREFCNT_dec(ret);
+      ret = gql_runtime_vm_drive_with_on_stall_sv(aTHX_ sched_state, on_stall_sv);
     } else if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ sched_state, ret)) {
       /* A genuinely pending response built through the real exec_state_handle_t
        * machinery forms the same reference cycle the generic executor's own
@@ -13657,6 +13858,29 @@ execute_native_program_auto_xs(runtime_sv, program_sv, root_value = &PL_sv_undef
         root_value,
         context_value,
         variables
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+execute_native_program_auto_with_on_stall_xs(runtime_sv, program_sv, root_value = &PL_sv_undef, context_value = &PL_sv_undef, variables = &PL_sv_undef, on_stall_sv = &PL_sv_undef)
+    SV *runtime_sv
+    SV *program_sv
+    SV *root_value
+    SV *context_value
+    SV *variables
+    SV *on_stall_sv
+  CODE:
+    {
+      RETVAL = gql_runtime_vm_execute_native_program_auto_with_on_stall_sv(
+        aTHX_
+        runtime_sv,
+        program_sv,
+        root_value,
+        context_value,
+        variables,
+        on_stall_sv
       );
     }
   OUTPUT:

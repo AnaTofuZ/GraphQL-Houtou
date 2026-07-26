@@ -341,16 +341,22 @@ sub execute_program {
   if ($on_stall && !$strict_sync) {
     require GraphQL::Houtou::Promise::PromiseXS;
     # Batching resolvers return promises, so the request must run on the
-    # async-capable lane regardless of variables, and the returned promise
-    # is driven to completion here: Promise::XS resolutions run their
-    # callbacks synchronously, so each flush advances the XS scheduler
-    # until the next stall.
-    my $result = GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(
+    # async-capable lane regardless of variables. When the fast lane covers
+    # this shape (Phase 3-7's eligibility work), it drives on_stall itself
+    # in C and returns the finished envelope directly - no Promise::XS is
+    # ever created for the response (see gql_runtime_vm_drive_with_on_stall_sv).
+    # A shape the fast lane does not cover (runtime directives present, the
+    # nesting-depth guard exceeded, ...) falls back to the same
+    # Promise::XS-returning generic executor as before; _settle_result's own
+    # first line already short-circuits on a non-promise result, so calling
+    # it here is correct either way.
+    my $result = GraphQL::Houtou::XS::VM::execute_native_program_auto_with_on_stall_xs(
       $runtime_handle,
       $native_program,
       $root_value,
       $context_value,
       $variables,
+      $on_stall,
     );
     return _settle_result($result, $on_stall);
   }

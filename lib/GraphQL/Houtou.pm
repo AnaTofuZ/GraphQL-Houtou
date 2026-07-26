@@ -7,7 +7,7 @@ use Exporter 'import';
 use XSLoader ();
 use GraphQL::Houtou::Runtime::LazyInfo ();
 
-our $VERSION = '0.03_01';
+our $VERSION = '0.04';
 our $XS_BUNDLE_LOADED = 0;
 our @EXPORT_OK = qw(
   parse

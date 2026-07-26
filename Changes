@@ -2,6 +2,16 @@ Revision history for Perl extension GraphQL-Houtou
 
 {{$NEXT}}
 
+0.04 2026-07-26T09:01:54Z
+
+    - Extend fast root continuation to single root object/abstract fields (#103)
+    - Drive on_stall from C, skip the response Promise::XS entirely (#104)
+    - Fix DataLoader Ticket cancellation leak, drive fallback on_stall from C too (#105)
+    - Pool LazyInfo ($info) structs to cut per-call allocator churn (#106)
+    - Extend Phase 7's raw frame linkage to suspending list items (#107)
+    - Fix two UTF8 flag loss bugs found while adding multibyte robustness tests (#108)
+    - Add regression tests for unverified multibyte/persistence paths (#109)
+
 0.03_01 2026-07-25T10:45:54Z
     - Apply argument defaults when referenced variables are omitted.
     - Reject unknown resolver modes during schema compilation.

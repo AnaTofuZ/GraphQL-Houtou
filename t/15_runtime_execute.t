@@ -8,6 +8,7 @@ use GraphQL::Houtou ();
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Runtime::SchemaGraph ();
 use GraphQL::Houtou::Type::Interface;
+use GraphQL::Houtou::Type::List;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::InputObject;
 use GraphQL::Houtou::Type::Scalar qw($Int $String);
@@ -722,6 +723,63 @@ subtest 'resolver receives lazy info hash' => sub {
     context_value => { trace_id => 1 },
     variable_values => { name => 'Ana', extra => 'kept' },
   }, 'lazy info exposes compatible keys on demand';
+};
+
+subtest 'LazyInfo pool reuse attributes each call to the right field/path' => sub {
+  # Phase 10: gql_runtime_vm_lazy_info_t is now pooled (a capped free-list,
+  # like block_frame/path_frame) instead of Newxz/Safefree per call. A
+  # stale or cross-contaminated reused struct would show up here as a
+  # wrong field_name or path on some item, since every item's resolver
+  # runs through the pool and each item's path index must differ.
+  my @seen;
+  my $Item = GraphQL::Houtou::Type::Object->new(
+    name => 'PoolReuseItem',
+    fields => {
+      label => {
+        type => $String,
+        args => { prefix => { type => $String } },
+        resolve => sub {
+          my ($source, $args, undef, $info) = @_;
+          push @seen, {
+            field_name => $info->{field_name},
+            parent_type => $info->{parent_type}->name,
+            path => $info->{path},
+          };
+          return "$args->{prefix}:$source->{id}";
+        },
+      },
+    },
+  );
+  my $pool_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'PoolReuseQuery',
+      fields => {
+        items => {
+          type => GraphQL::Houtou::Type::List->new(of => $Item),
+          args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+          resolve => sub {
+            my (undef, $args) = @_;
+            return [ map { { id => $_ } } @{ $args->{ids} } ];
+          },
+        },
+      },
+    ),
+  );
+  my $width = 30;
+  my $result = $pool_schema->execute(
+    'query Q($ids: [String], $p: String) { items(ids: $ids) { label(prefix: $p) } }',
+    variables => { ids => [ map { "id$_" } 1 .. $width ], p => 'pfx' },
+  );
+  is_deeply $result, {
+    data => { items => [ map { { label => "pfx:id$_" } } 1 .. $width ] },
+  }, 'every item resolves to its own value';
+  is scalar(@seen), $width, "every item's resolver ran exactly once";
+  for my $i (1 .. $width) {
+    my $entry = $seen[$i - 1];
+    is $entry->{field_name}, 'label', "item $i: field_name is 'label', not stale from another call";
+    is $entry->{parent_type}, 'PoolReuseItem', "item $i: parent_type is correct";
+    is_deeply $entry->{path}, [ 'items', $i - 1, 'label' ], "item $i: path index is correct, not stale";
+  }
 };
 
 subtest 'abstract callbacks receive lazy info hash' => sub {

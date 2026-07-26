@@ -521,6 +521,29 @@ settle後にresponseへなること、suspend前とresume後を通じてresolver
     あたり固定のコストであり、item数が増えるとitemごとの決着コストが
     支配的になるため相対的寄与が薄まるという解釈で一貫している。
 
+18. item 17末尾のwide list fan-out縮小を`sample`で調査した(詳細は
+    `docs/future-performance-investigation-ja.md` §14.25)。width 2/5/10
+    でasync/sync比がほぼ一定(41〜43%)と分かり、固定cost(≈4µs)+
+    item毎cost(≈2.3µs)の線形分解で説明できる、正常なスケーリングだと
+    確認した。item毎costの対策としてDataLoader::Ticket表現の再設計と
+    field単位のバッチresolver API(`resolve_many`)を検討したが、前者は
+    §14.10/14.12で既に試作・却下済みの再挑戦になり、後者はGraphQL
+    エコシステムに前例がなくDataLoaderと概念が重複するため、どちらも
+    見送った。
+
+    代わりに「resolverをN回呼ぶこと自体の効率化」を検討し、引数を持つ
+    resolverが`call_cb5_nonfatal`の5番目の引数として`$info`を毎回
+    新規構築している(`$info`を一度も参照しない場合でも)ことを特定
+    した。3個の内部文字列(`field_name_pv`等)はコンパイル済みnative
+    programから常に借用しているだけと確認し複製をやめ、
+    `gql_runtime_vm_lazy_info_t`構造体自体を既存のblock_frame/
+    path_frame/outcome/native_valueと同じ形でpool化した(blessed
+    handle SV自体はresolverが保持し続ける可能性があるためpool化せず、
+    構造体だけをpool化)。git worktreeでの前後比較(インターリーブ4回)
+    で引数ありresolverが平均46,776→50,023 req/sへ**約+7%**改善し、
+    全4回で同じ向きだった。引数なしresolverには影響しない、Phase 3〜9
+    と同じ「1桁%クラス」の改善で、抜本的な改善ではない。
+
 ## 11. 試行から分かった境界条件
 
 root fieldが1個で`child_block_index == -1`という条件だけでは、leaf continuationとして安全では

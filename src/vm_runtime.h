@@ -586,6 +586,7 @@ struct gql_runtime_vm_writer_t {
 };
 
 struct gql_runtime_vm_lazy_info {
+  struct gql_runtime_vm_lazy_info *pool_next;
   UV refcount;
   SV *field_name_sv;
   char *field_name_pv;
@@ -832,12 +833,19 @@ static IV gql_runtime_vm_path_frame_pool_count = 0;
 static gql_runtime_vm_block_frame_t *gql_runtime_vm_block_frame_pool_head = NULL;
 static IV gql_runtime_vm_block_frame_pool_count = 0;
 
+/* LazyInfo instances are mortal/short-lived per resolver call - a small
+ * cap matching block_frame's order of magnitude is plenty of working set. */
+#define GQL_RUNTIME_VM_LAZY_INFO_POOL_MAX 256
+static gql_runtime_vm_lazy_info_t *gql_runtime_vm_lazy_info_pool_head = NULL;
+static IV gql_runtime_vm_lazy_info_pool_count = 0;
+
 /* Leak instrumentation: frames handed out minus frames released (a pooled
  * frame counts as released). A quiescent process must read zero; a positive
  * residue after a request fully completed is an orphaned frame. Exposed via
  * GraphQL::Houtou::XS::VM::debug_frame_live_counts_xs. */
 static IV gql_runtime_vm_path_frame_live_count = 0;
 static IV gql_runtime_vm_block_frame_live_count = 0;
+static IV gql_runtime_vm_lazy_info_live_count = 0;
 
 static gql_runtime_vm_block_frame_t *
 gql_runtime_vm_block_frame_pool_get(pTHX)
@@ -887,6 +895,21 @@ gql_runtime_vm_path_frame_pool_get(pTHX)
     return ret;
   }
   Newxz(ret, 1, gql_runtime_vm_path_frame_t);
+  return ret;
+}
+
+static gql_runtime_vm_lazy_info_t *
+gql_runtime_vm_lazy_info_pool_get(pTHX)
+{
+  gql_runtime_vm_lazy_info_t *ret = gql_runtime_vm_lazy_info_pool_head;
+  gql_runtime_vm_lazy_info_live_count++;
+  if (ret) {
+    gql_runtime_vm_lazy_info_pool_head = ret->pool_next;
+    gql_runtime_vm_lazy_info_pool_count--;
+    Zero(ret, 1, gql_runtime_vm_lazy_info_t);
+    return ret;
+  }
+  Newxz(ret, 1, gql_runtime_vm_lazy_info_t);
   return ret;
 }
 

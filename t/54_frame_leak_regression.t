@@ -28,6 +28,7 @@ sub assert_no_live_frames {
   my $c = live_counts();
   is $c->{block_frame}, 0, "$label: no live block frames";
   is $c->{path_frame}, 0, "$label: no live path frames";
+  is $c->{lazy_info}, 0, "$label: no live lazy info handles";
 }
 
 my $Inner = GraphQL::Houtou::Type::Object->new(
@@ -437,6 +438,55 @@ subtest 'repeated single root object field promotions stay clean' => sub {
     }, "iteration $i resolved" or last;
   }
   assert_no_live_frames('200 single root object field promotions');
+};
+
+subtest 'repeated args-bearing resolver calls exercise the LazyInfo pool cleanly' => sub {
+  # Phase 10: gql_runtime_vm_lazy_info_t is pooled instead of Newxz/Safefree
+  # per call. Every field here declares args, so every call goes through
+  # the cb5 ABI and builds/tears down a pooled LazyInfo - some resolvers die,
+  # to also exercise the pool along the field-error path.
+  my $Item = GraphQL::Houtou::Type::Object->new(
+    name => 'LazyInfoPoolItem',
+    fields => {
+      label => {
+        type => $String,
+        args => { prefix => { type => $String } },
+        resolve => sub {
+          my (undef, $args, undef, $info) = @_;
+          die "boom for $info->{field_name}\n" if $args->{prefix} eq 'boom';
+          return "$args->{prefix}:$info->{path}[-1]";
+        },
+      },
+    },
+  );
+  my $pool_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        items => {
+          type => GraphQL::Houtou::Type::List->new(of => $Item),
+          args => { ids => { type => GraphQL::Houtou::Type::List->new(of => $String) } },
+          resolve => sub {
+            my (undef, $args) = @_;
+            return [ map { { id => $_ } } @{ $args->{ids} } ];
+          },
+        },
+      },
+    ),
+  );
+  for my $i (1 .. 200) {
+    my $prefix = $i % 5 == 0 ? 'boom' : "p$i";
+    my $r = $pool_schema->execute(
+      'query Q($ids: [String], $p: String) { items(ids: $ids) { label(prefix: $p) } }',
+      variables => { ids => [ map { "id$_" } 1 .. 10 ], p => $prefix },
+    );
+    if ($prefix eq 'boom') {
+      ok $r->{errors} && @{ $r->{errors} } == 10, "iteration $i: every item errors" or last;
+    } else {
+      is scalar(@{ $r->{data}{items} }), 10, "iteration $i: every item resolved" or last;
+    }
+  }
+  assert_no_live_frames('200 args-bearing resolver iterations (LazyInfo pool)');
 };
 
 done_testing;

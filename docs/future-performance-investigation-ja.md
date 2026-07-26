@@ -1832,3 +1832,92 @@ item数が増えるほど改善幅が縮小し、10件では誤差程度にな�
 (runtime directives・再帰深さ上限超過・json_mode)は、引き続き
 従来のgeneric executor+`_settle_result`経由のまま
 (このphaseの恩恵を受けない)。
+
+### 14.25 LazyInfo($info)構造体のpool化(Phase 10)
+
+Phase 8完了後、wide list fan-outで改善幅が縮小する件を`sample`で調査
+した。width 2/5/10でasync/sync比を計測したところ、比率はほぼ一定
+(41〜43%)で、固定cost(≈4µs)+item毎cost(≈2.3µs)という線形分解が
+成り立った。widthが増えるほど改善幅が縮む現象は、Phase 8/9が削った
+「リクエスト固定cost」がitem毎costに対して相対的に薄まるだけの、
+正常なスケーリングだと確認した。
+
+item毎costの内訳として、まずDataLoader::Ticketの表現見直し(pooled
+C handle化)を検討したが、§14.10/§14.12で既に同種の試作・検証済み
+(「支配的なのはTicket生成ではなくpending entry/callback/scheduler
+機構」という結論)であり、リーフフレーム内訳(`Perl_sv_clear`/
+`Perl_hv_common`/`_xzm_free`等の汎用Perlランタイムコストが上位で、
+Ticket生成関数は少数)も同じ結論を裏付けたため見送った。次に
+field単位のバッチresolver API(`resolve_many`)を検討したが、GraphQL
+エコシステムに前例がなくDataLoaderと概念が重複し、per-item
+error/non-null伝播の意味論が破綻しやすいため設計として見送った。
+
+その後「resolverをN回呼ぶこと自体を効率化できないか」を検討し、
+具体的な残りの一手を1件発見した。resolverが引数を持つ場合、
+`gql_runtime_vm_call_cb5_nonfatal`(5引数ABI)の5番目の引数として
+`GraphQL::Houtou::Runtime::LazyInfo`ハンドルを**resolverが`$info`を
+一度も参照しない場合でも毎回**新規構築していた。構築のたびに
+`gql_runtime_vm_lazy_info_t`を`Newxz`、8個の`SvREFCNT_inc`、3個の
+文字列複製(`gql_runtime_vm_copy_cstr`によるNewx+Copy)、blessed
+handle SVの生成を行い、破棄時にすべて逆再生する。引数なし/1引数
+resolverは`call_cb3_nonfatal`/`call_cb4_nonfatal`を使い、そもそも
+`$info`を作らない(このためこのセッションの他のベンチマークの多くは
+偶然この最適化の恩恵を既に受けていた)。
+
+引数あり/なしresolverのみを変えた同一width=10の同期ベンチマークで
+この差を単離すると:
+
+```
+                   Rate dynamic_args_sv      no_args_sv
+dynamic_args_sv 48260/s              --             -9%
+no_args_sv      52919/s             10%              --
+```
+
+約9〜10%の一貫した差が出た。3個の文字列複製先(`field_name_pv`/
+`parent_type_name_pv`/`return_type_name_pv`)はいずれも
+`slot->field_name`/`block->type_name`/`slot->return_type_name`という
+コンパイル済みnative program(スキーマ)由来の、リクエストより長生き
+する不変文字列だと確認できたため、複製せず借用するだけに変更(対応
+する`Safefree`も削除)。さらに`gql_runtime_vm_lazy_info_t`構造体自体を
+`gql_runtime_vm_block_frame_pool_get`/`_path_frame_pool_get`/
+`_outcome_pool_get`/`_native_value_pool_get`(`src/vm_runtime.h`)と
+全く同じ形(capを持つfree-listで構造体メモリを使い回す)でpool化し、
+`Newxz`/`Safefree`のアロケータchurnを除去した。参照カウント(refcount)
+の意味論は一切変更していない。blessed handle SV自体(resolverの`@_`
+へ直接渡され、resolverが保持し続ける可能性がある)はpool化していない
+- 保持されたまま使い回すと別呼び出しの情報にすり替わる危険がある
+ため、構造体だけをpool化し、handle SVは従来通り毎回新規生成する。
+
+**検証。** `t/15_runtime_execute.t`の既存subtest(`$info`の
+field_name/parent_type/return_type/path/context_value/variable_values
+を検証)がそのまま正しさの網になる。加えて、30 item分のargsあり
+resolver呼び出しを行い、各呼び出しの`$info`(field_name/parent_type/
+path)が正しくその呼び出しに紐付いている(pool再利用による汚染が
+ないか)ことを確認する新規subtestと、`t/54_frame_leak_regression.t`
+の`assert_no_live_frames`へ新設した`lazy_info`カウンタの0確認
+(既存の全subtestに自動適用)、200回の混在ストレス(正常決着/
+resolver dieを混ぜる)subtestを追加した。全512テスト・ASan
+(5 hash seed)・Perl 5.24(Docker)がクリーン。
+
+**計測。** git worktreeでPhase 10適用前(main)と適用後を並べ、
+`dynamic_args_sv`のみをインターリーブして4回計測(同一プロセス内の
+相対比較ではなく、別プロセス起動を交互に行うことで環境ドリフトの
+影響を抑える狙い):
+
+| round | 適用前 | 適用後 |
+|---|---:|---:|
+| 1 | 47,168 req/s | 50,146 req/s |
+| 2 | 46,693 req/s | 50,561 req/s |
+| 3 | 46,548 req/s | 49,304 req/s |
+| 4 | 46,693 req/s | 50,082 req/s |
+
+平均46,776→50,023 req/sで**約+7%**、全4回で同じ向きの改善を確認した。
+`async_nested_object_list_item_field`(引数なしresolver、width 2/5/10)
+は回帰なし。
+
+**スコープと限界。** これは引数を持つresolverにのみ効く、Phase 3〜9
+と同じ「1桁%クラス」の改善であり、抜本的な改善ではない。Perlが
+resolverクロージャをN回呼ぶという本質コスト(entersub/eval scope/
+sv_clear)自体は変わらない。field単位のバッチresolver APIは
+GraphQLのAPIとして筋が悪いと判断し見送ったため、この方向での
+「抜本的な一手」は現時点で見つかっていない。

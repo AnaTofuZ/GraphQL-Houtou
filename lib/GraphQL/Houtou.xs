@@ -7244,8 +7244,18 @@ gql_runtime_vm_call_on_stall_once(
     gql_runtime_vm_cancel_exec_state_sv(aTHX_ state_to_cancel);
     croak_sv(err);
   }
-  if (count > 0 && SvTRUE(POPs)) {
-    progressed = 1;
+  if (count > 0) {
+    /* POPs has the side effect of decrementing sp; binding it to a plain
+     * variable first (instead of writing SvTRUE(POPs) directly) avoids
+     * handing a self-mutating expression to a macro that may reference its
+     * argument more than once - some Perl versions' SvTRUE expansion does,
+     * which silently walked sp past the real stack contents here (found via
+     * a real SIGSEGV on Perl 5.24, unreproducible on 5.44 where SvTRUE
+     * happens to evaluate its argument only once). */
+    SV *result_sv = POPs;
+    if (SvTRUE(result_sv)) {
+      progressed = 1;
+    }
   }
   PUTBACK;
   FREETMPS;

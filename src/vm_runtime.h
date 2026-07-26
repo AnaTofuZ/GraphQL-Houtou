@@ -501,6 +501,17 @@ struct gql_runtime_vm_list_pending_t {
   gql_runtime_vm_block_frame_t *owner_frame;
   gql_runtime_vm_native_value_t *values_value;
   IV unresolved_count;
+  /* Phase 11: raw child block_frame_t linkage for a suspending
+   * object/abstract list item (mirrors block_frame_t's own parent_frame
+   * linkage - see block_frame_t::parent_list_pending below). Same length
+   * as the list; NULL except at slots holding a still-suspended child
+   * frame. Needed so gql_runtime_vm_cancel_frame_tree can find and
+   * recursively cancel these children on an abandoned request - nothing
+   * else keeps a reachable pointer to them, unlike the Promise::XS-
+   * mediated path this replaces (there, Promise::XS's own held reference
+   * was enough for cancel_frame_tree's ordinary decref-only handling). */
+  gql_runtime_vm_block_frame_t **pending_child_frames;
+  IV pending_child_frame_count;
 };
 
 struct gql_runtime_vm_block_frame_t {
@@ -512,6 +523,14 @@ struct gql_runtime_vm_block_frame_t {
   gql_runtime_vm_pending_entry_t *pending_entries;
   gql_runtime_vm_block_frame_t *parent_frame;
   IV parent_entry_index;
+  /* Phase 11: alternate parent kind for a suspending object/abstract list
+   * item's child frame - a list_pending slot instead of another frame's
+   * pending_entries array. Mutually exclusive with parent_frame/
+   * parent_entry_index (a frame has at most one kind of parent); set by
+   * the new list-item linkage function, consumed by
+   * gql_runtime_vm_async_scheduler_resolve_frame's matching branch. */
+  gql_runtime_vm_list_pending_t *parent_list_pending;
+  IV parent_list_index;
   SV *deferred_sv;
   SV *promise_sv;
   U8 queued;

@@ -586,6 +586,36 @@ settle後にresponseへなること、suspend前とresume後を通じてresolver
     再現するのに、単発の`perl`/`prove`実行では再現しない、という
     形で最初に気づいた。
 
+20. 「async経路は調査し尽くした」という結論に対しユーザーから具体的な
+    再検証を受け、Phase 7(item 16)がobject/abstract child fieldに
+    導入した「Promise::XSを作らない生frame直結」がlist itemにだけ
+    適用されていない点を確認し、Phase 11として拡張した(詳細は
+    `docs/future-performance-investigation-ja.md` §14.27)。list item
+    呼び出し箇所を`want_promise=0`に変更し、`list_pending_t`へ
+    `pending_child_frames[]`を追加、`block_frame_t`へ`parent_list_pending`/
+    `parent_list_index`(既存の`parent_frame`と排他的な別種の親)を追加、
+    `resolve_frame`と`cancel_frame_tree`の両方に対応する分岐を追加した。
+
+    開発中、`t/54_frame_leak_regression.t`の`debug_frame_live_counts_xs()`
+    カウンタ(ASanではなく)で2件の実リークを発見・修正した。どちらも
+    「child frameが持つべき2つの参照(link自身の分+creation分)のうち
+    1つしか解放していない」という同じ形の見落としで、既存の
+    `parent_frame`分岐(`store_outcome_ptr`内で1回・末尾で1回、計2回
+    `free_block_frame`を呼ぶ)や`BLOCK_FRAME_PTR`のcancel処理
+    (`clear_pending`自身の処理から2回目をタダで得られる)と同じ構造を
+    見落としていた。
+
+    計測で一度誤りを報告した: 最初`git worktree`比較なしに単発実行を
+    セッション前半の数値と単純比較し「+40%超」と報告したが、これは
+    Phase 10自身が確立した「別プロセス起動を交互に行い環境ドリフトを
+    抑える」手法を怠った結果だった。正しくインターリーブして再測定
+    すると、`async_nested_object_list_item_field`のwidth=10で前後差なし
+    (誤差範囲内)。`sample`で確認すると、適用前のビルドですら
+    `Promise::XS`関連関数はプロファイルにほぼ出現せず、除去した
+    仕組みはこのbenchmark shapeで元々コストの小さい部分だったと分かった。
+    Phase 9のfallback駆動化と同じ「正しさの面では妥当だが測定可能な
+    改善なし」という結果で、correctness面の価値を理由に採用した。
+
 ## 11. 試行から分かった境界条件
 
 root fieldが1個で`child_block_index == -1`という条件だけでは、leaf continuationとして安全では

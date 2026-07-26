@@ -180,11 +180,36 @@ subtest 'on_stall itself dying while a plain Promise::XS is pending propagates c
   assert_no_live_frames('after on_stall die (plain Promise::XS pending)');
 };
 
+subtest 'on_stall itself dying while a DataLoader Ticket is pending propagates cleanly' => sub {
+  # Unlike a plain Promise::XS, a DataLoader Ticket that never gets
+  # dispatched is kept alive independent of the exec state: subscribing to
+  # it (gql_runtime_vm_subscribe_dataloader_ticket) pushes our resolve/
+  # reject callback pair onto the Ticket's own subscriber list, which the
+  # DataLoader's own queue can keep alive well past the abandoned request.
+  # gql_runtime_vm_cancel_frame_tree disarms that pair's ctx (dropping its
+  # state_sv/frame refs) so this does not leak the frame tree.
+  my $loader = GraphQL::Houtou::DataLoader->new(
+    batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+  );
+  my $err = do {
+    local $@;
+    eval {
+      $runtime->execute_document(
+        $QUERY,
+        variables => { id => 'u5', k => 'k5' },
+        context => { loader => $loader },
+        on_stall => sub { die "on_stall boom\n" },
+      );
+    };
+    $@;
+  };
+  like $err, qr/on_stall boom/, 'the on_stall die propagates';
+  assert_no_live_frames('after on_stall die (DataLoader Ticket pending)');
+};
+
 subtest 'stall detection (on_stall makes no progress) reports the deadlock and cleans up' => sub {
-  # A plain Promise::XS (not a DataLoader Ticket - see the known-leak
-  # subtest at the end of this file for why that distinction matters here)
-  # that never settles: on_stall reporting zero progress every round is the
-  # deadlock path.
+  # A plain Promise::XS that never settles: on_stall reporting zero
+  # progress every round is the deadlock path.
   my $pending_schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
       name => 'Query',
@@ -202,6 +227,28 @@ subtest 'stall detection (on_stall makes no progress) reports the deadlock and c
   like $err, qr/GraphQL execution stalled.*on_stall made no progress/s,
     'reports the same stall message as the Perl-driven path';
   assert_no_live_frames('after stall detection');
+};
+
+subtest 'stall detection with a pending DataLoader Ticket cleans up the same way' => sub {
+  # Same root cause/fix as the subtest above, reached via the ordinary
+  # zero-progress deadlock path instead of on_stall dying.
+  my $loader = GraphQL::Houtou::DataLoader->new(
+    batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+  );
+  my $err = do {
+    local $@;
+    eval {
+      $runtime->execute_document(
+        $QUERY,
+        variables => { id => 'u8', k => 'k8' },
+        context => { loader => $loader },
+        on_stall => sub { 0 },
+      );
+    };
+    $@;
+  };
+  like $err, qr/GraphQL execution stalled.*on_stall made no progress/s, 'reports the stall';
+  assert_no_live_frames('after stall detection (DataLoader Ticket pending)');
 };
 
 subtest 'multiple loaders via on_stall_for still resolve across rounds' => sub {
@@ -266,64 +313,181 @@ subtest 'repeated nested-suspend requests stay clean over many iterations' => su
   assert_no_live_frames('200 native-drive iterations');
 };
 
-# Kept last: this scenario permanently leaks 3 frames (see below), which
-# would fail every assert_no_live_frames baseline check in every subtest
-# that runs after it.
-subtest 'on_stall itself dying while a DataLoader Ticket is pending propagates but is a known leak' => sub {
-  # Known, pre-existing gap (confirmed present identically before Phase 8,
-  # via the same scenario against a pre-Phase-8 build): a Ticket subscribed
-  # via gql_runtime_vm_subscribe_dataloader_ticket but never dispatched
-  # keeps its subscriber list (holding our resolve/reject callback pair,
-  # and through it state_sv/frame) alive via the DataLoader's own _queue, a
-  # reference path gql_runtime_vm_cancel_exec_state_sv does not reach into.
-  # Phase 8 does not regress this or fix it (out of scope - see docs). This
-  # subtest pins the current behavior and confirms the runtime stays
-  # functionally usable despite the leak.
+# Item 1 (Phase 9): shapes the fast lane does not cover (a runtime directive
+# present, or the nesting-depth guard exceeded) fall back to the generic
+# executor, which still builds its own Promise::XS internally - but that
+# promise is now driven from C too (gql_runtime_vm_drive_promise_with_on_stall_sv),
+# not handed back to Perl's _settle_result. These pin the same settle/
+# reject/stall/cleanup contract for that fallback path that the subtests
+# above already pin for the fast lane.
+subtest 'a runtime-directive sibling forces the generic-executor fallback, still driven natively' => sub {
   my $loader = GraphQL::Houtou::DataLoader->new(
     batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
   );
+  my $directive_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        plain => { type => $String, resolve => sub { 'plain-val' } },
+        loaded => {
+          type => $String,
+          args => { key => { type => $String } },
+          resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader}->load($a->{key}) },
+        },
+      },
+    ),
+  );
+  my $directive_runtime = build_native_runtime($directive_schema, async => 1);
+  my $r = $directive_runtime->execute_document(
+    'query Q($skipIt: Boolean!, $k: String) { plain @skip(if: $skipIt) loaded(key: $k) }',
+    variables => { skipIt => 1, k => 'd1' },
+    context => { loader => $loader },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+  );
+  ok !exists($r->{data}{plain}), 'skipped field is absent';
+  is $r->{data}{loaded}, 'v:d1', 'the pending sibling still resolves via the natively-driven fallback';
+  assert_no_live_frames('after runtime-directive fallback settles');
+};
+
+subtest 'nesting deeper than the recursion guard falls back safely, still driven natively' => sub {
+  # GQL_VM_FAST_LANE_MAX_NESTING_DEPTH is 16 - one level deeper than that
+  # forces the generic-executor fallback (see
+  # t/39_fast_lane_promise_fallback.t's equivalent depth-guard subtest),
+  # this time with a genuinely pending DataLoader ticket at the bottom so
+  # the fallback's own Promise::XS response is driven through on_stall.
+  my $depth = 17;
+  my $innermost = GraphQL::Houtou::Type::Object->new(
+    name => 'DeepDriveLevelBottom',
+    fields => {
+      v => {
+        type => $String,
+        args => { key => { type => $String } },
+        resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader}->load($a->{key}) },
+      },
+    },
+  );
+  my @levels = ($innermost);
+  for (my $lvl = $depth - 1; $lvl >= 0; $lvl--) {
+    my $child = $levels[0];
+    unshift @levels, GraphQL::Houtou::Type::Object->new(
+      name => "DeepDriveLevel$lvl",
+      fields => { next => { type => $child } },
+    );
+  }
+  my $query_inner = join(' ', ('next {') x $depth) . ' v(key: "dd1") ' . ('}' x $depth);
+  my $chain_value = {};
+  for (1 .. $depth) {
+    $chain_value = { next => $chain_value };
+  }
+  my $deep_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => { root => { type => $levels[0], resolve => sub { $chain_value } } },
+    ),
+  );
+  my $deep_runtime = build_native_runtime($deep_schema, async => 1, max_depth => $depth + 5);
+  my $loader = GraphQL::Houtou::DataLoader->new(
+    batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+  );
+  my $r = $deep_runtime->execute_document(
+    "{ root { $query_inner } }",
+    context => { loader => $loader },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+  );
+  my $expected = { v => 'v:dd1' };
+  for (1 .. $depth) {
+    $expected = { next => $expected };
+  }
+  is_deeply $r->{data}{root}, $expected,
+    'the over-depth query resolves correctly through the natively-driven fallback';
+  assert_no_live_frames('after depth-guard fallback settles');
+};
+
+subtest 'a rejection through the generic-executor fallback propagates as a field error and cleans up' => sub {
+  my $loader = GraphQL::Houtou::DataLoader->new(batch => sub { die "fallback batch boom\n" });
+  my $directive_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        plain => { type => $String, resolve => sub { 'plain-val' } },
+        loaded => {
+          type => $String,
+          args => { key => { type => $String } },
+          resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader}->load($a->{key}) },
+        },
+      },
+    ),
+  );
+  my $directive_runtime = build_native_runtime($directive_schema, async => 1);
+  my $r = $directive_runtime->execute_document(
+    'query Q($skipIt: Boolean!, $k: String) { plain @skip(if: $skipIt) loaded(key: $k) }',
+    variables => { skipIt => 1, k => 'd2' },
+    context => { loader => $loader },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+  );
+  is $r->{data}{loaded}, undef, 'the loaded field is null';
+  like $r->{errors}[0]{message}, qr/fallback batch boom/, 'the batch die became a field error';
+  assert_no_live_frames('after fallback batch die');
+};
+
+subtest 'on_stall itself dying through the generic-executor fallback propagates cleanly' => sub {
+  my $loader = GraphQL::Houtou::DataLoader->new(
+    batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
+  );
+  my $directive_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        plain => { type => $String, resolve => sub { 'plain-val' } },
+        loaded => {
+          type => $String,
+          args => { key => { type => $String } },
+          resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader}->load($a->{key}) },
+        },
+      },
+    ),
+  );
+  my $directive_runtime = build_native_runtime($directive_schema, async => 1);
   my $err = do {
     local $@;
     eval {
-      $runtime->execute_document(
-        $QUERY,
-        variables => { id => 'u5', k => 'k5' },
+      $directive_runtime->execute_document(
+        'query Q($skipIt: Boolean!, $k: String) { plain @skip(if: $skipIt) loaded(key: $k) }',
+        variables => { skipIt => 1, k => 'd3' },
         context => { loader => $loader },
-        on_stall => sub { die "on_stall boom\n" },
+        on_stall => sub { die "fallback on_stall boom\n" },
       );
     };
     $@;
   };
-  like $err, qr/on_stall boom/, 'the on_stall die propagates';
-
-  my $loader2 = GraphQL::Houtou::DataLoader->new(
-    batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
-  );
-  my $r = $runtime->execute_document(
-    $QUERY,
-    variables => { id => 'u6', k => 'k6' },
-    context => { loader => $loader2 },
-    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader2),
-  );
-  is_deeply $r, { data => { user => { name => 'n:u6', team => { name => 'v:k6' } } } },
-    'the runtime executes normally despite the known leak from the earlier on_stall die';
+  like $err, qr/fallback on_stall boom/, 'the on_stall die propagates';
+  assert_no_live_frames('after fallback on_stall die');
 };
 
-subtest 'stall detection with a pending DataLoader Ticket is the same known leak' => sub {
-  # Same root cause as the subtest above, reached via the ordinary
-  # zero-progress deadlock path instead of on_stall dying: a never-dispatched
-  # Ticket's subscriber list keeps our callback pair (and through it
-  # state_sv/frame) alive via the loader's own _queue regardless of why
-  # cancellation ran.
+subtest 'stall detection through the generic-executor fallback reports the deadlock and cleans up' => sub {
   my $loader = GraphQL::Houtou::DataLoader->new(
     batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
   );
+  my $directive_schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        plain => { type => $String, resolve => sub { 'plain-val' } },
+        loaded => {
+          type => $String,
+          args => { key => { type => $String } },
+          resolve => sub { my (undef, $a, $ctx) = @_; return $ctx->{loader}->load($a->{key}) },
+        },
+      },
+    ),
+  );
+  my $directive_runtime = build_native_runtime($directive_schema, async => 1);
   my $err = do {
     local $@;
     eval {
-      $runtime->execute_document(
-        $QUERY,
-        variables => { id => 'u8', k => 'k8' },
+      $directive_runtime->execute_document(
+        'query Q($skipIt: Boolean!, $k: String) { plain @skip(if: $skipIt) loaded(key: $k) }',
+        variables => { skipIt => 1, k => 'd4' },
         context => { loader => $loader },
         on_stall => sub { 0 },
       );
@@ -331,18 +495,7 @@ subtest 'stall detection with a pending DataLoader Ticket is the same known leak
     $@;
   };
   like $err, qr/GraphQL execution stalled.*on_stall made no progress/s, 'reports the stall';
-
-  my $loader2 = GraphQL::Houtou::DataLoader->new(
-    batch => sub { my ($ids) = @_; return [ map { "v:$_" } @$ids ] },
-  );
-  my $r = $runtime->execute_document(
-    $QUERY,
-    variables => { id => 'u9', k => 'k9' },
-    context => { loader => $loader2 },
-    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader2),
-  );
-  is_deeply $r, { data => { user => { name => 'n:u9', team => { name => 'v:k9' } } } },
-    'the runtime executes normally despite the known leak from the earlier stall';
+  assert_no_live_frames('after fallback stall detection');
 };
 
 done_testing;

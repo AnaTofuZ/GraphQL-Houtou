@@ -544,6 +544,48 @@ settle後にresponseへなること、suspend前とresume後を通じてresolver
     全4回で同じ向きだった。引数なしresolverには影響しない、Phase 3〜9
     と同じ「1桁%クラス」の改善で、抜本的な改善ではない。
 
+19. item 17末尾で今後の課題として残した2件(DataLoader Ticketが
+    genuinely pendingなままキャンセルされるとリークする件と、fast lane
+    非対応shapeのfallbackがPhase 8の恩恵を受けない件)にPhase 9として
+    対応した(詳細は`docs/future-performance-investigation-ja.md`
+    §14.26)。
+
+    リークの方は、`gql_runtime_vm_cancel_frame_tree`がpending entryの
+    `armed_resolve_ctx`を一切見ていなかったことが原因。新設した
+    `gql_runtime_vm_pending_callback_ctx_disarm`(通常決着時の
+    `pending_callback_pair_recycle`と同じ`state_sv`/`frame`参照破棄を
+    行うが、CVペアをプールへ戻さない版)を`cancel_frame_tree`から呼ぶ
+    ようにした。CVをプールへ戻さない理由は、キャンセル後もTicket自体は
+    DataLoaderの`_queue`から参照が続く可能性があり、後で万一dispatch
+    されると同じCVが発火してしまうため - プールに戻していると
+    無関係な別リクエストがそのCVを再利用している可能性があり被害が
+    及ぶ。`t/59_on_stall_native_drive.t`末尾の「既知のリークとして
+    固定した」2 subtestを、他と同じ0/0を要求する形に書き換えた。
+
+    fallbackの方は、generic executor自体(`exec_state_execute_block_async_path_sv`)
+    には手を入れず、それが返す本物のPromise::XSを`gql_runtime_vm_drive_promise_with_on_stall_sv`
+    がC側で`.then()`登録して駆動する形にした。generic executorは複数の
+    呼び出し元に共有されており、`finalize_sv`のモード3をそこまで通す
+    変更は対象範囲の狭さに対してリスクが大きいと判断したため。
+    ベンチマーク(`async_fallback_runtime_directive`)では誤差の範囲内
+    (112,065〜116,693 req/sで前後差なし)で、Phase 3〜7と同じ「改善
+    なしだが正しさ・保守性の観点で妥当」という結果だった - generic
+    executor自体のコストが支配的で、外側のPromise::XS往復を削っても
+    寄与が薄いというPhase 8の考察と整合する。
+
+    開発中、ローカルASan(Apple clang由来のランタイムを
+    `DYLD_INSERT_LIBRARIES`で明示指定)で実際のheap-use-after-freeを
+    発見・修正した: settle-capture ctxをresolve/reject CVペアの
+    refcountだけで共有していたところ、Promise::XSがarmを発火させた
+    直後に両方のCV参照を一括解放する実装のため、駆動ループ自身が
+    まだ`ctx->settled`を読もうとしている最中にctxが破棄されていた。
+    ctxのrefcountに駆動ループ自身の持ち分を追加(CV2つ+呼び出し元1の
+    3口に)し、読み終えた後に明示的に解放するよう修正した。
+    この不具合はheap allocatorのレイアウト依存で発現有無が変わり、
+    `minil test`(50ファイルをそれぞれ独立プロセスで実行)では毎回
+    再現するのに、単発の`perl`/`prove`実行では再現しない、という
+    形で最初に気づいた。
+
 ## 11. 試行から分かった境界条件
 
 root fieldが1個で`child_block_index == -1`という条件だけでは、leaf continuationとして安全では

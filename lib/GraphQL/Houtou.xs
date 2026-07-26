@@ -7443,8 +7443,17 @@ gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
         }
         list_pending->pending_child_frames[ci] = NULL;
         gql_runtime_vm_cancel_frame_tree(aTHX_ child);
+        /* Two releases, matching resolve_frame's parent_list_pending
+         * branch exactly (clear_pending's own LIST_PENDING_PTR handling,
+         * below, only drops the *entry's* reference to list_pending as a
+         * whole - it has no visibility into pending_child_frames[], so it
+         * cannot provide either of these the way it does for a
+         * BLOCK_FRAME_PTR entry's single child): one for the link's own
+         * hold on child (gql_runtime_vm_list_pending_link_child_frame's
+         * refcount++), one for child's original creation reference. */
         gql_runtime_vm_free_block_frame(aTHX_ child);
         gql_runtime_vm_list_pending_decref(aTHX_ list_pending);
+        gql_runtime_vm_free_block_frame(aTHX_ child);
       }
     }
   }

@@ -7286,10 +7286,19 @@ gql_runtime_vm_attach_response_state_magic(pTHX_ SV *promise_rv, SV *state_sv)
  * terminates. An OBJECT/ABSTRACT field's own suspended child block (Phase
  * 5/6/7: gql_runtime_vm_execute_safe_child_block_fast_sv,
  * gql_runtime_vm_push_pending_block_frame) is pushed as exactly this same
- * BLOCK_FRAME_PTR shape, so it needs no special handling here - only a list
- * item's own per-item pending sub-tree (GQL_VM_PENDING_LIST_PENDING_PTR,
- * genuinely Promise::XS-shaped for Layer 2's per-item aggregation) is not
- * reachable from here yet. */
+ * BLOCK_FRAME_PTR shape, so it needs no special handling here.
+ *
+ * Phase 11: a GQL_VM_PENDING_LIST_PENDING_PTR entry's list_pending may now
+ * itself hold raw child block_frame_t pointers
+ * (gql_runtime_vm_list_pending_link_child_frame, one per still-suspended
+ * list item) instead of everything being Promise::XS-mediated. clear_pending
+ * only drops the entry's own reference to the list_pending as a whole; each
+ * linked child frame needs the same two-release treatment
+ * gql_runtime_vm_async_scheduler_resolve_frame's parent_list_pending branch
+ * gives a normally-settling one (one release for the link's own hold on the
+ * child frame, one gql_runtime_vm_list_pending_decref for the child's own
+ * hold on list_pending) before recursing into it, or both frame and
+ * list_pending leak. */
 static void
 gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
 {
@@ -7304,6 +7313,21 @@ gql_runtime_vm_cancel_frame_tree(pTHX_ gql_runtime_vm_block_frame_t *frame)
         frame->pending_entries[i].payload.block_frame_ptr;
       gql_runtime_vm_cancel_frame_tree(aTHX_ child);
       gql_runtime_vm_free_block_frame(aTHX_ child);
+    } else if (frame->pending_entries[i].payload_kind == GQL_VM_PENDING_LIST_PENDING_PTR
+        && frame->pending_entries[i].payload.list_pending_ptr) {
+      gql_runtime_vm_list_pending_t *list_pending =
+        frame->pending_entries[i].payload.list_pending_ptr;
+      IV ci;
+      for (ci = 0; ci < list_pending->pending_child_frame_count; ci++) {
+        gql_runtime_vm_block_frame_t *child = list_pending->pending_child_frames[ci];
+        if (!child) {
+          continue;
+        }
+        list_pending->pending_child_frames[ci] = NULL;
+        gql_runtime_vm_cancel_frame_tree(aTHX_ child);
+        gql_runtime_vm_free_block_frame(aTHX_ child);
+        gql_runtime_vm_list_pending_decref(aTHX_ list_pending);
+      }
     }
   }
   gql_runtime_vm_block_frame_clear_pending(aTHX_ frame);

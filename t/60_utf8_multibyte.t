@@ -14,6 +14,7 @@ use Test::More 0.98;
 # corners across Query, Mutation, and schema description strings that had
 # not been exercised before.
 
+use File::Temp qw(tmpnam);
 use JSON::MaybeXS ();
 
 use GraphQL::Houtou qw(build_native_runtime print_schema);
@@ -22,7 +23,7 @@ use GraphQL::Houtou::Type::Enum;
 use GraphQL::Houtou::Type::InputObject;
 use GraphQL::Houtou::Type::List;
 use GraphQL::Houtou::Type::Object;
-use GraphQL::Houtou::Type::Scalar qw($String);
+use GraphQL::Houtou::Type::Scalar qw($Boolean $String);
 
 my $ja  = "\x{65e5}\x{672c}\x{8a9e}";              # "日本語"
 my $tanaka = "\x{7530}\x{4e2d}\x{3055}\x{3093}";   # "田中さん"
@@ -326,6 +327,115 @@ subtest 'a multibyte custom scalar validation error message is not garbled' => s
   is $result->{data}{bad}, undef, 'the field is null';
   like $result->{errors}[0]{message}, qr/\Q$desc\E/, 'the error message content is correct';
   ok utf8::is_utf8($result->{errors}[0]{message}), 'the error message keeps its UTF8 flag';
+};
+
+subtest 'a JSON::PP::Boolean literal survives the static-args cache at every nesting depth' => sub {
+  # gql_runtime_vm_native_dynamic_value_from_sv (the compiled/cached
+  # representation of a query's static literal args - the same struct fixed
+  # for scalar_pv_is_utf8 above) has no case at all for a blessed reference
+  # (JSON::PP::Boolean, which is how the parser represents a `true`/`false`
+  # literal - see gql_parser_ir's BooleanValue handling): SvROK is true but
+  # the referent is neither a PVHV/PVAV/PV, so a raw blessed boolean reaching
+  # that function would fall through every branch and silently become
+  # GQL_VM_NATIVE_SCALAR_UNDEF. This only stays safe because
+  # GraphQL::Houtou::Type::Scalar's Boolean coercion (_builtin_graphql_to_perl)
+  # normalizes every literal - top-level, inside a list, and inside a nested
+  # input object - down to a plain unblessed 1/0 before it ever reaches that
+  # cache. This test locks in that normalization so a future change to the
+  # coercion path (or to how literals are compiled) cannot silently regress
+  # boolean literals into null.
+  my $Input = GraphQL::Houtou::Type::InputObject->new(
+    name => 'FlagInput',
+    fields => { flag => { type => $Boolean } },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        echo => {
+          type => $Boolean,
+          args => { flag => { type => $Boolean } },
+          resolve => sub { my (undef, $a) = @_; return $a->{flag} },
+        },
+        echoList => {
+          type => GraphQL::Houtou::Type::List->new(of => $Boolean),
+          args => { flags => { type => GraphQL::Houtou::Type::List->new(of => $Boolean) } },
+          resolve => sub { my (undef, $a) = @_; return $a->{flags} },
+        },
+        echoNested => {
+          type => $Boolean,
+          args => { input => { type => $Input } },
+          resolve => sub { my (undef, $a) = @_; return $a->{input}{flag} },
+        },
+      },
+    ),
+  );
+  my $runtime = build_native_runtime($schema);
+  is $runtime->execute_document('{ echo(flag: true) }')->{data}{echo}, 1, 'top-level true';
+  is $runtime->execute_document('{ echo(flag: false) }')->{data}{echo}, 0, 'top-level false';
+  is_deeply $runtime->execute_document('{ echoList(flags: [true, false, true]) }')->{data}{echoList},
+    [1, 0, 1], 'list items';
+  is $runtime->execute_document('{ echoNested(input: { flag: true }) }')->{data}{echoNested}, 1,
+    'nested input object field';
+};
+
+subtest 'a custom scalar returning a raw hashref with multibyte keys is not decomposed' => sub {
+  # A CUSTOM scalar's serialize() result can be any SV, including a hashref
+  # (a "raw JSON passthrough" scalar). gql_runtime_vm_new_native_value_scalar
+  # wraps such a reference whole as GQL_VM_NATIVE_SCALAR_FALLBACK_SV instead
+  # of decomposing it - so the original hash keys (which are NOT GraphQL
+  # Name-grammar tokens the way object field names are, and so are not
+  # guaranteed ASCII) keep whatever UTF8 flag Perl already gave them, rather
+  # than passing through gql_runtime_vm_native_object_store's
+  # hv_store(..., (I32)strlen(...), ...) - a positive/non-negative klen never
+  # marks the resulting hash key as UTF-8, which would have silently broken
+  # a multibyte key had this scalar type been decomposed like a plain
+  # resolved object instead of kept as a fallback SV.
+  my $Raw = GraphQL::Houtou::Type::Scalar->new(
+    name => 'Raw',
+    serialize => sub { return { $tanaka => $suzuki } },
+    parse_value => sub { $_[0] },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => { raw => { type => $Raw, resolve => sub { 1 } } },
+    ),
+  );
+  my $runtime = build_native_runtime($schema);
+  my $result = $runtime->execute_document('{ raw }');
+  my ($key) = keys %{ $result->{data}{raw} };
+  is $key, $tanaka, 'the hash key content is correct';
+  ok utf8::is_utf8($key), 'the hash key keeps its UTF8 flag';
+  is $result->{data}{raw}{$tanaka}, $suzuki, 'the hash value content is correct';
+  ok utf8::is_utf8($result->{data}{raw}{$tanaka}), 'the hash value keeps its UTF8 flag';
+};
+
+subtest 'a dumped/loaded native bundle descriptor JSON file preserves a multibyte literal' => sub {
+  # dump_native_bundle_descriptor/load_bundle_descriptor_file round-trip the
+  # compiled program through an actual JSON file on disk (encode_json/decode
+  # via a raw, non-:encoding filehandle) - a persisted-query-style path
+  # distinct from the plain in-memory static-args cache covered above.
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'Query',
+      fields => {
+        greet => {
+          type => $String,
+          args => { name => { type => $String } },
+          resolve => sub { my (undef, $a) = @_; return "hello, $a->{name}" },
+        },
+      },
+    ),
+  );
+  my $path = tmpnam();
+  $schema->dump_native_bundle_descriptor(qq{ { greet(name: "$tanaka") } }, $path);
+  my $runtime = $schema->build_native_runtime;
+  my $bundle = $runtime->load_bundle_descriptor_file($path);
+  my $result = $runtime->execute_bundle($bundle);
+  unlink $path;
+  is $result->{data}{greet}, "hello, $tanaka", 'content round-trips correctly through the descriptor file';
+  ok utf8::is_utf8($result->{data}{greet}), 'UTF8 flag is set on the response value';
 };
 
 done_testing;

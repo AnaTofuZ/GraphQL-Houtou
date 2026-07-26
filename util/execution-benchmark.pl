@@ -1088,6 +1088,89 @@ sub benchmark_async_single_root_object_field {
   cmpthese($count, \%modes);
 }
 
+sub benchmark_async_fallback_runtime_directive {
+  require GraphQL::Houtou::DataLoader;
+
+  # Item 1 (Phase 9): a runtime-directive sibling forces the whole request
+  # off the fast lane and onto the generic executor - the shape
+  # gql_runtime_vm_drive_promise_with_on_stall_sv now drives from C instead
+  # of handing the generic executor's own Promise::XS response back to
+  # Perl's _settle_result. Unlike benchmark_async_single_root_object_field
+  # (which measures the fast lane skipping the response Promise::XS
+  # entirely), the generic executor here still builds a real Promise::XS
+  # internally - only the outer then()/while-loop round trip moves into C -
+  # so this measures a smaller saving.
+  my $query = 'query q($skipIt: Boolean!, $id: String) { '
+    . 'plain @skip(if: $skipIt) user(id: $id) { name team { name } } }';
+  my $vars = { skipIt => 1, id => 'u1' };
+
+  my $build_schema = sub {
+    my ($team_name_resolve) = @_;
+    my $Team = GraphQL::Houtou::Type::Object->new(
+      name => 'FallbackTeam',
+      fields => {
+        name => { type => $GraphQL::Houtou::Type::Scalar::String, resolve => $team_name_resolve },
+      },
+    );
+    my $User = GraphQL::Houtou::Type::Object->new(
+      name => 'FallbackUser',
+      fields => {
+        name => { type => $GraphQL::Houtou::Type::Scalar::String, resolve => sub { "n:$_[0]{id}" } },
+        team => { type => $Team, resolve => sub { { id => $_[0]{id} } } },
+      },
+    );
+    return GraphQL::Houtou::Schema->new(
+      query => GraphQL::Houtou::Type::Object->new(
+        name => 'Query',
+        fields => {
+          plain => { type => $GraphQL::Houtou::Type::Scalar::String, resolve => sub { 'plain-val' } },
+          user => {
+            type => $User,
+            args => { id => { type => $GraphQL::Houtou::Type::Scalar::String } },
+            resolve => sub { my (undef, $args) = @_; return { id => $args->{id} } },
+          },
+        },
+      ),
+    );
+  };
+
+  my $sync_rt = $build_schema->(
+    sub { return "sync:$_[0]{id}" }
+  )->build_native_runtime;
+
+  my $pending_loader;
+  my $async_rt = $build_schema->(
+    sub { my ($source, undef, $ctx) = @_; return $pending_loader->load($source->{id}) }
+  )->build_native_runtime(async => 1);
+
+  my %modes = (
+    'houtou_sync_fallback_runtime_directive_sv' => sub {
+      return $sync_rt->execute_document($query, variables => $vars);
+    },
+    'houtou_async_fallback_runtime_directive_sv' => sub {
+      $pending_loader = GraphQL::Houtou::DataLoader->new(
+        batch => sub { my ($keys) = @_; return [ map { "batched:$_" } @$keys ] },
+      );
+      return maybe_get_promise_xs(
+        $async_rt->execute_document(
+          $query,
+          variables => $vars,
+          on_stall => GraphQL::Houtou::DataLoader->on_stall_for($pending_loader),
+        )
+      );
+    },
+  );
+
+  my $async_result = _normalize_result($modes{'houtou_async_fallback_runtime_directive_sv'}->());
+  die "Result mismatch for fallback_runtime_directive\n"
+    unless ($async_result->{data}{user}{team}{name} // '') eq 'batched:u1';
+
+  print "\n=== async_fallback_runtime_directive ===\n";
+  print "Query: a runtime-directive sibling forces the generic-executor fallback,\n";
+  print "  whose nested team field is DataLoader-Ticket-pending\n";
+  cmpthese($count, \%modes);
+}
+
 sub _dump {
   require Data::Dumper;
   local $Data::Dumper::Sortkeys = 1;
@@ -1192,3 +1275,5 @@ benchmark_async_nested_object_list_item_field()
   if $include_async && (!@only || $only{async_nested_object_list_item_field});
 benchmark_async_single_root_object_field()
   if $include_async && (!@only || $only{async_single_root_object_field});
+benchmark_async_fallback_runtime_directive()
+  if $include_async && (!@only || $only{async_fallback_runtime_directive});

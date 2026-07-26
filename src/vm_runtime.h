@@ -500,6 +500,13 @@ struct gql_runtime_vm_path_frame {
 typedef struct {
   UV refcount;
   char *message_pv;
+  /* Whether message_pv holds UTF-8-flagged text (SvUTF8 on the source
+   * message SV), mirroring gql_runtime_vm_native_value::scalar_pv_is_utf8
+   * - without this, every field error message (from a resolver/serialize
+   * die, or a validation failure) silently lost its UTF8 flag on the way
+   * into the response's errors array, even though message_pv's bytes were
+   * already the correct UTF-8 encoding. */
+  U8 message_pv_is_utf8;
   gql_runtime_vm_path_frame_t *path_frame;
 } gql_runtime_vm_error_record_t;
 
@@ -2725,6 +2732,7 @@ gql_runtime_vm_new_error_record_struct_for_path(
     Newxz(record->message_pv, len + 1, char);
     Copy(pv, record->message_pv, len, char);
     record->message_pv[len] = '\0';
+    record->message_pv_is_utf8 = SvUTF8(message) ? 1 : 0;
   }
   if (path_frame) {
     record->path_frame = path_frame;
@@ -2810,7 +2818,15 @@ gql_runtime_vm_error_record_to_error_sv(pTHX_ const gql_runtime_vm_error_record_
     return newRV_noinc((SV *)error_hv);
   }
 
-  hv_store(error_hv, "message", 7, record->message_pv ? newSVpv(record->message_pv, 0) : newSVsv(&PL_sv_undef), 0);
+  if (record->message_pv) {
+    SV *message_sv = newSVpv(record->message_pv, 0);
+    if (record->message_pv_is_utf8) {
+      SvUTF8_on(message_sv);
+    }
+    hv_store(error_hv, "message", 7, message_sv, 0);
+  } else {
+    hv_store(error_hv, "message", 7, newSVsv(&PL_sv_undef), 0);
+  }
 
   if (record->path_frame) {
     path_sv = gql_runtime_vm_path_frame_to_path_sv(aTHX_ record->path_frame);

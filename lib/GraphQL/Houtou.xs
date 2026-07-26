@@ -684,6 +684,14 @@ gql_runtime_vm_list_pending_decref(pTHX_ gql_runtime_vm_list_pending_t *pending)
   if (pending->values_value) {
     gql_runtime_vm_native_value_destroy(aTHX_ pending->values_value);
   }
+  /* Every entry here should already be NULL by the time refcount reaches
+   * 0 (a still-linked child frame holds its own ref to pending, so
+   * pending could not have reached 0 refcount while one remains linked -
+   * see gql_runtime_vm_list_pending_link_child_frame/resolve_frame's
+   * parent_list_pending branch/cancel_frame_tree's LIST_PENDING_PTR
+   * recursion, all of which clear the slot before releasing their ref).
+   * Only the array itself needs freeing here. */
+  Safefree(pending->pending_child_frames);
   Safefree(pending);
 }
 
@@ -2138,6 +2146,36 @@ gql_runtime_vm_push_pending_list_pending(
   list_pending->owner_frame->refcount++;
 }
 
+/* Phase 11: link a suspending object/abstract list item's own child
+ * block_frame_t directly into its list_pending slot, mirroring
+ * gql_runtime_vm_push_pending_block_frame's two-directional refcounting
+ * exactly (list_pending holds a ref to child_frame via
+ * pending_child_frames[index]; child_frame holds a ref back to
+ * list_pending via parent_list_pending) but targeting a list slot
+ * instead of a parent frame's pending_entries array. Unlike
+ * push_pending_block_frame, this does not touch pending_unresolved or
+ * push a pending_entry - the caller (gql_runtime_vm_list_pending_handle_sv)
+ * already accounts for this item in list_pending->unresolved_count the
+ * same way it does for a promise-shaped item. */
+static void
+gql_runtime_vm_list_pending_link_child_frame(
+  pTHX_
+  gql_runtime_vm_list_pending_t *list_pending,
+  IV index,
+  gql_runtime_vm_block_frame_t *child_frame
+)
+{
+  if (!list_pending || !child_frame || index < 0
+      || index >= list_pending->pending_child_frame_count) {
+    return;
+  }
+  list_pending->pending_child_frames[index] = child_frame;
+  child_frame->refcount++;
+  gql_runtime_vm_list_pending_incref(list_pending);
+  child_frame->parent_list_pending = list_pending;
+  child_frame->parent_list_index = index;
+}
+
 static gql_runtime_vm_pending_callback_ctx_t *
 gql_runtime_vm_new_pending_callback_pair(
   pTHX_
@@ -2232,6 +2270,30 @@ gql_runtime_vm_pending_callback_pair_recycle(
   }
 }
 
+/* Shared by gql_runtime_vm_xs_list_pending_callback (a settled item that
+ * arrived as a Promise::XS/Ticket) and
+ * gql_runtime_vm_async_scheduler_resolve_frame's parent_list_pending
+ * branch below (a settled item that was a raw linked child frame):
+ * store the item's final native value and decrement unresolved_count.
+ * Does not enqueue/drain owner_frame - callers differ on whether that's
+ * safe/needed right here (a Promise::XS callback fires from outside any
+ * active drain and must kick one off itself if owner_frame is now ready;
+ * resolve_frame's branch runs from inside an active drain already and
+ * only needs to enqueue, mirroring the existing parent_frame branch). */
+static void
+gql_runtime_vm_list_pending_store_item_value(
+  pTHX_
+  gql_runtime_vm_list_pending_t *pending,
+  IV index,
+  gql_runtime_vm_native_value_t *item_value
+)
+{
+  gql_runtime_vm_native_list_store_at(aTHX_ pending->values_value, index, item_value);
+  if (pending->unresolved_count > 0) {
+    pending->unresolved_count--;
+  }
+}
+
 static void
 gql_runtime_vm_async_scheduler_resolve_frame(
   pTHX_
@@ -2312,6 +2374,69 @@ gql_runtime_vm_async_scheduler_resolve_frame(
     }
 
     gql_runtime_vm_outcome_decref(aTHX_ outcome);
+    gql_runtime_vm_free_block_frame(aTHX_ frame);
+    return;
+  }
+
+  if (frame->parent_list_pending) {
+    /* Phase 11: this frame is a suspending list item's own child block,
+     * linked directly into its list_pending slot
+     * (gql_runtime_vm_list_pending_link_child_frame) instead of ever
+     * having a Promise::XS built for it. Take its native value straight
+     * across (no SV materialize/outcome-wrap round trip) - mirrors the
+     * parent_frame branch above exactly, targeting a list slot instead
+     * of a pending_entries array index. */
+    gql_runtime_vm_list_pending_t *list_pending = frame->parent_list_pending;
+    IV list_index = frame->parent_list_index;
+    gql_runtime_vm_native_value_t *item_value;
+
+    if (frame->self_nulled) {
+      /* The original "Cannot return null" error is already recorded
+       * (same comment as the parent_frame branch above); the item slot
+       * itself just becomes null. */
+      item_value = gql_runtime_vm_new_native_value_scalar(aTHX_ &PL_sv_undef);
+    } else {
+      item_value = frame->values_value;
+      frame->values_value = NULL;
+    }
+
+    if (list_index >= 0 && list_index < list_pending->pending_child_frame_count) {
+      /* Drop the reference gql_runtime_vm_list_pending_link_child_frame
+       * took out on frame's behalf (pending_child_frames[index] holding
+       * it) - mirrors gql_runtime_vm_async_pending_entry_store_outcome_ptr
+       * dropping the BLOCK_FRAME_PTR entry's own held ref in the
+       * parent_frame branch above. This is a SEPARATE reference from the
+       * creation reference the explicit free_block_frame call below
+       * drops - both are needed, exactly like that branch's two calls
+       * (one inside store_outcome_ptr, one explicit at its tail). */
+      list_pending->pending_child_frames[list_index] = NULL;
+      gql_runtime_vm_free_block_frame(aTHX_ frame);
+    }
+    gql_runtime_vm_list_pending_store_item_value(aTHX_ list_pending, list_index, item_value);
+
+    if (list_pending->unresolved_count == 0 && list_pending->owner_frame) {
+      /* Same "don't enqueue a frame still mid-block-loop on the exec
+       * stack" guard as the parent_frame branch above - list_pending's
+       * owner_frame can just as easily still be executing (this branch
+       * can fire synchronously, from list_pending_handle_sv's own
+       * immediate-settle check, while the owning block's op loop hasn't
+       * returned yet). */
+      U8 owner_executing = 0;
+      if (s) {
+        IV fi;
+        for (fi = 0; fi < s->frame_stack_count; fi++) {
+          if (s->frame_stack[fi] == list_pending->owner_frame) {
+            owner_executing = 1;
+            break;
+          }
+        }
+      }
+      if (!owner_executing) {
+        gql_runtime_vm_async_scheduler_enqueue_frame(s, list_pending->owner_frame);
+      }
+    }
+
+    gql_runtime_vm_list_pending_decref(aTHX_ list_pending);
     gql_runtime_vm_free_block_frame(aTHX_ frame);
     return;
   }
@@ -4085,12 +4210,15 @@ gql_runtime_vm_list_pending_handle_sv(
   pending->owner_frame = NULL;
   pending->values_value = gql_runtime_vm_new_native_value_list();
   pending->unresolved_count = 0;
+  pending->pending_child_frame_count = av_len(values_av) + 1;
+  Newxz(pending->pending_child_frames, pending->pending_child_frame_count, gql_runtime_vm_block_frame_t *);
 
   for (i = 0; i <= av_len(values_av); i++) {
     SV **svp = av_fetch(values_av, i, 0);
     SV *value_sv = (svp && *svp) ? *svp : &PL_sv_undef;
 
-    if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, value_sv)) {
+    if (gql_runtime_vm_is_block_frame_value_sv(value_sv)
+        || gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, value_sv)) {
       pending->unresolved_count++;
       gql_runtime_vm_native_list_store_at(
         aTHX_
@@ -4113,7 +4241,25 @@ gql_runtime_vm_list_pending_handle_sv(
     SV **svp = av_fetch(values_av, i, 0);
     SV *value_sv = (svp && *svp) ? *svp : &PL_sv_undef;
 
-    if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, value_sv)) {
+    if (gql_runtime_vm_is_block_frame_value_sv(value_sv)) {
+      /* Phase 11: this item's own child block suspended
+       * (gql_runtime_vm_execute_safe_child_block_fast_sv, called with
+       * want_promise=0 at the list-item site too now) - link the raw
+       * frame directly instead of ever building a Promise::XS for it.
+       * If it already settled synchronously by the time we get here
+       * (mirrors the object/abstract-field call site's own immediate-
+       * settle check), enqueue+drain right away; otherwise
+       * gql_runtime_vm_async_scheduler_resolve_frame's parent_list_pending
+       * branch notices when it settles later. */
+      gql_runtime_vm_block_frame_t *child_frame = gql_runtime_vm_expect_block_frame(aTHX_ value_sv);
+      gql_runtime_vm_list_pending_link_child_frame(aTHX_ pending, i, child_frame);
+      if (child_frame->pending_unresolved == 0) {
+        gql_runtime_vm_async_scheduler_enqueue_frame(s, child_frame);
+        if (!s->async_scheduler_draining) {
+          gql_runtime_vm_async_scheduler_drain(aTHX_ state_sv, s);
+        }
+      }
+    } else if (gql_runtime_vm_is_promise_value_for_state_sv(aTHX_ s, value_sv)) {
       SV *callback_sv = gql_runtime_vm_new_list_pending_callback_sv(aTHX_ state_sv, pending, i);
       SV *error_callback_sv = gql_runtime_vm_new_error_callback_sv(aTHX_ path_frame);
       SV *ret;
@@ -9521,13 +9667,18 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
         item_had_error = 1;
       } else if (item_block_index >= 0) {
         completed = gql_runtime_vm_execute_safe_child_block_fast_sv(
-          aTHX_ state, item_block_index, item, item_path, 1
+          /* Phase 11: want_promise=0 - a genuine suspension now comes back
+           * as a raw block_frame_t handle
+           * (gql_runtime_vm_is_block_frame_value_sv), not a Promise::XS;
+           * gql_runtime_vm_list_pending_handle_sv links it directly. */
+          aTHX_ state, item_block_index, item, item_path, 0
         );
         if (!completed) {
           /* The item block nulled itself (non-null propagation) with
            * nothing async in flight - a genuine suspension inside the
-           * item's own child block instead comes back as a Promise::XS
-           * (never NULL), handled by the item_non_null/av_store code
+           * item's own child block instead comes back as a raw
+           * block_frame_t handle (never NULL), handled by the
+           * item_non_null/av_store code
            * below exactly like any other already-known value. */
           item_had_error = state->null_carries_error;
           state->null_carries_error = 0;
@@ -9638,12 +9789,17 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
        * NOT the raw, not-yet-item-completed array the leaf pre-scan above
        * stashes), so there is nothing left to delegate to Layer 1 -
        * gql_runtime_vm_list_pending_handle_sv's own promise detection
-       * subscribes directly to any such item. */
+       * subscribes directly to any such item. Phase 11: a suspending
+       * item's own child block now comes back as a raw block_frame_t
+       * handle instead (want_promise=0 above), which
+       * list_pending_handle_sv also recognizes and links directly. */
       IV pi;
       int any_promise = 0;
       for (pi = 0; pi <= av_len(out_av); pi++) {
         SV **item_svp = av_fetch(out_av, pi, 0);
-        if (item_svp && *item_svp && gql_runtime_vm_sv_is_promise_xs(aTHX_ *item_svp)) {
+        if (item_svp && *item_svp
+            && (gql_runtime_vm_sv_is_promise_xs(aTHX_ *item_svp)
+                || gql_runtime_vm_is_block_frame_value_sv(*item_svp))) {
           any_promise = 1;
           break;
         }

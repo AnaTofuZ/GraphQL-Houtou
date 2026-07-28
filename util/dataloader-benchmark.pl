@@ -130,6 +130,44 @@ sub build_execution_runner {
   };
 }
 
+sub build_argument_execution_runner {
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'ArgumentLoaderBenchmarkQuery',
+      fields => {
+        loaded => {
+          type => $String,
+          args => { key => { type => $String } },
+          loader => {
+            context_key => 'loader',
+            key => { argument => 'key' },
+          },
+        },
+      },
+    ),
+  );
+  my $runtime = build_native_runtime($schema, async => 1);
+  my $query = '{ ' . join(' ', map {
+    "loaded$_: loaded(key: \"$_\")"
+  } @request_keys) . ' }';
+  my $program = $runtime->compile_program($query);
+
+  return sub {
+    my $loader = GraphQL::Houtou::DataLoader->new(
+      cache => $access eq 'unique' ? 0 : 1,
+      batch => sub {
+        my ($batch_keys) = @_;
+        return [ map { "value:$_" } @$batch_keys ];
+      },
+    );
+    return $runtime->execute_program(
+      $program,
+      context => { loader => $loader },
+      on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+    );
+  };
+}
+
 my $cases;
 my $label;
 if ($scenario eq 'execution') {
@@ -137,6 +175,7 @@ if ($scenario eq 'execution') {
     generic_resolver => build_execution_runner('generic'),
     fast_resolver => build_execution_runner('fast'),
     declarative_loader => build_execution_runner('declarative'),
+    declarative_argument_loader => build_argument_execution_runner(),
   };
   $label = "$width $access accesses through GraphQL execution";
 } else {

@@ -2190,3 +2190,27 @@ width 25の3組のinterleaved測定では、適用前中央値約31.0k req/s、�
 現時点の主要ボトルネックではない。次に検討する場合は、batch callback境界、
 keys/results配列のmaterialize、またはアプリケーション固有backendまで含めた
 複数key一括取得を対象にし、Ticketだけを置換する実験は繰り返さない。
+
+### 14.30 DataLoader dispatch中のscheduler drain集約と不採用
+
+width 25の宣言的loader経路をmacOS `sample`で8秒計測した。
+`_dispatch_queue` 1,788 samplesのうちTicket settleが1,512、その下の
+`pending_callback_resolve_direct`が1,438、さらにscheduler drainが960だった。
+keys配列構築やbatch callback境界より、settle後のframe completionが支配的
+である。
+
+各Ticket settleがready frameを即座にdrainする代わりに、`on_stall` callback
+実行中は`async_scheduler_draining`を立て、callback終了後にready queueを
+1回だけdrainする変更を試した。nested loaderが新しくqueueされるタイミングは
+外側drive loopの次roundになるが、progress contractとbatch semanticsは
+維持され、DataLoader、fallback、cancel、frame leakのfocused testは通過した。
+
+しかしwidth 25の3組のinterleaved測定では、適用前中央値約31.3k req/s、
+適用後約31.1k req/sで改善しなかった。drain関数へのentry回数は減っても、
+25個のchild frameそれぞれが行うcompletion、native value生成、親への反映は
+同量であるため、全体コストは変わらない。変更は不採用とした。
+
+このprofileから、次の有力候補はbatch callbackやTicketの局所allocationでは
+なく、同じloader batchで解決した複数fieldを1つのcompletion単位として親へ
+反映するbulk completionである。ただしframe ownership、non-null伝播、
+fieldごとのerror pathをまとめて扱う必要があり、独立したVM設計変更になる。

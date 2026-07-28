@@ -483,6 +483,65 @@ item. The bundled DataLoader benchmark measures roughly 4--7% higher
 end-to-end throughput for this shape. Use the regular resolver contract when
 the field needs GraphQL arguments or C<$info>.
 
+=head3 Declarative loader fields
+
+A field whose resolver only selects a request-scoped loader and calls
+C<load> can declare that operation directly. The runtime performs the
+context/source lookups in XS and preserves the ordinary DataLoader cache,
+batch, error, and completion semantics:
+
+    author => {
+      type => $User,
+      loader => {
+        context_key => 'users',
+        key => { source_key => 'author_id' },
+      },
+    }
+
+The named loader lives in the request context as usual. It must provide a
+C<load($key)> method; L<GraphQL::Houtou::DataLoader> is the reference
+implementation. A GraphQL argument can supply the key instead:
+
+    user => {
+      type => $User,
+      args => { id => { type => $ID->non_null } },
+      loader => {
+        context_key => 'users',
+        key => { argument => 'id' },
+      },
+    }
+
+When items must be partitioned across tenant, shard, or backend-specific
+loaders, declare a router. The context entry is a HashRef from route key to
+loader:
+
+    author => {
+      type => $User,
+      loader => {
+        router => {
+          context_key => 'user_loaders',
+          route_key => { source_key => 'tenant_id' },
+        },
+        key => { source_key => 'author_id' },
+      },
+    }
+
+    context => {
+      user_loaders => {
+        tenant_a => $tenant_a_users,
+        tenant_b => $tenant_b_users,
+      },
+    }
+
+Each loader retains an independent queue and cache, so identical keys on
+different routes are never mixed. C<source_key> and C<argument> are
+mutually exclusive in both C<key> and C<route_key>. A declarative C<loader>
+cannot be combined with C<resolve> or C<accessor>.
+
+Declarative fields currently use the same explicit C<on_stall> registration
+as resolver-based DataLoader fields. This keeps dispatch policy independent
+from request context layout.
+
 =head3 Declaring an async schema (async => 1)
 
 Batching is the normal deployment shape, so runtimes accept a single

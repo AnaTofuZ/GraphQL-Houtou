@@ -59,34 +59,43 @@ sub run_request {
 }
 
 sub build_execution_runner {
-  my ($fast) = @_;
+  my ($mode) = @_;
+  my $fast = $mode eq 'fast';
+  my $declarative = $mode eq 'declarative';
   my $Loaded = GraphQL::Houtou::Type::Object->new(
-    name => $fast ? 'FastLoadedValue' : 'GenericLoadedValue',
+    name => ucfirst($mode) . 'LoadedValue',
     fields => {
       value => { type => $String },
     },
   );
   my $Row = GraphQL::Houtou::Type::Object->new(
-    name => $fast ? 'FastLoaderRow' : 'GenericLoaderRow',
+    name => ucfirst($mode) . 'LoaderRow',
     fields => {
       loaded => {
         type => $Loaded,
-        ($fast ? (resolver_mode => 'fast_resolve_no_args') : ()),
-        resolve => $fast
-          ? sub {
-              my ($source, $context) = @_;
-              return $context->{loader}->load($source->{id});
-            }
-          : sub {
-              my ($source, undef, $context) = @_;
-              return $context->{loader}->load($source->{id});
-            },
+        ($declarative
+          ? (loader => {
+              context_key => 'loader',
+              key => { source_key => 'id' },
+            })
+          : (
+              ($fast ? (resolver_mode => 'fast_resolve_no_args') : ()),
+              resolve => $fast
+                ? sub {
+                    my ($source, $context) = @_;
+                    return $context->{loader}->load($source->{id});
+                  }
+                : sub {
+                    my ($source, undef, $context) = @_;
+                    return $context->{loader}->load($source->{id});
+                  },
+            )),
       },
     },
   );
   my $schema = GraphQL::Houtou::Schema->new(
     query => GraphQL::Houtou::Type::Object->new(
-      name => $fast ? 'FastLoaderQuery' : 'GenericLoaderQuery',
+      name => ucfirst($mode) . 'LoaderQuery',
       fields => {
         rows => {
           type => $Row->list,
@@ -125,8 +134,9 @@ my $cases;
 my $label;
 if ($scenario eq 'execution') {
   $cases = {
-    generic_resolver => build_execution_runner(0),
-    fast_resolver => build_execution_runner(1),
+    generic_resolver => build_execution_runner('generic'),
+    fast_resolver => build_execution_runner('fast'),
+    declarative_loader => build_execution_runner('declarative'),
   };
   $label = "$width $access accesses through GraphQL execution";
 } else {

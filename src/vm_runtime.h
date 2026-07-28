@@ -166,6 +166,7 @@ typedef struct {
   SV *runtime_schema;
   SV **slot_field_names;
   SV **slot_resolvers;
+  SV **slot_loader_specs;
   SV **slot_type_objects;
   SV **slot_tag_resolvers;
   SV **slot_resolve_types;
@@ -3760,6 +3761,9 @@ gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
       if (catalog->slot_resolvers[i]) {
         SvREFCNT_dec(catalog->slot_resolvers[i]);
       }
+      if (catalog->slot_loader_specs && catalog->slot_loader_specs[i]) {
+        SvREFCNT_dec(catalog->slot_loader_specs[i]);
+      }
       if (catalog->slot_type_objects && catalog->slot_type_objects[i]) {
         SvREFCNT_dec(catalog->slot_type_objects[i]);
       }
@@ -3792,6 +3796,7 @@ gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
     }
     Safefree(catalog->slot_field_names);
     Safefree(catalog->slot_resolvers);
+    Safefree(catalog->slot_loader_specs);
     Safefree(catalog->slot_type_objects);
     Safefree(catalog->slot_tag_resolvers);
     Safefree(catalog->slot_tag_entries);

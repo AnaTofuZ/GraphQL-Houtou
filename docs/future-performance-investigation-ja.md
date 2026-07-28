@@ -2127,3 +2127,120 @@ benchmark shapeにおいて元々全体コストに占める割合が小さく�
 それはそれで頭打ちの証拠になる」というユーザー自身の見立て通りの結果
 になった。correctness面の価値(Phase 7の仕組みの一貫した適用、
 Promise::XS依存の削減)を理由に採用する。
+
+### 14.28 宣言的DataLoader fieldとload hot pathのXS統合
+
+resolverが行う処理を「request contextからloaderを選び、sourceまたは
+argumentからkeyを取り、`load($key)`を呼ぶ」に限定できるfieldへ
+`loader`宣言を追加した。固定loaderに加え、tenant・shard・backendなどの
+route keyから別々のloaderを選ぶrouter形式も持つ。routeごとに既存
+DataLoader instanceを分けるため、queueとcacheは自然に分離される。
+
+第1段階ではloaderとkeyの選択だけをXSで行い、選択後は通常どおり
+`load` methodを呼んだ。この段階はgeneric resolver比で約6〜8%改善したが、
+既存の`fast_resolve_no_args` resolverとほぼ同等であり、resolver closure
+除去だけでは新しい性能領域には入らなかった。
+
+第2段階では、exact classの`GraphQL::Houtou::DataLoader`について
+`load`のcache-key計算、cache hit判定、Ticket生成、queue push、cache
+storeを宣言的fieldのXS経路へ統合した。subclassはoverridden `load`
+semanticsを守るため従来のmethod callへfallbackする。custom `cache_key`、
+cache無効化、primed/settled Ticketを含む既存の公開データ構造とdispatch
+contractは維持している。
+
+`util/dataloader-benchmark.pl --scenario execution --width 10 --count -5`
+での同一build内比較:
+
+| access | generic resolver | fast resolver | declarative loader |
+|---|---:|---:|---:|
+| unique (`cache => 0`) | 44,724 req/s | 49,588 req/s | 56,433 req/s |
+| repeated (同一key) | 54,413 req/s | 59,416 req/s | 69,418 req/s |
+| primed | 67,494 req/s | 73,524 req/s | 90,140 req/s |
+
+宣言的経路はgeneric比で26〜34%、fast resolver比で14〜23%高い。
+特にprimed/cache-hitで差が広がるため、batch callbackそのものではなく
+Perl `load` method境界とhash操作の往復を除いた効果だと解釈できる。
+
+次の候補であるTicket除去には、単一fieldのframeポインタをqueueへ置くだけ
+では不十分である。同一cache keyを複数field/frameが共有でき、request破棄後も
+loader cacheが生存し得るため、native pending entry自身が複数destinationと
+cancellation/disarmを所有する必要がある。use-after-freeを避けるため、
+Ticket互換cache entryとVM destinationを分離した共有entryとして設計する。
+
+### 14.29 Ticket表現・購読のnative化試作と不採用
+
+§14.28の次段階として、Ticket周辺のallocationを減らす2案を実装し、
+いずれもcorrectnessとframe leak回帰を通した上で、直前commitのworktreeと
+交互に計測した。
+
+1つ目はpending entryのresolve/reject CV pairを作らず、TicketからVM frameへ
+C structのsubscriberで直接settleする案。既存callback pairはすでにpool化され、
+settle時もPerl calling conventionを迂回するdirect-callを持つため、width 25で
+適用前30.6〜30.8k req/s、適用後28.8〜30.5k req/sとなり改善しなかった。
+subscriber handle、retarget、cancel管理の追加費用が削減分を相殺した。
+
+2つ目は宣言的cache missだけをTicket互換のC structへ置き換え、state/value/
+subscriber AVの初期allocationを減らす案。通常の`load()`が同じcache keyを
+後から取得しても`then`/`catch`/`AWAIT_*`を使える互換クラスまで接続した。
+width 25の3組のinterleaved測定では、適用前中央値約31.0k req/s、適用後
+約30.5k req/sで、やはり改善しなかった。object kind判定、互換分岐、DESTROY
+処理が小さなAV削減を上回ったと考えられる。
+
+両試作とも不採用とし、コードは残していない。Ticketの表現や購読方法は
+現時点の主要ボトルネックではない。次に検討する場合は、batch callback境界、
+keys/results配列のmaterialize、またはアプリケーション固有backendまで含めた
+複数key一括取得を対象にし、Ticketだけを置換する実験は繰り返さない。
+
+### 14.30 DataLoader dispatch中のscheduler drain集約と不採用
+
+width 25の宣言的loader経路をmacOS `sample`で8秒計測した。試作を戻した
+後は必ずblibを再buildしていることをシンボル一覧でも確認したclean profileで、
+`_dispatch_queue` 1,856 samplesのうちTicket settleが1,553、その下の
+`pending_callback_resolve_direct`が1,455、さらにscheduler drainが955だった。
+keys配列構築やbatch callback境界より、settle後のframe completionが支配的
+である。
+
+各Ticket settleがready frameを即座にdrainする代わりに、`on_stall` callback
+実行中は`async_scheduler_draining`を立て、callback終了後にready queueを
+1回だけdrainする変更を試した。nested loaderが新しくqueueされるタイミングは
+外側drive loopの次roundになるが、progress contractとbatch semanticsは
+維持され、DataLoader、fallback、cancel、frame leakのfocused testは通過した。
+
+しかしwidth 25の3組のinterleaved測定では、適用前中央値約31.3k req/s、
+適用後約31.1k req/sで改善しなかった。drain関数へのentry回数は減っても、
+25個のchild frameそれぞれが行うcompletion、native value生成、親への反映は
+同量であるため、全体コストは変わらない。変更は不採用とした。
+
+このprofileから、次の有力候補はbatch callbackやTicketの局所allocationでは
+なく、同じloader batchで解決した複数fieldを1つのcompletion単位として親へ
+反映するbulk completionである。ただしframe ownership、non-null伝播、
+fieldごとのerror pathをまとめて扱う必要があり、独立したVM設計変更になる。
+
+### 14.31 settled objectのplain-hash直接projection
+
+bulk completionの設計調査中、既存VMには
+`gql_runtime_vm_try_execute_plain_hash_block_fast_sv`が存在することを確認した。
+このhelperはsourceが非blessed hash、selectionがdirectiveなしのdefault scalar
+fieldのみ、custom scalarなし、値がreference/callable/promiseでないことを
+全fieldについて先に証明してから、child block frameを作らずnative objectへ
+直接projectionする。alias、built-in scalar serialization、non-null違反と
+field固有error pathも処理する。従来はPromise settlement後のLIST itemにだけ
+利用され、DataLoader TicketがOBJECT fieldそのものへsettleした経路では
+同じshapeでも常にresumable child frameを作っていた。
+
+`GQL_VM_COMPLETE_OBJECT`のsettlement直後に同helperを呼び、成立しなければ
+従来のasync child blockへそのままfallbackするようにした。新しい緩い判定を
+追加せず、既にLIST経路で運用されている安全条件を再利用している。
+
+width 25、unique key、3組のinterleaved測定:
+
+| | 適用前 | 適用後 |
+|---|---:|---:|
+| run 1 | 31,239 req/s | 33,185 req/s |
+| run 2 | 31,464 req/s | 33,182 req/s |
+| run 3 | 31,070 req/s | 33,340 req/s |
+
+全組で約5.5〜7.3%改善した。Ticketやschedulerを置き換えるのではなく、
+settlement後に同期と証明できるsubtreeのframe allocation/completion自体を
+除いたことで初めて安定した差が出た。object loaderのaliasとnon-null child
+error pathを`t/61_declarative_loader.t`へ恒久テストとして追加した。

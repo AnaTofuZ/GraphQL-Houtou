@@ -2127,3 +2127,42 @@ benchmark shapeにおいて元々全体コストに占める割合が小さく�
 それはそれで頭打ちの証拠になる」というユーザー自身の見立て通りの結果
 になった。correctness面の価値(Phase 7の仕組みの一貫した適用、
 Promise::XS依存の削減)を理由に採用する。
+
+### 14.28 宣言的DataLoader fieldとload hot pathのXS統合
+
+resolverが行う処理を「request contextからloaderを選び、sourceまたは
+argumentからkeyを取り、`load($key)`を呼ぶ」に限定できるfieldへ
+`loader`宣言を追加した。固定loaderに加え、tenant・shard・backendなどの
+route keyから別々のloaderを選ぶrouter形式も持つ。routeごとに既存
+DataLoader instanceを分けるため、queueとcacheは自然に分離される。
+
+第1段階ではloaderとkeyの選択だけをXSで行い、選択後は通常どおり
+`load` methodを呼んだ。この段階はgeneric resolver比で約6〜8%改善したが、
+既存の`fast_resolve_no_args` resolverとほぼ同等であり、resolver closure
+除去だけでは新しい性能領域には入らなかった。
+
+第2段階では、exact classの`GraphQL::Houtou::DataLoader`について
+`load`のcache-key計算、cache hit判定、Ticket生成、queue push、cache
+storeを宣言的fieldのXS経路へ統合した。subclassはoverridden `load`
+semanticsを守るため従来のmethod callへfallbackする。custom `cache_key`、
+cache無効化、primed/settled Ticketを含む既存の公開データ構造とdispatch
+contractは維持している。
+
+`util/dataloader-benchmark.pl --scenario execution --width 10 --count -5`
+での同一build内比較:
+
+| access | generic resolver | fast resolver | declarative loader |
+|---|---:|---:|---:|
+| unique (`cache => 0`) | 44,724 req/s | 49,588 req/s | 56,433 req/s |
+| repeated (同一key) | 54,413 req/s | 59,416 req/s | 69,418 req/s |
+| primed | 67,494 req/s | 73,524 req/s | 90,140 req/s |
+
+宣言的経路はgeneric比で26〜34%、fast resolver比で14〜23%高い。
+特にprimed/cache-hitで差が広がるため、batch callbackそのものではなく
+Perl `load` method境界とhash操作の往復を除いた効果だと解釈できる。
+
+次の候補であるTicket除去には、単一fieldのframeポインタをqueueへ置くだけ
+では不十分である。同一cache keyを複数field/frameが共有でき、request破棄後も
+loader cacheが生存し得るため、native pending entry自身が複数destinationと
+cancellation/disarmを所有する必要がある。use-after-freeを避けるため、
+Ticket互換cache entryとVM destinationを分離した共有entryとして設計する。

@@ -158,6 +158,93 @@ subtest 'argument key is supported' => sub {
   is_deeply \@seen, [ [qw(9)] ], 'argument key reaches the batch callback';
 };
 
+subtest 'native loader path preserves custom cache keys' => sub {
+  my @seen;
+  my $loader = GraphQL::Houtou::DataLoader->new(
+    cache_key => sub { lc $_[0] },
+    batch => sub {
+      my ($keys) = @_;
+      push @seen, [ @$keys ];
+      return [ map { "cached:$_" } @$keys ];
+    },
+  );
+  my $Row = GraphQL::Houtou::Type::Object->new(
+    name => 'CacheKeyLoaderRow',
+    fields => {
+      value => {
+        type => $String,
+        loader => {
+          context_key => 'values',
+          key => { source_key => 'id' },
+        },
+      },
+    },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'CacheKeyLoaderQuery',
+      fields => {
+        rows => {
+          type => GraphQL::Houtou::Type::List->new(of => $Row),
+          resolve => sub { [ { id => 'A' }, { id => 'a' } ] },
+        },
+      },
+    ),
+    types => [ $Row ],
+  );
+  my $runtime = $schema->build_native_runtime(async => 1);
+  my $result = $runtime->execute_document(
+    '{ rows { value } }',
+    context => { values => $loader },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+  );
+
+  is_deeply $result->{data}{rows}, [
+    { value => 'cached:A' },
+    { value => 'cached:A' },
+  ], 'custom cache key shares the first ticket';
+  is_deeply \@seen, [ ['A'] ], 'equivalent keys occupy one batch slot';
+};
+
+subtest 'DataLoader subclasses retain overridden load semantics' => sub {
+  {
+    package Local::DeclarativeLoaderSubclass;
+    our @ISA = ('GraphQL::Houtou::DataLoader');
+    sub load {
+      my ($self, $key) = @_;
+      $self->{override_calls}++;
+      return GraphQL::Houtou::DataLoader::Ticket->resolved("override:$key");
+    }
+  }
+
+  my $loader = Local::DeclarativeLoaderSubclass->new(
+    batch => sub { die "overridden load must bypass batch\n" },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'SubclassLoaderQuery',
+      fields => {
+        value => {
+          type => $String,
+          args => { id => { type => $String } },
+          loader => {
+            context_key => 'values',
+            key => { argument => 'id' },
+          },
+        },
+      },
+    ),
+  );
+  my $runtime = $schema->build_native_runtime(async => 1);
+  my $result = $runtime->execute_document(
+    '{ value(id: "7") }',
+    context => { values => $loader },
+  );
+
+  is $result->{data}{value}, 'override:7', 'subclass load method is honored';
+  is $loader->{override_calls}, 1, 'override is called exactly once';
+};
+
 subtest 'invalid declarations fail while building the runtime graph' => sub {
   my @invalid = (
     [

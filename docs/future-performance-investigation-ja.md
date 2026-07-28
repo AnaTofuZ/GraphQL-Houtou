@@ -2166,3 +2166,27 @@ Perl `load` method境界とhash操作の往復を除いた効果だと解釈で�
 loader cacheが生存し得るため、native pending entry自身が複数destinationと
 cancellation/disarmを所有する必要がある。use-after-freeを避けるため、
 Ticket互換cache entryとVM destinationを分離した共有entryとして設計する。
+
+### 14.29 Ticket表現・購読のnative化試作と不採用
+
+§14.28の次段階として、Ticket周辺のallocationを減らす2案を実装し、
+いずれもcorrectnessとframe leak回帰を通した上で、直前commitのworktreeと
+交互に計測した。
+
+1つ目はpending entryのresolve/reject CV pairを作らず、TicketからVM frameへ
+C structのsubscriberで直接settleする案。既存callback pairはすでにpool化され、
+settle時もPerl calling conventionを迂回するdirect-callを持つため、width 25で
+適用前30.6〜30.8k req/s、適用後28.8〜30.5k req/sとなり改善しなかった。
+subscriber handle、retarget、cancel管理の追加費用が削減分を相殺した。
+
+2つ目は宣言的cache missだけをTicket互換のC structへ置き換え、state/value/
+subscriber AVの初期allocationを減らす案。通常の`load()`が同じcache keyを
+後から取得しても`then`/`catch`/`AWAIT_*`を使える互換クラスまで接続した。
+width 25の3組のinterleaved測定では、適用前中央値約31.0k req/s、適用後
+約30.5k req/sで、やはり改善しなかった。object kind判定、互換分岐、DESTROY
+処理が小さなAV削減を上回ったと考えられる。
+
+両試作とも不採用とし、コードは残していない。Ticketの表現や購読方法は
+現時点の主要ボトルネックではない。次に検討する場合は、batch callback境界、
+keys/results配列のmaterialize、またはアプリケーション固有backendまで含めた
+複数key一括取得を対象にし、Ticketだけを置換する実験は繰り返さない。

@@ -4892,6 +4892,22 @@ gql_runtime_vm_exec_state_complete_current_native_async_sv(
         return gql_runtime_vm_sync_outcome_result_sv(aTHX_ GQL_VM_KIND_SCALAR, resolved_sv, outcome_out);
       }
 
+      /*
+       * A loader commonly settles to a plain row hash whose selected
+       * children are only default scalar reads. The list-completion path
+       * already proves and executes that shape without a resumable child
+       * frame; apply the same narrow fast path when the pending value is
+       * the object field itself.
+       */
+      child_value = gql_runtime_vm_try_execute_plain_hash_block_fast_sv(
+        aTHX_ s, child_block_index, resolved_sv, path_frame
+      );
+      if (child_value) {
+        return gql_runtime_vm_outcome_result_from_handle_sv(
+          aTHX_ child_value, outcome_out
+        );
+      }
+
       /* Mode 1: a synchronously completed child comes back as a native
        * outcome (returned as-is below) and a pending child as a raw
        * block-frame handle - no Promise::XS deferred/promise pair. Every

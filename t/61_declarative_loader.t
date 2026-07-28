@@ -245,6 +245,79 @@ subtest 'DataLoader subclasses retain overridden load semantics' => sub {
   is $loader->{override_calls}, 1, 'override is called exactly once';
 };
 
+subtest 'object loader projects plain hash children after settlement' => sub {
+  my @seen;
+  my $loader = GraphQL::Houtou::DataLoader->new(
+    batch => sub {
+      my ($keys) = @_;
+      push @seen, [ @$keys ];
+      return [
+        map {
+          +{
+            name => "name:$_",
+            required => $_ eq '2' ? undef : "required:$_",
+          }
+        } @$keys
+      ];
+    },
+  );
+  my $User = GraphQL::Houtou::Type::Object->new(
+    name => 'ProjectedLoaderUser',
+    fields => {
+      name => { type => $String },
+      required => { type => $String->non_null },
+    },
+  );
+  my $Row = GraphQL::Houtou::Type::Object->new(
+    name => 'ProjectedLoaderRow',
+    fields => {
+      user => {
+        type => $User,
+        loader => {
+          context_key => 'users',
+          key => { source_key => 'user_id' },
+        },
+      },
+    },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'ProjectedLoaderQuery',
+      fields => {
+        rows => {
+          type => GraphQL::Houtou::Type::List->new(of => $Row),
+          resolve => sub {
+            return [ { user_id => '1' }, { user_id => '2' } ];
+          },
+        },
+      },
+    ),
+    types => [ $Row, $User ],
+  );
+  my $runtime = $schema->build_native_runtime(async => 1);
+  my $result = $runtime->execute_document(
+    '{ rows { user { displayName: name required } } }',
+    context => { users => $loader },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+  );
+
+  is_deeply $result->{data}{rows}, [
+    {
+      user => {
+        displayName => 'name:1',
+        required => 'required:1',
+      },
+    },
+    { user => undef },
+  ], 'plain child fields and aliases complete directly from loaded hashes';
+  is_deeply \@seen, [ [qw(1 2)] ], 'object loads remain one batch';
+  is scalar(@{ $result->{errors} || [] }), 1,
+    'non-null child failure emits one error';
+  is_deeply $result->{errors}[0]{path},
+    [ 'rows', 1, 'user', 'required' ],
+    'projected child failure retains its exact response path';
+};
+
 subtest 'invalid declarations fail while building the runtime graph' => sub {
   my @invalid = (
     [

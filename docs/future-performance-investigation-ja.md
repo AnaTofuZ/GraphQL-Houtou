@@ -2193,9 +2193,10 @@ keys/results配列のmaterialize、またはアプリケーション固有backen
 
 ### 14.30 DataLoader dispatch中のscheduler drain集約と不採用
 
-width 25の宣言的loader経路をmacOS `sample`で8秒計測した。
-`_dispatch_queue` 1,788 samplesのうちTicket settleが1,512、その下の
-`pending_callback_resolve_direct`が1,438、さらにscheduler drainが960だった。
+width 25の宣言的loader経路をmacOS `sample`で8秒計測した。試作を戻した
+後は必ずblibを再buildしていることをシンボル一覧でも確認したclean profileで、
+`_dispatch_queue` 1,856 samplesのうちTicket settleが1,553、その下の
+`pending_callback_resolve_direct`が1,455、さらにscheduler drainが955だった。
 keys配列構築やbatch callback境界より、settle後のframe completionが支配的
 である。
 
@@ -2214,3 +2215,32 @@ keys配列構築やbatch callback境界より、settle後のframe completionが�
 なく、同じloader batchで解決した複数fieldを1つのcompletion単位として親へ
 反映するbulk completionである。ただしframe ownership、non-null伝播、
 fieldごとのerror pathをまとめて扱う必要があり、独立したVM設計変更になる。
+
+### 14.31 settled objectのplain-hash直接projection
+
+bulk completionの設計調査中、既存VMには
+`gql_runtime_vm_try_execute_plain_hash_block_fast_sv`が存在することを確認した。
+このhelperはsourceが非blessed hash、selectionがdirectiveなしのdefault scalar
+fieldのみ、custom scalarなし、値がreference/callable/promiseでないことを
+全fieldについて先に証明してから、child block frameを作らずnative objectへ
+直接projectionする。alias、built-in scalar serialization、non-null違反と
+field固有error pathも処理する。従来はPromise settlement後のLIST itemにだけ
+利用され、DataLoader TicketがOBJECT fieldそのものへsettleした経路では
+同じshapeでも常にresumable child frameを作っていた。
+
+`GQL_VM_COMPLETE_OBJECT`のsettlement直後に同helperを呼び、成立しなければ
+従来のasync child blockへそのままfallbackするようにした。新しい緩い判定を
+追加せず、既にLIST経路で運用されている安全条件を再利用している。
+
+width 25、unique key、3組のinterleaved測定:
+
+| | 適用前 | 適用後 |
+|---|---:|---:|
+| run 1 | 31,239 req/s | 33,185 req/s |
+| run 2 | 31,464 req/s | 33,182 req/s |
+| run 3 | 31,070 req/s | 33,340 req/s |
+
+全組で約5.5〜7.3%改善した。Ticketやschedulerを置き換えるのではなく、
+settlement後に同期と証明できるsubtreeのframe allocation/completion自体を
+除いたことで初めて安定した差が出た。object loaderのaliasとnon-null child
+error pathを`t/61_declarative_loader.t`へ恒久テストとして追加した。

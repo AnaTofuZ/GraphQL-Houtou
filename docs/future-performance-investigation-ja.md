@@ -2275,3 +2275,21 @@ width 25、unique key、3組のinterleaved測定:
 全組で約4.2〜5.3%改善した。固定loader/source keyだけでなく、router routeと
 loader keyの両方をGraphQL argumentから取るケースをfocused testへ追加し、
 compiled enum分岐と従来interfaceの一致を確認した。
+
+### 14.33 単一argument loader keyの直接materialize
+
+loader metadataのnative化後も、argumentをkeyにする宣言的loaderはresolver用の
+args HashRef全体を生成し、そこからkeyを名前検索していた。
+
+runtime slotのargument definitionとloader keyをschema compile時に対応付け、
+fieldが単一argumentの場合は既存のtyped one-argument specializationを直接使う
+ようにした。これにより、一時HVの生成と`hv_store`、直後の`hv_fetch`を省く。
+
+複数argumentのfieldは従来経路を維持する。loaderが一つの値しか使用しなくても
+GraphQLの`CoerceArgumentValues`は全argumentを検査する必要があり、未使用の
+Non-Null argumentやcustom scalar coercionを省略してはならないためである。
+
+width 25のargument loader benchmarkを長めに交互測定した中央値は、変更前
+52,833 req/s、変更後53,653 req/sで、約1.6%改善した。効果は小さいが、
+既存APIと複数argumentの意味論を維持したままrequest-time HashRefを一つ除去する
+限定的なfast pathとして採用する。

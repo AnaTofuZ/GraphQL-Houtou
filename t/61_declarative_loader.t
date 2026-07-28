@@ -158,6 +158,47 @@ subtest 'argument key is supported' => sub {
   is_deeply \@seen, [ [qw(9)] ], 'argument key reaches the batch callback';
 };
 
+subtest 'single argument loader preserves input coercion' => sub {
+  my (@seen, $parse_count);
+  my $Key = GraphQL::Houtou::Type::Scalar->new(
+    name => 'LoaderKey',
+    serialize => sub { $_[0] },
+    parse_value => sub {
+      $parse_count++;
+      return "coerced:$_[0]";
+    },
+  );
+  my $loader = loader_for('custom', \@seen);
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'CoercedArgumentLoaderQuery',
+      fields => {
+        user => {
+          type => $String,
+          args => { id => { type => $Key } },
+          loader => {
+            context_key => 'users',
+            key => { argument => 'id' },
+          },
+        },
+      },
+    ),
+  );
+  my $runtime = $schema->build_native_runtime(async => 1);
+  my $result = $runtime->execute_document(
+    'query($id: LoaderKey) { user(id: $id) }',
+    variables => { id => '9' },
+    context => { users => $loader },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+  );
+
+  is $result->{data}{user}, 'custom:coerced:9',
+    'the prepared argument value is used as the loader key';
+  is $parse_count, 1, 'custom scalar input coercion runs exactly once';
+  is_deeply \@seen, [ ['coerced:9'] ],
+    'the coerced key reaches the batch callback';
+};
+
 subtest 'router and loader key can both use arguments' => sub {
   my (@primary_seen, @archive_seen);
   my $primary = loader_for('primary-arg', \@primary_seen);

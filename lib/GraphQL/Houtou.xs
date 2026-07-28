@@ -7234,6 +7234,8 @@ gql_runtime_vm_compile_loader_spec(pTHX_ SV *loader_spec_sv)
   key_sv = gql_runtime_vm_fetch_hash_entry_sv(aTHX_ spec_hv, "key", 3);
 
   Newxz(compiled, 1, gql_runtime_vm_native_loader_spec_t);
+  compiled->key_arg_index = -1;
+  compiled->route_key_arg_index = -1;
   if (context_key_sv && SvOK(context_key_sv)) {
     compiled->context_key = gql_runtime_vm_copy_loader_name_sv(
       aTHX_ context_key_sv, &compiled->context_key_len
@@ -7276,6 +7278,28 @@ gql_runtime_vm_compile_loader_spec(pTHX_ SV *loader_spec_sv)
     );
   }
   return compiled;
+}
+
+static IV
+gql_runtime_vm_find_loader_arg_index(
+  const gql_runtime_vm_native_slot_t *slot,
+  const char *name,
+  STRLEN name_len
+)
+{
+  IV i;
+  if (!slot || !name) {
+    return -1;
+  }
+  for (i = 0; i < slot->arg_def_count; i++) {
+    const char *arg_name = slot->arg_defs[i].name;
+    if (arg_name
+        && strlen(arg_name) == name_len
+        && memEQ(arg_name, name, name_len)) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 static gql_runtime_vm_native_runtime_t *
@@ -7379,6 +7403,31 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
             newSVsv(*loader_spec_svp);
           runtime->callback_catalog->slot_native_loader_specs[i] =
             gql_runtime_vm_compile_loader_spec(aTHX_ *loader_spec_svp);
+          if (runtime->callback_catalog->slot_native_loader_specs[i]) {
+            gql_runtime_vm_native_loader_spec_t *native_loader =
+              runtime->callback_catalog->slot_native_loader_specs[i];
+            /* Direct materialization deliberately stays on the one-argument
+             * shape. With multiple definitions, CoerceArgumentValues must
+             * still visit every argument (including custom scalars and
+             * missing Non-Null values), even when the loader only consumes
+             * one of them. That shape retains the full args-HV path. */
+            if (native_loader->key_kind == 2
+                && runtime->runtime_slots[i].arg_def_count == 1) {
+              native_loader->key_arg_index = gql_runtime_vm_find_loader_arg_index(
+                &runtime->runtime_slots[i],
+                native_loader->key_name,
+                native_loader->key_name_len
+              );
+            }
+            if (native_loader->route_key_kind == 2
+                && runtime->runtime_slots[i].arg_def_count == 1) {
+              native_loader->route_key_arg_index = gql_runtime_vm_find_loader_arg_index(
+                &runtime->runtime_slots[i],
+                native_loader->route_key_name,
+                native_loader->route_key_name_len
+              );
+            }
+          }
         }
       }
       if (runtime->runtime_slots[i].field_name && *runtime->runtime_slots[i].field_name) {
@@ -9604,6 +9653,8 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
       ? (HV *)SvRV(context_sv) : NULL;
     SV *loader_sv = NULL;
     SV *key_sv = NULL;
+    SV *owned_key_sv = NULL;
+    SV *owned_route_key_sv = NULL;
     SV *args_sv = NULL;
     SV *ret = NULL;
 
@@ -9653,16 +9704,23 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
         );
         route_key_sv = (svp && SvOK(*svp)) ? *svp : NULL;
       } else if (loader_spec->route_key_kind == 2) {
-        args_sv = gql_runtime_vm_build_current_args_sv(aTHX_ state);
-        if (args_sv && SvROK(args_sv)
-            && SvTYPE(SvRV(args_sv)) == SVt_PVHV) {
-          SV **svp = hv_fetch(
-            (HV *)SvRV(args_sv),
-            loader_spec->route_key_name,
-            (I32)loader_spec->route_key_name_len,
-            0
-          );
-          route_key_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+        if (loader_spec->route_key_arg_index >= 0) {
+          owned_route_key_sv =
+            gql_runtime_vm_build_current_one_arg_sv(aTHX_ state);
+          route_key_sv = (owned_route_key_sv && SvOK(owned_route_key_sv))
+            ? owned_route_key_sv : NULL;
+        } else {
+          args_sv = gql_runtime_vm_build_current_args_sv(aTHX_ state);
+          if (args_sv && SvROK(args_sv)
+              && SvTYPE(SvRV(args_sv)) == SVt_PVHV) {
+            SV **svp = hv_fetch(
+              (HV *)SvRV(args_sv),
+              loader_spec->route_key_name,
+              (I32)loader_spec->route_key_name_len,
+              0
+            );
+            route_key_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+          }
         }
       }
       if (router_sv && SvROK(router_sv)
@@ -9693,18 +9751,29 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
       );
       key_sv = (svp && SvOK(*svp)) ? *svp : NULL;
     } else if (loader_spec->key_kind == 2) {
-      if (!args_sv) {
-        args_sv = gql_runtime_vm_build_current_args_sv(aTHX_ state);
-      }
-      if (args_sv && SvROK(args_sv)
-          && SvTYPE(SvRV(args_sv)) == SVt_PVHV) {
-        SV **svp = hv_fetch(
-          (HV *)SvRV(args_sv),
-          loader_spec->key_name,
-          (I32)loader_spec->key_name_len,
-          0
-        );
-        key_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+      if (loader_spec->key_arg_index >= 0) {
+        if (owned_route_key_sv
+            && loader_spec->key_arg_index == loader_spec->route_key_arg_index) {
+          key_sv = SvOK(owned_route_key_sv) ? owned_route_key_sv : NULL;
+        } else {
+          owned_key_sv = gql_runtime_vm_build_current_one_arg_sv(aTHX_ state);
+          key_sv = (owned_key_sv && SvOK(owned_key_sv))
+            ? owned_key_sv : NULL;
+        }
+      } else {
+        if (!args_sv) {
+          args_sv = gql_runtime_vm_build_current_args_sv(aTHX_ state);
+        }
+        if (args_sv && SvROK(args_sv)
+            && SvTYPE(SvRV(args_sv)) == SVt_PVHV) {
+          SV **svp = hv_fetch(
+            (HV *)SvRV(args_sv),
+            loader_spec->key_name,
+            (I32)loader_spec->key_name_len,
+            0
+          );
+          key_sv = (svp && SvOK(*svp)) ? *svp : NULL;
+        }
       }
     }
 
@@ -9743,6 +9812,8 @@ gql_runtime_vm_resolve_current_field_explicit_fast_sv(
     if (args_sv) {
       SvREFCNT_dec(args_sv);
     }
+    SvREFCNT_dec(owned_key_sv);
+    SvREFCNT_dec(owned_route_key_sv);
     return gql_runtime_vm_fast_lane_guard_promise_sv(
       aTHX_ state, ret ? ret : newSVsv(&PL_sv_undef), error_out
     );

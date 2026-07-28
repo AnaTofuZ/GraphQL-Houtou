@@ -167,8 +167,10 @@ typedef struct {
   STRLEN context_key_len;
   char *key_name;
   STRLEN key_name_len;
+  IV key_arg_index;
   char *route_key_name;
   STRLEN route_key_name_len;
+  IV route_key_arg_index;
   /* 1 = source hash key, 2 = GraphQL argument. */
   U8 key_kind;
   U8 route_key_kind;

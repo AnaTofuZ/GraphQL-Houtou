@@ -158,6 +158,52 @@ subtest 'argument key is supported' => sub {
   is_deeply \@seen, [ [qw(9)] ], 'argument key reaches the batch callback';
 };
 
+subtest 'router and loader key can both use arguments' => sub {
+  my (@primary_seen, @archive_seen);
+  my $primary = loader_for('primary-arg', \@primary_seen);
+  my $archive = loader_for('archive-arg', \@archive_seen);
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'ArgumentRouterQuery',
+      fields => {
+        user => {
+          type => $String,
+          args => {
+            store => { type => $String },
+            id => { type => $String },
+          },
+          loader => {
+            router => {
+              context_key => 'user_loaders',
+              route_key => { argument => 'store' },
+            },
+            key => { argument => 'id' },
+          },
+        },
+      },
+    ),
+  );
+  my $runtime = $schema->build_native_runtime(async => 1);
+  my $result = $runtime->execute_document(
+    '{ user(store: "archive", id: "8") }',
+    context => {
+      user_loaders => {
+        primary => $primary,
+        archive => $archive,
+      },
+    },
+    on_stall => GraphQL::Houtou::DataLoader->on_stall_for(
+      $primary, $archive,
+    ),
+  );
+
+  is $result->{data}{user}, 'archive-arg:8',
+    'argument route selects the requested loader';
+  is_deeply \@primary_seen, [], 'unselected argument route stays idle';
+  is_deeply \@archive_seen, [ [qw(8)] ],
+    'argument key reaches the routed loader';
+};
+
 subtest 'native loader path preserves custom cache keys' => sub {
   my @seen;
   my $loader = GraphQL::Houtou::DataLoader->new(

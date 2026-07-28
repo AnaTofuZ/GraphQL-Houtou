@@ -163,10 +163,24 @@ typedef struct {
 #define GQL_VM_LEAF_CUSTOM 7
 
 typedef struct {
+  char *context_key;
+  STRLEN context_key_len;
+  char *key_name;
+  STRLEN key_name_len;
+  char *route_key_name;
+  STRLEN route_key_name_len;
+  /* 1 = source hash key, 2 = GraphQL argument. */
+  U8 key_kind;
+  U8 route_key_kind;
+  U8 uses_router;
+} gql_runtime_vm_native_loader_spec_t;
+
+typedef struct {
   SV *runtime_schema;
   SV **slot_field_names;
   SV **slot_resolvers;
   SV **slot_loader_specs;
+  gql_runtime_vm_native_loader_spec_t **slot_native_loader_specs;
   SV **slot_type_objects;
   SV **slot_tag_resolvers;
   SV **slot_resolve_types;
@@ -3764,6 +3778,15 @@ gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
       if (catalog->slot_loader_specs && catalog->slot_loader_specs[i]) {
         SvREFCNT_dec(catalog->slot_loader_specs[i]);
       }
+      if (catalog->slot_native_loader_specs
+          && catalog->slot_native_loader_specs[i]) {
+        gql_runtime_vm_native_loader_spec_t *loader_spec =
+          catalog->slot_native_loader_specs[i];
+        Safefree(loader_spec->context_key);
+        Safefree(loader_spec->key_name);
+        Safefree(loader_spec->route_key_name);
+        Safefree(loader_spec);
+      }
       if (catalog->slot_type_objects && catalog->slot_type_objects[i]) {
         SvREFCNT_dec(catalog->slot_type_objects[i]);
       }
@@ -3797,6 +3820,7 @@ gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
     Safefree(catalog->slot_field_names);
     Safefree(catalog->slot_resolvers);
     Safefree(catalog->slot_loader_specs);
+    Safefree(catalog->slot_native_loader_specs);
     Safefree(catalog->slot_type_objects);
     Safefree(catalog->slot_tag_resolvers);
     Safefree(catalog->slot_tag_entries);

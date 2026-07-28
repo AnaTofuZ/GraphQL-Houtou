@@ -2244,3 +2244,34 @@ width 25、unique key、3組のinterleaved測定:
 settlement後に同期と証明できるsubtreeのframe allocation/completion自体を
 除いたことで初めて安定した差が出た。object loaderのaliasとnon-null child
 error pathを`t/61_declarative_loader.t`へ恒久テストとして追加した。
+
+### 14.32 declarative loader metadataのnative compile
+
+宣言的loaderのschema metadataはnative runtime構築時点でvalidation済みだが、
+実行時にはfieldごとにPerl hashから`context_key`、`router`、`key`、
+`source_key`/`argument`、`route_key`を再取得し、各文字列へ`SvPV`を行っていた。
+
+`gql_runtime_vm_native_loader_spec_t`を追加し、runtime構築時に次を固定長metadata
+へコンパイルするようにした。
+
+- fixed loaderかrouterか
+- request context key
+- loader keyのsource/argument種別と名前
+- router keyのsource/argument種別と名前
+
+Perlのloader specはgeneric/fallback executorとの互換用に保持し、native fast
+pathだけがcompiled metadataを利用する。runtime destructorはコピーした文字列と
+spec本体をslot単位で解放する。公開schema interfaceとrequest context形式に変更は
+ない。
+
+width 25、unique key、3組のinterleaved測定:
+
+| | 適用前 | 適用後 |
+|---|---:|---:|
+| run 1 | 34,183 req/s | 35,628 req/s |
+| run 2 | 33,811 req/s | 35,607 req/s |
+| run 3 | 33,653 req/s | 35,291 req/s |
+
+全組で約4.2〜5.3%改善した。固定loader/source keyだけでなく、router routeと
+loader keyの両方をGraphQL argumentから取るケースをfocused testへ追加し、
+compiled enum分岐と従来interfaceの一致を確認した。

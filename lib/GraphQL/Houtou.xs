@@ -4736,35 +4736,55 @@ gql_runtime_vm_try_execute_plain_hash_block_fast_sv(
 
   block = &bundle->blocks[block_index];
   source_hv = (HV *)SvRV(source);
+  if (block->plain_hash_projection_state == 0) {
+    block->plain_hash_projection_state = 2;
+    for (i = 0; i < block->op_count; i++) {
+      const gql_runtime_vm_native_op_t *op = &block->ops[i];
+      const gql_runtime_vm_native_slot_t *slot;
+      IV leaf_kind = GQL_VM_LEAF_NONE;
+
+      if (op->slot_index < 0 || op->slot_index >= block->slot_count
+          || op->resolve_code != GQL_VM_RESOLVE_DEFAULT
+          || op->complete_code != GQL_VM_COMPLETE_GENERIC
+          || op->child_block_index >= 0 || op->abstract_child_count > 0
+          || op->has_directives || op->has_runtime_directives
+          || op->runtime_directives_sv) {
+        block->plain_hash_projection_state = 1;
+        break;
+      }
+      slot = gql_runtime_vm_effective_slot(
+        runtime, &block->slots[op->slot_index]
+      );
+      if (!slot || slot->resolver_shape_code != GQL_VM_RESOLVE_DEFAULT
+          || (slot->accessor_name && slot->accessor_name_len)
+          || gql_runtime_vm_slot_resolver_sv(runtime, slot)) {
+        block->plain_hash_projection_state = 1;
+        break;
+      }
+      if (runtime->callback_catalog
+          && runtime->callback_catalog->slot_leaf_kinds
+          && slot->schema_slot_index >= 0
+          && slot->schema_slot_index < runtime->runtime_slot_count) {
+        leaf_kind = runtime->callback_catalog
+          ->slot_leaf_kinds[slot->schema_slot_index];
+      }
+      if (leaf_kind == GQL_VM_LEAF_CUSTOM) {
+        block->plain_hash_projection_state = 1;
+        break;
+      }
+    }
+  }
+  if (block->plain_hash_projection_state != 2) {
+    return NULL;
+  }
+
   for (i = 0; i < block->op_count; i++) {
     const gql_runtime_vm_native_op_t *op = &block->ops[i];
-    const gql_runtime_vm_native_slot_t *slot;
+    const gql_runtime_vm_native_slot_t *slot =
+      gql_runtime_vm_effective_slot(
+        runtime, &block->slots[op->slot_index]
+      );
     SV **value_svp;
-    IV leaf_kind = GQL_VM_LEAF_NONE;
-
-    if (op->slot_index < 0 || op->slot_index >= block->slot_count
-        || op->resolve_code != GQL_VM_RESOLVE_DEFAULT
-        || op->complete_code != GQL_VM_COMPLETE_GENERIC
-        || op->child_block_index >= 0 || op->abstract_child_count > 0
-        || op->has_directives || op->has_runtime_directives
-        || op->runtime_directives_sv) {
-      return NULL;
-    }
-    slot = gql_runtime_vm_effective_slot(runtime, &block->slots[op->slot_index]);
-    if (!slot || slot->resolver_shape_code != GQL_VM_RESOLVE_DEFAULT
-        || (slot->accessor_name && slot->accessor_name_len)
-        || gql_runtime_vm_slot_resolver_sv(runtime, slot)) {
-      return NULL;
-    }
-    if (runtime->callback_catalog
-        && runtime->callback_catalog->slot_leaf_kinds
-        && slot->schema_slot_index >= 0
-        && slot->schema_slot_index < runtime->runtime_slot_count) {
-      leaf_kind = runtime->callback_catalog->slot_leaf_kinds[slot->schema_slot_index];
-    }
-    if (leaf_kind == GQL_VM_LEAF_CUSTOM) {
-      return NULL;
-    }
     value_svp = hv_fetch(
       source_hv,
       slot->field_name,

@@ -2293,3 +2293,64 @@ width 25のargument loader benchmarkを長めに交互測定した中央値は�
 52,833 req/s、変更後53,653 req/sで、約1.6%改善した。効果は小さいが、
 既存APIと複数argumentの意味論を維持したままrequest-time HashRefを一つ除去する
 限定的なfast pathとして採用する。
+
+### 14.34 DataLoader batch bulk completion試作と不採用
+
+同じDataLoader batchで解決した複数fieldを一つのcompletion単位として親へ反映する
+案を、width 25のplain-hash object loaderに限定して2段階で試作した。
+
+最初の試作では、pendingが1件だけのitem frameについてTicket callback内で
+plain-hash projection、field outcome反映、親list slotへの格納まで融合した。
+focused testは成功したが、約35k req/sだった従来経路に対して約31k req/sとなり、
+およそ10%低下した。callbackごとに親への伝播を開始するとbatch中の処理局所性が
+悪化する。
+
+次にDataLoaderのdispatch結果を全件preflightし、次の条件を満たすbatchだけを
+まとめてsettleする試作を行った。
+
+- 各Ticketのsubscriberがnative callback一つだけ
+- 各callbackがpending一件だけのitem frameを所有
+- 全item frameが同じlist pendingへ接続
+- 各結果が既存のplain-hash projection fast pathに適合
+
+全Ticketをsettled状態へ移してから各itemをnative listへ格納し、最後にowner frameを
+一度だけschedulerへ渡した。長めの3組の交互測定は次の通りだった。
+
+| run | 従来 | bulk |
+|---|---:|---:|
+| 1 | 31,331 req/s | 33,213 req/s |
+| 2 | 28,985 req/s | 27,111 req/s |
+| 3 | 33,671 req/s | 29,789 req/s |
+
+中央値は従来31,331 req/s、bulk 29,789 req/sで約4.9%低下し、改善を再現できなかった。
+Ticket、callback、frameの一部をまとめても、各rowのprojectionとnative object生成は
+残るうえ、batch全体のpreflightと一時保持が追加される。両試作は不採用とし、
+実験コードは残していない。
+
+この結果から、現在のplain-hash object loaderではscheduler単位の集約をこれ以上
+進めず、次はprojectionそのものを複数row向けtight loopへ変えるか、async JSON
+writerへ直接流す設計を検討する。
+
+### 14.35 plain-hash projection planのblock cache
+
+bulk completion不採用後、projection自体のrequest-time処理を再確認した。
+`gql_runtime_vm_try_execute_plain_hash_block_fast_sv`はrowごとに、child blockの全opが
+default resolver、built-in scalar、directiveなし、child blockなしであることを
+再検証していた。これらはschema/runtime/programに対して不変である。
+
+native blockへ3-state cache（未確認、不適格、適格）を追加し、構造条件とresolver
+catalogの検査を最初のrowで一度だけ行うようにした。各source hashの値がreferenceで
+ないことはrequest data依存なので、従来どおりrowごとに確認する。custom scalar、
+accessor、明示resolverなどで不適格になったblockも、その結果をcacheしてgeneric
+completionへ戻す。
+
+width 25のobject loaderだけを10秒ずつ3組交互測定した。
+
+| run | cacheなし | cacheあり |
+|---|---:|---:|
+| 1 | 33,586 req/s | 34,067 req/s |
+| 2 | 33,526 req/s | 33,853 req/s |
+| 3 | 33,204 req/s | 33,154 req/s |
+
+中央値は33,526 req/sから33,853 req/sへ約1.0%改善した。局所的な改善だが、
+追加allocationがなく、不適格blockの繰り返し検査も除去できるため採用する。

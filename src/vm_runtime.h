@@ -221,6 +221,10 @@ typedef struct {
 
 typedef struct {
   IV family_code;
+  /* 0 = unchecked, 1 = ineligible, 2 = structurally eligible for the
+   * plain-hash scalar projection fast path. Runtime source values are
+   * still checked per row. */
+  U8 plain_hash_projection_state;
   char *type_name;
   SV *type_object_sv;
   IV slot_count;

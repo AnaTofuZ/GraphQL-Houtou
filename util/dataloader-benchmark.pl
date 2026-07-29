@@ -25,13 +25,15 @@ my $count = -3;
 my $width = 10;
 my $scenario = 'loader';
 my $access = 'unique';
+my $case = '';
 
 GetOptions(
   'count=s' => \$count,
   'width=i' => \$width,
   'scenario=s' => \$scenario,
   'access=s' => \$access,
-) or die "Usage: $0 [--count Benchmark-count] [--width key-count] [--scenario loader|execution] [--access unique|cold|repeated|primed]\n";
+  'case=s' => \$case,
+) or die "Usage: $0 [--count Benchmark-count] [--width key-count] [--scenario loader|execution] [--access unique|cold|repeated|primed] [--case name]\n";
 
 die "--width must be positive\n" unless $width > 0;
 die "--scenario must be loader or execution\n"
@@ -181,6 +183,11 @@ if ($scenario eq 'execution') {
 } else {
   $cases = { load_and_dispatch => \&run_request };
   $label = "$width $access accesses in one batch";
+}
+
+if ($case ne '') {
+  die "unknown benchmark case '$case'\n" if !exists $cases->{$case};
+  $cases = { $case => $cases->{$case} };
 }
 
 for my $runner (values %$cases) {

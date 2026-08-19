@@ -10546,7 +10546,7 @@ gql_runtime_vm_try_complete_declarative_batch_plan_list_fast_sv(
       SV *values_sv = POPs;
       if (values_sv && SvROK(values_sv)
           && SvTYPE(SvRV(values_sv)) == SVt_PVAV
-          && av_count((AV *)SvRV(values_sv)) == count) {
+          && (IV)av_count((AV *)SvRV(values_sv)) == count) {
         values_av = (AV *)SvREFCNT_inc(SvRV(values_sv));
       } else {
         batch_error = newSVpvs(

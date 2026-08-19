@@ -549,7 +549,15 @@ frames. The loaded object selection must contain only default scalar fields:
     my $users = GraphQL::Houtou::DataLoader->new(
       cache => 0,
       batch_plan => 1,
-      batch => \&load_users,
+      batch => sub {
+        my ($ids) = @_;
+        my $in = join ',', ('?') x @$ids;
+        my %user = map { ($_->{id} => $_) } @{ $dbh->selectall_arrayref(
+          "SELECT id, name FROM users WHERE id IN ($in)",
+          { Slice => {} }, @$ids,
+        ) };
+        return [ map { $user{$_} } @$ids ];
+      },
     );
 
 Other query shapes and loader configurations automatically use the ordinary

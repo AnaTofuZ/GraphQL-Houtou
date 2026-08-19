@@ -2354,3 +2354,25 @@ width 25のobject loaderだけを10秒ずつ3組交互測定した。
 
 中央値は33,526 req/sから33,853 req/sへ約1.0%改善した。局所的な改善だが、
 追加allocationがなく、不適格blockの繰り返し検査も除去できるため採用する。
+
+### 14.36 宣言的loaderのexecutor-owned batch plan
+
+Ticket生成後のbulk completionではなく、Ticketとitem frameを最初から作らない
+限定経路を追加した。対象は、単一root object-list、itemのselectionが単一の
+宣言的object loader field、cache無効、loaded objectがdefault scalar fieldのみ、
+というshapeに明示的に`batch_plan => 1`を指定した場合に限る。全source keyを
+先に収集し、batch callbackを1回呼び、結果を既存の同期child completionへ直接
+渡す。条件外は従来のTicket経路へfallbackする。
+
+width 25、unique keyを5秒ずつ3組交互測定した結果は次の通り。
+
+| run | declarative loader | batch plan |
+|---|---:|---:|
+| 1 | 35,813 req/s | 94,076 req/s |
+| 2 | 35,476 req/s | 94,210 req/s |
+| 3 | 35,449 req/s | 94,565 req/s |
+
+中央値35,476 req/sから94,210 req/sへ約2.66倍となった。過去のTicket表現変更や
+settle後bulk化と異なり、per-itemのTicket、subscriber、suspension frameを
+生成前に除去したことが差になった。cache、router、複数sibling、引数付きfield、
+custom scalarは意味論とbatch境界を保つため現時点では対象外とする。

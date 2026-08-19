@@ -63,7 +63,8 @@ sub run_request {
 sub build_execution_runner {
   my ($mode) = @_;
   my $fast = $mode eq 'fast';
-  my $declarative = $mode eq 'declarative';
+  my $declarative = $mode eq 'declarative' || $mode eq 'batch_plan';
+  my $batch_plan = $mode eq 'batch_plan';
   my $Loaded = GraphQL::Houtou::Type::Object->new(
     name => ucfirst($mode) . 'LoadedValue',
     fields => {
@@ -116,6 +117,7 @@ sub build_execution_runner {
   return sub {
     my $loader = GraphQL::Houtou::DataLoader->new(
       cache => $access eq 'unique' ? 0 : 1,
+      batch_plan => $batch_plan,
       batch => sub {
         my ($batch_keys) = @_;
         return [ map { +{ value => "value:$_" } } @$batch_keys ];
@@ -177,6 +179,7 @@ if ($scenario eq 'execution') {
     generic_resolver => build_execution_runner('generic'),
     fast_resolver => build_execution_runner('fast'),
     declarative_loader => build_execution_runner('declarative'),
+    declarative_batch_plan => build_execution_runner('batch_plan'),
     declarative_argument_loader => build_argument_execution_runner(),
   };
   $label = "$width $access accesses through GraphQL execution";

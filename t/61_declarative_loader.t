@@ -405,6 +405,75 @@ subtest 'object loader projects plain hash children after settlement' => sub {
     'projected child failure retains its exact response path';
 };
 
+subtest 'cacheless object-list batch plan bypasses tickets and stall drive' => sub {
+  my @seen;
+  my $stall_calls = 0;
+  my $loader = GraphQL::Houtou::DataLoader->new(
+    cache => 0,
+    batch_plan => 1,
+    batch => sub {
+      my ($keys) = @_;
+      push @seen, [ @$keys ];
+      return [ map {
+        $_ eq '2'
+          ? GraphQL::Houtou::DataLoader::Error->new('missing user')
+          : +{ name => "planned:$_" }
+      } @$keys ];
+    },
+  );
+  my $User = GraphQL::Houtou::Type::Object->new(
+    name => 'BatchPlanUser',
+    fields => { name => { type => $String } },
+  );
+  my $Row = GraphQL::Houtou::Type::Object->new(
+    name => 'BatchPlanRow',
+    fields => {
+      user => {
+        type => $User,
+        loader => {
+          context_key => 'users',
+          key => { source_key => 'user_id' },
+        },
+      },
+    },
+  );
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'BatchPlanQuery',
+      fields => {
+        rows => {
+          type => GraphQL::Houtou::Type::List->new(of => $Row),
+          resolve => sub {
+            return [ { user_id => '1' }, { user_id => '2' }, { user_id => '3' } ];
+          },
+        },
+      },
+    ),
+    types => [ $Row, $User ],
+  );
+  my $runtime = $schema->build_native_runtime(async => 1);
+  my $result = $runtime->execute_document(
+    '{ rows { user { label: name } } }',
+    context => { users => $loader },
+    on_stall => sub {
+      $stall_calls++;
+      return $loader->dispatch;
+    },
+  );
+
+  is_deeply $result->{data}{rows}, [
+    { user => { label => 'planned:1' } },
+    { user => undef },
+    { user => { label => 'planned:3' } },
+  ], 'batch results project directly into their list positions';
+  is_deeply \@seen, [ [qw(1 2 3)] ], 'all visible keys use one direct batch';
+  is $stall_calls, 0, 'no Ticket suspension reaches on_stall';
+  is_deeply $result->{errors}[0]{path}, [ 'rows', 1, 'user' ],
+    'per-key errors retain the loader field path';
+
+  is $loader->dispatch, 0, 'batch plan leaves no ticket queue behind';
+};
+
 subtest 'invalid declarations fail while building the runtime graph' => sub {
   my @invalid = (
     [

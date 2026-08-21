@@ -542,6 +542,27 @@ Declarative fields currently use the same explicit C<on_stall> registration
 as resolver-based DataLoader fields. This keeps dispatch policy independent
 from request context layout.
 
+For a cacheless loader used by the only field of a root object list, opt in
+to the executor-owned batch plan to skip per-item tickets and suspension
+frames. The loaded object selection must contain only default scalar fields:
+
+    my $users = GraphQL::Houtou::DataLoader->new(
+      cache => 0,
+      batch_plan => 1,
+      batch => sub {
+        my ($ids) = @_;
+        my $in = join ',', ('?') x @$ids;
+        my %user = map { ($_->{id} => $_) } @{ $dbh->selectall_arrayref(
+          "SELECT id, name FROM users WHERE id IN ($in)",
+          { Slice => {} }, @$ids,
+        ) };
+        return [ map { $user{$_} } @$ids ];
+      },
+    );
+
+Other query shapes and loader configurations automatically use the ordinary
+DataLoader path.
+
 =head3 Declaring an async schema (async => 1)
 
 Batching is the normal deployment shape, so runtimes accept a single

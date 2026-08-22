@@ -37,6 +37,7 @@ my $adapter = GraphQL::Houtou::Async::Adapter->register(
     return [
       $future,
       sub { $future->done(@_) },
+      sub { $future->fail(@_) },
     ];
   },
   all => sub {
@@ -56,8 +57,10 @@ is(($rejected->failure)[0], 'original failure',
 
 my $pending;
 my $loader = GraphQL::Houtou::DataLoader->new(
+  async_adapter => $adapter,
   batch => sub { [ map { "L$_" } @{ $_[0] } ] },
 );
+my ($loader_chain_promise, $loader_all_promise);
 my $schema = GraphQL::Houtou::Schema->new(
   query => GraphQL::Houtou::Type::Object->new(
     name => 'FutureXSAdapterQuery',
@@ -70,12 +73,14 @@ my $schema = GraphQL::Houtou::Schema->new(
       },
       loader_chain => {
         type => $String,
-        resolve => sub { $loader->load(2)->then(sub { $_[0] }) },
+        resolve => sub {
+          $loader_chain_promise = $loader->load(2)->then(sub { $_[0] });
+        },
       },
       loader_all => {
         type => $String->list,
         resolve => sub {
-          return GraphQL::Houtou::DataLoader::Ticket
+          return $loader_all_promise = GraphQL::Houtou::DataLoader::Ticket
             ->all($loader->load(3), $loader->load(4))
             ->then(sub { [ map { @$_ } @_ ] });
         },
@@ -112,6 +117,34 @@ is_deeply $loaded, {
     loader_all => [qw(L3 L4)],
   },
 }, 'Future::XS adapter supports DataLoader tickets and promise composition';
+ok $loader_chain_promise->isa('Future') && $loader_all_promise->isa('Future'),
+  'DataLoader promise composition uses its async adapter';
+
+my $adapter_ticket = GraphQL::Houtou::DataLoader::Ticket->resolved(
+  'adapter value', $adapter,
+);
+my $race = $adapter_ticket->race($adapter_ticket);
+ok $race->isa('Future'), 'DataLoader race uses its async adapter';
+is(($race->get)[0], 'adapter value', 'adapter race resolves correctly');
+my $plain_race = $adapter_ticket->race('plain value');
+is(($plain_race->get)[0], 'plain value',
+  'adapter race accepts plain values');
+
+my $caught_ticket = GraphQL::Houtou::DataLoader::Ticket->new($adapter);
+my $caught = $caught_ticket->catch(sub { "caught $_[0]" });
+$caught_ticket->_reject('failure');
+is(($caught->get)[0], 'caught failure', 'DataLoader catch uses its async adapter');
+
+my $finalized = 0;
+my $finally = $adapter_ticket->finally(sub { $finalized++ });
+is(($finally->get)[0], 'adapter value', 'DataLoader finally preserves its value');
+is $finalized, 1, 'DataLoader finally uses its async adapter';
+
+my $finally_rejected_ticket = GraphQL::Houtou::DataLoader::Ticket->new($adapter);
+my $finally_rejected = $finally_rejected_ticket->finally(sub { Future->done });
+$finally_rejected_ticket->_reject('final failure');
+is(($finally_rejected->failure)[0], 'final failure',
+  'DataLoader finally preserves rejection through its async adapter');
 
 my $result = $runtime->execute_document('{ pending }');
 ok !$result->is_ready, 'XS-backed Future response remains pending';

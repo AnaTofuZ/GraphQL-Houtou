@@ -237,8 +237,8 @@ optional C<description> / C<deprecation_reason>. Fields without
 C<resolve> use the default resolver. A blessed source method named for the
 field is called with C<($args, $context, $info)>. Otherwise a source hash key
 is read; when that value is a coderef, it is called with the same arguments.
-Other hash values are returned directly. Resolvers may return
-L<Promise::XS> promises; see
+Other hash values are returned directly. Resolvers may return promises
+supported by the runtime's async adapter; see
 L<GraphQL::Houtou/Batching resolvers (DataLoader / the on_stall hook)>.
 For the common resolver shape that only calls a request-scoped loader, the
 C<loader> field option provides a declarative XS path; see

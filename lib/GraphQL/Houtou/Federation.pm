@@ -6,8 +6,9 @@ use warnings;
 
 use Exporter 'import';
 use GraphQL::Houtou ();
-use GraphQL::Houtou::Schema ();
+use GraphQL::Houtou::Async::Adapter ();
 use GraphQL::Houtou::Promise::PromiseXS qw(is_promise_xs_value);
+use GraphQL::Houtou::Schema ();
 
 our $VERSION = $GraphQL::Houtou::VERSION;
 our @EXPORT_OK = qw(build_subgraph_schema);
@@ -58,6 +59,11 @@ sub build_subgraph_schema {
     if !defined($document) || ref($document) || $document !~ /\S/;
 
   my $entity_resolvers = delete($opts{entity_resolvers}) || {};
+  my $has_async_adapter = exists $opts{async_adapter};
+  my $async_adapter = GraphQL::Houtou::Async::Adapter->coerce(
+    delete $opts{async_adapter},
+  );
+  my $builtin_async = $async_adapter->is_builtin;
   my $max_representations = exists($opts{max_representations})
     ? delete($opts{max_representations}) : 100;
   die "max_representations must be a positive integer\n"
@@ -129,7 +135,10 @@ sub build_subgraph_schema {
         die "Federation representations exceed max_representations ($max_representations)\n"
           if @$representations > $max_representations;
         return [ map {
-          _resolve_representation($_, $context, $entities, $entity_resolvers)
+          _resolve_representation(
+            $_, $context, $entities, $entity_resolvers,
+            $async_adapter, $builtin_async,
+          )
         } @$representations ];
       },
     );
@@ -143,6 +152,7 @@ sub build_subgraph_schema {
   $entities = _validate_entity_keys($schema, $entities);
   $schema->{_federation_subgraph_sdl} = $document;
   $schema->{_federation_max_representations} = 0 + $max_representations;
+  $schema->{_default_async_adapter} = $async_adapter if $has_async_adapter;
   return $schema;
 }
 
@@ -238,7 +248,8 @@ sub _validate_fieldset_selections {
 }
 
 sub _resolve_representation {
-  my ($representation, $context, $entities, $entity_resolvers) = @_;
+  my ($representation, $context, $entities, $entity_resolvers,
+      $async_adapter, $builtin_async) = @_;
   die "Federation representation must be an object\n"
     if ref($representation) ne 'HASH';
   my $typename = $representation->{__typename};
@@ -250,8 +261,13 @@ sub _resolve_representation {
     if !grep { _representation_has_fields($representation, $_) }
       @{ $entities->{$typename} };
   my $value = $entity_resolvers->{$typename}->($representation, $context);
-  if (is_promise_xs_value($value)) {
+  if ($builtin_async && is_promise_xs_value($value)) {
     return $value->then(sub { _tag_entity_result($typename, $_[0]) });
+  }
+  if (!$builtin_async && $async_adapter->is_promise($value)) {
+    return $async_adapter->then(
+      $value, sub { _tag_entity_result($typename, $_[0]) },
+    );
   }
   return _tag_entity_result($typename, $value);
 }
@@ -316,9 +332,11 @@ limits work performed by one C<_entities> field.
 
 C<entity_resolvers> maps each resolvable entity type to a callback. The
 callback receives C<($representation, $context)> and returns a hash reference,
-C<undef>, or a C<Promise::XS> for either. Results are emitted in representation
-order, so callbacks can return request-scoped DataLoader promises to batch
-database access.
+C<undef>, or a promise supported by the configured async adapter for either.
+Pass C<async_adapter> to C<build_subgraph_schema>; the schema reuses it when
+building its native runtime. Results are emitted in representation order, so
+callbacks can return request-scoped DataLoader promises to batch database
+access.
 
 Every representation must contain a string C<__typename> and satisfy at least
 one resolvable C<@key> declared for that type. FieldSet syntax and field paths

@@ -6,6 +6,7 @@ use Test::More;
 use Test::Deep qw(cmp_deeply);
 
 use GraphQL::Houtou qw(build_subgraph_schema execute);
+use GraphQL::Houtou::Async::Adapter;
 
 my $SDL = <<'SDL';
 extend schema
@@ -158,6 +159,48 @@ subtest 'Promise::XS entity resolvers stay on the async lane' => sub {
   );
   is $result->{data}{_entities}[0]{name}, 'promised',
     'promise result is tagged and completed';
+};
+
+subtest 'entity resolvers use the configured async adapter' => sub {
+  require Promise::XS;
+  my $then_calls = 0;
+  my $adapter = GraphQL::Houtou::Async::Adapter->register(
+    class => 'Promise::XS::Promise',
+    then => sub { $then_calls++; shift->then(@_) },
+    new_pending => sub {
+      my $deferred = Promise::XS::deferred();
+      return [
+        $deferred->promise,
+        sub { $deferred->resolve(@_) },
+        sub { $deferred->reject(@_) },
+      ];
+    },
+    all => sub { Promise::XS::Promise->all(@{ $_[0] }) },
+  );
+  my $async_schema = build_subgraph_schema(
+    $SDL,
+    async_adapter => $adapter,
+    entity_resolvers => {
+      Product => sub {
+        my ($representation) = @_;
+        return Promise::XS::resolved({
+          upc => $representation->{upc}, name => 'adapted',
+        });
+      },
+    },
+  );
+  my $result = execute(
+    $async_schema,
+    'query Entities($representations: [_Any!]!) {'
+      . ' _entities(representations: $representations) {'
+      . '   ... on Product { upc name }'
+      . ' }'
+      . '}',
+    { representations => [ { __typename => 'Product', upc => 'p' } ] },
+  );
+  is $result->{data}{_entities}[0]{name}, 'adapted',
+    'adapter promise is tagged and completed';
+  ok $then_calls, 'Federation chained through the configured adapter';
 };
 
 subtest 'key FieldSets are validated when the schema is built' => sub {

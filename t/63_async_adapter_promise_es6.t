@@ -29,9 +29,9 @@ my $adapter = GraphQL::Houtou::Async::Adapter->register(
     return $promise->then(@callbacks);
   },
   new_pending => sub {
-    my $resolve;
-    my $promise = Promise::ES6->new(sub { ($resolve) = @_ });
-    return [ $promise, $resolve ];
+    my ($resolve, $reject);
+    my $promise = Promise::ES6->new(sub { ($resolve, $reject) = @_ });
+    return [ $promise, $resolve, $reject ];
   },
   all => sub { Promise::ES6->all($_[0]) },
 );

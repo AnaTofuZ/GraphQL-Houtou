@@ -83,13 +83,7 @@ sub _native_runtime_handle {
 
 sub _async_adapter {
   my ($adapter) = @_;
-  return GraphQL::Houtou::Async::Adapter->builtin
-    if !defined($adapter) || (!ref($adapter) && $adapter eq 'Promise::XS');
-  die "async_adapter must be an adapter object; only 'Promise::XS' is built in\n"
-    if !ref($adapter);
-  die "async_adapter must be a GraphQL::Houtou async adapter object\n"
-    if !blessed($adapter) || !$adapter->isa('GraphQL::Houtou::Async::Adapter');
-  return $adapter;
+  return GraphQL::Houtou::Async::Adapter->coerce($adapter);
 }
 
 sub _uses_promise_xs { $_[0]{_async_adapter}->is_builtin }
@@ -353,7 +347,7 @@ sub execute_program {
   my $variables = $has_variables ? $opts{variables} : undef;
   my $strict_sync = delete $opts{strict_sync} ? 1 : 0;
 
-  die "promise_code is no longer supported; Promise::XS is detected automatically.\n"
+  die "promise_code is no longer supported; Promise::XS is built in and custom backends use async_adapter.\n"
     if exists $opts{promise_code};
 
   if ($on_stall && !$strict_sync) {
@@ -689,8 +683,8 @@ sub execute_bundle {
 
 # Direct-JSON siblings of the sync native lane: the response is rendered as
 # UTF-8 JSON bytes in XS without materializing the Perl envelope. Without
-# on_stall the lane is sync-only and resolvers returning Promise::XS
-# promises croak; with on_stall the request runs on the async lane and the
+# on_stall the lane is sync-only and resolvers returning supported promises
+# croak; with on_stall the request runs on the async lane and the
 # response frame serializes its native value tree straight to JSON when it
 # resolves (see execute_program_to_json).
 

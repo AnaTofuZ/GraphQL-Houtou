@@ -20,6 +20,7 @@ BEGIN {
     File::Spec->catdir($upstream, 'lib');
 }
 
+use GraphQL ();
 use GraphQL::Execution qw(execute);
 use GraphQL::Language::Parser qw(parse);
 
@@ -1255,7 +1256,7 @@ push @cases, {
 } if $include_async;
 
 print "Benchmark count: $count\n";
-print "Using built GraphQL::Houtou from blib and upstream GraphQL from sibling checkout.\n";
+print "Using GraphQL::Houtou from the current checkout and GraphQL $GraphQL::VERSION from $INC{'GraphQL.pm'}.\n";
 
 for my $case (@cases) {
   benchmark_case($case->{name}, $case, $up_schema, $houtou_schema);

@@ -667,12 +667,22 @@ two-item x two-field `{ users { id name } }` query to a JSON response:
 Against graphql-perl's fastest configuration (pre-parsed AST), the dynamic
 document lane is roughly `17x` and persisted bundles roughly `38x`.
 
+A request-scoped DataLoader comparison uses the same loader, ten object rows,
+one batch callback, a pre-parsed operation, and JSON output on both sides.
+graphql-perl accepts the loader tickets through its public `then` contract;
+Houtou consumes the same tickets directly. The medians are `6.27k/s` for
+graphql-perl and `31.2k/s` for Houtou, roughly `5.0x`.
+
 Reproduce the comparison with:
 
     perl -Iblib/lib -Iblib/arch util/execution-benchmark-checkpoint.pl \
       --count=-2 --repeat=5 --case list_of_objects_json \
       --mode upstream_string --mode upstream_ast \
       --mode houtou_document_to_json --mode houtou_bundle_to_json
+
+    perl -Iblib/lib -Iblib/arch util/execution-benchmark-checkpoint.pl \
+      --count=-2 --repeat=5 --case dataloader_json \
+      --mode upstream_dataloader_json --mode houtou_dataloader_json
 
 For methodology and reproducible commands, see
 `docs/execution-benchmark.md`.

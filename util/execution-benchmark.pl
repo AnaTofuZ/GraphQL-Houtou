@@ -59,16 +59,7 @@ sub upstream_promise_xs_code {
   return {
     resolve => sub { Promise::XS::resolved(@_) },
     reject => sub { Promise::XS::rejected(@_) },
-    all => sub {
-      my $all_promise = Promise::XS::all(@_);
-      return $all_promise->then(sub {
-        my @rows = @_;
-        my @flattened = map {
-          ref($_) eq 'ARRAY' && @{$_} == 1 ? $_->[0] : $_
-        } @rows;
-        return \@flattened;
-      });
-    },
+    all => sub { Promise::XS::all(@_) },
     then => sub {
       my ($promise, $on_fulfilled, $on_rejected) = @_;
       return defined $on_rejected
@@ -1172,6 +1163,98 @@ sub benchmark_async_fallback_runtime_directive {
   cmpthese($count, \%modes);
 }
 
+sub benchmark_dataloader_json {
+  require GraphQL::Houtou::DataLoader;
+  require JSON::MaybeXS;
+
+  my @rows = map { +{ id => "key$_" } } 1 .. 10;
+  my $query = '{ rows { loaded } }';
+  my $promise_code = upstream_promise_xs_code();
+  my $json = JSON::MaybeXS->new->utf8;
+  my $make_loader = sub {
+    return GraphQL::Houtou::DataLoader->new(
+      batch => sub {
+        my ($keys) = @_;
+        return [ map { "value:$_" } @$keys ];
+      },
+    );
+  };
+
+  my $UpstreamRow = GraphQL::Type::Object->new(
+    name => 'DataLoaderBenchmarkRow',
+    fields => {
+      loaded => {
+        type => $GraphQL::Type::Scalar::String,
+        resolve => sub {
+          my ($source, undef, $context) = @_;
+          return $context->{loader}->load($source->{id});
+        },
+      },
+    },
+  );
+  my $upstream_schema = GraphQL::Schema->new(
+    query => GraphQL::Type::Object->new(
+      name => 'DataLoaderBenchmarkQuery',
+      fields => {
+        rows => { type => $UpstreamRow->list, resolve => sub { \@rows } },
+      },
+    ),
+  );
+  my $upstream_ast = parse($query);
+
+  my $HoutouRow = GraphQL::Houtou::Type::Object->new(
+    name => 'DataLoaderBenchmarkRow',
+    fields => {
+      loaded => {
+        type => $GraphQL::Houtou::Type::Scalar::String,
+        resolve => sub {
+          my ($source, undef, $context) = @_;
+          return $context->{loader}->load($source->{id});
+        },
+      },
+    },
+  );
+  my $houtou_runtime = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'DataLoaderBenchmarkQuery',
+      fields => {
+        rows => { type => $HoutouRow->list, resolve => sub { \@rows } },
+      },
+    ),
+  )->build_native_runtime(async => 1);
+  my $houtou_program = $houtou_runtime->compile_program($query);
+
+  my %modes = (
+    upstream_dataloader_json => sub {
+      my $loader = $make_loader->();
+      my $result = execute(
+        $upstream_schema, $upstream_ast, undef, { loader => $loader },
+        undef, undef, undef, $promise_code,
+      );
+      $loader->dispatch;
+      return $json->encode(maybe_get_promise_xs($result));
+    },
+    houtou_dataloader_json => sub {
+      my $loader = $make_loader->();
+      return $houtou_runtime->execute_program_to_json(
+        $houtou_program,
+        context => { loader => $loader },
+        on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+      );
+    },
+  );
+
+  my $expected = $json->decode($modes{upstream_dataloader_json}->());
+  my $actual = $json->decode($modes{houtou_dataloader_json}->());
+  die "Result mismatch for dataloader_json\nExpected: " . _dump($expected)
+    . "Actual: " . _dump($actual)
+    if _dump($actual) ne _dump($expected);
+
+  print "\n=== dataloader_json ===\n";
+  print "Query: 10 object rows, one request-scoped DataLoader batch, JSON response\n";
+  cmpthese($count, \%modes);
+}
+
 sub _dump {
   require Data::Dumper;
   local $Data::Dumper::Sortkeys = 1;
@@ -1278,3 +1361,5 @@ benchmark_async_single_root_object_field()
   if $include_async && (!@only || $only{async_single_root_object_field});
 benchmark_async_fallback_runtime_directive()
   if $include_async && (!@only || $only{async_fallback_runtime_directive});
+benchmark_dataloader_json()
+  if !@only || $only{dataloader_json};

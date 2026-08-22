@@ -393,10 +393,10 @@ External promise implementations register through
 Promise::XS values, including DataLoader promise chains, remain composable on
 an adapter-backed runtime.
 
-Without the declaration, requests with variables run on the synchronous
-fast lane, which cannot suspend. A resolver returning a Promise::XS
-promise there fails immediately with an error pointing at `async => 1`
-and `on_stall` - promise objects never leak into response data.
+Without `async => 1`, `async_adapter`, or `on_stall`, requests with
+variables run on the synchronous fast lane, which cannot suspend. A resolver
+returning a supported promise there fails immediately with an error pointing
+at the async options - promise objects never leak into response data.
 `strict_sync => 1` forces the strict sync lane even on an async runtime.
 
 ### Execution lane option
@@ -619,8 +619,10 @@ Mutation fields always execute serially: each resolver is called only after
 the previous resolver's promise has resolved, in conformance with the GraphQL
 specification.
 
-Only `Promise::XS` promises are recognized. Generic promise adapters and
-`promise_code` injection are no longer part of the active runtime path.
+The built-in backend recognizes `Promise::XS`. A runtime built with
+`async_adapter` also recognizes that adapter's promise class; pass the same
+adapter to DataLoader to keep its public promise chains on that backend.
+Legacy `promise_code` injection is not part of the active runtime path.
 
 # PARSER SURFACE
 
@@ -683,8 +685,8 @@ execute a subscription fails closed with a `SUBSCRIPTION_NOT_SUPPORTED`
 request error.
 
 The PSGI adapter accepts GraphQL execution requests over POST. GET query
-execution, `@defer`, `@stream`, WebSocket/SSE subscriptions, a Federation
-Gateway/Router, and generic promise adapters are outside the 0.01 profile.
+execution, `@defer`, `@stream`, WebSocket/SSE subscriptions, and a Federation
+Gateway/Router are outside the 0.01 profile.
 Federation 2 subgraph execution is provided by
 [GraphQL::Houtou::Federation](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3AFederation). Only `Promise::XS` promises are recognized.
 

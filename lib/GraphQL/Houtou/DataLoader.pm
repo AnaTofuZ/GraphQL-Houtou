@@ -4,11 +4,8 @@ use 5.014;
 use strict;
 use warnings;
 
-use Promise::XS ();
 use GraphQL::Houtou ();
-# The Houtou XS runtime resolves promise continuations through helpers in
-# this module; settling loader promises requires it to be loaded.
-use GraphQL::Houtou::Promise::PromiseXS ();
+use GraphQL::Houtou::Async::Adapter ();
 use Scalar::Util qw(blessed);
 
 our $VERSION = '0.07';
@@ -26,12 +23,16 @@ sub new {
   my $batch = $args{batch};
   die "GraphQL::Houtou::DataLoader requires a 'batch' function\n"
     if ref($batch) ne 'CODE';
+  my $async_adapter = exists $args{async_adapter}
+    ? GraphQL::Houtou::Async::Adapter->coerce($args{async_adapter})
+    : undef;
   return bless {
     batch => $batch,
     max_batch_size => $args{max_batch_size} || 0,
     cache => exists $args{cache} ? ($args{cache} ? 1 : 0) : 1,
     cache_key => ref($args{cache_key}) eq 'CODE' ? $args{cache_key} : undef,
     _batch_plan => $args{batch_plan} ? 1 : 0,
+    ($async_adapter ? (_async_adapter => $async_adapter) : ()),
     _promises => {},
     _queue => [],
   }, $class;
@@ -62,11 +63,15 @@ sub load_many {
     return map { $self->load($_) } @args;
   }
   my $keys = $args[0];
-  return GraphQL::Houtou::DataLoader::Ticket->resolved([]) if !@$keys;
+  return GraphQL::Houtou::DataLoader::Ticket->resolved(
+    [], $self->{_async_adapter},
+  ) if !@$keys;
 
   my @results;
   my $remaining = @$keys;
-  my $ticket = GraphQL::Houtou::DataLoader::Ticket->new;
+  my $ticket = GraphQL::Houtou::DataLoader::Ticket->new(
+    $self->{_async_adapter},
+  );
   for my $i (0 .. $#$keys) {
     my $slot = $i;
     $self->load($keys->[$slot])->_subscribe(
@@ -94,7 +99,9 @@ sub prime {
   my $cache_key = $self->{cache_key} ? $self->{cache_key}->($key) : $key;
   return $self if !$self->{cache} || exists $self->{_promises}{$cache_key};
   $self->{_promises}{$cache_key} =
-    GraphQL::Houtou::DataLoader::Ticket->resolved($value);
+    GraphQL::Houtou::DataLoader::Ticket->resolved(
+      $value, $self->{_async_adapter},
+    );
   return $self;
 }
 
@@ -153,21 +160,86 @@ sub message { return $_[0]{message} }
 
 package GraphQL::Houtou::DataLoader::Ticket;
 
-sub _as_promise {
-  my ($self) = @_;
-  my $deferred = Promise::XS::deferred();
-  $self->_subscribe_native(
-    sub { $deferred->resolve($_[0]) },
-    sub { $deferred->reject($_[0]) },
-  );
-  return $deferred->promise;
+sub _new_pending {
+  my ($adapter) = @_;
+  return @{ $adapter->new_pending };
 }
 
-sub then    { return shift->_as_promise->then(@_) }
-sub catch   { return shift->_as_promise->catch(@_) }
-sub finally { return shift->_as_promise->finally(@_) }
-sub all     { shift; return Promise::XS::Promise->all(@_) }
-sub race    { shift; return Promise::XS::Promise->race(@_) }
+sub _as_promise {
+  my ($self) = @_;
+  return GraphQL::Houtou::Async::Adapter::ticket_promise($self);
+}
+
+*then = \&GraphQL::Houtou::Async::Adapter::ticket_then;
+
+sub _catch_adapter {
+  my ($adapter, $self, $callback) = @_;
+  return $adapter->then($self->_as_promise, sub { $_[0] }, $callback);
+}
+
+*catch = \&GraphQL::Houtou::Async::Adapter::ticket_catch;
+
+sub _after {
+  my ($adapter, $callback, $done, $reject) = @_;
+  my $result;
+  eval { $result = $callback->(); 1 } or return $reject->($@);
+  return $adapter->then($result, sub { $done->() }, $reject)
+    if $adapter->is_promise($result);
+  return $done->();
+}
+
+sub _finally_adapter {
+  my ($adapter, $self, $callback) = @_;
+  my ($promise, $resolve, $reject) = _new_pending($adapter);
+  $self->_subscribe_native(
+    sub {
+      my $value = $_[0];
+      _after($adapter, $callback, sub { $resolve->($value) }, $reject);
+    },
+    sub {
+      my $reason = $_[0];
+      _after($adapter, $callback, sub { $reject->($reason) }, $reject);
+    },
+  );
+  return $promise;
+}
+
+*finally = \&GraphQL::Houtou::Async::Adapter::ticket_finally;
+
+sub _adapt_values {
+  return [ map {
+    Scalar::Util::blessed($_)
+      && $_->isa('GraphQL::Houtou::DataLoader::Ticket')
+      ? $_->_as_promise : $_
+  } @_ ];
+}
+
+sub _all_adapter {
+  my ($adapter, @values) = @_;
+  return $adapter->all(_adapt_values(@values));
+}
+
+*all = \&GraphQL::Houtou::Async::Adapter::ticket_all;
+
+sub _race_adapter {
+  my ($adapter, @values) = @_;
+  my ($promise, $resolve, $reject) = _new_pending($adapter);
+  my $settled = 0;
+  for (@{ _adapt_values(@values) }) {
+    if (!$adapter->is_promise($_)) {
+      $resolve->($_) if !$settled++;
+      next;
+    }
+    $adapter->then(
+      $_,
+      sub { $resolve->(@_) if !$settled++; return },
+      sub { $reject->(@_) if !$settled++; return },
+    );
+  }
+  return $promise;
+}
+
+*race = \&GraphQL::Houtou::Async::Adapter::ticket_race;
 
 package GraphQL::Houtou::DataLoader;
 
@@ -275,7 +347,8 @@ rejected ticket throws the rejection reason.
 Instances cache per key (create one loader per request unless you want
 cross-request caching). Pass C<< cache => 0 >> to disable, C<cache_key>
 to derive cache keys from structured keys, C<max_batch_size> to chunk
-large batches.
+large batches. Pass the runtime's C<async_adapter> to make C<then>, C<catch>,
+C<finally>, C<all>, and C<race> return that adapter's promise type.
 
 =head1 THE on_stall CONTRACT
 

@@ -585,10 +585,10 @@ L<GraphQL::Houtou::Async::Adapter> and are selected when the runtime is built:
 Promise::XS values, including DataLoader promise chains, remain composable on
 an adapter-backed runtime.
 
-Without the declaration, requests with variables run on the synchronous
-fast lane, which cannot suspend. A resolver returning a Promise::XS
-promise there fails immediately with an error pointing at C<async =E<gt> 1>
-and C<on_stall> - promise objects never leak into response data.
+Without C<async =E<gt> 1>, C<async_adapter>, or C<on_stall>, requests with
+variables run on the synchronous fast lane, which cannot suspend. A resolver
+returning a supported promise there fails immediately with an error pointing
+at the async options - promise objects never leak into response data.
 C<strict_sync =E<gt> 1> forces the strict sync lane even on an async runtime.
 
 =head3 Execution lane option
@@ -818,8 +818,10 @@ Mutation fields always execute serially: each resolver is called only after
 the previous resolver's promise has resolved, in conformance with the GraphQL
 specification.
 
-Only C<Promise::XS> promises are recognized. Generic promise adapters and
-C<promise_code> injection are no longer part of the active runtime path.
+The built-in backend recognizes C<Promise::XS>. A runtime built with
+C<async_adapter> also recognizes that adapter's promise class; pass the same
+adapter to DataLoader to keep its public promise chains on that backend.
+Legacy C<promise_code> injection is not part of the active runtime path.
 
 =head1 PARSER SURFACE
 
@@ -897,8 +899,8 @@ execute a subscription fails closed with a C<SUBSCRIPTION_NOT_SUPPORTED>
 request error.
 
 The PSGI adapter accepts GraphQL execution requests over POST. GET query
-execution, C<@defer>, C<@stream>, WebSocket/SSE subscriptions, a Federation
-Gateway/Router, and generic promise adapters are outside the 0.01 profile.
+execution, C<@defer>, C<@stream>, WebSocket/SSE subscriptions, and a Federation
+Gateway/Router are outside the 0.01 profile.
 Federation 2 subgraph execution is provided by
 L<GraphQL::Houtou::Federation>. Only C<Promise::XS> promises are recognized.
 

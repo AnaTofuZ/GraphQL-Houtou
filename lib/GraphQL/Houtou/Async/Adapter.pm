@@ -3,6 +3,8 @@ package GraphQL::Houtou::Async::Adapter;
 use 5.024;
 use strict;
 use warnings;
+use Promise::XS ();
+use Scalar::Util qw(blessed);
 use GraphQL::Houtou ();
 
 our $VERSION = $GraphQL::Houtou::VERSION;
@@ -12,9 +14,162 @@ sub register {
   return bless \%spec, $class;
 }
 
-sub builtin { bless { _builtin => 1 }, $_[0] }
+my %BUILTIN;
+sub builtin { return $BUILTIN{$_[0]} ||= bless { _builtin => 1 }, $_[0] }
 sub _spec { $_[0]->is_builtin ? undef : $_[0] }
 sub is_builtin { $_[0]{_builtin} ? 1 : 0 }
+
+sub coerce {
+  my ($class, $adapter) = @_;
+  return $class->builtin
+    if !defined($adapter) || (!ref($adapter) && $adapter eq 'Promise::XS');
+  die "async_adapter must be an adapter object; only 'Promise::XS' is built in\n"
+    if !ref($adapter);
+  die "async_adapter must be a GraphQL::Houtou async adapter object\n"
+    if !blessed($adapter) || !$adapter->isa($class);
+  return $adapter;
+}
+
+sub new_pending {
+  my ($self) = @_;
+  if ($self->is_builtin) {
+    my $deferred = Promise::XS::deferred();
+    return [
+      $deferred->promise,
+      sub { $deferred->resolve(@_) },
+      sub { $deferred->reject(@_) },
+    ];
+  }
+  my $pending = $self->{new_pending}->();
+  die "async adapter new_pending must return [promise, resolve, reject]\n"
+    if ref($pending) ne 'ARRAY' || !$self->is_promise($pending->[0])
+    || ref($pending->[1]) ne 'CODE' || ref($pending->[2]) ne 'CODE';
+  return $pending;
+}
+
+sub from_ticket {
+  my ($self, $ticket) = @_;
+  if ($self->is_builtin) {
+    my $deferred = Promise::XS::deferred();
+    $ticket->_subscribe_native(
+      sub { $deferred->resolve($_[0]) },
+      sub { $deferred->reject($_[0]) },
+    );
+    return $deferred->promise;
+  }
+  my ($promise, $resolve, $reject) = @{ $self->new_pending };
+  $ticket->_subscribe_native($resolve, $reject);
+  return $promise;
+}
+
+sub ticket_promise {
+  my ($ticket) = @_;
+  return ($ticket->[3] || __PACKAGE__->builtin)->from_ticket($ticket);
+}
+
+sub ticket_then {
+  my ($ticket, @callbacks) = @_;
+  my $adapter = $ticket->[3];
+  if (!$adapter) {
+    my $deferred = Promise::XS::deferred();
+    $ticket->_subscribe_native(
+      sub { $deferred->resolve($_[0]) },
+      sub { $deferred->reject($_[0]) },
+    );
+    return $deferred->promise->then(@callbacks);
+  }
+  return $adapter->then($adapter->from_ticket($ticket), @callbacks);
+}
+
+sub ticket_catch {
+  my ($ticket, $callback) = @_;
+  my $adapter = $ticket->[3];
+  if (!$adapter) {
+    my $deferred = Promise::XS::deferred();
+    $ticket->_subscribe_native(
+      sub { $deferred->resolve($_[0]) },
+      sub { $deferred->reject($_[0]) },
+    );
+    return $deferred->promise->catch($callback);
+  }
+  return GraphQL::Houtou::DataLoader::Ticket::_catch_adapter(
+    $adapter, $ticket, $callback,
+  );
+}
+
+sub ticket_finally {
+  my ($ticket, $callback) = @_;
+  my $adapter = $ticket->[3];
+  if (!$adapter) {
+    my $deferred = Promise::XS::deferred();
+    $ticket->_subscribe_native(
+      sub { $deferred->resolve($_[0]) },
+      sub { $deferred->reject($_[0]) },
+    );
+    return $deferred->promise->finally($callback);
+  }
+  return GraphQL::Houtou::DataLoader::Ticket::_finally_adapter(
+    $adapter, $ticket, $callback,
+  );
+}
+
+# ponytail: one Perl adapter branch; move it to XS only if public chain profiles matter.
+sub ticket_race {
+  my $invocant = shift;
+  if (ref($invocant)) {
+    my $adapter = $invocant->[3];
+    return Promise::XS::Promise->race(@_) if !$adapter;
+    return GraphQL::Houtou::DataLoader::Ticket::_race_adapter(
+      $adapter, @_,
+    );
+  }
+  my ($ticket) = grep {
+    ref($_) eq 'GraphQL::Houtou::DataLoader::Ticket'
+  } @_;
+  my $adapter = $ticket && $ticket->[3];
+  return Promise::XS::Promise->race(@_) if !$adapter;
+  return GraphQL::Houtou::DataLoader::Ticket::_race_adapter(
+    $adapter, @_,
+  );
+}
+
+sub ticket_all {
+  my $invocant = shift;
+  if (ref($invocant)) {
+    my $adapter = $invocant->[3];
+    return Promise::XS::Promise->all(@_) if !$adapter;
+    return GraphQL::Houtou::DataLoader::Ticket::_all_adapter(
+      $adapter, @_,
+    );
+  }
+  my ($ticket) = grep {
+    ref($_) eq 'GraphQL::Houtou::DataLoader::Ticket'
+  } @_;
+  my $adapter = $ticket && $ticket->[3];
+  return Promise::XS::Promise->all(@_) if !$adapter;
+  return GraphQL::Houtou::DataLoader::Ticket::_all_adapter(
+    $adapter, @_,
+  );
+}
+
+sub all {
+  my ($self, $values) = @_;
+  return $self->{all}->($values) if !$self->is_builtin;
+  return Promise::XS::Promise->all(@$values);
+}
+
+sub then {
+  my ($self, $promise, @callbacks) = @_;
+  return $self->{then}->($promise, @callbacks) if !$self->is_builtin;
+  return $promise->then(@callbacks);
+}
+
+sub is_promise {
+  my ($self, $value) = @_;
+  return 0 if !blessed($value);
+  return $value->isa('Promise::XS::Promise') if $self->is_builtin;
+  return $value->isa($self->{class});
+}
 
 1;
 
@@ -76,10 +231,9 @@ also recognized.
 
 =item new_pending
 
-A coderef taking no arguments and returning
-C<[ $promise, $resolve ]>. The latter value is a coderef that resolves
-C<$promise>. GraphQL field failures settle the response through Houtou's
-error-outcome path, so the VM does not reject its response promise.
+A coderef taking no arguments and returning C<[ $promise, $resolve ]>, or
+C<[ $promise, $resolve, $reject ]> when the adapter is also used by DataLoader.
+The latter callbacks settle C<$promise>; the VM only needs C<$resolve>.
 
 =item all
 
@@ -117,11 +271,11 @@ adapter can delegate directly to that method:
     name  => 'promise_es6',
     class => 'Promise::ES6',
     new_pending => sub {
-      my $resolve;
+      my ($resolve, $reject);
       my $promise = Promise::ES6->new(sub {
-        ($resolve) = @_;
+        ($resolve, $reject) = @_;
       });
-      return [ $promise, $resolve ];
+      return [ $promise, $resolve, $reject ];
     },
     all => sub {
       return Promise::ES6->all($_[0]);
@@ -160,7 +314,7 @@ register native functions supplied by an external XS distribution:
 
 The XSUB signatures follow the same contract:
 
-  SV * new_pending_xs()
+  SV * new_pending_xs() /* returns [promise, resolve, reject] */
   SV * all_xs(values)
       SV *values
   SV * then_xs(promise, on_done, on_fail = &PL_sv_undef)

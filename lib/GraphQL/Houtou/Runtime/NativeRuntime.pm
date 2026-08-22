@@ -83,13 +83,7 @@ sub _native_runtime_handle {
 
 sub _async_adapter {
   my ($adapter) = @_;
-  return GraphQL::Houtou::Async::Adapter->builtin
-    if !defined($adapter) || (!ref($adapter) && $adapter eq 'Promise::XS');
-  die "async_adapter must be an adapter object; only 'Promise::XS' is built in\n"
-    if !ref($adapter);
-  die "async_adapter must be a GraphQL::Houtou async adapter object\n"
-    if !blessed($adapter) || !$adapter->isa('GraphQL::Houtou::Async::Adapter');
-  return $adapter;
+  return GraphQL::Houtou::Async::Adapter->coerce($adapter);
 }
 
 sub _uses_promise_xs { $_[0]{_async_adapter}->is_builtin }

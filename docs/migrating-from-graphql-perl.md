@@ -31,7 +31,7 @@ depends on Houtou-specific data.
 | --- | --- | --- |
 | Execution call | Positional `execute(...)` arguments | Named options on `execute()` or a reusable native runtime |
 | Runtime | Interpreter and promise adapter selected per call | Native XS runtime; build once and reuse |
-| Async abstraction | Injectable `promise_code` | `Promise::XS` only, driven synchronously with `on_stall` |
+| Async abstraction | Injectable `promise_code` | Built-in `Promise::XS` or a runtime-owned `Async::Adapter`, driven synchronously with `on_stall` when requested |
 | Global field resolver | May be passed to `execute()` | No request-level global `field_resolver`; attach resolvers to the schema |
 | Parser AST | graphql-perl AST | Houtou's canonical graphql-perl-style AST; internal details are not an interchange contract |
 | Validation | Older executable validation behavior | September 2025 query/mutation validation before execution |
@@ -287,9 +287,10 @@ matters to application policy.
 
 ## Async resolvers and DataLoader
 
-Houtou accepts `Promise::XS` promises only. It drives them to completion
-during the request; it does not return a framework promise to a Mojolicious or
-Future event loop.
+Houtou uses `Promise::XS` by default and accepts another promise class through
+a runtime-owned `GraphQL::Houtou::Async::Adapter`. It can drive promises to
+completion with `on_stall`; without that hook, a pending async runtime returns
+its configured backend promise to the caller.
 
 For promise-returning resolvers:
 

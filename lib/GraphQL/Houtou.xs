@@ -250,12 +250,25 @@ gql_runtime_vm_dataloader_ticket_value(pTHX_ SV *ticket)
 }
 
 static SV *
-gql_runtime_vm_new_dataloader_ticket_sv(pTHX_ IV state, SV *value)
+gql_runtime_vm_dataloader_ticket_async_adapter(pTHX_ SV *ticket)
+{
+  AV *av = gql_runtime_vm_dataloader_ticket_av(aTHX_ ticket);
+  SV **async_adapter = av_fetch(av, 3, 0);
+  return async_adapter ? *async_adapter : &PL_sv_undef;
+}
+
+static SV *
+gql_runtime_vm_new_dataloader_ticket_sv(
+  pTHX_ IV state, SV *value, SV *async_adapter
+)
 {
   AV *av = newAV();
   av_store(av, 0, newSViv(state));
   av_store(av, 1, newSVsv(value ? value : &PL_sv_undef));
   av_store(av, 2, newRV_noinc((SV *)newAV()));
+  if (async_adapter && SvOK(async_adapter)) {
+    av_store(av, 3, newSVsv(async_adapter));
+  }
   if (!gql_runtime_vm_dataloader_ticket_stash) {
     gql_runtime_vm_dataloader_ticket_stash =
       gv_stashpvs("GraphQL::Houtou::DataLoader::Ticket", GV_ADD);
@@ -298,6 +311,7 @@ gql_runtime_vm_dataloader_load_exact_sv(
   SV **cache_key_cb_svp;
   SV **promises_rv;
   SV **queue_rv;
+  SV **async_adapter_svp;
   HV *promises_hv = NULL;
   AV *queue_av;
   SV *cache_key_sv = NULL;
@@ -376,8 +390,11 @@ gql_runtime_vm_dataloader_load_exact_sv(
     return NULL;
   }
   queue_av = (AV *)SvRV(*queue_rv);
+  async_adapter_svp = hv_fetch(loader_hv, "_async_adapter", 14, 0);
   ticket_sv = gql_runtime_vm_new_dataloader_ticket_sv(
-    aTHX_ 0, &PL_sv_undef
+    aTHX_ 0, &PL_sv_undef,
+    (async_adapter_svp && *async_adapter_svp)
+      ? *async_adapter_svp : &PL_sv_undef
   );
   entry_av = newAV();
   av_push(entry_av, newSVsv(key));
@@ -3782,7 +3799,8 @@ gql_runtime_vm_chain_dataloader_ticket(
 )
 {
   SV *derived = gql_runtime_vm_new_dataloader_ticket_sv(
-    aTHX_ 0, &PL_sv_undef
+    aTHX_ 0, &PL_sv_undef,
+    gql_runtime_vm_dataloader_ticket_async_adapter(aTHX_ ticket)
   );
   SV *resolve = gql_runtime_vm_new_ticket_chain_callback_sv(
     aTHX_ derived, resolve_callback, 0
@@ -15696,6 +15714,7 @@ _enqueue_load_miss(self, key, cache_key, cache)
     HV *loader_hv;
     SV **queue_rv;
     SV **promises_rv;
+    SV **async_adapter_svp;
     AV *queue_av;
     HV *promises_hv;
     SV *ticket_sv;
@@ -15721,8 +15740,11 @@ _enqueue_load_miss(self, key, cache_key, cache)
       promises_hv = (HV *)SvRV(*promises_rv);
     }
 
+    async_adapter_svp = hv_fetch(loader_hv, "_async_adapter", 14, 0);
     ticket_sv = gql_runtime_vm_new_dataloader_ticket_sv(
-      aTHX_ 0, &PL_sv_undef
+      aTHX_ 0, &PL_sv_undef,
+      (async_adapter_svp && *async_adapter_svp)
+        ? *async_adapter_svp : &PL_sv_undef
     );
     entry_av = newAV();
     av_push(entry_av, newSVsv(key));
@@ -15881,21 +15903,27 @@ _dispatch_queue(self, queue_sv)
 MODULE = GraphQL::Houtou    PACKAGE = GraphQL::Houtou::DataLoader::Ticket
 
 SV *
-new(class)
+new(class, async_adapter = &PL_sv_undef)
     SV *class
+    SV *async_adapter
   CODE:
     (void)class;
-    RETVAL = gql_runtime_vm_new_dataloader_ticket_sv(aTHX_ 0, &PL_sv_undef);
+    RETVAL = gql_runtime_vm_new_dataloader_ticket_sv(
+      aTHX_ 0, &PL_sv_undef, async_adapter
+    );
   OUTPUT:
     RETVAL
 
 SV *
-resolved(class, value)
+resolved(class, value, async_adapter = &PL_sv_undef)
     SV *class
     SV *value
+    SV *async_adapter
   CODE:
     (void)class;
-    RETVAL = gql_runtime_vm_new_dataloader_ticket_sv(aTHX_ 1, value);
+    RETVAL = gql_runtime_vm_new_dataloader_ticket_sv(
+      aTHX_ 1, value, async_adapter
+    );
   OUTPUT:
     RETVAL
 

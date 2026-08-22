@@ -2,6 +2,15 @@ Revision history for Perl extension GraphQL-Houtou
 
 {{$NEXT}}
 
+0.08 2026-08-22T21:32:25Z
+
+    - Route DataLoader Ticket chaining through the configured async adapter
+      while preserving the Promise::XS fast paths (#117)
+    - Support configured async adapters in Federation entity resolvers and
+      reuse the adapter when building the native runtime (#117)
+    - Refresh the graphql-perl execution comparison and add a reproducible
+      request-scoped DataLoader benchmark (#117, #118)
+
 0.07 2026-08-22T10:19:22Z
 
     - Add runtime-owned async adapters for external promise implementations (#116)

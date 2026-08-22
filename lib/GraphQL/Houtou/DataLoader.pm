@@ -8,7 +8,7 @@ use GraphQL::Houtou ();
 use GraphQL::Houtou::Async::Adapter ();
 use Scalar::Util qw(blessed);
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 
 GraphQL::Houtou::_bootstrap_xs();
 

@@ -4,6 +4,8 @@ requires 'Promise::XS', '0.21';
 requires 'Role::Tiny', '0';
 requires 'XSLoader';
 
+recommends 'Future', '0.45';
+
 on configure => sub {
     requires 'Module::Build', '0.4005';
 };

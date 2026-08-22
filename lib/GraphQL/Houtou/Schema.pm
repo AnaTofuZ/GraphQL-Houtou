@@ -969,6 +969,7 @@ sub build_native_runtime {
   my $max_cost = delete $opts{max_cost};
   my $default_list_size = delete $opts{default_list_size};
   my $async = delete $opts{async};
+  my $async_adapter = delete $opts{async_adapter};
   my $validate = delete $opts{validate};
   my $allow_introspection = delete $opts{allow_introspection};
   my %runtime_args;
@@ -978,6 +979,7 @@ sub build_native_runtime {
   $runtime_args{max_cost}          = $max_cost if defined $max_cost;
   $runtime_args{default_list_size} = $default_list_size if defined $default_list_size;
   $runtime_args{async}             = $async if defined $async;
+  $runtime_args{async_adapter}     = $async_adapter if defined $async_adapter;
   $runtime_args{validate}          = $validate if defined $validate;
   $runtime_args{allow_introspection} = $allow_introspection
     if defined $allow_introspection;

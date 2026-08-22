@@ -237,6 +237,7 @@ typedef struct {
   IV runtime_slot_count;
   gql_runtime_vm_native_slot_t *runtime_slots;
   gql_runtime_vm_native_callback_catalog_t *callback_catalog;
+  U8 promise_backend_code;
 } gql_runtime_vm_native_runtime_t;
 
 typedef struct {

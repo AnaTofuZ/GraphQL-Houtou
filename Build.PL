@@ -30,6 +30,7 @@ my %args = (
     },
 
     recommends => {
+        'Future' => '0.45',
     },
 
     suggests => {

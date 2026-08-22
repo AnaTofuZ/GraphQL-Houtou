@@ -42,6 +42,9 @@
          }
       },
       "runtime" : {
+         "recommends" : {
+            "Future" : "0.45"
+         },
          "requires" : {
             "JSON::MaybeXS" : "0",
             "Promise::XS" : "0.21",

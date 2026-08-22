@@ -13913,6 +13913,31 @@ runtime_value_is_async_xs(runtime_sv, value)
     RETVAL
 
 SV *
+runtime_then_async_xs(runtime_sv, promise, on_done, on_fail = &PL_sv_undef)
+    SV *runtime_sv
+    SV *promise
+    SV *on_done
+    SV *on_fail
+  CODE:
+    {
+      gql_runtime_vm_native_runtime_t *runtime;
+      if (!runtime_sv || !SvROK(runtime_sv)
+          || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
+      }
+      runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
+      if (!runtime) {
+        croak("native VM runtime handle is no longer valid");
+      }
+      RETVAL = gql_runtime_vm_call_then_adapter_sv(
+        aTHX_ runtime->promise_backend_code, promise, on_done,
+        (on_fail && SvOK(on_fail)) ? on_fail : NULL, NULL
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
 debug_frame_live_counts_xs()
   CODE:
     {

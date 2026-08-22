@@ -13,19 +13,20 @@ use GraphQL::Houtou::Type::Scalar qw($String);
 
 ok(Future->isa('Future::XS'), 'Future uses the XS implementation');
 
+my $then = sub {
+  my ($future, $done, $fail) = @_;
+  my @callbacks = (sub { Future->done($done->(@_)) });
+  push @callbacks, sub { Future->done($fail->(@_)) } if $fail;
+  my $next = $future->then(@callbacks);
+  my $keep = $next;
+  $future->on_ready(sub { undef $keep }) if !$next->is_ready;
+  return $next;
+};
+
 my $adapter = GraphQL::Houtou::Async::Adapter->register(
   name => 'test_future_xs',
   class => 'Future',
-  then => sub {
-    my ($future, $done, $fail) = @_;
-    my $next = $future->then(
-      sub { Future->done($done->(@_)) },
-      sub { Future->done($fail->(@_)) },
-    );
-    my $keep = $next;
-    $future->on_ready(sub { undef $keep }) if !$next->is_ready;
-    return $next;
-  },
+  then => $then,
   new_pending => sub {
     my $future = Future->new;
     return [
@@ -44,6 +45,10 @@ my $adapter = GraphQL::Houtou::Async::Adapter->register(
     );
   },
 );
+
+my $rejected = $then->(Future->fail('original failure'), sub { Future->done(@_) });
+is(($rejected->failure)[0], 'original failure',
+  'Future adapter preserves rejection when on_fail is omitted');
 
 my $pending;
 my $schema = GraphQL::Houtou::Schema->new(
@@ -75,5 +80,18 @@ $pending->done('later');
 my ($settled) = $result->get;
 is_deeply $settled, { data => { pending => 'later' } },
   'Future::XS response resumes after resolution';
+
+my @warnings;
+my $json;
+{
+  local $SIG{__WARN__} = sub { push @warnings, @_ };
+  $json = $runtime->execute_document_to_json(
+    '{ pending }',
+    on_stall => sub { $pending->done('driven'); 1 },
+  );
+}
+is $json, '{"data":{"pending":"driven"}}',
+  'on_stall drives a Future JSON response through the adapter';
+is_deeply \@warnings, [], 'Future JSON settlement emits no warnings';
 
 done_testing;

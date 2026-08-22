@@ -456,7 +456,9 @@ sub _settle_result {
     );
 
   my ($settled, $value) = (0, undef);
-  $result->then(
+  my $chain = GraphQL::Houtou::XS::VM::runtime_then_async_xs(
+    $self->_native_runtime_handle,
+    $result,
     sub { ($settled, $value) = (1, $_[0]) },
     sub { ($settled, $value) = (-1, $_[0]) },
   );

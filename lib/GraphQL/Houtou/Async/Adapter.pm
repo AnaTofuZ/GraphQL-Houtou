@@ -98,10 +98,9 @@ For example, a Future-style adapter needs the equivalent of:
 
   then => sub {
     my ($future, $done, $fail) = @_;
-    my $next = $future->then(
-      sub { Future->done($done->(@_)) },
-      sub { Future->done($fail->(@_)) },
-    );
+    my @callbacks = (sub { Future->done($done->(@_)) });
+    push @callbacks, sub { Future->done($fail->(@_)) } if $fail;
+    my $next = $future->then(@callbacks);
     my $keep = $next;
     $future->on_ready(sub { undef $keep }) if !$next->is_ready;
     return $next;

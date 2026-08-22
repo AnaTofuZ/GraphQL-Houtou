@@ -5,6 +5,7 @@ use warnings;
 use Benchmark qw(cmpthese);
 use FindBin qw($Bin);
 use Getopt::Long qw(GetOptions);
+use Scalar::Util qw(blessed);
 
 use lib "$Bin/../lib", "$Bin/../blib/lib", "$Bin/../blib/arch";
 use GraphQL::Houtou::Async::Adapter;
@@ -37,13 +38,44 @@ require Promise::XS;
 my $promise_xs = runtime_for(sub { Promise::XS::resolved('ok') }, 'Promise::XS');
 $cases{promise_xs} = sub { $promise_xs->execute_document('{ value }') };
 
-if (eval { require Future; Future->VERSION(0.45); 1 }) {
-  require GraphQL::Houtou::Async::Adapter::Future;
+if (eval {
+  require Future;
+  require Future::XS;
+  Future::XS->VERSION(0.15);
+  Future->isa('Future::XS');
+}) {
+  my $adapter = GraphQL::Houtou::Async::Adapter->register(
+    name => 'benchmark_future_xs',
+    class => 'Future',
+    then => sub {
+      my ($future, $done, $fail) = @_;
+      my $next = $future->then(
+        sub { Future->done($done->(@_)) },
+        sub { Future->done($fail->(@_)) },
+      );
+      my $keep = $next;
+      $future->on_ready(sub { undef $keep }) if !$next->is_ready;
+      return $next;
+    },
+    new_pending => sub {
+      my $future = Future->new;
+      [ $future, sub { $future->done(@_) }, sub { $future->fail(@_) } ]
+    },
+    all => sub {
+      my @futures = map {
+        blessed($_) && $_->isa('Future') ? $_ : Future->done($_)
+      } @{ $_[0] };
+      return Future->done([]) if !@futures;
+      return Future->needs_all(@futures)->then(
+        sub { Future->done([@_]) },
+      );
+    },
+  );
   my $future = runtime_for(
     sub { Future->done('ok') },
-    GraphQL::Houtou::Async::Adapter::Future->adapter,
+    $adapter,
   );
-  $cases{future_pp} = sub { $future->execute_document('{ value }') };
+  $cases{future_xs} = sub { $future->execute_document('{ value }') };
 }
 
 if (eval { require Promises; 1 }) {

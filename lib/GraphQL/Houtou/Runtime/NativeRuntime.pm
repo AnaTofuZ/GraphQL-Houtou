@@ -84,10 +84,6 @@ sub _async_adapter {
   my ($adapter) = @_;
   return GraphQL::Houtou::Async::Adapter->builtin(1)
     if !defined($adapter) || (!ref($adapter) && $adapter eq 'Promise::XS');
-  if (!ref($adapter) && lc($adapter) eq 'future') {
-    require GraphQL::Houtou::Async::Adapter::Future;
-    return GraphQL::Houtou::Async::Adapter::Future->adapter;
-  }
   die "async_adapter must provide backend_code\n"
     if !blessed($adapter) || !$adapter->can('backend_code');
   return $adapter;

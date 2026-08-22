@@ -4,13 +4,13 @@ requires 'Promise::XS', '0.21';
 requires 'Role::Tiny', '0';
 requires 'XSLoader';
 
-recommends 'Future', '0.45';
-
 on configure => sub {
     requires 'Module::Build', '0.4005';
 };
 
 on 'test' => sub {
+    requires 'Future::XS', '0.15';
+    requires 'Promise::ES6', '0.28';
     requires 'Test::More', '0.98';
     requires 'Test::Deep', '1.205';
     requires 'Test::Exception', '0.43';

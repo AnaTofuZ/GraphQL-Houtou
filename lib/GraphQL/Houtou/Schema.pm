@@ -970,6 +970,8 @@ sub build_native_runtime {
   my $default_list_size = delete $opts{default_list_size};
   my $async = delete $opts{async};
   my $async_adapter = delete $opts{async_adapter};
+  $async_adapter = $self->{_default_async_adapter}
+    if !defined $async_adapter && $self->{_default_async_adapter};
   my $validate = delete $opts{validate};
   my $allow_introspection = delete $opts{allow_introspection};
   my %runtime_args;
@@ -1078,7 +1080,7 @@ sub inflate_program {
 
 sub execute {
   my ($self, $document, %opts) = @_;
-  die "promise_code is no longer supported; Promise::XS is detected automatically.\n"
+  die "promise_code is no longer supported; Promise::XS is built in and custom backends use async_adapter.\n"
     if exists $opts{promise_code};
 
   my $runtime = $self->build_native_runtime;

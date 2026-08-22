@@ -436,7 +436,7 @@ order)
 - the envelope matches `execute()`: `"data"` plus `"errors"`
 (message and path) only when execution errors occurred
 - without `on_stall`, the lane is synchronous - a resolver returning
-a Promise::XS promise croaks
+a supported promise croaks
 
 ### Batching resolvers and JSON output
 
@@ -688,7 +688,8 @@ The PSGI adapter accepts GraphQL execution requests over POST. GET query
 execution, `@defer`, `@stream`, WebSocket/SSE subscriptions, and a Federation
 Gateway/Router are outside the 0.01 profile.
 Federation 2 subgraph execution is provided by
-[GraphQL::Houtou::Federation](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3AFederation). Only `Promise::XS` promises are recognized.
+[GraphQL::Houtou::Federation](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3AFederation). Pass `async_adapter` to
+`build_subgraph_schema` when entity resolvers use another promise backend.
 
 Fixed native bundles are for variable-free queries. Use compiled native
 programs for persisted queries that accept variables.

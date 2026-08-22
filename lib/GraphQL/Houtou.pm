@@ -152,7 +152,7 @@ sub execute {
     $opts{variables} = $variables_or_opts;
   }
 
-  die "promise_code is no longer supported; Promise::XS is detected automatically.\n"
+  die "promise_code is no longer supported; Promise::XS is built in and custom backends use async_adapter.\n"
     if exists $opts{promise_code};
 
   my $runtime = $schema->build_native_runtime;
@@ -633,7 +633,7 @@ order)
 (message and path) only when execution errors occurred
 
 =item * without C<on_stall>, the lane is synchronous - a resolver returning
-a Promise::XS promise croaks
+a supported promise croaks
 
 =back
 
@@ -902,7 +902,8 @@ The PSGI adapter accepts GraphQL execution requests over POST. GET query
 execution, C<@defer>, C<@stream>, WebSocket/SSE subscriptions, and a Federation
 Gateway/Router are outside the 0.01 profile.
 Federation 2 subgraph execution is provided by
-L<GraphQL::Houtou::Federation>. Only C<Promise::XS> promises are recognized.
+L<GraphQL::Houtou::Federation>. Pass C<async_adapter> to
+C<build_subgraph_schema> when entity resolvers use another promise backend.
 
 Fixed native bundles are for variable-free queries. Use compiled native
 programs for persisted queries that accept variables.

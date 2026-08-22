@@ -335,7 +335,7 @@ endpoint URL the IDE posts to (defaults to the page's own path).
 
 Passed to C<build_native_runtime> when the app is constructed from a
 C<schema>. Declare it when resolvers return promises (DataLoader or other
-Promise::XS sources) so every request starts on the async-capable lane
+supported promise sources) so every request starts on the async-capable lane
 (see "Declaring an async schema" in L<GraphQL::Houtou>). Requests that
 carry an C<on_stall> hook run on the async lane either way, so pure
 DataLoader apps work without it - C<async> matters when promises can

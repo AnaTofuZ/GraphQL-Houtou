@@ -50,7 +50,11 @@ Each callback receives the representation and request context. It may return:
 
 - an entity hash reference;
 - `undef` when the entity does not exist;
-- a `Promise::XS` resolving to either value.
+- a promise supported by the configured async adapter resolving to either value.
+
+Pass `async_adapter` to `build_subgraph_schema` when entity resolvers use a
+backend other than the built-in `Promise::XS`; the schema reuses it when its
+native runtime is built.
 
 Houtou restores `__typename` on returned hashes for union dispatch. Entity
 results remain in representation order. Returning DataLoader promises is the

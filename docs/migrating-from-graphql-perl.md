@@ -110,8 +110,8 @@ immediately encoded. It avoids constructing and then walking a complete Perl
 response envelope.
 
 Do not pass `promise_code` or an execution engine selector. Houtou rejects
-`promise_code`, recognizes `Promise::XS` directly, and always uses the native
-runtime.
+`promise_code`; `Promise::XS` is built in, custom promise backends use
+`async_adapter`, and execution always uses the native runtime.
 
 ## Schema-first migration
 

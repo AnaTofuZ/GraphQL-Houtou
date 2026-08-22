@@ -869,21 +869,24 @@ on the async lane runs at C<63k/s>; one promise per item at C<29k/s>.
 
 =head2 Compared with graphql-perl
 
-Same machine, same 20-item x 3-field list-of-objects query, both sides
-executing to a JSON response. C<util/execution-benchmark.pl> runs the
-upstream lanes automatically when a C<graphql-perl> checkout sits next
-to this repository:
+Medians of five two-second samples on one machine, 2026-08-23, using this
+checkout as the Houtou upstream and GraphQL 0.54. Both sides execute the same
+two-item x two-field C<{ users { id name } }> query to a JSON response:
 
-    graphql-perl, query string each request        5.0k/s
-    graphql-perl, pre-parsed AST + reused schema    23k/s
-    GraphQL::Houtou execute_document_to_json       463k/s
-    GraphQL::Houtou execute_bundle_to_json         894k/s
+    graphql-perl, query string each request         4.9k/s
+    graphql-perl, pre-parsed AST + reused schema   24.8k/s
+    GraphQL::Houtou execute_document_to_json        424k/s
+    GraphQL::Houtou execute_bundle_to_json          945k/s
 
-Against upstream's fastest configuration (pre-parsed AST), the dynamic
-document lane is roughly C<20x> and persisted bundles roughly C<39x>.
-The async lane - resolvers returning promises, which upstream's executor
-resolves through its own promise plumbing - still clears upstream's sync
-numbers by more than C<2x>.
+Against graphql-perl's fastest configuration (pre-parsed AST), the dynamic
+document lane is roughly C<17x> and persisted bundles roughly C<38x>.
+
+Reproduce the comparison with:
+
+    perl -Iblib/lib -Iblib/arch util/execution-benchmark-checkpoint.pl \
+      --count=-2 --repeat=5 --case list_of_objects_json \
+      --mode upstream_string --mode upstream_ast \
+      --mode houtou_document_to_json --mode houtou_bundle_to_json
 
 For methodology and reproducible commands, see
 C<docs/execution-benchmark.md>.

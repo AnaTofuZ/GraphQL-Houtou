@@ -76,23 +76,23 @@ sub _native_runtime_handle {
   GraphQL::Houtou::_bootstrap_xs();
   $self->{native_runtime_handle} ||= GraphQL::Houtou::XS::VM::load_native_runtime_xs(
     $self->_native_runtime_struct,
-    $self->{_async_adapter}->backend_code,
+    $self->{_async_adapter}->_spec,
   );
   return $self->{native_runtime_handle};
 }
 
 sub _async_adapter {
   my ($adapter) = @_;
-  return GraphQL::Houtou::Async::Adapter->builtin(1)
+  return GraphQL::Houtou::Async::Adapter->builtin
     if !defined($adapter) || (!ref($adapter) && $adapter eq 'Promise::XS');
-  die "async_adapter must be a registered adapter object; only 'Promise::XS' is built in\n"
+  die "async_adapter must be an adapter object; only 'Promise::XS' is built in\n"
     if !ref($adapter);
-  die "async_adapter must provide backend_code\n"
-    if !blessed($adapter) || !$adapter->can('backend_code');
+  die "async_adapter must be a GraphQL::Houtou async adapter object\n"
+    if !blessed($adapter) || !$adapter->isa('GraphQL::Houtou::Async::Adapter');
   return $adapter;
 }
 
-sub _uses_promise_xs { $_[0]{_async_adapter}->backend_code == 1 }
+sub _uses_promise_xs { $_[0]{_async_adapter}->is_builtin }
 
 sub compile_program {
   my ($self, $document, %opts) = @_;

@@ -237,7 +237,7 @@ typedef struct {
   IV runtime_slot_count;
   gql_runtime_vm_native_slot_t *runtime_slots;
   gql_runtime_vm_native_callback_catalog_t *callback_catalog;
-  U8 promise_backend_code;
+  gql_runtime_vm_async_adapter_t *async_adapter;
 } gql_runtime_vm_native_runtime_t;
 
 typedef struct {
@@ -469,7 +469,7 @@ typedef struct {
   SV *context;
   SV *variables;
   SV *root_value;
-  U8 promise_backend_code;
+  gql_runtime_vm_async_adapter_t *async_adapter;
   SV *empty_args;
   IV async_ready_frame_count;
   IV async_ready_frame_capacity;
@@ -2539,11 +2539,7 @@ gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
   } else {
     entry->payload_kind = payload_kind;
     entry->payload.promise_sv = newSVsv(outcome);
-    if (gql_runtime_vm_sv_is_pending_async_value(aTHX_ outcome)) {
-      entry->state_code = GQL_VM_PENDING_STATE_WAITING_UNARMED;
-    } else {
-      entry->state_code = GQL_VM_PENDING_STATE_READY_SV;
-    }
+    entry->state_code = GQL_VM_PENDING_STATE_WAITING_UNARMED;
   }
 }
 
@@ -3763,6 +3759,7 @@ gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
   if (!runtime) {
     return;
   }
+  gql_runtime_vm_async_adapter_destroy(aTHX_ runtime->async_adapter);
   if (runtime->runtime_slots) {
     for (i = 0; i < runtime->runtime_slot_count; i++) {
       Safefree(runtime->runtime_slots[i].field_name);

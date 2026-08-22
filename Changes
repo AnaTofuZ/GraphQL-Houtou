@@ -2,7 +2,7 @@ Revision history for Perl extension GraphQL-Houtou
 
 {{$NEXT}}
 
-    - Add pluggable async adapters for external promise implementations
+    - Add runtime-owned async adapters for external promise implementations
 
 0.06 2026-08-21T03:31:47Z
 

@@ -9,13 +9,12 @@ our $VERSION = $GraphQL::Houtou::VERSION;
 
 sub register {
   my ($class, %spec) = @_;
-  GraphQL::Houtou::_bootstrap_xs();
-  my $code = GraphQL::Houtou::XS::VM::register_async_adapter_xs(\%spec);
-  return bless \$code, $class;
+  return bless \%spec, $class;
 }
 
-sub builtin { bless \(my $code = $_[1]), $_[0] }
-sub backend_code { ${ $_[0] } }
+sub builtin { bless { _builtin => 1 }, $_[0] }
+sub _spec { $_[0]->is_builtin ? undef : $_[0] }
+sub is_builtin { $_[0]{_builtin} ? 1 : 0 }
 
 1;
 
@@ -23,7 +22,7 @@ __END__
 
 =head1 NAME
 
-GraphQL::Houtou::Async::Adapter - register an async backend with Houtou's XS VM
+GraphQL::Houtou::Async::Adapter - describe an async backend for Houtou's XS VM
 
 =head1 SYNOPSIS
 
@@ -54,14 +53,13 @@ In an application:
 
 =head1 DESCRIPTION
 
-This module is the public registration boundary between the Houtou native VM
+This module is the public adapter boundary between the Houtou native VM
 and promise implementations. Houtou only bundles its C<Promise::XS> fast path.
 Adapters for other implementations should be released as independent
 distributions.
 
-Registration is process-global and idempotent by C<name>. Registering the same
-name and class again returns the existing adapter code. Reusing a name for a
-different class is an error.
+Each native runtime owns its adapter callbacks. Adapter objects may be reused
+across runtimes without process-global registration or adapter limits.
 
 =head1 ADAPTER CONTRACT
 
@@ -69,7 +67,7 @@ different class is an error.
 
 =item name
 
-A non-empty, NUL-free identifier unique to the adapter distribution.
+An optional identifier for documentation and diagnostics.
 
 =item class
 
@@ -93,7 +91,7 @@ reference in the original order.
 
 An optional coderef called as
 C<($promise, $on_done, $on_fail)>, where C<$on_fail> may be omitted. If it is
-not supplied at registration time, C<< $promise->then >> is cached directly.
+not supplied when the adapter is created, C<< $promise->then >> is cached directly.
 
 Some promise implementations require callbacks to return another promise. In
 that case the adapter must wrap plain values returned by Houtou's callbacks.
@@ -176,7 +174,7 @@ backend C API where the benchmark justifies the extra code.
 
 =head1 PERFORMANCE
 
-Registration and dispatch live in XS. The callbacks may themselves be XSUBs,
+Adapter ownership and dispatch live in XS. The callbacks may themselves be XSUBs,
 so an XS-backed implementation does not need a Perl callback body. The bundled
 C<Promise::XS> backend still has a dedicated VM hot path and is the baseline
 for adapter benchmarks.

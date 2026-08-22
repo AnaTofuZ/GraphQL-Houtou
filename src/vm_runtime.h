@@ -303,6 +303,7 @@ struct gql_runtime_vm_callback_context {
 
 typedef struct {
   gql_runtime_vm_native_runtime_t *runtime;
+  SV *runtime_handle_sv;
   gql_runtime_vm_native_bundle_t *bundle;
   gql_runtime_vm_callback_context_t *callback_ctx;
   gql_runtime_vm_path_frame_t *path_frame;
@@ -457,6 +458,7 @@ typedef struct {
   SV *runtime_schema;
   SV *program;
   gql_runtime_vm_native_runtime_t *native_runtime;
+  SV *native_runtime_owner_sv;
   U8 native_runtime_is_borrowed;
   gql_runtime_vm_native_program_t *native_program;
   gql_runtime_vm_cursor_t *cursor;

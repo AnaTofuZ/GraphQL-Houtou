@@ -4648,6 +4648,7 @@ gql_runtime_vm_adapter_new_deferred_sv(pTHX_ gql_runtime_vm_async_adapter_t *ada
 {
   dSP;
   SV *ret = NULL;
+  I32 count;
 
   if (adapter == &gql_runtime_vm_promise_xs_adapter) {
     return gql_runtime_vm_promise_xs_new_deferred_sv(aTHX);
@@ -4660,20 +4661,21 @@ gql_runtime_vm_adapter_new_deferred_sv(pTHX_ gql_runtime_vm_async_adapter_t *ada
   sv_setsv(ERRSV, &PL_sv_undef);
   PUSHMARK(SP);
   PUTBACK;
-  call_sv(adapter->new_pending_cb, G_SCALAR | G_EVAL);
+  count = call_sv(adapter->new_pending_cb, G_SCALAR | G_EVAL);
   SPAGAIN;
-  if (!SvTRUE(ERRSV) && SP > PL_stack_base) {
+  if (!SvTRUE(ERRSV) && count > 0) {
     ret = newSVsv(POPs);
-  } else if (SP > PL_stack_base) {
+  } else if (count > 0) {
     (void)POPs;
   }
   if (SvTRUE(ERRSV)) {
-    SV *error_sv = newSVsv(ERRSV);
+    SV *error_sv = newSVpvs("async adapter pending factory failed: ");
+    sv_catsv(error_sv, ERRSV);
     sv_setsv(ERRSV, &PL_sv_undef);
     PUTBACK;
     FREETMPS;
     LEAVE;
-    croak("async adapter pending factory failed: %s", SvPV_nolen(error_sv));
+    croak_sv(sv_2mortal(error_sv));
   }
   PUTBACK;
   FREETMPS;
@@ -4682,6 +4684,18 @@ gql_runtime_vm_adapter_new_deferred_sv(pTHX_ gql_runtime_vm_async_adapter_t *ada
       || av_count((AV *)SvRV(ret)) < 2) {
     if (ret) SvREFCNT_dec(ret);
     croak("async adapter pending factory must return [promise, resolve]");
+  }
+  {
+    AV *deferred_av = (AV *)SvRV(ret);
+    SV **promise_svp = av_fetch(deferred_av, 0, 0);
+    SV **resolve_svp = av_fetch(deferred_av, 1, 0);
+    if (!promise_svp
+        || !gql_runtime_vm_sv_is_adapter_promise(aTHX_ adapter, *promise_svp)
+        || !resolve_svp || !SvROK(*resolve_svp)
+        || SvTYPE(SvRV(*resolve_svp)) != SVt_PVCV) {
+      SvREFCNT_dec(ret);
+      croak("async adapter pending factory must return [promise, resolve coderef]");
+    }
   }
   return ret;
 }
@@ -4723,12 +4737,13 @@ gql_runtime_vm_adapter_deferred_resolve_sv(
   call_sv(*cb_svp, G_VOID | G_DISCARD | G_EVAL);
   SPAGAIN;
   if (SvTRUE(ERRSV)) {
-    SV *error_sv = newSVsv(ERRSV);
+    SV *error_sv = newSVpvs("async adapter resolve failed: ");
+    sv_catsv(error_sv, ERRSV);
     sv_setsv(ERRSV, &PL_sv_undef);
     PUTBACK;
     FREETMPS;
     LEAVE;
-    croak("async adapter resolve failed: %s", SvPV_nolen(error_sv));
+    croak_sv(sv_2mortal(error_sv));
   }
   PUTBACK;
   FREETMPS;
@@ -8024,6 +8039,7 @@ gql_runtime_vm_new_exec_state_handle_sv(
   state->runtime_schema = newSVsv(runtime_schema ? runtime_schema : &PL_sv_undef);
   state->program = newSVsv(program ? program : &PL_sv_undef);
   state->native_runtime = NULL;
+  state->native_runtime_owner_sv = NULL;
   state->native_runtime_is_borrowed = 0;
   state->cursor = cursor;
   gql_runtime_vm_cursor_incref(state->cursor);
@@ -8524,6 +8540,7 @@ gql_runtime_vm_execute_native_program_auto_impl_sv(
   state = gql_runtime_vm_expect_exec_state_handle(aTHX_ state_sv);
   state->native_runtime = runtime;
   state->native_runtime_is_borrowed = 1;
+  state->native_runtime_owner_sv = newSVsv(runtime_sv);
   state->async_adapter = runtime->async_adapter;
   state->response_json_mode = json_mode;
   /* The exec state holds its own cursor/writer references now. */
@@ -11886,6 +11903,9 @@ gql_runtime_vm_ensure_fast_lane_state_sv(
     gql_runtime_vm_cursor_decref(aTHX_ cursor);
     sched_state->native_runtime = state->runtime;
     sched_state->native_runtime_is_borrowed = 1;
+    sched_state->native_runtime_owner_sv = state->runtime_handle_sv
+      ? newSVsv(state->runtime_handle_sv)
+      : NULL;
     sched_state->async_adapter = state->runtime->async_adapter;
     state->fast_lane_root_state_sv = sched_state_sv;
   }
@@ -12330,6 +12350,7 @@ gql_runtime_vm_fast_root_continuation_settle_sv(
   Zero(&callback_ctx, 1, gql_runtime_vm_callback_context_t);
   gql_runtime_vm_init_writer_struct(&writer);
   state.runtime = ctx->runtime;
+  state.runtime_handle_sv = ctx->runtime_sv;
   state.bundle = ctx->bundle;
   state.callback_ctx = &callback_ctx;
   state.writer = &writer;
@@ -12614,6 +12635,7 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
   Zero(&callback_ctx, 1, gql_runtime_vm_callback_context_t);
   writer = gql_runtime_vm_new_writer_struct(aTHX);
   state.runtime = runtime;
+  state.runtime_handle_sv = runtime_sv;
   state.bundle = bundle;
   state.callback_ctx = &callback_ctx;
   state.writer = writer;
@@ -16250,6 +16272,7 @@ DESTROY(self)
         SvREFCNT_dec(state->root_value);
         SvREFCNT_dec(state->empty_args);
         SvREFCNT_dec(state->completed_response_sv);
+        SvREFCNT_dec(state->native_runtime_owner_sv);
         Safefree(state);
       }
     }

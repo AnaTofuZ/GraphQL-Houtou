@@ -2,7 +2,7 @@ use strict;
 use warnings;
 
 use Test::More;
-use Scalar::Util qw(blessed refaddr);
+use Scalar::Util qw(blessed refaddr weaken);
 
 BEGIN {
   eval { require Promise::ES6; Promise::ES6->VERSION(0.28); 1 }
@@ -80,6 +80,24 @@ $resolve_pending->('later');
 ok $done, 'Promise::ES6 response resumes after resolution';
 is_deeply $value, { data => { pending => 'later' } },
   'Promise::ES6 pending response is correct';
+
+{
+  $pending_promise = undef;
+  $resolve_pending = undef;
+  my $owner_runtime = $schema->build_native_runtime(async_adapter => $adapter);
+  my $weak_handle = $owner_runtime->_native_runtime_handle;
+  weaken($weak_handle);
+  my $owned_response = $owner_runtime->execute_document('{ pending }');
+  undef $owner_runtime;
+  ok defined($weak_handle), 'pending response keeps its native runtime alive';
+  my $owned_value;
+  $owned_response->then(sub { $owned_value = $_[0] });
+  $resolve_pending->('owned');
+  is_deeply $owned_value, { data => { pending => 'owned' } },
+    'response settles after its Perl runtime is released';
+  ($owned_response, $pending_promise, $resolve_pending) = (undef, undef, undef);
+  ok !defined($weak_handle), 'native runtime is released with the response';
+}
 
 $then_error = 'adapter then failed';
 eval {

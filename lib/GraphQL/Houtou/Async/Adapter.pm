@@ -3,10 +3,12 @@ package GraphQL::Houtou::Async::Adapter;
 use 5.024;
 use strict;
 use warnings;
+use GraphQL::Houtou ();
+
+our $VERSION = $GraphQL::Houtou::VERSION;
 
 sub register {
   my ($class, %spec) = @_;
-  require GraphQL::Houtou;
   GraphQL::Houtou::_bootstrap_xs();
   my $code = GraphQL::Houtou::XS::VM::register_async_adapter_xs(\%spec);
   return bless \$code, $class;
@@ -77,8 +79,9 @@ also recognized.
 =item new_pending
 
 A coderef taking no arguments and returning
-C<[ $promise, $resolve, $reject ]>. The latter two values are coderefs that
-settle C<$promise>.
+C<[ $promise, $resolve ]>. The latter value is a coderef that resolves
+C<$promise>. GraphQL field failures settle the response through Houtou's
+error-outcome path, so the VM does not reject its response promise.
 
 =item all
 
@@ -117,11 +120,11 @@ adapter can consist only of the two required factories:
     name  => 'promise_es6',
     class => 'Promise::ES6',
     new_pending => sub {
-      my ($resolve, $reject);
+      my $resolve;
       my $promise = Promise::ES6->new(sub {
-        ($resolve, $reject) = @_;
+        ($resolve) = @_;
       });
-      return [ $promise, $resolve, $reject ];
+      return [ $promise, $resolve ];
     },
     all => sub {
       return Promise::ES6->all($_[0]);

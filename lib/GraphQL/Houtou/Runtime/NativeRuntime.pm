@@ -26,6 +26,7 @@ sub new {
   my ($class, %args) = @_;
   die "runtime_schema is required\n" if !$args{runtime_schema};
   my $async_adapter = _async_adapter($args{async_adapter});
+  my $has_async_adapter = defined $args{async_adapter};
   my $cache_max = exists $args{program_cache_max} ? $args{program_cache_max} : 1000;
   my $max_depth = exists $args{max_depth} ? $args{max_depth} : DEFAULT_MAX_DEPTH;
   my $max_nodes = exists $args{max_nodes} ? $args{max_nodes} : DEFAULT_MAX_NODES;
@@ -51,7 +52,7 @@ sub new {
     _validate => exists $args{validate} ? ($args{validate} ? 1 : 0) : 1,
     _allow_introspection => exists $args{allow_introspection}
       ? ($args{allow_introspection} ? 1 : 0) : 1,
-    _async => ($args{async} || exists $args{async_adapter}) ? 1 : 0,
+    _async => ($args{async} || $has_async_adapter) ? 1 : 0,
     _async_adapter => $async_adapter,
   }, $class;
 }
@@ -84,6 +85,8 @@ sub _async_adapter {
   my ($adapter) = @_;
   return GraphQL::Houtou::Async::Adapter->builtin(1)
     if !defined($adapter) || (!ref($adapter) && $adapter eq 'Promise::XS');
+  die "async_adapter must be a registered adapter object; only 'Promise::XS' is built in\n"
+    if !ref($adapter);
   die "async_adapter must provide backend_code\n"
     if !blessed($adapter) || !$adapter->can('backend_code');
   return $adapter;
@@ -456,6 +459,8 @@ sub _settle_result {
     );
 
   my ($settled, $value) = (0, undef);
+  # Keep the derived chain alive until settlement; Future-style adapters may
+  # otherwise discard it before its callbacks run.
   my $chain = GraphQL::Houtou::XS::VM::runtime_then_async_xs(
     $self->_native_runtime_handle,
     $result,

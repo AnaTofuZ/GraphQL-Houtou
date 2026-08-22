@@ -4,9 +4,14 @@ use warnings;
 use Test::More;
 use Scalar::Util qw(blessed);
 
-use Future;
-use Future::XS 0.15;
+BEGIN {
+  eval { require Future; require Future::XS; Future::XS->VERSION(0.15); 1 }
+    or plan skip_all => 'Future::XS 0.15 required';
+}
+
+use Promise::XS ();
 use GraphQL::Houtou::Async::Adapter;
+use GraphQL::Houtou::DataLoader;
 use GraphQL::Houtou::Schema;
 use GraphQL::Houtou::Type::Object;
 use GraphQL::Houtou::Type::Scalar qw($String);
@@ -32,7 +37,6 @@ my $adapter = GraphQL::Houtou::Async::Adapter->register(
     return [
       $future,
       sub { $future->done(@_) },
-      sub { $future->fail(@_) },
     ];
   },
   all => sub {
@@ -51,14 +55,36 @@ is(($rejected->failure)[0], 'original failure',
   'Future adapter preserves rejection when on_fail is omitted');
 
 my $pending;
+my $loader = GraphQL::Houtou::DataLoader->new(
+  batch => sub { [ map { "L$_" } @{ $_[0] } ] },
+);
 my $schema = GraphQL::Houtou::Schema->new(
   query => GraphQL::Houtou::Type::Object->new(
     name => 'FutureXSAdapterQuery',
     fields => {
       ready => { type => $String, resolve => sub { Future->done('ready') } },
+      pxs => { type => $String, resolve => sub { Promise::XS::resolved('pxs') } },
+      loader_ticket => {
+        type => $String,
+        resolve => sub { $loader->load(1) },
+      },
+      loader_chain => {
+        type => $String,
+        resolve => sub { $loader->load(2)->then(sub { $_[0] }) },
+      },
+      loader_all => {
+        type => $String->list,
+        resolve => sub {
+          return GraphQL::Houtou::DataLoader::Ticket
+            ->all($loader->load(3), $loader->load(4))
+            ->then(sub { [ map { @$_ } @_ ] });
+        },
+      },
       items => {
         type => $String->list,
-        resolve => sub { [ Future->done('a'), 'b' ] },
+        resolve => sub {
+          [ Future->done('a'), Promise::XS::resolved('pxs-item'), 'b' ]
+        },
       },
       pending => {
         type => $String,
@@ -69,10 +95,23 @@ my $schema = GraphQL::Houtou::Schema->new(
 );
 
 my $runtime = $schema->build_native_runtime(async_adapter => $adapter);
-my $ready = $runtime->execute_document('{ ready items }');
+my $ready = $runtime->execute_document('{ ready pxs items }');
 ($ready) = $ready->get if blessed($ready);
-is_deeply $ready, { data => { ready => 'ready', items => [qw(a b)] } },
-  'external-style Future::XS adapter completes values';
+is_deeply $ready, {
+  data => { ready => 'ready', pxs => 'pxs', items => [qw(a pxs-item b)] },
+}, 'Future::XS adapter composes with Promise::XS values';
+
+my $loaded = $runtime->execute_document(
+  '{ loader_ticket loader_chain loader_all }',
+  on_stall => GraphQL::Houtou::DataLoader->on_stall_for($loader),
+);
+is_deeply $loaded, {
+  data => {
+    loader_ticket => 'L1',
+    loader_chain => 'L2',
+    loader_all => [qw(L3 L4)],
+  },
+}, 'Future::XS adapter supports DataLoader tickets and promise composition';
 
 my $result = $runtime->execute_document('{ pending }');
 ok !$result->is_ready, 'XS-backed Future response remains pending';

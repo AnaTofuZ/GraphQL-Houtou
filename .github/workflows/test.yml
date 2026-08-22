@@ -34,7 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install dependencies
-        run: cpanm --notest --installdeps .
+        run: |
+          cpanm --notest --installdeps .
+          cpanm --notest Future::XS@0.15 Promise::ES6@0.28
       - name: Build XS distribution
         run: |
           perl Build.PL
@@ -54,5 +56,6 @@ jobs:
             Test::MinimumVersion::Fast Test::PAUSE::Permissions \
             Test::Pod Test::Spellunker
           cpanm --notest --with-develop --installdeps .
+          cpanm --notest Future::XS@0.15 Promise::ES6@0.28
       - name: Run distribution and author tests
         run: RELEASE_TESTING=1 minil test

@@ -385,6 +385,14 @@ settled envelope (or a promise while pending), and
 Per-request `on_stall` hooks compose with it as usual and remain the way
 DataLoader batches are flushed.
 
+External promise implementations register through
+[GraphQL::Houtou::Async::Adapter](https://metacpan.org/pod/GraphQL%3A%3AHoutou%3A%3AAsync%3A%3AAdapter) and are selected when the runtime is built:
+
+    my $runtime = build_native_runtime($schema, async_adapter => $adapter);
+
+Promise::XS values, including DataLoader promise chains, remain composable on
+an adapter-backed runtime.
+
 Without the declaration, requests with variables run on the synchronous
 fast lane, which cannot suspend. A resolver returning a Promise::XS
 promise there fails immediately with an error pointing at `async => 1`

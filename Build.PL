@@ -39,8 +39,6 @@ my %args = (
     },
 
     test_requires => {
-        'Future::XS' => '0.15',
-        'Promise::ES6' => '0.28',
         'Test::Deep' => '1.205',
         'Test::Exception' => '0.43',
         'Test::More' => '0.98',

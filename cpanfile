@@ -9,8 +9,6 @@ on configure => sub {
 };
 
 on 'test' => sub {
-    requires 'Future::XS', '0.15';
-    requires 'Promise::ES6', '0.28';
     requires 'Test::More', '0.98';
     requires 'Test::Deep', '1.205';
     requires 'Test::Exception', '0.43';

@@ -91,6 +91,10 @@ if (eval { require Promises; 1 }) {
         [ map { @$_ == 1 ? $_->[0] : [@$_] } @_ ]
       })
     },
+    then => sub {
+      my ($promise, @callbacks) = @_;
+      $promise->then(@callbacks)
+    },
   );
   my $runtime = runtime_for(sub {
     my $d = Promises::deferred();
@@ -110,6 +114,10 @@ if (eval { require Promise::ES6; 1 }) {
       [ $promise, $resolve, $reject ]
     },
     all => sub { Promise::ES6->all($_[0]) },
+    then => sub {
+      my ($promise, @callbacks) = @_;
+      $promise->then(@callbacks)
+    },
   );
   my $runtime = runtime_for(sub { Promise::ES6->resolve('ok') }, $adapter);
   $cases{promise_es6_pp} = sub { $runtime->execute_document('{ value }') };

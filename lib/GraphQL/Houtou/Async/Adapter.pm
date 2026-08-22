@@ -40,7 +40,7 @@ In an adapter distribution:
       class       => 'My::Promise',
       new_pending => \&new_pending,
       all         => \&all,
-      then        => \&then, # optional
+      then        => \&then,
     );
   }
 
@@ -89,9 +89,8 @@ reference in the original order.
 
 =item then
 
-An optional coderef called as
-C<($promise, $on_done, $on_fail)>, where C<$on_fail> may be omitted. If it is
-not supplied when the adapter is created, C<< $promise->then >> is cached directly.
+A required coderef called as C<($promise, $on_done, $on_fail)>, where
+C<$on_fail> may be omitted.
 
 Some promise implementations require callbacks to return another promise. In
 that case the adapter must wrap plain values returned by Houtou's callbacks.
@@ -112,7 +111,7 @@ For example, a Future-style adapter needs the equivalent of:
 =head1 WRITING AN ADAPTER IN PERL
 
 For a promise whose C<then> method accepts ordinary callback return values, the
-adapter can consist only of the two required factories:
+adapter can delegate directly to that method:
 
   my $adapter = GraphQL::Houtou::Async::Adapter->register(
     name  => 'promise_es6',
@@ -126,6 +125,10 @@ adapter can consist only of the two required factories:
     },
     all => sub {
       return Promise::ES6->all($_[0]);
+    },
+    then => sub {
+      my ($promise, @callbacks) = @_;
+      return $promise->then(@callbacks);
     },
   );
 

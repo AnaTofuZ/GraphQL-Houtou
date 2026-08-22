@@ -461,12 +461,20 @@ sub _settle_result {
   my ($settled, $value) = (0, undef);
   # Keep the derived chain alive until settlement; Future-style adapters may
   # otherwise discard it before its callbacks run.
-  my $chain = GraphQL::Houtou::XS::VM::runtime_then_async_xs(
-    $self->_native_runtime_handle,
-    $result,
-    sub { ($settled, $value) = (1, $_[0]) },
-    sub { ($settled, $value) = (-1, $_[0]) },
-  );
+  my $chain;
+  eval {
+    $chain = GraphQL::Houtou::XS::VM::runtime_then_async_xs(
+      $self->_native_runtime_handle,
+      $result,
+      sub { ($settled, $value) = (1, $_[0]) },
+      sub { ($settled, $value) = (-1, $_[0]) },
+    );
+    1;
+  } or do {
+    my $error = $@;
+    GraphQL::Houtou::XS::VM::cancel_pending_response_xs($result);
+    die $error;
+  };
   while (!$settled) {
     my $progressed = $on_stall->();
     if (!$settled && !$progressed) {

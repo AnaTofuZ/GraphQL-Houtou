@@ -696,7 +696,8 @@ static void gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
   gql_runtime_vm_path_frame_t *path_frame,
   IV block_index,
   IV slot_index,
-  IV op_index
+  IV op_index,
+  const gql_runtime_vm_async_adapter_t *async_adapter
 );
 static gql_runtime_vm_pending_entry_t *gql_runtime_vm_block_frame_push_pending_entry_with_meta(
   pTHX_
@@ -2491,7 +2492,8 @@ gql_runtime_vm_block_frame_push_pending_pvn(
     NULL,
     -1,
     -1,
-    -1
+    -1,
+    NULL
   );
 }
 
@@ -2507,7 +2509,8 @@ gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
   gql_runtime_vm_path_frame_t *path_frame,
   IV block_index,
   IV slot_index,
-  IV op_index
+  IV op_index,
+  const gql_runtime_vm_async_adapter_t *async_adapter
 )
 {
   gql_runtime_vm_pending_entry_t *entry = NULL;
@@ -2539,7 +2542,9 @@ gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
   } else {
     entry->payload_kind = payload_kind;
     entry->payload.promise_sv = newSVsv(outcome);
-    entry->state_code = GQL_VM_PENDING_STATE_WAITING_UNARMED;
+    entry->state_code = gql_runtime_vm_sv_is_pending_async_value(
+      aTHX_ async_adapter, outcome
+    ) ? GQL_VM_PENDING_STATE_WAITING_UNARMED : GQL_VM_PENDING_STATE_READY_SV;
   }
 }
 

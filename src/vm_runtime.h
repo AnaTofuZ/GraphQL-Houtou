@@ -237,6 +237,7 @@ typedef struct {
   IV runtime_slot_count;
   gql_runtime_vm_native_slot_t *runtime_slots;
   gql_runtime_vm_native_callback_catalog_t *callback_catalog;
+  gql_runtime_vm_async_adapter_t *async_adapter;
 } gql_runtime_vm_native_runtime_t;
 
 typedef struct {
@@ -302,6 +303,7 @@ struct gql_runtime_vm_callback_context {
 
 typedef struct {
   gql_runtime_vm_native_runtime_t *runtime;
+  SV *runtime_handle_sv;
   gql_runtime_vm_native_bundle_t *bundle;
   gql_runtime_vm_callback_context_t *callback_ctx;
   gql_runtime_vm_path_frame_t *path_frame;
@@ -456,6 +458,7 @@ typedef struct {
   SV *runtime_schema;
   SV *program;
   gql_runtime_vm_native_runtime_t *native_runtime;
+  SV *native_runtime_owner_sv;
   U8 native_runtime_is_borrowed;
   gql_runtime_vm_native_program_t *native_program;
   gql_runtime_vm_cursor_t *cursor;
@@ -468,7 +471,7 @@ typedef struct {
   SV *context;
   SV *variables;
   SV *root_value;
-  U8 promise_backend_code;
+  gql_runtime_vm_async_adapter_t *async_adapter;
   SV *empty_args;
   IV async_ready_frame_count;
   IV async_ready_frame_capacity;
@@ -695,7 +698,8 @@ static void gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
   gql_runtime_vm_path_frame_t *path_frame,
   IV block_index,
   IV slot_index,
-  IV op_index
+  IV op_index,
+  const gql_runtime_vm_async_adapter_t *async_adapter
 );
 static gql_runtime_vm_pending_entry_t *gql_runtime_vm_block_frame_push_pending_entry_with_meta(
   pTHX_
@@ -2490,7 +2494,8 @@ gql_runtime_vm_block_frame_push_pending_pvn(
     NULL,
     -1,
     -1,
-    -1
+    -1,
+    NULL
   );
 }
 
@@ -2506,7 +2511,8 @@ gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
   gql_runtime_vm_path_frame_t *path_frame,
   IV block_index,
   IV slot_index,
-  IV op_index
+  IV op_index,
+  const gql_runtime_vm_async_adapter_t *async_adapter
 )
 {
   gql_runtime_vm_pending_entry_t *entry = NULL;
@@ -2538,11 +2544,9 @@ gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
   } else {
     entry->payload_kind = payload_kind;
     entry->payload.promise_sv = newSVsv(outcome);
-    if (gql_runtime_vm_sv_is_pending_async_value(aTHX_ outcome)) {
-      entry->state_code = GQL_VM_PENDING_STATE_WAITING_UNARMED;
-    } else {
-      entry->state_code = GQL_VM_PENDING_STATE_READY_SV;
-    }
+    entry->state_code = gql_runtime_vm_sv_is_pending_async_value(
+      aTHX_ async_adapter, outcome
+    ) ? GQL_VM_PENDING_STATE_WAITING_UNARMED : GQL_VM_PENDING_STATE_READY_SV;
   }
 }
 
@@ -3762,6 +3766,7 @@ gql_runtime_vm_native_runtime_destroy(gql_runtime_vm_native_runtime_t *runtime)
   if (!runtime) {
     return;
   }
+  gql_runtime_vm_async_adapter_destroy(aTHX_ runtime->async_adapter);
   if (runtime->runtime_slots) {
     for (i = 0; i < runtime->runtime_slot_count; i++) {
       Safefree(runtime->runtime_slots[i].field_name);

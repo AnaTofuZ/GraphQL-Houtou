@@ -9,7 +9,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install dependencies
-        run: cpanm --notest --installdeps .
+        run: |
+          cpanm --notest --installdeps .
+          cpanm --notest Future::XS@0.15 Promise::ES6@0.28
       - name: Build with ASan
         run: |
           perl Build.PL --config optimize="-O2 -g -fsanitize=address -fno-omit-frame-pointer" --config lddlflags="-shared -fsanitize=address"
@@ -68,6 +70,7 @@ jobs:
       - name: Install dependencies
         run: |
           cpanm --notest --installdeps .
+          cpanm --notest Future::XS@0.15 Promise::ES6@0.28
           apt-get update -qq && apt-get install -y -qq valgrind
       - name: Build
         run: |

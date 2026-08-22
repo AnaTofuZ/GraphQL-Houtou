@@ -10,6 +10,7 @@ use GraphQL::Houtou::Runtime::InputCoercion ();
 use GraphQL::Houtou::Runtime::DirectiveRuntime ();
 use GraphQL::Houtou::Runtime::OperationCompiler ();
 use GraphQL::Houtou::Runtime::VMCompiler ();
+use GraphQL::Houtou::Async::Adapter ();
 use GraphQL::Houtou::Schema ();
 use JSON::MaybeXS qw(decode_json encode_json is_bool);
 
@@ -24,6 +25,8 @@ use constant DEFAULT_LIST_SIZE => 10;
 sub new {
   my ($class, %args) = @_;
   die "runtime_schema is required\n" if !$args{runtime_schema};
+  my $async_adapter = _async_adapter($args{async_adapter});
+  my $has_async_adapter = defined $args{async_adapter};
   my $cache_max = exists $args{program_cache_max} ? $args{program_cache_max} : 1000;
   my $max_depth = exists $args{max_depth} ? $args{max_depth} : DEFAULT_MAX_DEPTH;
   my $max_nodes = exists $args{max_nodes} ? $args{max_nodes} : DEFAULT_MAX_NODES;
@@ -49,7 +52,8 @@ sub new {
     _validate => exists $args{validate} ? ($args{validate} ? 1 : 0) : 1,
     _allow_introspection => exists $args{allow_introspection}
       ? ($args{allow_introspection} ? 1 : 0) : 1,
-    _async => $args{async} ? 1 : 0,
+    _async => ($args{async} || $has_async_adapter) ? 1 : 0,
+    _async_adapter => $async_adapter,
   }, $class;
 }
 
@@ -72,9 +76,23 @@ sub _native_runtime_handle {
   GraphQL::Houtou::_bootstrap_xs();
   $self->{native_runtime_handle} ||= GraphQL::Houtou::XS::VM::load_native_runtime_xs(
     $self->_native_runtime_struct,
+    $self->{_async_adapter}->_spec,
   );
   return $self->{native_runtime_handle};
 }
+
+sub _async_adapter {
+  my ($adapter) = @_;
+  return GraphQL::Houtou::Async::Adapter->builtin
+    if !defined($adapter) || (!ref($adapter) && $adapter eq 'Promise::XS');
+  die "async_adapter must be an adapter object; only 'Promise::XS' is built in\n"
+    if !ref($adapter);
+  die "async_adapter must be a GraphQL::Houtou async adapter object\n"
+    if !blessed($adapter) || !$adapter->isa('GraphQL::Houtou::Async::Adapter');
+  return $adapter;
+}
+
+sub _uses_promise_xs { $_[0]{_async_adapter}->is_builtin }
 
 sub compile_program {
   my ($self, $document, %opts) = @_;
@@ -339,7 +357,7 @@ sub execute_program {
     if exists $opts{promise_code};
 
   if ($on_stall && !$strict_sync) {
-    require GraphQL::Houtou::Promise::PromiseXS;
+    require GraphQL::Houtou::Promise::PromiseXS if $self->_uses_promise_xs;
     # Batching resolvers return promises, so the request must run on the
     # async-capable lane regardless of variables. When the fast lane covers
     # this shape (Phase 3-7's eligibility work), it drives on_stall itself
@@ -358,14 +376,14 @@ sub execute_program {
       $variables,
       $on_stall,
     );
-    return _settle_result($result, $on_stall);
+    return $self->_settle_result($result, $on_stall);
   }
   # Runtimes built with async => 1 declare that resolvers return promises
   # (the DataLoader deployment shape); every request starts on the
   # async-capable lane, exactly like the no-variables path. A strict
   # synchronous request still wins.
   if ($self->{_async} && !$strict_sync) {
-    require GraphQL::Houtou::Promise::PromiseXS;
+    require GraphQL::Houtou::Promise::PromiseXS if $self->_uses_promise_xs;
     return GraphQL::Houtou::XS::VM::execute_native_program_auto_xs(
       $runtime_handle,
       $native_program,
@@ -434,15 +452,29 @@ sub execute_compact_program {
 # to the next stall. No progress while promises remain pending is reported
 # as a deadlock.
 sub _settle_result {
-  my ($result, $on_stall) = @_;
+  my ($self, $result, $on_stall) = @_;
   return $result
-    if !(blessed($result) && $result->isa('Promise::XS::Promise'));
+    if !GraphQL::Houtou::XS::VM::runtime_value_is_async_xs(
+      $self->_native_runtime_handle, $result,
+    );
 
   my ($settled, $value) = (0, undef);
-  $result->then(
-    sub { ($settled, $value) = (1, $_[0]) },
-    sub { ($settled, $value) = (-1, $_[0]) },
-  );
+  # Keep the derived chain alive until settlement; Future-style adapters may
+  # otherwise discard it before its callbacks run.
+  my $chain;
+  eval {
+    $chain = GraphQL::Houtou::XS::VM::runtime_then_async_xs(
+      $self->_native_runtime_handle,
+      $result,
+      sub { ($settled, $value) = (1, $_[0]) },
+      sub { ($settled, $value) = (-1, $_[0]) },
+    );
+    1;
+  } or do {
+    my $error = $@;
+    GraphQL::Houtou::XS::VM::cancel_pending_response_xs($result);
+    die $error;
+  };
   while (!$settled) {
     my $progressed = $on_stall->();
     if (!$settled && !$progressed) {
@@ -683,7 +715,7 @@ sub execute_program_to_json {
     # response frame renders JSON directly from its native value tree at
     # resolve time (query field order preserved). The auto lane prepares
     # program variables itself.
-    require GraphQL::Houtou::Promise::PromiseXS;
+    require GraphQL::Houtou::Promise::PromiseXS if $self->_uses_promise_xs;
     my $result = GraphQL::Houtou::XS::VM::execute_native_program_auto_to_json_xs(
       $self->_native_runtime_handle,
       $native_program,
@@ -691,7 +723,7 @@ sub execute_program_to_json {
       $opts{context},
       $opts{variables},
     );
-    return _settle_result($result, $on_stall);
+    return $self->_settle_result($result, $on_stall);
   }
   if ($self->{_async} && !$strict_sync) {
     return $self->_auto_json_or_die($native_program, %opts);
@@ -729,7 +761,7 @@ sub execute_program_to_json {
 # rather than handing a promise to a caller that expected bytes.
 sub _auto_json_or_die {
   my ($self, $native_program, %opts) = @_;
-  require GraphQL::Houtou::Promise::PromiseXS;
+  require GraphQL::Houtou::Promise::PromiseXS if $self->_uses_promise_xs;
   my $result = GraphQL::Houtou::XS::VM::execute_native_program_auto_to_json_xs(
     $self->_native_runtime_handle,
     $native_program,
@@ -737,7 +769,8 @@ sub _auto_json_or_die {
     $opts{context},
     $opts{variables},
   );
-  if (blessed($result) && $result->isa('Promise::XS::Promise')) {
+  if ($self->_uses_promise_xs
+      && blessed($result) && $result->isa('Promise::XS::Promise')) {
     # Pre-resolved promise chains settle during execution, so the response
     # promise may already hold the JSON; only a genuine stall is an error.
     my $settled = eval {
@@ -753,6 +786,13 @@ sub _auto_json_or_die {
         . " so execute_document_to_json can drive them to completion\n";
     }
     return $settled;
+  }
+  if (GraphQL::Houtou::XS::VM::runtime_value_is_async_xs(
+      $self->_native_runtime_handle, $result,
+  )) {
+    GraphQL::Houtou::XS::VM::cancel_pending_response_xs($result);
+    die "resolvers returned pending promises; pass on_stall (see GraphQL::Houtou::DataLoader)"
+      . " so execute_document_to_json can drive them to completion\n";
   }
   return $result;
 }

@@ -1,0 +1,128 @@
+use 5.024;
+use strict;
+use warnings;
+
+use Benchmark qw(cmpthese);
+use FindBin qw($Bin);
+use Getopt::Long qw(GetOptions);
+use Scalar::Util qw(blessed);
+
+use lib "$Bin/../lib", "$Bin/../blib/lib", "$Bin/../blib/arch";
+use GraphQL::Houtou::Async::Adapter;
+use GraphQL::Houtou::Promise::PromiseXS ();
+use GraphQL::Houtou::Schema;
+use GraphQL::Houtou::Type::Object;
+use GraphQL::Houtou::Type::Scalar qw($String);
+
+my $count = -3;
+GetOptions('count=s' => \$count) or die "Usage: $0 [--count Benchmark-count]\n";
+
+sub runtime_for {
+  my ($resolve, $adapter) = @_;
+  my $schema = GraphQL::Houtou::Schema->new(
+    query => GraphQL::Houtou::Type::Object->new(
+      name => 'AsyncAdapterBenchmarkQuery',
+      fields => { value => { type => $String, resolve => $resolve } },
+    ),
+  );
+  return $schema->build_native_runtime(
+    defined($adapter) ? (async_adapter => $adapter) : (),
+  );
+}
+
+my %cases;
+my $sync = runtime_for(sub { 'ok' });
+$cases{sync} = sub { $sync->execute_document('{ value }') };
+
+require Promise::XS;
+my $promise_xs = runtime_for(sub { Promise::XS::resolved('ok') }, 'Promise::XS');
+$cases{promise_xs} = sub { $promise_xs->execute_document('{ value }') };
+
+if (eval {
+  require Future;
+  require Future::XS;
+  Future::XS->VERSION(0.15);
+  Future->isa('Future::XS');
+}) {
+  my $adapter = GraphQL::Houtou::Async::Adapter->register(
+    name => 'benchmark_future_xs',
+    class => 'Future',
+    then => sub {
+      my ($future, $done, $fail) = @_;
+      my $next = $future->then(
+        sub { Future->done($done->(@_)) },
+        sub { Future->done($fail->(@_)) },
+      );
+      my $keep = $next;
+      $future->on_ready(sub { undef $keep }) if !$next->is_ready;
+      return $next;
+    },
+    new_pending => sub {
+      my $future = Future->new;
+      [ $future, sub { $future->done(@_) }, sub { $future->fail(@_) } ]
+    },
+    all => sub {
+      my @futures = map {
+        blessed($_) && $_->isa('Future') ? $_ : Future->done($_)
+      } @{ $_[0] };
+      return Future->done([]) if !@futures;
+      return Future->needs_all(@futures)->then(
+        sub { Future->done([@_]) },
+      );
+    },
+  );
+  my $future = runtime_for(
+    sub { Future->done('ok') },
+    $adapter,
+  );
+  $cases{future_xs} = sub { $future->execute_document('{ value }') };
+}
+
+if (eval { require Promises; 1 }) {
+  my $adapter = GraphQL::Houtou::Async::Adapter->register(
+    name => 'benchmark_promises',
+    class => 'Promises::Promise',
+    new_pending => sub {
+      my $d = Promises::deferred();
+      [ $d->promise, sub { $d->resolve(@_) }, sub { $d->reject(@_) } ]
+    },
+    all => sub {
+      Promises::collect(@{ $_[0] })->then(sub {
+        [ map { @$_ == 1 ? $_->[0] : [@$_] } @_ ]
+      })
+    },
+    then => sub {
+      my ($promise, @callbacks) = @_;
+      $promise->then(@callbacks)
+    },
+  );
+  my $runtime = runtime_for(sub {
+    my $d = Promises::deferred();
+    $d->resolve('ok');
+    return $d->promise;
+  }, $adapter);
+  $cases{promises_pp} = sub { $runtime->execute_document('{ value }') };
+}
+
+if (eval { require Promise::ES6; 1 }) {
+  my $adapter = GraphQL::Houtou::Async::Adapter->register(
+    name => 'benchmark_promise_es6',
+    class => 'Promise::ES6',
+    new_pending => sub {
+      my ($resolve, $reject);
+      my $promise = Promise::ES6->new(sub { ($resolve, $reject) = @_ });
+      [ $promise, $resolve, $reject ]
+    },
+    all => sub { Promise::ES6->all($_[0]) },
+    then => sub {
+      my ($promise, @callbacks) = @_;
+      $promise->then(@callbacks)
+    },
+  );
+  my $runtime = runtime_for(sub { Promise::ES6->resolve('ok') }, $adapter);
+  $cases{promise_es6_pp} = sub { $runtime->execute_document('{ value }') };
+}
+
+$_->() for values %cases;
+print "Pre-resolved scalar through GraphQL::Houtou async adapters\n";
+cmpthese($count, \%cases);

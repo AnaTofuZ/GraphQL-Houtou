@@ -8,7 +8,11 @@
 #include "validation.h"
 static SV *gql_runtime_vm_empty_args_sv(pTHX);
 static SV *gql_runtime_vm_named_coderef_sv(pTHX_ const char *name);
-static int gql_runtime_vm_sv_is_pending_async_value(pTHX_ SV *value);
+typedef struct gql_runtime_vm_async_adapter gql_runtime_vm_async_adapter_t;
+static void gql_runtime_vm_async_adapter_destroy(pTHX_ gql_runtime_vm_async_adapter_t *adapter);
+static int gql_runtime_vm_sv_is_pending_async_value(
+  pTHX_ const gql_runtime_vm_async_adapter_t *adapter, SV *value
+);
 #include "vm_runtime.h"
 
 static SV *gql_runtime_vm_global_empty_args_sv = NULL;
@@ -32,6 +36,116 @@ static IV gql_runtime_vm_pending_cb_pool_count = 0;
  * compare above gates them), so then() always resolves to the same CV;
  * cache it and skip call_method's per-call method lookup. */
 static CV *gql_runtime_vm_promise_xs_then_cv = NULL;
+static int gql_runtime_vm_sv_is_promise_xs(pTHX_ SV *sv);
+
+struct gql_runtime_vm_async_adapter {
+  char *class_name;
+  HV *stash;
+  CV *then_cv;
+  SV *new_pending_cb;
+  SV *all_cb;
+};
+
+/* NULL means synchronous execution. This static descriptor marks the built-in
+ * Promise::XS backend without allocating or retaining Perl callbacks. */
+static gql_runtime_vm_async_adapter_t gql_runtime_vm_promise_xs_adapter;
+
+static gql_runtime_vm_async_adapter_t *
+gql_runtime_vm_async_adapter_from_spec_sv(pTHX_ SV *spec)
+{
+  HV *hv;
+  SV **class_svp;
+  SV **new_pending_svp;
+  SV **all_svp;
+  SV **then_svp;
+  STRLEN class_len;
+  const char *class_name;
+  gql_runtime_vm_async_adapter_t *adapter;
+
+  if (!spec || !SvOK(spec)) {
+    return &gql_runtime_vm_promise_xs_adapter;
+  }
+  if (!SvROK(spec) || SvTYPE(SvRV(spec)) != SVt_PVHV) {
+    croak("async adapter specification must be a hash reference");
+  }
+  hv = (HV *)SvRV(spec);
+  class_svp = hv_fetchs(hv, "class", 0);
+  new_pending_svp = hv_fetchs(hv, "new_pending", 0);
+  all_svp = hv_fetchs(hv, "all", 0);
+  then_svp = hv_fetchs(hv, "then", 0);
+  if (!class_svp || !SvOK(*class_svp)
+      || !new_pending_svp || !SvROK(*new_pending_svp)
+      || SvTYPE(SvRV(*new_pending_svp)) != SVt_PVCV
+      || !all_svp || !SvROK(*all_svp)
+      || SvTYPE(SvRV(*all_svp)) != SVt_PVCV
+      || !then_svp || !SvROK(*then_svp)
+      || SvTYPE(SvRV(*then_svp)) != SVt_PVCV) {
+    croak("async adapter requires class, new_pending, all, and then");
+  }
+  class_name = SvPV(*class_svp, class_len);
+  if (!class_len || strlen(class_name) != class_len) {
+    croak("async adapter class must be a non-empty string without NUL bytes");
+  }
+  Newxz(adapter, 1, gql_runtime_vm_async_adapter_t);
+  adapter->class_name = savepvn(class_name, class_len);
+  adapter->stash = gv_stashpv(adapter->class_name, GV_ADD);
+  adapter->then_cv = (CV *)SvRV(*then_svp);
+  adapter->new_pending_cb = newSVsv(*new_pending_svp);
+  adapter->all_cb = newSVsv(*all_svp);
+  SvREFCNT_inc_simple_void_NN((SV *)adapter->then_cv);
+  return adapter;
+}
+
+static void
+gql_runtime_vm_async_adapter_destroy(pTHX_ gql_runtime_vm_async_adapter_t *adapter)
+{
+  if (!adapter || adapter == &gql_runtime_vm_promise_xs_adapter) {
+    return;
+  }
+  Safefree(adapter->class_name);
+  SvREFCNT_dec((SV *)adapter->then_cv);
+  SvREFCNT_dec(adapter->new_pending_cb);
+  SvREFCNT_dec(adapter->all_cb);
+  Safefree(adapter);
+}
+
+typedef struct {
+  gql_runtime_vm_native_runtime_t *runtime;
+} gql_runtime_vm_native_runtime_guard_t;
+
+static void
+gql_runtime_vm_native_runtime_guard_cleanup(pTHX_ void *ptr)
+{
+  gql_runtime_vm_native_runtime_guard_t *guard =
+    (gql_runtime_vm_native_runtime_guard_t *)ptr;
+  if (guard && guard->runtime) {
+    gql_runtime_vm_native_runtime_destroy(guard->runtime);
+  }
+}
+
+static int
+gql_runtime_vm_sv_is_adapter_promise(
+  pTHX_ const gql_runtime_vm_async_adapter_t *adapter, SV *sv
+)
+{
+  SV *rv;
+
+  if (gql_runtime_vm_sv_is_promise_xs(aTHX_ sv)) {
+    return 1;
+  }
+  if (adapter == &gql_runtime_vm_promise_xs_adapter) {
+    return 0;
+  }
+  if (!adapter || !sv || !SvROK(sv)) {
+    return 0;
+  }
+  rv = SvRV(sv);
+  if (!SvOBJECT(rv)) {
+    return 0;
+  }
+  return SvSTASH(rv) == adapter->stash
+    || sv_derived_from(sv, adapter->class_name);
+}
 
 static CV *
 gql_runtime_vm_promise_xs_then_cv_get(pTHX)
@@ -351,9 +465,11 @@ gql_runtime_vm_settle_dataloader_ticket(pTHX_ SV *ticket, IV state, SV *value)
 }
 
 static int
-gql_runtime_vm_sv_is_pending_async_value(pTHX_ SV *value)
+gql_runtime_vm_sv_is_pending_async_value(
+  pTHX_ const gql_runtime_vm_async_adapter_t *adapter, SV *value
+)
 {
-  return gql_runtime_vm_sv_is_promise_xs(aTHX_ value)
+  return gql_runtime_vm_sv_is_adapter_promise(aTHX_ adapter, value)
     || (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ value)
         && gql_runtime_vm_dataloader_ticket_state(aTHX_ value) == 0);
 }
@@ -361,9 +477,6 @@ gql_runtime_vm_sv_is_pending_async_value(pTHX_ SV *value)
 static SV *gql_runtime_vm_global_wrap_object_outcome_callback_sv = NULL;
 static SV *gql_runtime_vm_global_wrap_list_outcome_callback_sv = NULL;
 static SV *gql_runtime_vm_global_promise_xs_flatten_all_callback_sv = NULL;
-
-#define GQL_VM_PROMISE_BACKEND_NONE 0
-#define GQL_VM_PROMISE_BACKEND_PROMISE_XS 1
 
 static SV *
 gql_runtime_vm_empty_args_sv(pTHX)
@@ -623,6 +736,8 @@ static gql_runtime_vm_pending_callback_ctx_t *gql_runtime_vm_new_pending_callbac
 static SV *gql_runtime_vm_new_finalize_callback_sv(pTHX_ gql_runtime_vm_pending_merge_t *merge);
 static SV *gql_runtime_vm_call_then_promise_xs_sv(pTHX_ SV *promise_sv, SV *callback_sv, SV *error_callback_sv, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_all_promise_xs_sv(pTHX_ AV *values_av, gql_runtime_vm_path_frame_t *path_frame);
+static SV *gql_runtime_vm_call_then_adapter_sv(pTHX_ gql_runtime_vm_async_adapter_t *adapter, SV *promise_sv, SV *callback_sv, SV *error_callback_sv, gql_runtime_vm_path_frame_t *path_frame);
+static SV *gql_runtime_vm_call_all_adapter_sv(pTHX_ gql_runtime_vm_async_adapter_t *adapter, AV *values_av, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_callback_scalar_sv(pTHX_ SV *callback_sv, SV *arg_sv, gql_runtime_vm_path_frame_t *path_frame);
 static SV *gql_runtime_vm_call_then_promise_for_state_sv(pTHX_ const gql_runtime_vm_exec_state_handle_t *s, SV *promise_sv, SV *callback_sv, SV *error_callback_sv, gql_runtime_vm_path_frame_t *path_frame);
 static IV gql_runtime_vm_select_abstract_child_block_fast(pTHX_ gql_runtime_vm_exec_state_t *state, SV *value, SV **error_out);
@@ -657,6 +772,9 @@ static SV *gql_runtime_vm_fast_lane_guard_promise_sv(pTHX_ gql_runtime_vm_exec_s
 static SV *gql_runtime_vm_promise_xs_new_deferred_sv(pTHX);
 static SV *gql_runtime_vm_promise_xs_deferred_promise_sv(pTHX_ SV *deferred_sv);
 static void gql_runtime_vm_promise_xs_deferred_resolve_sv(pTHX_ SV *deferred_sv, SV *value_sv);
+static SV *gql_runtime_vm_adapter_new_deferred_sv(pTHX_ gql_runtime_vm_async_adapter_t *adapter);
+static SV *gql_runtime_vm_adapter_deferred_promise_sv(pTHX_ gql_runtime_vm_async_adapter_t *adapter, SV *deferred_sv);
+static void gql_runtime_vm_adapter_deferred_resolve_sv(pTHX_ gql_runtime_vm_async_adapter_t *adapter, SV *deferred_sv, SV *value_sv);
 static void gql_runtime_vm_async_scheduler_enqueue_frame(gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_block_frame_t *frame);
 static void gql_runtime_vm_async_scheduler_arm_frame(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s, gql_runtime_vm_block_frame_t *frame);
 static void gql_runtime_vm_async_scheduler_drain(pTHX_ SV *state_sv, gql_runtime_vm_exec_state_handle_t *s);
@@ -1682,7 +1800,7 @@ gql_runtime_vm_consume_current_result_now(pTHX_ SV *state_sv, gql_runtime_vm_exe
       s->cursor ? s->cursor->slot_index : -1,
       s->cursor ? s->cursor->op_index : -1
     );
-    if (s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS
+    if (s->async_adapter != NULL
         && child_frame
         && child_frame->pending_unresolved == 0) {
       gql_runtime_vm_async_scheduler_enqueue_frame(s, child_frame);
@@ -1722,7 +1840,8 @@ gql_runtime_vm_consume_current_result_now(pTHX_ SV *state_sv, gql_runtime_vm_exe
       NULL,
       -1,
       -1,
-      -1
+      -1,
+      s->async_adapter
     );
   }
   gql_runtime_vm_leave_field_now(aTHX_ s);
@@ -1732,7 +1851,7 @@ static SV *
 gql_runtime_vm_block_frame_finalize_sv(
   pTHX_
   gql_runtime_vm_block_frame_t *frame,
-  U8 promise_backend_code,
+  gql_runtime_vm_async_adapter_t *async_adapter,
   gql_runtime_vm_writer_t *writer,
   SV *state_sv,
   U8 return_pending_handle
@@ -1752,7 +1871,7 @@ gql_runtime_vm_finalize_current_block_now(pTHX_ SV *state_sv, gql_runtime_vm_exe
 
   frame = s->frame;
   completed_frame = frame;
-  if (s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
+  if (s->async_adapter != NULL) {
     if (frame->pending_count > 0) {
       frame->deferred_resolves_response = (frame == s->response_frame) ? 1 : 0;
       scheduler_owned = 1;
@@ -1760,7 +1879,7 @@ gql_runtime_vm_finalize_current_block_now(pTHX_ SV *state_sv, gql_runtime_vm_exe
     result = gql_runtime_vm_block_frame_finalize_sv(
       aTHX_
       frame,
-      s->promise_backend_code,
+      s->async_adapter,
       s->writer,
       state_sv,
       return_pending_handle
@@ -1791,7 +1910,7 @@ static SV *
 gql_runtime_vm_block_frame_finalize_sv(
   pTHX_
   gql_runtime_vm_block_frame_t *frame,
-  U8 promise_backend_code,
+  gql_runtime_vm_async_adapter_t *async_adapter,
   gql_runtime_vm_writer_t *writer,
   SV *state_sv,
   U8 return_pending_handle
@@ -1853,8 +1972,8 @@ gql_runtime_vm_block_frame_finalize_sv(
     }
     return gql_runtime_vm_native_value_materialize_sv(aTHX_ frame->values_value);
   }
-  if (promise_backend_code != GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
-    croak("pending async runtime blocks require Promise::XS");
+  if (!async_adapter) {
+    croak("pending async runtime blocks require an async adapter");
   }
   if (exec_state) {
     SV *ret_sv;
@@ -1890,8 +2009,10 @@ gql_runtime_vm_block_frame_finalize_sv(
     }
 
     if (return_promise && !frame->deferred_sv) {
-      frame->deferred_sv = gql_runtime_vm_promise_xs_new_deferred_sv(aTHX);
-      frame->promise_sv = gql_runtime_vm_promise_xs_deferred_promise_sv(aTHX_ frame->deferred_sv);
+      frame->deferred_sv = gql_runtime_vm_adapter_new_deferred_sv(aTHX_ async_adapter);
+      frame->promise_sv = gql_runtime_vm_adapter_deferred_promise_sv(
+        aTHX_ async_adapter, frame->deferred_sv
+      );
     }
     ret_sv = return_promise
       ? (frame->promise_sv ? newSVsv(frame->promise_sv) : newSVsv(&PL_sv_undef))
@@ -1935,7 +2056,8 @@ gql_runtime_vm_block_frame_finalize_sv(
         frame->pending_entries[i].path_frame,
         frame->pending_entries[i].block_index,
         frame->pending_entries[i].slot_index,
-        frame->pending_entries[i].op_index
+        frame->pending_entries[i].op_index,
+        async_adapter
       );
     }
   }
@@ -1968,7 +2090,9 @@ gql_runtime_vm_block_frame_finalize_sv(
       av_push(pending_av, newSVsv(&PL_sv_undef));
     }
   }
-  aggregate = gql_runtime_vm_call_all_promise_xs_sv(aTHX_ pending_av, NULL);
+  aggregate = gql_runtime_vm_call_all_adapter_sv(
+    aTHX_ async_adapter, pending_av, NULL
+  );
   SvREFCNT_dec((SV *)pending_av);
 
   if (aggregate && SvOK(aggregate) && gql_runtime_vm_sv_is_outcome(aTHX_ aggregate)) {
@@ -1990,7 +2114,9 @@ gql_runtime_vm_block_frame_finalize_sv(
     callback_sv = gql_runtime_vm_new_finalize_callback_sv(aTHX_ merge);
     gql_runtime_vm_pending_merge_decref(aTHX_ merge);
 
-    retval = gql_runtime_vm_call_then_promise_xs_sv(aTHX_ aggregate, callback_sv, NULL, NULL);
+    retval = gql_runtime_vm_call_then_adapter_sv(
+      aTHX_ async_adapter, aggregate, callback_sv, NULL, NULL
+    );
 
     SvREFCNT_dec(aggregate);
     SvREFCNT_dec(callback_sv);
@@ -2028,8 +2154,10 @@ gql_runtime_vm_is_promise_value_for_state_sv(
   if (!value || !SvOK(value)) {
     return 0;
   }
-  if (s && s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
-    return gql_runtime_vm_is_promise_xs_value_sv(value)
+  if (s && s->async_adapter != NULL) {
+    return gql_runtime_vm_sv_is_adapter_promise(
+        aTHX_ s->async_adapter, value
+      )
       || (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ value)
           && gql_runtime_vm_dataloader_ticket_state(aTHX_ value) == 0);
   }
@@ -2695,7 +2823,9 @@ gql_runtime_vm_async_scheduler_resolve_frame(
   }
 
   if (frame->deferred_sv && SvOK(frame->deferred_sv)) {
-    gql_runtime_vm_promise_xs_deferred_resolve_sv(aTHX_ frame->deferred_sv, resolved_sv);
+    gql_runtime_vm_adapter_deferred_resolve_sv(
+      aTHX_ s->async_adapter, frame->deferred_sv, resolved_sv
+    );
     SvREFCNT_dec(resolved_sv);
   } else if (frame->deferred_resolves_response) {
     /* No deferred was ever created: the request is completing inside the
@@ -3019,7 +3149,8 @@ gql_runtime_vm_async_scheduler_process_frame(
             entry->path_frame,
             entry->block_index,
             entry->slot_index,
-            entry->op_index
+            entry->op_index,
+            s->async_adapter
           );
           moved = &next_pending.pending_entries[next_pending.pending_count - 1];
           moved->state_code = entry->state_code;
@@ -3227,7 +3358,8 @@ gql_runtime_vm_async_scheduler_process_frame(
             NULL,
             -1,
             -1,
-            -1
+            -1,
+            s->async_adapter
           );
         }
         if (completed_sv) {
@@ -3453,7 +3585,8 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
             NULL,
             -1,
             -1,
-            -1
+            -1,
+            exec_state ? exec_state->async_adapter : NULL
           );
         }
         if (completed_sv) {
@@ -3498,7 +3631,9 @@ gql_runtime_vm_pending_merge_resolve_sv(pTHX_ gql_runtime_vm_pending_merge_t *st
     return gql_runtime_vm_block_frame_finalize_sv(
       aTHX_
       state->frame,
-      GQL_VM_PROMISE_BACKEND_PROMISE_XS,
+      (exec_state && exec_state->async_adapter != NULL)
+        ? exec_state->async_adapter
+        : &gql_runtime_vm_promise_xs_adapter,
       state->writer,
       state->state_sv,
       0
@@ -3866,7 +4001,6 @@ static XS(gql_runtime_vm_xs_list_pending_callback)
     resolved_sv = tmp_resolved;
   }
   state = gql_runtime_vm_expect_exec_state_handle(aTHX_ ctx->state_sv);
-
   /* Outcomes carry error records (rejected items, failed child fields);
    * surface them in the response instead of collapsing to a silent null. */
   if (resolved_sv && SvOK(resolved_sv)
@@ -4224,6 +4358,79 @@ gql_runtime_vm_call_then_promise_xs_sv(
 }
 
 static SV *
+gql_runtime_vm_call_then_adapter_sv(
+  pTHX_
+  gql_runtime_vm_async_adapter_t *adapter,
+  SV *promise_sv,
+  SV *callback_sv,
+  SV *error_callback_sv,
+  gql_runtime_vm_path_frame_t *path_frame
+)
+{
+  dSP;
+  SV *ret = NULL;
+  SV *stack_ret = NULL;
+  I32 count;
+
+  if (gql_runtime_vm_sv_is_promise_xs(aTHX_ promise_sv)) {
+    return gql_runtime_vm_call_then_promise_xs_sv(
+      aTHX_ promise_sv, callback_sv, error_callback_sv, path_frame
+    );
+  }
+  if (!gql_runtime_vm_sv_is_adapter_promise(aTHX_ adapter, promise_sv)) {
+    return gql_runtime_vm_call_callback_scalar_sv(
+      aTHX_ callback_sv, promise_sv ? promise_sv : &PL_sv_undef, path_frame
+    );
+  }
+  if (!adapter || !adapter->then_cv) {
+    croak("invalid async adapter");
+  }
+
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  PUSHMARK(SP);
+  XPUSHs(promise_sv);
+  XPUSHs(callback_sv ? callback_sv : &PL_sv_undef);
+  if (error_callback_sv) {
+    XPUSHs(error_callback_sv);
+  }
+  PUTBACK;
+  count = call_sv((SV *)adapter->then_cv, G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (count > 0) {
+    stack_ret = POPs;
+  }
+  if (SvTRUE(ERRSV)) {
+    ret = gql_runtime_vm_new_error_outcome_for_path_sv(aTHX_ ERRSV, path_frame);
+    sv_setsv(ERRSV, &PL_sv_undef);
+  } else if (stack_ret) {
+    ret = newSVsv(stack_ret);
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  return ret ? ret : newSVsv(&PL_sv_undef);
+}
+
+static SV *
+gql_runtime_vm_adapter_error_sv(pTHX_ SV *outcome_sv)
+{
+  gql_runtime_vm_outcome_t *outcome =
+    gql_runtime_vm_expect_outcome(aTHX_ outcome_sv);
+  SV *error_sv = newSVpv("async adapter then failed", 0);
+  if (outcome->error_record_count > 0
+      && outcome->error_records[0]
+      && outcome->error_records[0]->message_pv) {
+    sv_setpv(error_sv, outcome->error_records[0]->message_pv);
+    if (outcome->error_records[0]->message_pv_is_utf8) {
+      SvUTF8_on(error_sv);
+    }
+  }
+  return error_sv;
+}
+
+static SV *
 gql_runtime_vm_call_all_promise_xs_sv(
   pTHX_
   AV *values_av,
@@ -4283,6 +4490,49 @@ gql_runtime_vm_call_all_promise_xs_sv(
   SvREFCNT_dec(flatten_callback_sv);
   SvREFCNT_dec(aggregate);
 
+  return ret ? ret : newSVsv(&PL_sv_undef);
+}
+
+static SV *
+gql_runtime_vm_call_all_adapter_sv(
+  pTHX_
+  gql_runtime_vm_async_adapter_t *adapter,
+  AV *values_av,
+  gql_runtime_vm_path_frame_t *path_frame
+)
+{
+  dSP;
+  SV *ret = NULL;
+  SV *values_rv;
+  I32 count;
+
+  if (adapter == &gql_runtime_vm_promise_xs_adapter) {
+    return gql_runtime_vm_call_all_promise_xs_sv(aTHX_ values_av, path_frame);
+  }
+  if (!adapter || !adapter->all_cb) {
+    croak("async adapter has no all callback");
+  }
+  values_rv = newRV_inc((SV *)values_av);
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  PUSHMARK(SP);
+  XPUSHs(sv_2mortal(values_rv));
+  PUTBACK;
+  count = call_sv(adapter->all_cb, G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (!SvTRUE(ERRSV) && count > 0) {
+    ret = newSVsv(POPs);
+  } else if (count > 0) {
+    (void)POPs;
+  }
+  if (SvTRUE(ERRSV)) {
+    ret = gql_runtime_vm_new_error_outcome_for_path_sv(aTHX_ ERRSV, path_frame);
+    sv_setsv(ERRSV, &PL_sv_undef);
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
   return ret ? ret : newSVsv(&PL_sv_undef);
 }
 
@@ -4387,6 +4637,113 @@ gql_runtime_vm_promise_xs_deferred_resolve_sv(pTHX_ SV *deferred_sv, SV *value_s
     FREETMPS;
     LEAVE;
     croak("failed to resolve Promise::XS deferred: %s", SvPV_nolen(error_sv));
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+}
+
+static SV *
+gql_runtime_vm_adapter_new_deferred_sv(pTHX_ gql_runtime_vm_async_adapter_t *adapter)
+{
+  dSP;
+  SV *ret = NULL;
+  I32 count;
+
+  if (adapter == &gql_runtime_vm_promise_xs_adapter) {
+    return gql_runtime_vm_promise_xs_new_deferred_sv(aTHX);
+  }
+  if (!adapter || !adapter->new_pending_cb) {
+    croak("invalid async adapter pending factory");
+  }
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  PUSHMARK(SP);
+  PUTBACK;
+  count = call_sv(adapter->new_pending_cb, G_SCALAR | G_EVAL);
+  SPAGAIN;
+  if (!SvTRUE(ERRSV) && count > 0) {
+    ret = newSVsv(POPs);
+  } else if (count > 0) {
+    (void)POPs;
+  }
+  if (SvTRUE(ERRSV)) {
+    SV *error_sv = newSVpvs("async adapter pending factory failed: ");
+    sv_catsv(error_sv, ERRSV);
+    sv_setsv(ERRSV, &PL_sv_undef);
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak_sv(sv_2mortal(error_sv));
+  }
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  if (!ret || !SvROK(ret) || SvTYPE(SvRV(ret)) != SVt_PVAV
+      || av_count((AV *)SvRV(ret)) < 2) {
+    if (ret) SvREFCNT_dec(ret);
+    croak("async adapter pending factory must return [promise, resolve]");
+  }
+  {
+    AV *deferred_av = (AV *)SvRV(ret);
+    SV **promise_svp = av_fetch(deferred_av, 0, 0);
+    SV **resolve_svp = av_fetch(deferred_av, 1, 0);
+    if (!promise_svp
+        || !gql_runtime_vm_sv_is_adapter_promise(aTHX_ adapter, *promise_svp)
+        || !resolve_svp || !SvROK(*resolve_svp)
+        || SvTYPE(SvRV(*resolve_svp)) != SVt_PVCV) {
+      SvREFCNT_dec(ret);
+      croak("async adapter pending factory must return [promise, resolve coderef]");
+    }
+  }
+  return ret;
+}
+
+static SV *
+gql_runtime_vm_adapter_deferred_promise_sv(
+  pTHX_ gql_runtime_vm_async_adapter_t *adapter, SV *deferred_sv
+)
+{
+  SV **svp;
+  if (adapter == &gql_runtime_vm_promise_xs_adapter) {
+    return gql_runtime_vm_promise_xs_deferred_promise_sv(aTHX_ deferred_sv);
+  }
+  svp = av_fetch((AV *)SvRV(deferred_sv), 0, 0);
+  return newSVsv((svp && *svp) ? *svp : &PL_sv_undef);
+}
+
+static void
+gql_runtime_vm_adapter_deferred_resolve_sv(
+  pTHX_ gql_runtime_vm_async_adapter_t *adapter, SV *deferred_sv, SV *value_sv
+)
+{
+  SV **cb_svp;
+  dSP;
+  if (adapter == &gql_runtime_vm_promise_xs_adapter) {
+    gql_runtime_vm_promise_xs_deferred_resolve_sv(aTHX_ deferred_sv, value_sv);
+    return;
+  }
+  cb_svp = av_fetch((AV *)SvRV(deferred_sv), 1, 0);
+  if (!cb_svp || !*cb_svp || !SvOK(*cb_svp)) {
+    croak("invalid async adapter resolve callback");
+  }
+  ENTER;
+  SAVETMPS;
+  sv_setsv(ERRSV, &PL_sv_undef);
+  PUSHMARK(SP);
+  XPUSHs(value_sv ? value_sv : &PL_sv_undef);
+  PUTBACK;
+  call_sv(*cb_svp, G_VOID | G_DISCARD | G_EVAL);
+  SPAGAIN;
+  if (SvTRUE(ERRSV)) {
+    SV *error_sv = newSVpvs("async adapter resolve failed: ");
+    sv_catsv(error_sv, ERRSV);
+    sv_setsv(ERRSV, &PL_sv_undef);
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    croak_sv(sv_2mortal(error_sv));
   }
   PUTBACK;
   FREETMPS;
@@ -4558,16 +4915,17 @@ gql_runtime_vm_call_then_promise_for_state_sv(
     LEAVE;
     return ret;
   }
-  if (s && s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS) {
-    return gql_runtime_vm_call_then_promise_xs_sv(
+  if (s && s->async_adapter != NULL) {
+    return gql_runtime_vm_call_then_adapter_sv(
       aTHX_
+      s->async_adapter,
       promise_sv,
       callback_sv,
       error_callback_sv,
       path_frame
     );
   }
-  croak("async runtime requires Promise::XS");
+  croak("async runtime requires an async adapter");
 }
 
 static SV *
@@ -6108,8 +6466,12 @@ gql_runtime_vm_execute_serial_mutation_steps(
 
       /* Lazily create the outer deferred on first async result */
       if (!ctx->frame->deferred_sv) {
-        ctx->frame->deferred_sv = gql_runtime_vm_promise_xs_new_deferred_sv(aTHX);
-        ctx->frame->promise_sv  = gql_runtime_vm_promise_xs_deferred_promise_sv(aTHX_ ctx->frame->deferred_sv);
+        ctx->frame->deferred_sv = gql_runtime_vm_adapter_new_deferred_sv(
+          aTHX_ s->async_adapter
+        );
+        ctx->frame->promise_sv = gql_runtime_vm_adapter_deferred_promise_sv(
+          aTHX_ s->async_adapter, ctx->frame->deferred_sv
+        );
         ctx->frame->deferred_resolves_response = (ctx->frame == s->response_frame) ? 1 : 0;
       }
 
@@ -6203,8 +6565,8 @@ static XS(gql_runtime_vm_xs_serial_mutation_step_callback)
     /* All remaining ops were sync; deferred was pre-created, resolve it now */
     if (ctx->frame && ctx->frame->deferred_sv && SvOK(ctx->frame->deferred_sv)) {
       SV *response = gql_runtime_vm_fast_response_sv(aTHX_ sync_result, s->writer);
-      gql_runtime_vm_promise_xs_deferred_resolve_sv(
-        aTHX_ ctx->frame->deferred_sv, response
+      gql_runtime_vm_adapter_deferred_resolve_sv(
+        aTHX_ s->async_adapter, ctx->frame->deferred_sv, response
       );
       SvREFCNT_dec(response);
     }
@@ -6320,7 +6682,7 @@ gql_runtime_vm_exec_state_execute_block_async_path_sv(
   if (s && s->cursor && s->cursor->native_program
       && s->cursor->native_program->operation_type_code == GQL_VM_OPTYPE_MUTATION
       && block_index == s->cursor->native_program->root_block_index
-      && s->promise_backend_code == GQL_VM_PROMISE_BACKEND_PROMISE_XS
+      && s->async_adapter != NULL
       && return_pending_handle == 0) {
     return gql_runtime_vm_exec_state_execute_block_serial_mutation_sv(
       aTHX_ state_sv, s, block_index, source, base_path_ptr
@@ -6916,7 +7278,8 @@ gql_runtime_vm_then_complete_current_sv(
       path_frame,
       block_index,
       slot_index,
-      op_index
+      op_index,
+      s->async_adapter
     );
     return newSVsv(&PL_sv_undef);
   }
@@ -7366,6 +7729,7 @@ gql_runtime_vm_native_runtime_from_runtime_schema_sv(pTHX_ SV *runtime_schema)
     : NULL;
 
   Newxz(runtime, 1, gql_runtime_vm_native_runtime_t);
+  runtime->async_adapter = &gql_runtime_vm_promise_xs_adapter;
   Newxz(runtime->callback_catalog, 1, gql_runtime_vm_native_callback_catalog_t);
   runtime->callback_catalog->runtime_schema = newSVsv(runtime_schema ? runtime_schema : &PL_sv_undef);
   runtime->runtime_slot_count = av_count(catalog_av);
@@ -7675,6 +8039,7 @@ gql_runtime_vm_new_exec_state_handle_sv(
   state->runtime_schema = newSVsv(runtime_schema ? runtime_schema : &PL_sv_undef);
   state->program = newSVsv(program ? program : &PL_sv_undef);
   state->native_runtime = NULL;
+  state->native_runtime_owner_sv = NULL;
   state->native_runtime_is_borrowed = 0;
   state->cursor = cursor;
   gql_runtime_vm_cursor_incref(state->cursor);
@@ -7689,7 +8054,7 @@ gql_runtime_vm_new_exec_state_handle_sv(
   state->context = newSVsv(context ? context : &PL_sv_undef);
   state->variables = newSVsv(variables ? variables : &PL_sv_undef);
   state->root_value = newSVsv(root_value ? root_value : &PL_sv_undef);
-  state->promise_backend_code = GQL_VM_PROMISE_BACKEND_PROMISE_XS;
+  state->async_adapter = &gql_runtime_vm_promise_xs_adapter;
   state->empty_args = (empty_args && SvOK(empty_args))
     ? newSVsv(empty_args)
     : gql_runtime_vm_empty_args_sv(aTHX);
@@ -8035,7 +8400,22 @@ gql_runtime_vm_drive_promise_with_on_stall_sv(
   SV *ret;
 
   ctx = gql_runtime_vm_new_settle_capture_pair(aTHX_ &resolve_rv, &reject_rv);
-  chain = gql_runtime_vm_call_then_promise_xs_sv(aTHX_ promise_rv, resolve_rv, reject_rv, NULL);
+  chain = gql_runtime_vm_call_then_adapter_sv(
+    aTHX_ state_to_cancel->async_adapter,
+    promise_rv,
+    resolve_rv,
+    reject_rv,
+    NULL
+  );
+  if (chain && SvOK(chain) && gql_runtime_vm_sv_is_outcome(aTHX_ chain)) {
+    SV *error_sv = gql_runtime_vm_adapter_error_sv(aTHX_ chain);
+    gql_runtime_vm_cancel_pending_response_sv(aTHX_ promise_rv);
+    SvREFCNT_dec(chain);
+    SvREFCNT_dec(resolve_rv);
+    SvREFCNT_dec(reject_rv);
+    gql_runtime_vm_settle_capture_ctx_release(aTHX_ ctx);
+    croak_sv(sv_2mortal(error_sv));
+  }
   SvREFCNT_dec(chain);
   SvREFCNT_dec(resolve_rv);
   SvREFCNT_dec(reject_rv);
@@ -8160,6 +8540,8 @@ gql_runtime_vm_execute_native_program_auto_impl_sv(
   state = gql_runtime_vm_expect_exec_state_handle(aTHX_ state_sv);
   state->native_runtime = runtime;
   state->native_runtime_is_borrowed = 1;
+  state->native_runtime_owner_sv = newSVsv(runtime_sv);
+  state->async_adapter = runtime->async_adapter;
   state->response_json_mode = json_mode;
   /* The exec state holds its own cursor/writer references now. */
   gql_runtime_vm_cursor_decref(aTHX_ cursor);
@@ -9615,7 +9997,11 @@ gql_runtime_vm_fast_lane_guard_promise_sv(
   } else if (!resolved
       || !SvROK(resolved)
       || !SvOBJECT(SvRV(resolved))
-      || !sv_derived_from(resolved, "Promise::XS::Promise")) {
+      || !state
+      || !state->runtime
+      || !gql_runtime_vm_sv_is_adapter_promise(
+           aTHX_ state->runtime->async_adapter, resolved
+         )) {
     return resolved;
   }
 
@@ -10357,7 +10743,7 @@ gql_runtime_vm_execute_safe_child_block_fast_sv(
   Safefree(resolved_values);
 
   ret = gql_runtime_vm_block_frame_finalize_sv(
-    aTHX_ frame, GQL_VM_PROMISE_BACKEND_PROMISE_XS, state->writer, state_sv,
+    aTHX_ frame, state->runtime->async_adapter, state->writer, state_sv,
     want_promise ? 2 : 1
   );
   return ret;
@@ -10716,7 +11102,9 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
         SV **pending_svp = av_fetch(in_av, pi, 0);
         SV *pending_item = (pending_svp && SvOK(*pending_svp)) ? *pending_svp : NULL;
         if (pending_item
-            && (gql_runtime_vm_sv_is_promise_xs(aTHX_ pending_item)
+            && (gql_runtime_vm_sv_is_adapter_promise(
+                  aTHX_ state->runtime->async_adapter, pending_item
+                )
                 || (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ pending_item)
                     && gql_runtime_vm_dataloader_ticket_state(aTHX_ pending_item) == 0))) {
           any_pending = 1;
@@ -10747,7 +11135,9 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
       SV *sel_error = NULL;
       gql_runtime_vm_path_frame_t *item_path = NULL;
       IV item_block_index;
-      if (gql_runtime_vm_sv_is_promise_xs(aTHX_ item)
+      if (gql_runtime_vm_sv_is_adapter_promise(
+            aTHX_ state->runtime->async_adapter, item
+          )
           || (gql_runtime_vm_sv_is_dataloader_ticket(aTHX_ item)
               && gql_runtime_vm_dataloader_ticket_state(aTHX_ item) == 0)) {
         /* Promise/pending-Ticket list item on the strict sync lane (the
@@ -10916,7 +11306,9 @@ gql_runtime_vm_complete_current_list_fast_sv(pTHX_ gql_runtime_vm_exec_state_t *
       for (pi = 0; pi <= av_len(out_av); pi++) {
         SV **item_svp = av_fetch(out_av, pi, 0);
         if (item_svp && *item_svp
-            && (gql_runtime_vm_sv_is_promise_xs(aTHX_ *item_svp)
+            && (gql_runtime_vm_sv_is_adapter_promise(
+                  aTHX_ state->runtime->async_adapter, *item_svp
+                )
                 || gql_runtime_vm_is_block_frame_value_sv(*item_svp))) {
           any_promise = 1;
           break;
@@ -11511,6 +11903,10 @@ gql_runtime_vm_ensure_fast_lane_state_sv(
     gql_runtime_vm_cursor_decref(aTHX_ cursor);
     sched_state->native_runtime = state->runtime;
     sched_state->native_runtime_is_borrowed = 1;
+    sched_state->native_runtime_owner_sv = state->runtime_handle_sv
+      ? newSVsv(state->runtime_handle_sv)
+      : NULL;
+    sched_state->async_adapter = state->runtime->async_adapter;
     state->fast_lane_root_state_sv = sched_state_sv;
   }
   *state_sv_out = state->fast_lane_root_state_sv;
@@ -11648,7 +12044,8 @@ gql_runtime_vm_execute_block_fast_multi_sv(
         : GQL_VM_PENDING_PROMISE_RESOLVED_VALUE_SV;
       gql_runtime_vm_block_frame_push_pending_pvn_with_meta(
         aTHX_ frame, slot->result_name, slot->result_name_len, 1,
-        promise_sv, payload_kind, field_path, block_index, op->slot_index, i
+        promise_sv, payload_kind, field_path, block_index, op->slot_index, i,
+        state->runtime->async_adapter
       );
       SvREFCNT_dec(promise_sv);
       gql_runtime_vm_path_frame_decref(field_path);
@@ -11953,6 +12350,7 @@ gql_runtime_vm_fast_root_continuation_settle_sv(
   Zero(&callback_ctx, 1, gql_runtime_vm_callback_context_t);
   gql_runtime_vm_init_writer_struct(&writer);
   state.runtime = ctx->runtime;
+  state.runtime_handle_sv = ctx->runtime_sv;
   state.bundle = ctx->bundle;
   state.callback_ctx = &callback_ctx;
   state.writer = &writer;
@@ -12163,6 +12561,11 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
   IV i;
 
   *handled_out = 0;
+  /* The continuation lane calls Promise::XS internals directly; adapters use
+   * the generic async executor until they provide an equivalent fast ABI. */
+  if (runtime->async_adapter != &gql_runtime_vm_promise_xs_adapter) {
+    return NULL;
+  }
   if (json_mode) {
     return NULL;
   }
@@ -12232,6 +12635,7 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
   Zero(&callback_ctx, 1, gql_runtime_vm_callback_context_t);
   writer = gql_runtime_vm_new_writer_struct(aTHX);
   state.runtime = runtime;
+  state.runtime_handle_sv = runtime_sv;
   state.bundle = bundle;
   state.callback_ctx = &callback_ctx;
   state.writer = writer;
@@ -12404,7 +12808,7 @@ gql_runtime_vm_try_execute_fast_root_continuation_sv(
     gql_runtime_vm_writer_decref(aTHX_ writer);
 
     ret = gql_runtime_vm_block_frame_finalize_sv(
-      aTHX_ frame, GQL_VM_PROMISE_BACKEND_PROMISE_XS, sched_state->writer,
+      aTHX_ frame, sched_state->async_adapter, sched_state->writer,
       sched_state_sv, on_stall_sv ? 3 : 0
     );
     if (sched_state->completed_response_sv) {
@@ -12523,7 +12927,12 @@ gql_runtime_vm_json_cat_scalar(pTHX_ gql_runtime_vm_exec_state_t *state, SV *out
       sv_catpv(out, SvIV(inner) ? "true" : "false");
       return;
     }
-    if (sv_isobject(value) && sv_derived_from(value, "Promise::XS::Promise")) {
+    if (sv_isobject(value)
+        && ((state && state->runtime
+             && gql_runtime_vm_sv_is_adapter_promise(
+                  aTHX_ state->runtime->async_adapter, value
+                ))
+            || (!state && gql_runtime_vm_sv_is_promise_xs(aTHX_ value)))) {
       /* A promise that slipped past the resolve/item guards (e.g. inside
        * a source hash). On the fast lanes, defer the croak so the live
        * path frame chain unwinds; the native-value writer (async tail,
@@ -12678,7 +13087,9 @@ gql_runtime_vm_complete_current_list_fast_json(
         sv_catpvs(out, ",");
       }
       item_start = SvCUR(out);
-      if (gql_runtime_vm_sv_is_promise_xs(aTHX_ item)) {
+      if (gql_runtime_vm_sv_is_adapter_promise(
+            aTHX_ state->runtime->async_adapter, item
+          )) {
         /* Promise list item on the sync lane: complete it as null and
          * record the deferred croak; the top-level entry raises it after
          * cleanup. The item SV is borrowed from the resolver's array,
@@ -13587,6 +13998,58 @@ cancel_pending_response_xs(promise)
   CODE:
     gql_runtime_vm_cancel_pending_response_sv(aTHX_ promise);
 
+int
+runtime_value_is_async_xs(runtime_sv, value)
+    SV *runtime_sv
+    SV *value
+  CODE:
+    {
+      gql_runtime_vm_native_runtime_t *runtime;
+      if (!runtime_sv || !SvROK(runtime_sv)
+          || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
+      }
+      runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
+      if (!runtime) {
+        croak("native VM runtime handle is no longer valid");
+      }
+      RETVAL = gql_runtime_vm_sv_is_adapter_promise(
+        aTHX_ runtime->async_adapter, value
+      );
+    }
+  OUTPUT:
+    RETVAL
+
+SV *
+runtime_then_async_xs(runtime_sv, promise, on_done, on_fail = &PL_sv_undef)
+    SV *runtime_sv
+    SV *promise
+    SV *on_done
+    SV *on_fail
+  CODE:
+    {
+      gql_runtime_vm_native_runtime_t *runtime;
+      if (!runtime_sv || !SvROK(runtime_sv)
+          || !sv_derived_from(runtime_sv, "GraphQL::Houtou::Runtime::NativeRuntime")) {
+        croak("expected a GraphQL::Houtou::Runtime::NativeRuntime");
+      }
+      runtime = INT2PTR(gql_runtime_vm_native_runtime_t *, SvUV(SvRV(runtime_sv)));
+      if (!runtime) {
+        croak("native VM runtime handle is no longer valid");
+      }
+      RETVAL = gql_runtime_vm_call_then_adapter_sv(
+        aTHX_ runtime->async_adapter, promise, on_done,
+        (on_fail && SvOK(on_fail)) ? on_fail : NULL, NULL
+      );
+      if (RETVAL && SvOK(RETVAL) && gql_runtime_vm_sv_is_outcome(aTHX_ RETVAL)) {
+        SV *error_sv = gql_runtime_vm_adapter_error_sv(aTHX_ RETVAL);
+        SvREFCNT_dec(RETVAL);
+        croak_sv(sv_2mortal(error_sv));
+      }
+    }
+  OUTPUT:
+    RETVAL
+
 SV *
 debug_frame_live_counts_xs()
   CODE:
@@ -13834,15 +14297,24 @@ native_program_summary_xs(program_sv)
     RETVAL
 
 SV *
-load_native_runtime_xs(runtime_schema)
+load_native_runtime_xs(runtime_schema, adapter_spec = &PL_sv_undef)
     SV *runtime_schema
+    SV *adapter_spec
   CODE:
     {
-      gql_runtime_vm_native_runtime_t *runtime =
-        gql_runtime_vm_native_runtime_from_runtime_schema_sv(aTHX_ runtime_schema);
-      SV *inner = newSVuv(PTR2UV(runtime));
+      gql_runtime_vm_native_runtime_t *runtime;
+      gql_runtime_vm_native_runtime_guard_t guard;
+      SV *inner;
+      runtime = gql_runtime_vm_native_runtime_from_runtime_schema_sv(aTHX_ runtime_schema);
+      guard.runtime = runtime;
+      ENTER;
+      SAVEDESTRUCTOR_X(gql_runtime_vm_native_runtime_guard_cleanup, &guard);
+      runtime->async_adapter = gql_runtime_vm_async_adapter_from_spec_sv(aTHX_ adapter_spec);
+      inner = newSVuv(PTR2UV(runtime));
       RETVAL = newRV_noinc(inner);
       sv_bless(RETVAL, gv_stashpv("GraphQL::Houtou::Runtime::NativeRuntime", GV_ADD));
+      guard.runtime = NULL;
+      LEAVE;
     }
   OUTPUT:
     RETVAL
@@ -14562,7 +15034,7 @@ block_frame_finalize_xs(frame, writer)
       RETVAL = gql_runtime_vm_block_frame_finalize_sv(
         aTHX_
         state,
-        GQL_VM_PROMISE_BACKEND_PROMISE_XS,
+        &gql_runtime_vm_promise_xs_adapter,
         writer_state,
         &PL_sv_undef,
         0
@@ -15800,6 +16272,7 @@ DESTROY(self)
         SvREFCNT_dec(state->root_value);
         SvREFCNT_dec(state->empty_args);
         SvREFCNT_dec(state->completed_response_sv);
+        SvREFCNT_dec(state->native_runtime_owner_sv);
         Safefree(state);
       }
     }

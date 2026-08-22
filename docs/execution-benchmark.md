@@ -57,6 +57,13 @@ perl util/profile-execution-target.pl \
 
 promise case では native bundle を使わず、Perl runtime を比較対象に残します。
 
+`dataloader_json` は同じ request-scoped
+`GraphQL::Houtou::DataLoader` を両runtimeへ渡し、10 object rowsを1 batchで
+解決してJSON応答まで測ります。比較targetは次です。
+
+- `upstream_dataloader_json`
+- `houtou_dataloader_json`
+
 ## Notes
 
 - benchmark script は repo checkout の `lib/` を優先し、必要なら `blib/arch` の XS を併用します。

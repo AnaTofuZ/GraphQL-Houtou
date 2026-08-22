@@ -11,7 +11,7 @@ use GraphQL::Houtou ();
 use GraphQL::Houtou::Promise::PromiseXS ();
 use Scalar::Util qw(blessed);
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 GraphQL::Houtou::_bootstrap_xs();
 

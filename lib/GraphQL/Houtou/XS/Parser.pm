@@ -7,7 +7,7 @@ use GraphQL::Houtou ();
 use GraphQL::Houtou::Error ();
 use JSON::MaybeXS ();
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 BEGIN {
   GraphQL::Houtou::_bootstrap_xs();
